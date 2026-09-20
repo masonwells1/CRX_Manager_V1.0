@@ -5,18 +5,27 @@
  * permission allow-list and never pauses an unattended run for approval.
  *
  * Usage:
- *   node scripts/overnight-codex-gate.mjs <promptFile> [--timeout 540]
+ *   node scripts/overnight-codex-gate.mjs <promptFile> [--timeout 540] [--sol]
  *
  * - <promptFile>: a UTF-8 text file containing the full Codex prompt (candidate
  *   findings for the finding-gate, or a staged diff + ask for the fix-gate).
  *   Passing the prompt via a FILE avoids argv-escaping landmines; the contents
  *   are then fed to codex on STDIN (like codex-hunt.mjs), so a large staged
  *   diff never hits the Windows ~32K command-line length cap.
+ * - `--sol`: run the review on `gpt-5.6-sol` at high effort instead of the
+ *   default. DEFAULT SINCE 2026-09-20 is `gpt-5.6-luna` at xhigh (Mason's
+ *   standing review-tier decision): these loops run many rounds, and the cheap
+ *   tier is what makes that affordable. Pass `--sol` for the one end-of-run
+ *   adversarial pass, or for genuinely complex work Luna is out of its depth on.
+ *   This wrapper is ADVISORY either way — it writes no proof JSON, so it can
+ *   never satisfy (or corrupt) the push / migration-apply gates, which keep
+ *   hard-requiring a `gpt-5.6-sol`/high proof minted by write-codex-push-proof.mjs.
  * - Resolves the newest codex.exe (version-hashed dir) and falls back to the
  *   `codex` shim on PATH. Runs an ephemeral, user-config-isolated
- *   `codex exec --model gpt-5.6-sol -c model_reasoning_effort="high"`
- *   review under the read-only sandbox. Adversarial reviews never inherit a
- *   cheaper builder model or reasoning level from workstation configuration.
+ *   `codex exec` review under the read-only sandbox. The model and effort are
+ *   always pinned explicitly here and never inherited from workstation
+ *   configuration — the configured default is a model this CLI cannot run, so an
+ *   unpinned call fails on the model rather than on anything real.
  *   spawnSync writes the prompt to stdin and closes it, so codex never blocks
  *   waiting on input. Prints Codex's output to stdout; exits with its code.
  *
@@ -39,6 +48,12 @@ if (!promptFile) fail('missing <promptFile> argument')
 if (!existsSync(promptFile)) fail(`prompt file not found: ${promptFile}`)
 const tIdx = process.argv.indexOf('--timeout')
 const timeoutSec = tIdx > -1 ? Number(process.argv[tIdx + 1]) || 540 : 540
+
+// Review tier. Luna/xhigh is the default (2026-09-20); `--sol` opts into the
+// frontier tier for the one end-of-run pass. Both are advisory — see the header.
+const useSol = process.argv.includes('--sol')
+const reviewModel = useSol ? CODEX_REVIEW_MODEL : 'gpt-5.6-luna'
+const reviewEffort = useSol ? CODEX_REVIEW_EFFORT : 'xhigh'
 
 const prompt = readFileSync(promptFile, 'utf8')
 if (!prompt.trim()) fail('prompt file is empty')
@@ -70,7 +85,7 @@ function resolveCodex() {
 const codex = resolveCodex()
 const args = [
   'exec', '--ephemeral', '--ignore-user-config',
-  '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
+  '--model', reviewModel, '-c', `model_reasoning_effort="${reviewEffort}"`,
   '--sandbox', 'read-only', '-C', repoRoot,
 ]
 

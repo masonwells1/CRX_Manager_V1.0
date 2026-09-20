@@ -64,7 +64,8 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 - Get Mason’s explicit approval in the current conversation before force-pushing, applying a live migration or changing live data, deploying an Edge Function or out-of-band production change, deleting data, or changing secrets, authentication, permissions, billing, domains, or ownership. The only migration exception is a hands-free run Mason explicitly pre-authorized with an unexpired autopilot arm flag, a fresh migration-apply-guard proof, and a fresh Codex verdict; it never permits destructive migrations. See the 2026-07-13 entry in `docs/manual/DECISION_LOG.md`.
 - Armed, unattended, or automated work never loosens any other hard gate.
 - Regular reversible code follows the protected path in `.claude/commands/ship.md`: branch → PR → required checks → applicable exact-SHA review → resolved agent findings → exact-head merge → proportionate production verification.
-- Risky money, inventory, auth, RLS, migration, permission, or other business-critical changes require a fresh independent `gpt-5.6-sol` high-effort review of the exact candidate SHA. A green status row is not proof that a review occurred.
+- Iterating code review runs on `gpt-5.6-luna` at xhigh (Mason's standing tier decision, 2026-09-20). Fix and re-run until it is clean; that is the whole review for ordinary reversible work. Escalate a round to `gpt-5.6-sol` early only for genuinely complex work, and say why.
+- Risky money, inventory, auth, RLS, migration, permission, or other business-critical changes require a fresh independent `gpt-5.6-sol` high-effort review of the exact candidate SHA. A green status row is not proof that a review occurred, and neither is a clean Luna round. Run it **once**, after Luna is clean — the proof wrapper unlinks the existing proof for that SHA when it starts, so a Luna round must never be routed through it.
 
 ## Verification and Closeout
 

@@ -136,10 +136,15 @@ grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-s
 1": a clean run legitimately reports `2`, because the capture holds both a structured section and
 the raw transcript. Anything with `0` is `UNVERIFIED`/`BLOCKED` per Step 2, never clean.
 
-The hard gate is a separate ephemeral `gpt-5.6-sol` high-effort review session; Terra may build and
-Luna may take low-risk work, but adversarial review always goes to Sol. Step 4 evidence verification
-reduces false positives; it is NOT a substitute for the Sol gate. The re-review in Step 5 (sub-item 2)
-must use the same Codex scope and Sol/high settings.
+Adversarial review runs on `gpt-5.6-luna` at xhigh by default (Mason's standing review-tier
+decision, 2026-09-20) — a gauntlet is many rounds, and the cheap tier is what makes that
+affordable. Iterate on Luna until it comes back clean. The re-review in Step 5 (sub-item 2) must
+use the same Codex scope and the same Luna/xhigh settings.
+
+The **hard gate** is unchanged: a separate ephemeral `gpt-5.6-sol` high-effort session, run
+**once**, after Luna is clean, for a risky money / inventory / RLS / migration / permission diff.
+Step 4 evidence verification reduces false positives; it is NOT a substitute for that Sol gate,
+and neither is a clean Luna round. Terra may build; Luna may take low-risk work.
 
 ### Step 4: Verify Findings
 

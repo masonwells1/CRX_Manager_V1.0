@@ -112,11 +112,18 @@ If the migration touches a CHECK constraint, function with an existing name, or 
 
 Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
 
-If worthy, run a **separate Codex review pinned to `gpt-5.6-sol` at high effort directly via the
-headless CLI** — invoke `/codex-review` (scope `--base origin/main`, after `git fetch origin`, so a
-stale local `main` can't distort the diff). It runs `codex review` non-interactively, captures
-findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict
+If worthy, run a **separate Codex review directly via the headless CLI** — invoke `/codex-review`
+(scope `--base origin/main`, after `git fetch origin`, so a stale local `main` can't distort the
+diff). It runs non-interactively, captures findings, and returns a verdict
 (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
+
+**Two tiers, in this order (Mason's standing decision, 2026-09-20).** Iterate on `gpt-5.6-luna` at
+xhigh — `/codex-review` Step 3A — fixing and re-running until it comes back clean. That is the
+whole review for ordinary reversible work. Only then, and only if the diff is risky (money /
+inventory / RLS / migration / permission / edge function), spend **exactly one** `gpt-5.6-sol`
+high-effort pass to mint the exact-SHA proof the push and merge guards require
+(`/codex-review` Step 3B). Do not burn Sol rounds on iteration, and never route a Luna round
+through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
 
 Then act on the result like any other reviewer:
 - **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If the active session genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.

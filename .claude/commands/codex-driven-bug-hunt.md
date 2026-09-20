@@ -112,8 +112,9 @@ git add <the-fix's-files>
 git diff --quiet -- docs/app-workflow-map.html || git add docs/app-workflow-map.html   # stage the map IFF this fix changed it
 git status --porcelain                       # the staged set MUST equal what the commit will contain
 { echo "Review this staged diff for the CRX codex-driven hunt. It must fully fix: <finding>. Judge correctness + money / idempotency / actor / lifecycle bugs + whether it introduces a NEW bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/codex-fix-glance-prompt.txt
-# Adversarial review gate — use the Sol/high gate wrapper (pins gpt-5.6-sol at high effort,
-# --ignore-user-config, read-only), NOT the spark hunter wrapper. stdout = verdict, stderr = trace.
+# Adversarial review gate — use the gate wrapper (pins the model explicitly, --ignore-user-config,
+# read-only), NOT the spark hunter wrapper. Defaults to gpt-5.6-luna at xhigh since 2026-09-20;
+# add --sol for a gpt-5.6-sol/high pass on genuinely complex work. stdout = verdict, stderr = trace.
 node scripts/overnight-codex-gate.mjs .claude/session-state/codex-fix-glance-prompt.txt --timeout 600 \
   > .claude/session-state/codex-fix-glance-latest.txt 2> .claude/session-state/codex-fix-glance-trace.txt
 [ $? -ne 0 ] && echo "Codex fix-glance run FAILED — treat as NEEDS-WORK; do NOT commit."
