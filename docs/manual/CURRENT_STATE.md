@@ -88,8 +88,9 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-14 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`); schema shape last re-read 2026-09-05 by the live-introspection regeneration
+**Last verified: 2026-09-19 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: unchanged from the 2026-09-17 capture, and none of the `20260914100100`..`20260914100900`
+candidates or the new `20260908140000` six-generator year fix is applied); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and

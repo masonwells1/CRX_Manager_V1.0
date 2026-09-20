@@ -73,6 +73,11 @@ supabase/migrations/20260912165758_refuse_generic_field_invoice_creation.sql tex
 supabase/migrations/20260913040359_finish_generic_field_invoice_cutover.sql text eol=lf
 supabase/migrations/20260913152700_preserve_unchanged_source_invoice_dates.sql text eol=lf
 scripts/smoke/prove-preview-field-app-season.mjs text eol=lf
+# Six next_*_number generators year -> Chicago (2026-09-19, issue #617). Same rule:
+# the file pins md5(prosrc) for six bodies, and a CRLF smudge would fail every pin.
+# The prover reads the candidate bodies out of the migration, so it is pinned too.
+supabase/migrations/20260908140000_number_generators_year_chicago.sql text eol=lf
+scripts/smoke/prove-number-generators-year-chicago.mjs text eol=lf
 
 # The six migrations applied live on 2026-08-12 whose files were recovered from
 # the applying sessions' transcripts and landed afterwards. Same rule, same
