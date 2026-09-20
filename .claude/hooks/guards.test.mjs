@@ -365,6 +365,24 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const cancel = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: `gh ${mergeVerb} 5 --disable-auto` } });
   eq(cancel.stdout.trim(), "", "a plain cancellation is still allowed");
 
+  // Codex sol (2026-09-20, round 3): pflag BUNDLES boolean shorts, so `-db` is
+  // `-d` then `-b` and gh takes the next word as the body VALUE — the
+  // cancellation flag never reaches gh, and `--admin` is live. Reading only
+  // standalone shorts made the guard stand down on an ADMINISTRATOR merge
+  // (measured: base blocked, candidate allowed).
+  for (const command of [
+    `gh ${mergeVerb} 123 -db --disable-auto --admin --squash`,
+    `gh ${mergeVerb} 123 -d -b --disable-auto --admin --squash`,
+    `gh ${mergeVerb} 123 --disable-auto --admin`,
+  ]) {
+    const res2 = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command } });
+    const parsed2 = res2.stdout.trim() ? JSON.parse(res2.stdout)?.hookSpecificOutput ?? {} : {};
+    eq(parsed2.permissionDecision, "deny", `a cancellation never excuses --admin: ${command}`);
+  }
+  // A cancellation carrying a BOOLEAN short is still just a cancellation.
+  const shortCancel = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: `gh ${mergeVerb} 5 -d --disable-auto` } });
+  eq(shortCancel.stdout.trim(), "", "a cancellation with a boolean short stays allowed");
+
   // A configured remote name may legally contain `/`, and git resolves
   // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
   // raw URL — which means "no remote.<name>.* applies" — so a mirrored

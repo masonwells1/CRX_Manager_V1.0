@@ -32,6 +32,13 @@ ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
 // after refusing a composed command, so a substitution can no longer smuggle a
 // second merge past a silent gate (Codex sol, 2026-09-20).
 eq(ghMergeRequest("gh pr merge 5 --disable-auto")?.disableAuto, true, "--disable-auto is reported as a cancellation");
+// pflag bundles boolean shorts: `-db` is `-d` then `-b`, so the NEXT word is the
+// body VALUE and the cancellation flag never reaches gh — while `--admin` does
+// (Codex sol, 2026-09-20 round 3).
+eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.disableAuto, false,
+  "a bundled value-taking short swallows the next word, so it is not a cancellation");
+eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.admin, true,
+  "...and the administrator flag is still seen");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");

@@ -2393,7 +2393,26 @@ export function ghMergeRequest(command) {
   // because consuming one extra word costs nothing.
   const longValueFlags = new Set(["--repo", "--match-head-commit", "--subject", "--body", "--body-file"]);
   const shortValueFlags = new Set(["-R", "-r", "-t", "-b", "-F"]);
-  const takesValue = (word) => longValueFlags.has(word.toLowerCase()) || shortValueFlags.has(word);
+  // pflag BUNDLES boolean shorts: `-db` is `-d` (delete-branch) then `-b`
+  // (body). The value-taking flag in a bundle swallows the REST of that token if
+  // any characters follow it, and otherwise the NEXT word. Reading only
+  // standalone `-b` let `<merge> 123 -db --disable-auto --admin --squash` parse
+  // as a cancellation: gh takes `--disable-auto` as the body VALUE and performs
+  // an ADMINISTRATOR merge, while the guard stood down (Codex sol, 2026-09-20 —
+  // measured base blocked:true, candidate blocked:false).
+  const bundleTakesNextWord = (word) => {
+    if (!/^-[A-Za-z]+$/.test(word) || word.startsWith("--")) return false;
+    const chars = word.slice(1);
+    for (let position = 0; position < chars.length; position += 1) {
+      if (!shortValueFlags.has(`-${chars[position]}`)) continue;
+      // A value-taking short consumes the next word only when nothing follows it
+      // inside this token; otherwise the remainder IS its value.
+      return position === chars.length - 1;
+    }
+    return false;
+  };
+  const takesValue = (word) =>
+    longValueFlags.has(word.toLowerCase()) || shortValueFlags.has(word) || bundleTakesNextWord(word);
   // Which words gh reads as an OPTION rather than as some option's VALUE. Every
   // keyword test below asks this first, because a word in a value position is
   // data: `gh pr merge 123 --body '--disable-auto' --admin --squash` performs an

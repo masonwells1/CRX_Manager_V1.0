@@ -171,7 +171,10 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     // after the endpoint and substitution refusals above have seen the segment.
     // The parser used to swallow it, which let a substitution smuggle a second,
     // administrator merge past a silent gate (Codex sol, 2026-09-20).
-    if (found?.disableAuto) continue;
+    // ...and only for a PURE cancellation. A command that also carries `--admin`
+    // is an administrator merge whatever else it asks for, so it stays in the
+    // request list and hits the refusal below (Codex sol, 2026-09-20).
+    if (found?.disableAuto && !found.admin) continue;
     if (found) { addRequest(found); continue; }
   }
 }
