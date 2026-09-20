@@ -12,10 +12,13 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-19 against the live ledger (read-only ledger query, which confirmed by name that none of
-the parked commission, next-invoice-number or six-generator year candidates below is applied; boundary figures are
-recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
-separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
+**Last verified: 2026-09-20 against the live ledger (read-only ledger query, which confirmed by name
+that none of the parked commission or next-invoice-number candidates below is applied — all eight
+`20260914100*` files, PR #704's seven restamps plus PR #721's `20260914100800`. The six-generator
+year fix is NO LONGER parked: `20260908140000_number_generators_year_chicago` applied live
+2026-09-20 under ledger version `20260920051333`, and the 2026-09-19 stamp that called it unapplied
+was stale. Boundary figures are recorded in `docs/reference/migration-history.md`, not here); the F2
+entry retains its separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
 there before any apply decision, and update it there — never restate it here. The reason is a trap
@@ -645,7 +648,10 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 | `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
 | `next_return_number` | `extract(year FROM current_date)` | `RMA-<year>-nnnn` (this table said `RET-`; live is `RMA-`) |
 
-**FIX WRITTEN 2026-09-19, NOT APPLIED (issue #617).** `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
+**APPLIED LIVE 2026-09-20 (issue #617)** under ledger version `20260920051333`, confirmed by name in
+a read-only ledger query on 2026-09-20. The entry below describes the fix as written and parked; it
+is retained as history, and the "must go FIRST" apply-order paragraph is now satisfied rather than
+outstanding. `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
 re-emits all six from their live `prosrc` (read read-only 2026-09-19) with only the year line changed,
 pins each live and candidate md5 (the candidate pins were computed on live as
 `md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
@@ -655,14 +661,15 @@ EXECUTE on those two and must keep it; the other four are postgres/service_role 
 proves the transcription byte-exact against the recorded live pins (the apply-time preflight re-checks live itself), shows the real bodies minting `-2029-` at
 20:00 Chicago on 31 December 2028 before the fix and `-2028-` after (years chosen so a missed clock
 substitution cannot pass by matching the real year), and makes each tested refusal fire by mutation (drift, owner, overload, signature, volatility, strictness, cost, support function, ACL grantees, grant option, missing roles; not the CR check or the timezone-data assertion).
-**Apply order — this file must go FIRST.** It is stamped `20260908140000`: above the live high-water
-`20260908130000` and below every other unapplied migration. That is the parked
-`20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
-`20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
-(`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
-checked with its own code: once this merges, the guard refuses every one of those until this file
-is applied. If any of them applies live first, this file is stranded and must be restamped above it.
-Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.
+**Apply order — SATISFIED 2026-09-20; retained as history.** It was stamped `20260908140000` so it
+would sort above the then-live high-water `20260908130000` and below every other unapplied
+migration: the parked `20260914100*` cohort on `main` (EIGHT files — PR #704's seven restamps plus
+PR #721's `20260914100800`, which the `100100`..`100900` range notation undercounts), and, on
+unmerged branches, `20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season
+files (`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). It went in first, at
+`20260920051333`, eight minutes before `20260911120000` at `20260920052149`, so that ordering held
+and nothing was stranded. All eight `20260914100*` files remain unapplied, confirmed by name
+2026-09-20.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,

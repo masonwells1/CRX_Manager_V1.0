@@ -24,6 +24,20 @@
         "idempotency"
       ]
     },
+    "adjust_inventory_control_character_keys": {
+      "chain": "smoke-adjust-inventory-control-character-keys.sql",
+      "container_only": true,
+      "container_prover": "prove-adjust-inventory-control-character-keys.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-adjust-inventory-control-character-keys.mjs, never through run-smoke.mjs against the live database: the chain plants [SMOKE] users, profiles, products and inventory rows, which the LIVE-DATA GUARD correctly refuses. Covers the LOCAL CANDIDATE 20260920120000, which is NOT applied. 20260911120000 (applied live 2026-09-20, ledger version 20260920052149) added a key check whose comment claimed it refused 'non-printable' keys; it required only that a key carry AT LEAST ONE printable ASCII character, so a UUID with a trailing newline was accepted. The candidate adds OR p_idempotency_key COLLATE \"C\" ~ '[[:cntrl:]]' and corrects the comment. A hygiene gap, not a live defect: both browser callers derive the key from crypto.randomUUID(), and live carried zero adjust_inventory receipts of any kind on 2026-09-20. The chain proves a newline-bearing key, a DEL-bearing key and a non-ASCII-only key are each refused with IDEMPOTENCY_KEY_REQUIRED leaving no receipt, no ledger row and no stock movement; that an ORDINARY key still moves stock once with one ledger row and one bound receipt, so the chain cannot pass for a body that refuses everything; and that a ZWSP-bearing key is still ACCEPTED, which keeps the migration's stated scope (C0 controls plus DEL, not C1/ZWSP/BOM/U+2028/soft hyphen) honest rather than aspirational. The prover additionally asserts the replayed body is byte-identical to what production runs, reproduces the gap on that installed body, shows a non-ASCII-only key was ALREADY refused so only the control-character case is new, shows the candidate refusing to apply over an unexpired control-character receipt (PREFLIGHT_STRANDED_RECEIPTS), a clean re-apply via the re-run pin path, and two mutations: removing the clause is caught by POSTFLIGHT_BODY_PIN, and removing it while recomputing both pins is still caught by POSTFLIGHT_CONTROL_CHAR. It exits non-zero on failure.",
+      "covers": [
+        "adjust_inventory"
+      ],
+      "area": [
+        "inventory",
+        "security",
+        "idempotency"
+      ]
+    },
     "create_order_from_blend_ticket": {
       "chain": "smoke-blend-ticket-fractional-cents.sql",
       "container_only": true,

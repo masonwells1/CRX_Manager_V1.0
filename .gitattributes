@@ -270,3 +270,14 @@ scripts/smoke/prove-invoice-season-follows-invoice-date.mjs text eol=lf
 supabase/migrations/20260911120000_bind_adjust_inventory_receipt_to_intent.sql text eol=lf
 scripts/smoke/smoke-adjust-inventory-intent-binding.sql text eol=lf
 scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs text eol=lf
+
+# adjust_inventory control-character keys (2026-09-20, NOT applied). Same rule,
+# same reason, and it binds BEFORE the first apply: the migration sha256-pins
+# the body it emits at two places and its own postflight enforces that pin, so a
+# CRLF checkout would install bytes the pin was never computed against and abort
+# mid-apply. It also pins the body 20260911120000 installed live, which is LF.
+# The prover recomputes both hashes from these files, so all three must be
+# byte-identical on Windows and Linux.
+supabase/migrations/20260920120000_refuse_control_character_adjust_inventory_keys.sql text eol=lf
+scripts/smoke/smoke-adjust-inventory-control-character-keys.sql text eol=lf
+scripts/smoke/prove-adjust-inventory-control-character-keys.mjs text eol=lf
