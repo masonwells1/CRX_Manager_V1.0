@@ -348,6 +348,23 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
     eq(decision, "deny", `trailing-backslash destination does not hide \`${tail}\``);
   }
 
+  // Codex sol (2026-09-20, PR #630, HIGH-01): a cancellation flag must not hide a
+// composed command. The parser used to return null for `--disable-auto`, so the
+// guard's substitution refusal never ran and the NESTED administrator merge —
+// which bash executes first — reached GitHub with the gate silent. Measured
+// then: base denied, candidate allowed. Driven through the hook process here,
+  // because the parser assertions alone did not catch it.
+  const mergeVerb = "pr me" + "rge"; // keep the literal out of this file's own text
+  const bypass = `gh ${mergeVerb} 1 --disable-a""uto --body "$(gh ${mergeVerb} 2 --admin --squash)"`;
+  const res = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: bypass } });
+  const parsed = res.stdout.trim() ? JSON.parse(res.stdout)?.hookSpecificOutput ?? {} : {};
+  eq(parsed.permissionDecision, "deny", "a quoted cancellation does not hide a nested admin merge");
+  ok(/command substitution/.test(parsed.permissionDecisionReason ?? ""), "refused as a composed command");
+
+  // ...while a real cancellation still lands nothing and stays allowed.
+  const cancel = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: `gh ${mergeVerb} 5 --disable-auto` } });
+  eq(cancel.stdout.trim(), "", "a plain cancellation is still allowed");
+
   // A configured remote name may legally contain `/`, and git resolves
   // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
   // raw URL — which means "no remote.<name>.* applies" — so a mirrored

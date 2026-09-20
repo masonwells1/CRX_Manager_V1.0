@@ -167,6 +167,11 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
         "never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
       );
     }
+    // A cancellation lands nothing, so the gate stands down — but only HERE,
+    // after the endpoint and substitution refusals above have seen the segment.
+    // The parser used to swallow it, which let a substitution smuggle a second,
+    // administrator merge past a silent gate (Codex sol, 2026-09-20).
+    if (found?.disableAuto) continue;
     if (found) { addRequest(found); continue; }
   }
 }

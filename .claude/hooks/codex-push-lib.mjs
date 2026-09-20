@@ -2414,14 +2414,23 @@ export function ghMergeRequest(command) {
   // `--disable-auto` cancels a pending auto-merge — it does not land anything,
   // so the gate stands down for it. Only in an option position, and only when it
   // is actually asking to disable: `--disable-auto=false` does the opposite.
-  if (words.some((word, index) => {
+  //
+  // REPORTED, not returned as null. Standing down inside the parser hid the whole
+  // command from the caller, and the caller's composition checks — command
+  // substitution, a second merge, a raw REST merge — run only on a command it was
+  // given. So `<merge> 1 --disable-auto --body "$(<merge> 2 --admin --squash)"`
+  // ran its INNER administrator merge with the gate silent. The shell normalization
+  // added on this branch is what made the quoted spelling reach this test, so the
+  // stand-down has to happen in the CALLER, after it has refused composed commands
+  // (Codex sol, 2026-09-20 — measured: base denied, candidate allowed).
+  const disableAuto = words.some((word, index) => {
     if (!optionAt(index)) return false;
     const lower = word.toLowerCase();
     if (lower === "--disable-auto") return true;
     if (!lower.startsWith("--disable-auto=")) return false;
     const value = lower.slice("--disable-auto=".length);
     return value === "1" || value === "t" || value === "true";
-  })) return null;
+  });
   let selector = "";
   let repo = "";
   let auto = false;
@@ -2479,7 +2488,7 @@ export function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
-  return { selector, repo, auto, admin };
+  return { selector, repo, auto, admin, disableAuto };
 }
 
 // gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`
