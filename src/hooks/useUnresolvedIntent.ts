@@ -118,9 +118,14 @@ export function useUnresolvedIntent() {
    *   2. Warning once per distinct edit still let the SECOND click on any edited
    *      payload through -- which mints a fresh key and re-applies work that may
    *      already have committed. `gpt-5.6-sol` and the Codex bot both called that a
-   *      real double-apply path, independently, and they were right: these RPCs bind
-   *      no payload server-side, so the client is the only thing standing between a
-   *      lost response and a second stock adjustment, hold or duplicate record.
+   *      real double-apply path, independently, and they were right. `save_blend_recipe`
+   *      binds no payload server-side, so for that form the client is the only thing
+   *      standing between a lost response and a duplicate record. `adjust_inventory`
+   *      and `create_inventory_hold` now bind the actor and a request fingerprint per
+   *      key, and that does NOT close this path either: minting a FRESH key is exactly
+   *      how an edited retry escapes a binding that only compares requests arriving
+   *      under the SAME key. The freeze is what prevents the second stock adjustment
+   *      or hold.
    *
    * The cost is that an operator with an unresolved attempt must reload before making
    * a DIFFERENT change on that screen. That is the correct instruction anyway: while

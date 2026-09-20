@@ -63,6 +63,39 @@ to inspect.
   `save_blend_recipe` still does. The guard is still required for all three — a NEW key sidesteps
   the binding entirely, because the binding only compares requests arriving under the SAME key.
 
+### Flagged, NOT fixed here — stale "replays on the key alone" comments elsewhere
+
+The apply makes that phrase false for `adjust_inventory` wherever it still appears. Corrected in
+`src/hooks/useUnresolvedIntent.ts` (two places — the header contract note and the double-apply
+rationale at the `acknowledgement escape` block, the second caught by CodeRabbit after the first was
+fixed alone). Still stale, and deliberately left to their owning lane rather than widened into here:
+
+- `src/components/inventory/BatchAdjustModal.tsx` (~L62)
+- `src/hooks/useUncertainMutationIntent.test.ts` (~L742, ~L1146)
+- `src/components/inventory/BatchAdjustModal.retry.test.tsx` (~L74)
+- `src/lib/gauntletFrontendSafetyGuards.test.ts` (~L208)
+- `src/components/integrity/IntegrityCleanupPanel.tsx` (~L110) — confirm which RPC it means first
+
+Row 930 records this wording as owned by PR #624, which rewrites those files. Their test assertions
+still pass, so this is comment drift rather than a behavioural break — but the comments now describe
+a server contract that changed underneath them.
+
+### Fleet parser: an applied migration was being reported as pending
+
+Codex raised this on delivery 8 and it verified. `.claude/hooks/worktree-awareness-lib.mjs`
+(`localCandidateMigrationPathsFromHistory`, the `LOCAL CANDIDATE … NOT APPLIED` matcher) reads the
+history row's status token literally, and that library deliberately has **no** settled-detector — PR
+#437 tried twice to add one and was blocked both times, so the status token is the only thing that
+can retire a row. Row 929's `20260908140000_number_generators_year_chicago` still carried the pending
+wording after applying live at ledger version `20260920051333`, so fleet and worktree checks counted
+it as parked work.
+
+Proven by running the real parser against the real `migration-history.md`: **9** rows classified
+pending, one of them an applied migration. After settling row 929's status token: **8** rows, zero
+false pendings. The first attempt at that edit still failed the probe, because the explanatory prose
+quoted the old pending wording inside the same cell and the matcher fired on the quotation — the
+retiring edit must not restate it anywhere in the row.
+
 ### Not verified
 
 No UI exercise of an adjustment against production; the postflight is catalog-level plus the
