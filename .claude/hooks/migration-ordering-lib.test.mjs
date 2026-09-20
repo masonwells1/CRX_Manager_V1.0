@@ -9,6 +9,7 @@
 // batch of new migrations.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   normalizeMigrationName,
   migrationTimestamp,
@@ -200,6 +201,88 @@ check("compares against applied names carrying ledger-format noise", () => {
     appliedNames: ["supabase/migrations/20260714220000_shared_idempotency_and_hold_hardening.sql"],
   });
   assert.equal(res.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// The 20260908120100 band (Codex P3 on the 2026-09-13 restamp)
+//
+// PR #688/#695 first stamped the seven stranded commission/invoice candidates
+// 20260908120100..20260908130900. That sorts BELOW the inventory fix
+// 20260908130000, which applied live on 2026-09-15, so every one of them would
+// have been an out-of-order replay the moment it was applied. The restamp to
+// 20260914100* (PR #704) is the fix. Nothing pinned either half of that, so a
+// future stamp chosen in the same band would re-create the defect silently.
+// ---------------------------------------------------------------------------
+const TWO_SEPTEMBER_8_APPLIES = [
+  "20260908120000_close_pr535_live_gaps",
+  "20260908130000_bind_create_inventory_hold_receipt_to_intent",
+];
+
+check("REFUSES a candidate stamped between the two 2026-09-08 applied migrations", () => {
+  const res = checkMigrationOrdering({
+    name: "20260908120100_next_invoice_number_year_chicago",
+    sql: "SELECT 1;",
+    appliedNames: TWO_SEPTEMBER_8_APPLIES,
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.timestamp, "20260908120100");
+  assert.equal(res.newestApplied, "20260908130000");
+  assert.match(res.reason, /FORWARD-ONLY/);
+});
+
+check("REFUSES the whole first-draft band, not just its lowest stamp", () => {
+  // The draft ran to 20260908130900, which is ABOVE 20260908130000 and so is
+  // genuinely forward. The band is only partly bad, and a test that checked the
+  // lowest stamp alone would not say where the edge is.
+  for (const [stamp, expected] of [
+    ["20260908120100", false],
+    ["20260908125959", false],
+    ["20260908130000", true], // equal to the applied stamp: an idempotency question, not ordering
+    ["20260908130900", true],
+  ]) {
+    const res = checkMigrationOrdering({
+      name: `${stamp}_commission_candidate`,
+      sql: "SELECT 1;",
+      appliedNames: TWO_SEPTEMBER_8_APPLIES,
+    });
+    assert.equal(res.ok, expected, `${stamp} ordering verdict`);
+  }
+});
+
+check("ALLOWS the 20260914100* stamps the restamp replaced them with", () => {
+  // The fix has to actually clear the guard, or the restamp bought nothing.
+  for (const name of [
+    "20260914100100_next_invoice_number_year_chicago",
+    "20260914100200_commission_history_report_replay_guard",
+    "20260914100900_repair_commission_history_label_snapshots",
+  ]) {
+    const res = checkMigrationOrdering({
+      name,
+      sql: "SELECT 1;",
+      appliedNames: TWO_SEPTEMBER_8_APPLIES,
+    });
+    assert.equal(res.ok, true, `${name} must be allowed`);
+  }
+});
+
+check("the band is refused against the COMMITTED registry's applied names", () => {
+  // Bound to the real .claude/schema-registry.json rather than a fixture: if a
+  // later change drops 20260908130000 from the applied-name list, the band
+  // re-opens silently, and this is where that surfaces.
+  const registry = JSON.parse(
+    readFileSync(new URL("../schema-registry.json", import.meta.url), "utf8")
+  );
+  const appliedNames = registry._meta.applied_migration_names;
+  const res = checkMigrationOrdering({
+    name: "20260908120100_next_invoice_number_year_chicago",
+    sql: "SELECT 1;",
+    appliedNames,
+  });
+  assert.equal(res.ok, false);
+  assert.ok(
+    res.newestApplied >= "20260908130000",
+    `newest applied stamp ${res.newestApplied} must cover the 2026-09-15 apply of 20260908130000`
+  );
 });
 
 console.log(`migration-ordering-lib: ${passed} assertions passed`);

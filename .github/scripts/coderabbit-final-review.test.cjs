@@ -3135,7 +3135,9 @@ test('a changed candidate requires a fresh PR even when an earlier-head review c
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'blocked');
   assert.equal(harness.actionsComments.length, 0);
-  assert.match(harness.failures.join('\n'), /retargeted, rewritten or changed/);
+  assert.match(harness.failures.join('\n'),
+    /retargeted, rewritten or changed; open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment/);
+  assert.doesNotMatch(harness.failures.join('\n'), /preserve (this PR|it)/);
 });
 
 test('an authenticated outside-diff-only report reconciles without another dispatch', async () => {
@@ -3687,9 +3689,23 @@ test('a former administrator now read-only cannot launder a late review from the
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'blocked');
   assert.equal(result.reason, 'ambiguous_native_history');
-  assert.match(harness.failures.join('\n'), /changed since PR creation/);
+  assert.match(harness.failures.join('\n'),
+    /changed since PR creation; open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment/);
+  assert.doesNotMatch(harness.failures.join('\n'), /preserve (this PR|it)/);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.equal(harness.receiptComments.length, 1);
+});
+
+test('a candidate changed since PR creation is told to replace and close the PR, not relabel it', async () => {
+  const changed = pullRequest({ labels: [READY_LABEL], baseSha: NEXT_BASE });
+  const harness = makeNativeHarness({ pulls: [changed], eventPullRequest: changed, runHeadSha: HEAD });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  const failures = harness.failures.join('\n');
+  assert.match(failures, /changed since PR creation; open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment/);
+  assert.match(failures, /Apply ready-for-coderabbit on the fresh PR once its checks pass; a new commit is unnecessary/);
+  assert.doesNotMatch(failures, /preserve (this PR|it)|after correcting the blocker/);
 });
 
 test('missing edited duplicate or forged original context stops before spending provider quota', async () => {
