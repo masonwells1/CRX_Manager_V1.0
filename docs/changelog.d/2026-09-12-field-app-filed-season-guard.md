@@ -6,8 +6,12 @@ work and adds the guard; it does not revive the closed due-date PR #591.
 
 An existing field-application invoice keeps its filed season. Preview and save must reject
 date edits across October 1, and all database writers must reject changing its filed season.
-The screen explains the allowed date range. Within-season edits remain allowed. New invoices
-still derive their season from the invoice date. No money calculation is rewritten.
+The screen explains the allowed date range. Within-season edits remain allowed. New **generic**
+invoices still derive their season from the invoice date. That rule is scoped deliberately: the
+dedicated job and blend-ticket creators preserve their source season while stamping today's
+invoice date, which is supported behaviour and not a bypass — see
+`2026-09-12-field-app-invoice-creation-season-guard.md` and the September 13 compatibility
+clarification in `docs/manual/DECISION_LOG.md`. No money calculation is rewritten.
 
 The new migration is NOT APPLIED. Read-only live evidence on September 12 confirms the
 previous preview implementation remains installed and the new helper/trigger are absent.

@@ -41,7 +41,7 @@ Other SQL errors and uncertain transport failures are never automatically retrie
 `runCriticalAction` remains reporting/loading-state handling, not mutation replay.
 
 **Unchanged source dates, September 13 (LOCAL; NOT APPLIED):**
-`20260913152700_preserve_unchanged_source_invoice_dates.sql` follows the existing
+`20260911130000_preserve_unchanged_source_invoice_dates.sql` follows the existing
 guard and preserves each invoice member's own unchanged stored date, including
 prior-season job/blend invoices created with today's date. Preview still prices
 each member from its own filed season. Unchanged-date restoration does not

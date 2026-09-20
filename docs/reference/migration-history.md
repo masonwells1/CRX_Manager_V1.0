@@ -27,8 +27,9 @@ need registering in `MIGRATIONS_AWAITING_TYPE_REGENERATION`.
 
 **This PR's four field-invoice guard candidates are written, UNAPPLIED, and absent from every
 captured ledger above.** Rows 931-934 carry authored stamps `20260908190000`, `20260912165758`,
-`20260913040359` and `20260913152700`. Three of the four sort strictly ABOVE the 2026-09-20
-high-water. **`20260908190000` does NOT: it sorts BELOW the applied
+`20260913040359` and `20260911130000` (row 934, restamped from `20260913152700` on 2026-09-20 —
+see that row). Row numbers are insertion order, not apply order. Three of the four sort strictly
+ABOVE the 2026-09-20 high-water. **`20260908190000` does NOT: it sorts BELOW the applied
 `20260911120000_bind_adjust_inventory_receipt_to_intent`.** It is deliberately NOT restamped, for
 three reasons. (1) The two migrations share no database object — `20260908190000` replaces
 `preview_field_app_invoice_split`, `_assert_field_app_invoice_date_in_filed_season` and
@@ -53,20 +54,30 @@ NOT touched by these four files, and is tracked as **CRX-LIFE-001** in
 **ORDERING IS STRICT. None of these files carries an `ordering-guard: ahead-of-pending`
 marker.** An earlier revision of this paragraph said they did; that was true before
 2026-09-20 and is no longer. The three markers were REMOVED after PR #726 merged
-`20260908140000_number_generators_year_chicago` (UNAPPLIED), which sorts BELOW all four
-of these files and whose own header states it must apply first. The markers would have
-silently waved it through, and applying these ahead of it would make it permanently fail
-the ordering guard and strand the Chicago-year document-number correction (deadline
-31 December 2026). **Apply `20260908140000` first, then these four in ascending order.**
-The executable guard enforces this from the pending set rather than from the stamp, and it was
-re-run on this merge (2026-09-20, `checkPendingMigrations`): `20260908190000` REFUSES while
-`20260908140000` is pending; `20260912165758` REFUSES naming three older pending migrations; and
-`20260913040359` REFUSES naming four. That is why `20260908190000` sorting below the applied
-`20260911120000` is inert — the guard admits a candidate only when every older TRACKED-and-UNAPPLIED
-migration is gone, and an applied migration is by definition no longer in that set. (The guard
-currently still lists `20260911120000` among the pending, because it reads applied names from the
-un-refreshed registry; that is conservative in the safe direction and resolves itself on the next
-registry refresh.)
+`20260908140000_number_generators_year_chicago`, which sorts BELOW all four of these files
+and whose own header states it must apply first. The markers would have silently waved it
+through, and applying these ahead of it would have made it permanently fail the ordering
+guard and strand the Chicago-year document-number correction (deadline 31 December 2026).
+Removing them was still right — strict is the safe default — but the risk it guarded
+against is **now gone**: row 929 records `20260908140000` as **APPLIED LIVE 2026-09-20**
+under ledger version `20260920051333`. An earlier revision of this paragraph called it
+UNAPPLIED and told operators to "apply `20260908140000` first". **Do not. That prerequisite
+is already satisfied; re-applying it would fail.** The apply sequence is the four local
+candidates alone, and NOT in row order:
+**`20260908190000` → `20260911130000` → `20260912165758` → `20260913040359`.**
+
+The executable pending-set guard, not the stamp, is the authority on this, and it must be
+re-run immediately before any owner-authorized apply. Re-run here on 2026-09-20
+(`checkPendingMigrations`) it REFUSED all four, naming `20260908140000` and `20260911120000`
+among the blockers — **but that output reflects a stale input, not current reality.** The
+guard reads applied names from `.claude/schema-registry.json`, whose snapshot predates both
+2026-09-20 applies, so it still counts two already-applied migrations as pending. It errs in
+the safe direction (refusing too much, never too little) and resolves itself when the
+registry is refreshed from a live read — which is a separate owner-gated action this PR does
+not perform. The structural point the guard demonstrates stands regardless of the snapshot:
+it admits a candidate only when every older TRACKED-and-UNAPPLIED migration is gone, and an
+applied migration is by definition no longer in that set, which is why `20260908190000`
+sorting below the applied `20260911120000` is inert.
 
 They also sort BELOW the merged-but-unapplied `20260914100100`-`20260914100900` set;
 those are a separate lane that these guards neither apply nor repair. Row 927's inventory
@@ -1994,17 +2005,18 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | # | Authored timestamp | Description |
 |---|--------------------|-------------|
 | 932 | 20260912165758 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 1.** File: `20260912165758_refuse_generic_field_invoice_creation.sql`. SQL sha256: `997872a6afde7fc6fdee39bb4b3722d58e4f96881ffb900de4f179437efbc071`. The earlier one-phase refusal failed the committed-retry regression and is superseded IN THIS UNAPPLIED proposal. Install a fail-fast shared advisory barrier, transitional READ COMMITTED requirement and fresh V1 catalog fence while preserving original creation/below-cost/key-only receipt/delegation semantics. Commit this migration separately before phase 2; never bundle both. Owner, signature, defaults, search path, ACL and original OID remain pinned. Runtime and fresh whole-branch Sol/high review are pending for the corrected candidate; no merge or live apply authorized. |
-| 933 | 20260913040359 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 2.** File: `20260913040359_finish_generic_field_invoice_cutover.sql`. SQL sha256: `a84fa89eba7edabed07d4321605feca0d6997265af46ce908fd35efd00f1dc65`. Require committed phase 1, exclusive advisory access, one READ COMMITTED transaction, stats visibility, no other open/prepared transaction and no still-valid generic save receipt (NULL or exact expiry boundary included). Refusal preserves phase 1 and existing retries; wait for natural expiry, never delete/backfill receipts. Only after safe cutover install NEW generic field-invoice refusal before unchanged below-cost/key-only receipt/delegation. Dedicated source-season creators, other types, existing edits and original OID remain unchanged. Current-candidate proof/review/publication remain required; no merge or live apply authorized. |
+| 933 | 20260913040359 | **LOCAL CANDIDATE — NOT APPLIED. PHASE 2.** File: `20260913040359_finish_generic_field_invoice_cutover.sql`. SQL sha256: `da3d4c76c843b0646dee96abbbcff091066de1fd54e00f67ac65a5b52288c432`. Require committed phase 1, exclusive advisory access, one READ COMMITTED transaction, stats visibility, no other open/prepared transaction and no still-valid generic save receipt (NULL or exact expiry boundary included). Refusal preserves phase 1 and existing retries; wait for natural expiry, never delete/backfill receipts. Only after safe cutover install NEW generic field-invoice refusal before unchanged below-cost/key-only receipt/delegation. Dedicated source-season creators, other types, existing edits and original OID remain unchanged. Current-candidate proof/review/publication remain required; no merge or live apply authorized. |
 
 ## Unchanged source-date correction — 2026-09-13
 
 | # | Authored timestamp | Description |
 |---|--------------------|-------------|
-| 934 | 20260913152700 | **LOCAL CANDIDATE — NOT APPLIED.** SQL sha256: `27eee51361e87a4873e2ad1f3e20d5aa08adf2f31dd719b6c69134b9765c13b3`. `20260913152700_preserve_unchanged_source_invoice_dates.sql` follows row 930 without editing its migration. Preserve each existing invoice's unchanged stored date and restoration, including legitimate prior-season job/blend creators; retain immutable filed season, each-member filed-season pricing, NEW out-of-season date/type refusal, owner-only guards and unchanged trigger shape. Claude's HIGH was reproduced for BOTH public creator previews; corrected final behavior and independent review remain required. No table/column/type/public grant/pricing or business-row rewrite; no live apply authorized. |
+| 934 | 20260911130000 | **LOCAL CANDIDATE — NOT APPLIED.** SQL sha256: `2c3c58596e8067661861faa54e5412e6662cf9abb908815cf9d6d8fc87951204`. `20260911130000_preserve_unchanged_source_invoice_dates.sql` follows row 931 (`20260908190000`) without editing its migration. **RESTAMPED 2026-09-20 from `20260913152700` to `20260911130000`** on a Codex GitHub App P2, because at the old stamp it sorted AFTER both cutover phases while its own header says to apply it right after `20260908190000`. Phase 2 (row 933) deliberately aborts at `GENERIC_FIELD_CUTOVER_ACTIVE_RECEIPTS` or `GENERIC_FIELD_CUTOVER_NOT_QUIET` rather than cutting over while generic save receipts or other transactions are live, and strict ordering would not let this correction step around that block — so ordinary generic-invoice activity could have stranded production in the very broken state this file fixes for the receipt lifetime or longer. This file needs only the two guard identities from `20260908190000` and nothing from either phase, and the new stamp sorts above the live-applied `20260911120000`. Row numbers here are insertion order, NOT apply order: this row is 934 but applies THIRD of the four. Apply order is `20260908190000` → **this file** → `20260912165758` → `20260913040359`. Preserve each existing invoice's unchanged stored date and restoration, including legitimate prior-season job/blend creators; retain immutable filed season, each-member filed-season pricing, NEW out-of-season date/type refusal, owner-only guards and unchanged trigger shape. Claude's HIGH was reproduced for BOTH public creator previews; corrected final behavior and independent review remain required. No table/column/type/public grant/pricing or business-row rewrite; no live apply authorized. |
 
 This authored stamp is above the current effective live high-water `20260908130000`
 (captured read-only 2026-09-17; it was `20260908120000` when this row was authored).
-The additive correction `20260913152700_preserve_unchanged_source_invoice_dates.sql`
+The additive correction `20260911130000_preserve_unchanged_source_invoice_dates.sql`
+(restamped from `20260913152700` on 2026-09-20 so its stamp matches this requirement)
 must follow `20260908190000`; it remains LOCAL and UNAPPLIED. It preserves each
 existing stored date and unchanged-date restoration while retaining immutable
 filed season and NEW out-of-season date/type-change refusal. No type, table,

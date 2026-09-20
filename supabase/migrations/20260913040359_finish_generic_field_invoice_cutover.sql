@@ -87,6 +87,12 @@ BEGIN
 
   -- Stabilize the receipt scan against any writer outside the public entry.
   -- No invoice table lock: dedicated/source creators are not this cutover's target.
+  -- A NULL expires_at is NOT covered by "wait for natural expiry" below. Ordinary
+  -- save_invoice receipts take the column default, but idempotency_keys.expires_at is
+  -- nullable, so a legacy or hand-inserted NULL-expiry row is possible and never expires.
+  -- This gate deliberately treats it as still-valid and refuses, which is fail-closed and
+  -- correct: it is a rollout signal requiring OPERATOR ADJUDICATION of that specific row,
+  -- not a wait. Do not delete, backfill, re-date or otherwise bypass the gate to clear it.
   LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
   IF v_body = '82c68c993dcff32eabd7b70c70f11527' AND EXISTS (
     SELECT 1 FROM public.idempotency_keys WHERE operation = 'save_invoice'

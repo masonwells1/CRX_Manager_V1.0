@@ -754,7 +754,7 @@ substitution cannot pass by matching the real year), and makes each tested refus
 `20260908130000` and below every other unapplied migration. That is the parked
 `20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
 `20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
-(`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
+(`20260908190000`, `20260911130000`, `20260912165758`, `20260913040359`). The pending-migration guard
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
 Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.

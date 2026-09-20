@@ -123,8 +123,12 @@ Two modes, auto-selected:
   run each wrapped SELECT read-only with `mcp__…__execute_sql` (project `rhyzpcqhnizqbxphqdkr`). Each
   returns a `sweep_result` packet containing `predicate`, `rows`, and `function_contracts` from one
   database statement/snapshot. Capture those packets as a private local JSON array and run
-  `node scripts/db-invariant-sweeps/run-sweeps.mjs --adjudicate <captured.json>`; use `--only <names>`
-  for an explicit subset. Missing/duplicate/unknown packets are errors. Do **not** compare keys alone:
+  `node scripts/db-invariant-sweeps/run-sweeps.mjs --adjudicate <captured.json>` over the FULL
+  predicate set. **`--only <names>` is diagnostic-only.** It excludes predicates, so a filtered
+  adjudication cannot prove every invariant class is clean and is NOT valid evidence for the
+  migration, ship, or review gates — an unselected predicate could be holding an unallowlisted
+  violation. Iterate with it, then re-run unfiltered for gate evidence.
+  Missing/duplicate/unknown packets are errors. Do **not** compare keys alone:
   the same parameter/contract matcher runs in MCP adjudication and linked-psql execution. Captured
   JSON is not proof of freshness: actual read-only execution must still occur in the current session.
 

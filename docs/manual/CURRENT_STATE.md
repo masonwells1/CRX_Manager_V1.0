@@ -28,7 +28,7 @@ Live `save_invoice(jsonb,jsonb,text)` remains the original wrapper at body md5
 remains the null-acreage refusal body `8acf34542105a90212ddb0a5e7c5d272`.
 The filed-season edit guard, phase-one `20260912165758_refuse_generic_field_invoice_creation.sql`,
 phase-two `20260913040359_finish_generic_field_invoice_cutover.sql`, and unchanged-source-date
-correction `20260913152700_preserve_unchanged_source_invoice_dates.sql` all remain
+correction `20260911130000_preserve_unchanged_source_invoice_dates.sql` all remain
 **LOCAL CANDIDATES — NOT APPLIED**. Public-save creation/refusal, retries, existing
 edits, prior-season job/blend creation, replay drift and a byte-identical original-wrapper
 mutation passed in disposable PostgreSQL. This is local behavior proof, not live deployment.

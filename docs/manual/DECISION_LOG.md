@@ -19,8 +19,10 @@ this follow-up; exact exchange rechecked September 13 during Claude's adversaria
 
 **Decision.** Existing field-application invoices keep their filed season. A date can move within
 that season but cannot cross its October 1 boundary. Every database writer must also refuse to
-change the filed season, preventing a season-first/date-second bypass. New invoices still derive
-season from their invoice date. Preview and save follow the same rule.
+change the filed season, preventing a season-first/date-second bypass. New **generic** invoices
+still derive season from their invoice date; the dedicated job/blend creators are the documented
+exception, qualified in the compatibility clarification immediately below. Preview and save follow
+the same rule.
 
 **Compatibility clarification, September 13:** an unchanged stored date is not a date edit.
 Dedicated job/blend creators deliberately preserve the source season while stamping today's
