@@ -14,8 +14,10 @@
 -- exact-head proof, current read-only checks, live approval and postapply checks.
 -- No production execution is authorized by this pending file or its container proof.
 -- ORDERING: strict. No ahead-of-pending marker; its reason was obsolete and it would have
--- waved through 20260908140000 (PR #726, UNAPPLIED), the 20260908190000 season guard, and
--- phase one. Every older pending migration applies first, in ascending order.
+-- waved through 20260908140000 (PR #726), the season guard and phase one. 20260908140000
+-- APPLIED LIVE 2026-09-20 (ledger version 20260920051333), so do NOT reapply it. This file
+-- is LAST of the four: apply 20260911125000, then 20260911130000, then 20260912165758, then
+-- this one. Every older pending migration applies first, in ascending order.
 -- idempotency-body-check: exempt The existing operation-scoped check_idempotency and
 -- delegated key-only receipt behavior remain intact; no new intent binding is claimed.
 

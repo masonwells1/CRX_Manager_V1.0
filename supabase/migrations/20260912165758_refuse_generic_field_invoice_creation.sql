@@ -11,9 +11,11 @@
 -- No rows, money math, dates, source creators, signature, owner or ACL change.
 -- ORDERING: strict. No ahead-of-pending marker. The previous marker's reason was obsolete
 -- (the 20260905 candidates were restamped above this file) and it additionally waved through
--- both 20260908140000_number_generators_year_chicago (PR #726, UNAPPLIED) and this PR's own
--- 20260908190000 season guard, either of which stepping over would strand it. Apply every
--- older pending migration first, in ascending order.
+-- both 20260908140000_number_generators_year_chicago (PR #726) and this PR's own season
+-- guard, either of which stepping over would have stranded it. 20260908140000 APPLIED LIVE
+-- 2026-09-20 (ledger version 20260920051333), so do NOT reapply it. This file is THIRD of
+-- the four: apply 20260911125000, then 20260911130000, then this one, then 20260913040359.
+-- Apply every older pending migration first, in ascending order.
 -- idempotency-body-check: exempt This sole wrapper retains its real check_idempotency
 -- call and delegates unchanged key-only lookup/receipt semantics to the private writer.
 

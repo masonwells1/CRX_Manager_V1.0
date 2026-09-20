@@ -1,13 +1,23 @@
--- 20260908190000_field_app_invoice_cross_season_edit_guard.sql
+-- 20260911125000_field_app_invoice_cross_season_edit_guard.sql
 -- STATUS: NOT APPLIED
 --
 -- ORDERING: strict. No ahead-of-pending marker. The previous marker named the 20260905
 -- commission/invoice-number candidates, which were restamped to 20260914100100..20260914100900
 -- and now sort ABOVE this file, so its stated reason was obsolete. Worse, it silently waved
--- through 20260908140000_number_generators_year_chicago (PR #726, merged 2026-09-19, still
--- UNAPPLIED), which sorts BELOW this file and must run first: applying this one ahead of it
--- would make that migration permanently fail the ordering guard and strand the Chicago-year
--- document-number correction, whose deadline is 31 December 2026. Apply 20260908140000 first.
+-- through 20260908140000_number_generators_year_chicago (PR #726), which sorted BELOW this
+-- file and had to run first: applying this one ahead of it would have made that migration
+-- permanently fail the ordering guard and strand the Chicago-year document-number correction,
+-- whose deadline is 31 December 2026. That prerequisite is now SATISFIED -- 20260908140000
+-- APPLIED LIVE 2026-09-20 under ledger version 20260920051333 -- so do NOT apply it again.
+--
+-- RESTAMPED 2026-09-20 from 20260908190000 to 20260911125000. Two migrations applied live
+-- that morning and raised the effective ordering high-water to
+-- 20260911120000_bind_adjust_inventory_receipt_to_intent (ledger version 20260920052149).
+-- At its old stamp this file sorted BELOW that high-water, which the ledger requires a
+-- candidate to sort above. Nothing about this file's behaviour changed; only its position.
+-- It is still the FIRST of the four field-invoice candidates to apply, and the unchanged-date
+-- correction 20260911130000 still depends on the two guard identities created here and must
+-- follow it. Apply order: THIS FILE, 20260911130000, 20260912165758, 20260913040359.
 --
 -- Field-application invoices keep the season they were filed under. A date edit may
 -- move within that season, but it may not cross the October 1 boundary: doing so would

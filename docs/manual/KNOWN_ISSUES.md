@@ -107,8 +107,9 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-19 against the live ledger (read-only ledger query, which confirmed by name that none of
-the parked commission, next-invoice-number or six-generator year candidates below is applied; boundary figures are
+**Last verified: 2026-09-20 against the live ledger (read-only ledger query, which confirmed by name that the
+six-generator year fix `20260908140000` IS applied, and that the parked commission and
+next-invoice-number candidates below are still not; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
@@ -811,7 +812,16 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 | `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
 | `next_return_number` | `extract(year FROM current_date)` | `RMA-<year>-nnnn` (this table said `RET-`; live is `RMA-`) |
 
-**FIX WRITTEN 2026-09-19, NOT APPLIED (issue #617).** `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
+**FIXED AND APPLIED LIVE 2026-09-20 (issue #617).** The table above describes the pre-fix live
+bodies; all six now take the year from `(now() AT TIME ZONE 'America/Chicago')::date`. Merged as
+`6171c0a20` (PR #726) and applied live 2026-09-20 under ledger version `20260920051333`, which was
+the effective ordering high-water only briefly — `20260911120000` (#664) applied eight minutes
+later and superseded it. Post-apply live verification, read-only: all six
+`md5(prosrc)` equal the candidate pins, each body contains `America/Chicago`, and all six remain
+SECURITY DEFINER / `search_path=public, pg_temp` / owner `postgres`. The write-up below is the
+as-written record.
+
+`supabase/migrations/20260908140000_number_generators_year_chicago.sql`
 re-emits all six from their live `prosrc` (read read-only 2026-09-19) with only the year line changed,
 pins each live and candidate md5 (the candidate pins were computed on live as
 `md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
@@ -825,19 +835,32 @@ substitution cannot pass by matching the real year), and makes each tested refus
 `20260908130000` and below every other unapplied migration. That is the parked
 `20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
 `20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
-(`20260908190000`, `20260911130000`, `20260912165758`, `20260913040359`). The pending-migration guard
+(`20260911125000`, `20260911130000`, `20260912165758`, `20260913040359`). The pending-migration guard
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
-Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.
+**That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
+#664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
+The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply. Of the
+field-app season files `20260908190000` sorted BELOW it and had to be restamped; **that was done on
+2026-09-20 — it is now `20260911125000`** — so all four now sort above the high-water and their
+ascending stamp order is also their apply order: `20260911125000`, `20260911130000`,
+`20260912165758`, `20260913040359`. (`20260913152700` was restamped to `20260911130000` the same
+day for a separate ordering defect.) Read the boundary block in
+`docs/reference/migration-history.md` before ordering anything.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
-for cycle counts, `8675309`, verified from the live bodies 2026-09-19) — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
-`next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
-`MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
-2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
-the December work is filed under the wrong year and consumes that year's first number.
-**Same 31 December 2026 deadline.**
+for cycle counts, `8675309`, verified from the live bodies 2026-09-19).
+
+**Pre-fix behaviour, for the record — no longer live since 2026-09-20.** A job created at 7 pm
+Chicago on 31 December 2026 got `JOB-2027-0001`. As with `next_invoice_number`, that was a
+**wrong-year label, not a duplicate**: `next_job_number` takes `MAX(...) + 1` over rows already
+matching that year under an advisory lock (verified against live 2026-09-05), so the real first job
+of 2027 would simply have become `JOB-2027-0002`. Nothing was overwritten; the December work was
+filed under the wrong year and consumed that year's first number. **Post-fix, that same job is
+numbered in the 2026 sequence — `MAX(...) + 1` over the existing `JOB-2026-*` rows, so the next free
+2026 number, not `JOB-2026-0001` unless that year's sequence is empty.** The six generators now read
+the Chicago business date, so the 31 December 2026 deadline is met.
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
 function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**

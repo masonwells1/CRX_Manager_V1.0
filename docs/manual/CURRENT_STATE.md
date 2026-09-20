@@ -10,13 +10,17 @@ the current boundary is the **September 20** one recorded at the top of
 version `20260920052149` (1004 ledger rows), with bare names resolved by the canonical ordering
 rules. **Number a new candidate above `20260911120000`**, not above the now-superseded
 `20260908130000` (applied 2026-09-15, ledger version `20260915033227`, 1002 rows) that an earlier
-revision of this paragraph named. Both figures for the September 20 apply are transcribed from PR
-#739's apply record, not from a live read by this branch.
+revision of this paragraph named. Two migrations applied that morning: `20260908140000` under
+`20260920051333`, then `20260911120000` under `20260920052149`. **Do not reapply `20260908140000`.**
 
-Three of this branch's four guard migrations are stamped above that boundary.
-**`20260908190000_field_app_invoice_cross_season_edit_guard` is not** — it sorts below the applied
-`20260911120000` — and it is deliberately left unstamped-forward; see the reasoning and the
-executable pending-set proof at the top of `docs/reference/migration-history.md`. This branch also
+**All four of this branch's guard migrations now sort above that boundary**, and their ascending
+stamp order is also their apply order: `20260911125000` → `20260911130000` → `20260912165758` →
+`20260913040359`. Two were restamped on 2026-09-20 —
+`20260908190000_field_app_invoice_cross_season_edit_guard` → `20260911125000`, because it sorted
+below the new high-water, and `20260913152700_preserve_unchanged_source_invoice_dates` →
+`20260911130000`, because at its old stamp it sorted after both cutover phases while its own header
+required it to run right after the season guard. Reasons are recorded in rows 931 and 934 of
+`docs/reference/migration-history.md`. This branch also
 carries main's registry rebuild (PR #722, `--from-introspection`, `generated_at 2026-09-17`,
 `migrations_high_water 20260915033227`), which supersedes the September 12 regeneration this
 section previously described; it records already-applied identities, not any of the four pending
@@ -95,17 +99,25 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-19 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: unchanged from the 2026-09-17 capture, and none of the `20260914100100`..`20260914100900`
-candidates or the new `20260908140000` six-generator year fix is applied); schema shape last re-read 2026-09-05 by the live-introspection regeneration
+**Last verified: 2026-09-20 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1004 rows / 997 distinct names, `max(version)` `20260920052149` — two
+applies that morning, the `20260908140000` six-generator year fix (issue #617) under
+`20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
+`20260920052149`, which is now the effective ordering high-water; the
+`20260914100100`..`20260914100900` candidates are still not applied); schema shape last re-read 2026-09-05 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
 migration list includes both routine-only migrations from that refresh:
 `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied row's effective stamp:
+**`20260911120000_bind_adjust_inventory_receipt_to_intent`** (row 930, ledger version
+`20260920052149`, applied live 2026-09-20 via #664; verified live read-only 2026-09-20, 1004 ledger
+rows). A candidate must now sort above the `20260911120000` name-stamp.
+
+**Superseded boundary — row 927's 09-15 apply.** Until the 09-20 applies the high-water was
 **`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
 `20260915033227`, applied live 2026-09-15 via PR #691; verified live read-only 2026-09-17, 1002
-ledger rows). A candidate must now sort above the `20260908130000` name-stamp.
+ledger rows).
 
 **Superseded boundary — PR #646's row 923.** Until the 09-15 apply the high-water was
 **`20260908120000_close_pr535_live_gaps`** (row 923, ledger version `20260909023300`, applied live

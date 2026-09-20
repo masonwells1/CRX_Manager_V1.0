@@ -2,7 +2,7 @@
 -- prior-season job/blend creation. This is not a date edit or a re-seasoning.
 -- Actual disposable public preview regressions failed for BOTH creators under the
 -- September 8 guard. Date changes still must land inside the immutable filed season.
--- Apply AFTER 20260908190000; keep the earlier migration and cutover phases intact.
+-- Apply AFTER 20260911125000; keep the earlier migration and cutover phases intact.
 -- ORDERING: strict, and this file was RESTAMPED from 20260913152700 to 20260911130000 on
 -- 2026-09-20 so its stamp finally matches the line above. At the old stamp it sorted AFTER
 -- both cutover phases, and phase 2 (20260913040359) deliberately aborts at
@@ -12,9 +12,9 @@
 -- activity could have stranded production in exactly the broken state this file exists to
 -- fix - the September 8 guard rejecting unchanged-date previews for legitimate prior-season
 -- job/blend invoices - for the receipt lifetime or longer. The new stamp needs only the two
--- guard identities created by 20260908190000 and nothing from either cutover phase, and it
+-- guard identities created by 20260911125000 and nothing from either cutover phase, and it
 -- sorts above the live-applied 20260911120000. Apply order is now:
--- 20260908190000, THIS FILE, 20260912165758 (phase 1), 20260913040359 (phase 2).
+-- 20260911125000, THIS FILE, 20260912165758 (phase 1), 20260913040359 (phase 2).
 -- No business-row backfill, deletion, new grant, table, column, or pricing change.
 -- The owner-only SECURITY DEFINER assertion still inspects all live group members
 -- through RLS, and the existing row trigger still protects every table writer.

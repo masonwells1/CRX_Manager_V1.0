@@ -9,7 +9,7 @@ money, frontend or business behavior changes; all migrations remain unapplied.
 Observed metadata check: before the correction, `git -c core.autocrlf=true
 check-attr text eol` reported both attributes unspecified. Afterward it reports
 text set and eol lf. The SQL raw SHA-256 remains
-`da3d4c76c843b0646dee96abbbcff091066de1fd54e00f67ac65a5b52288c432`;
+`b6d05012f33b6567564c8e5b5337bf6f5af40b400a70fb20cb8486045c9c39b6`;
 the executed normalized PostgreSQL proof therefore retains identical SQL inputs.
 Focused indexed migration-history checks and docs checks must pass before commit.
 After midnight the docs gate required today's scoped verification. Read-only live
