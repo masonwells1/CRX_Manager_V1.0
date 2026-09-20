@@ -5,7 +5,7 @@
  * permission allow-list and never pauses an unattended run for approval.
  *
  * Usage:
- *   node scripts/overnight-codex-gate.mjs <promptFile> [--timeout 540] [--sol]
+ *   node scripts/overnight-codex-gate.mjs <promptFile> [--timeout 540] [--sol --reason "<why>"]
  *
  * - <promptFile>: a UTF-8 text file containing the full Codex prompt (candidate
  *   findings for the finding-gate, or a staged diff + ask for the fix-gate).
@@ -54,11 +54,20 @@ const timeoutSec = tIdx > -1 ? Number(process.argv[tIdx + 1]) || 540 : 540
 const useSol = process.argv.includes('--sol')
 const reviewModel = useSol ? CODEX_REVIEW_MODEL : 'gpt-5.6-luna'
 const reviewEffort = useSol ? CODEX_REVIEW_EFFORT : 'xhigh'
+// Escalating to Sol requires a stated reason, and the wrapper enforces that rather than trusting
+// the caller to write one into a report afterwards. An unattended loop that can escalate spend
+// silently makes the "say why" rule unauditable — the only reliable moment to capture the reason
+// is the moment of escalation.
+const rIdx = process.argv.indexOf('--reason')
+const solReason = rIdx > -1 ? String(process.argv[rIdx + 1] || '').trim() : ''
+if (useSol && !solReason) {
+  fail('--sol requires --reason "<why Luna was not enough>" — Sol escalation must never be silent')
+}
 // Log the tier WE selected, rather than relying on the CLI banner. An unattended loop is
 // required to record the model and effort that produced a verdict; if that record depends on
 // optional CLI output, a banner change silently makes the audit trail unfalsifiable. stderr,
 // so it lands in the trace file and never contaminates the stdout verdict.
-console.error(`[overnight-codex-gate] tier: ${reviewModel} / ${reviewEffort}${useSol ? ' (--sol)' : ' (default)'}`)
+console.error(`[overnight-codex-gate] tier: ${reviewModel} / ${reviewEffort}${useSol ? ` (--sol; reason: ${solReason})` : ' (default)'}`)
 
 const prompt = readFileSync(promptFile, 'utf8')
 if (!prompt.trim()) fail('prompt file is empty')

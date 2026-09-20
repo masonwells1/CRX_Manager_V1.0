@@ -115,6 +115,11 @@ default (2026-09-20); `gpt-5.6-sol` at high is reserved for the one end-of-run g
 covers the FULL risky set in `AGENTS.md` — money, inventory, auth, RLS, migration, permission, Edge
 Functions, or any other business-critical change — not a shortened list. Wait for his go-ahead.
 
+**A clean Luna validation does not close a risky finding.** This command is read-only and ends in a
+report, so say so explicitly in that report: for any risky-set change, the fix still requires the
+exact-SHA `gpt-5.6-sol` proof from `/codex-review` Step 3B before it can be pushed. Never present a
+Luna-validated risky finding to Mason as "reviewed and ready".
+
 ## Hard rules
 - **Read-only.** No `Edit`/`Write` except the one report file. No `apply_migration`, no deploy, no `git commit`.
 - **Cite or cut.** Any finding without a `file:line`, migration name, or constraint name gets dropped.
