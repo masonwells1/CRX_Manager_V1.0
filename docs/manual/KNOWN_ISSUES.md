@@ -1,7 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-09-13 for the read-only live ledger and scoped filed-season/generic-save
-contracts; other historical issues retain their own dated verification and are not re-certified.**
+**Last verified: 2026-09-14 against the live ledger — the verification recorded in the
+2026-09-14 header further down this file, which this branch's merge of `origin/main` brought
+in. The scoped filed-season/generic-save contract claims in the rest of THIS paragraph carry
+their own earlier 2026-09-13 verification and were not re-read on 2026-09-14. Other historical
+issues retain their own dated verification and are not re-certified.**
 The current ledger capture is maintained only in `docs/reference/migration-history.md`.
 Live generic save still has original body md5 `9a34478d405a1a3b8233cabcdfb39691`, and live
 preview remains `83f6600412ced085d0876a3c7339ff12`; the filed-season helpers are absent.

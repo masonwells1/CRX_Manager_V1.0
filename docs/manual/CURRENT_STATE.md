@@ -1,14 +1,19 @@
 # CRX Manager — Current State
 
-**Last verified: 2026-09-14 for the live migration ledger and the scoped invoice/job RPC
-contracts below; this is not a re-certification of every historical entry on this page.**
-The fresh read-only ledger agrees with the September 14 capture in
-`docs/reference/migration-history.md`: authored-name boundary `20260908120000`, with bare
-names resolved by the canonical ordering rules. That capture supersedes the September 8
-ordering guidance and older registry metadata below. This branch's registry was regenerated
-September 12 using all six live introspection queries; it records already-applied identities,
-not any of the four pending guard migrations as applied. Today's verification does
-not claim another six-query registry regeneration; that structural capture remains September 12.
+**Last verified: 2026-09-14 for the scoped invoice/job RPC contracts below; this is not a
+re-certification of every historical entry on this page.**
+**The migration ordering boundary is NEWER than that verification and has moved since.** This
+branch merged `origin/main` on 2026-09-19, so the current boundary is the **September 17**
+capture in `docs/reference/migration-history.md`, not the September 14 one this section
+originally cited: effective ordering high-water
+**`20260908130000_bind_create_inventory_hold_receipt_to_intent`**, applied live 2026-09-15 under
+ledger version `20260915033227` (1002 ledger rows), with bare names resolved by the canonical
+ordering rules. Number a new candidate above `20260908130000`, NOT above the superseded
+`20260908120000`. All four guard migrations in this branch are stamped above it and need no
+restamp. This branch also carries main's registry rebuild (PR #722, `--from-introspection`,
+`generated_at 2026-09-17`, `migrations_high_water 20260915033227`), which supersedes the
+September 12 regeneration this section previously described; it records already-applied
+identities, not any of the four pending guard migrations as applied.
 
 Live `save_invoice(jsonb,jsonb,text)` remains the original wrapper at body md5
 `9a34478d405a1a3b8233cabcdfb39691`; `preview_field_app_invoice_split` remains at

@@ -95,6 +95,7 @@ reconciling row counts as a drift signal does not get a false alarm from an unex
 | `20260904130047` | `20260904160000_invoice_date_fallbacks_chicago` (row 911) | 997 |
 | `20260904152221` | `20260904180000_invoice_season_follows_invoice_date` (row 912) | 998 |
 | `20260905185938` | `20260904185900_refuse_null_job_field_acres` (row 916) — **ledger name is the unprefixed `refuse_null_job_field_acres`** | 999 |
+
 **Superseded 2026-09-08 capture (1000 rows), kept for the restamp record it carries.** A read-only `list_migrations`
 on project `rhyzpcqhnizqbxphqdkr` records **1000 ledger rows** (993 distinct names), live
 `max(version)` **`20260908045843`**, and effective ordering high-water

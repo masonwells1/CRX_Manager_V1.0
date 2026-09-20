@@ -168,14 +168,12 @@ export default function FieldApplicationInvoice() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  // Written only from effects, never during render. React may discard an interrupted
+  // render, and a discarded render runs no effects — bumping these counters in the
+  // render body would advance `route` with no load to match it, and the render gate at
+  // the bottom of this component compares `loadedInvoice.route` against it, so the page
+  // would stay on "Loading invoice…" forever. The [id] effect below does the bump.
   const invoiceLoadRef = useRef({ id, route: 0, request: 0 });
-  if (invoiceLoadRef.current.id !== id) {
-    // Invalidate before effects run, including A -> B -> A navigation.
-    invoiceLoadRef.current = {
-      id, route: invoiceLoadRef.current.route + 1,
-      request: invoiceLoadRef.current.request + 1,
-    };
-  }
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
   // #33: per-invoice key cache for the billing-details RPC (PO/terms/due/footer/memo
   // + per-invoice Discount Earned). Keyed by the editor's invoice id (or '__new__'
@@ -1255,8 +1253,16 @@ export default function FieldApplicationInvoice() {
   }, [id, toast, navigate]);
 
   useEffect(() => {
-    // The route wrapper remounts per invoice. Retain these guards for direct
-    // mounts and invalidate abandoned requests on unmount as well as route changes.
+    // Invalidate any in-flight load for the previous identity BEFORE resetting state,
+    // including A -> B -> A navigation on a direct same-instance rerender. The route
+    // wrapper remounts per invoice. Retain these guards for direct mounts and
+    // invalidate abandoned requests on unmount as well as route changes.
+    if (invoiceLoadRef.current.id !== id) {
+      invoiceLoadRef.current = {
+        id, route: invoiceLoadRef.current.route + 1,
+        request: invoiceLoadRef.current.request + 1,
+      };
+    }
     setFiledSeason(null);
     setFiledDate(null);
     return () => { invoiceLoadRef.current.request += 1; };
