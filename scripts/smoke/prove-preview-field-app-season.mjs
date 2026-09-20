@@ -1481,6 +1481,16 @@ try {
   assert.ok(creationGuardIndex > guardIndex, 'creation guard must follow the filed-season edit guard');
   assert.ok(barrierIndex > guardIndex && creationGuardIndex > barrierIndex,
     'separately committed cutover barrier must precede final creation refusal');
+  // Connects the chain: candidate < season guard < unchanged-date guard < barrier < creation
+  // refusal. Without this link the set was open between the unchanged-date guard and the
+  // barrier, so a restamp moving the correction BEHIND the cutover phases passed these
+  // assertions -- which is the exact defect a reviewer caught on 2026-09-20, when the
+  // correction sat at 20260913152700 and sorted after both phases. Phase 2 can legitimately
+  // abort and wait for receipt expiry, and strict ordering gives the correction no way around
+  // a blocked phase, so that order can strand production in the broken state the correction
+  // removes. Keep this assertion adjacent to the two above it; they are one contract.
+  assert.ok(barrierIndex > unchangedDateGuardIndex,
+    'cutover barrier must follow the unchanged-date guard, which must apply before either phase');
   const stopIdx = migrations.findIndex((m) => path.basename(m) === REPLAY_STOP_BEFORE);
   assert.notEqual(stopIdx, -1, `replay stop marker ${REPLAY_STOP_BEFORE} is not in the ledger-selected list`);
   for (const [index, migration] of migrations.slice(0, stopIdx).entries()) {
