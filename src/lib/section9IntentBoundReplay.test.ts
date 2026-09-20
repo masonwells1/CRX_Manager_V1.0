@@ -148,11 +148,13 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(vendorBill).toContain('paymentIntent.resolveIntent()');
 
     expect(purchaseOrder).toContain('reverseIdem.resetKey()');
-    // adjust_inventory still replays on the key alone, but its protection moved
+    // adjust_inventory binds the actor and payload server-side as of migration
+    // 20260911120000 (applied 2026-09-20); the browser's own protection moved
     // from a per-payload key scope to the durable record that binds the key and
     // payload together. The RPC must consume that frozen request, not form
     // state; this is not a reduction back to a bare getKey(). Retirement still
-    // needs its payload-scoped key because it has no durable request record.
+    // needs its payload-scoped key because it replays on the key alone and has
+    // no durable request record.
     expect(inventoryPage).toContain('const request = await adjustIntent.beginIntent({');
     expect(inventoryPage).toContain('const idemKey = adjustIntent.getIdempotencyKey();');
     expect(inventoryPage).toContain('p_inventory_id: request.inventoryId');
