@@ -130,8 +130,8 @@ export function buildReviewerCodexArgs({
     '-',
   ];
   if (platform === 'win32') {
-    // Read-deny profiles need the native restricted Windows identity. This is
-    // the same backend used by the established push-proof reviewer.
+    // Deny-read entries need the elevated native Windows sandbox. This is the
+    // same backend used by the established push-proof reviewer.
     args.splice(args.indexOf('-C'), 0, '-c', 'windows.sandbox="elevated"');
   }
   return args;
