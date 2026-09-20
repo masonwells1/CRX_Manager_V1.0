@@ -591,7 +591,19 @@ export function isEnvSecretFileName(name) {
 }
 
 function worktreeRoots(sourceRoot) {
-  const listing = runGit(["worktree", "list", "--porcelain"], { cwd: sourceRoot });
+  // Sibling worktrees hold their own `.env` files and are nested too deep for the
+  // one-level drive scan, so an unreadable worktree list is a HOLE in the deny
+  // list, not an empty one. Fail closed instead of reviewing without it.
+  const listing = runGit(["worktree", "list", "--porcelain"], {
+    cwd: sourceRoot,
+    fallback: null,
+  });
+  if (listing === null) {
+    throw new Error(
+      `Could not enumerate the worktrees of ${sourceRoot}, so the reviewer deny list would silently ` +
+      "omit sibling worktrees' .env files. Refusing to build a review sandbox; fix Git access and re-run.",
+    );
+  }
   return listing
     .split(/\r?\n/)
     .filter((line) => line.startsWith("worktree "))

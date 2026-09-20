@@ -212,6 +212,14 @@ assert.equal(
     "D:\\secrets\\real.env",
   ]);
 }
+// Sibling worktrees hold their own `.env` files, so a worktree list that cannot be
+// read is a hole in the deny list. The real (uninjected) enumeration must refuse.
+assert.throws(
+  () => codexReviewDenyReadPaths({ sourceRoot: path.join(tmpdir(), "crx-not-a-repo-9f3a1c") }),
+  /Could not enumerate the worktrees/,
+  "an unreadable worktree list must refuse to build a review sandbox",
+);
+
 assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
 assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
 assert.ok(args.includes("--ignore-user-config"));
