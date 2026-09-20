@@ -32,6 +32,20 @@ seven migrations, but the range `20260914100100`..`20260914100900` spans eight s
 `20260914100800`. A blanket seven-to-eight replacement across the five affected documents would
 introduce a new error.
 
+### A defect inside the preserved diff, flagged rather than edited
+
+CodeRabbit's review of the first delivery found a real inaccuracy in the diff's proposed header
+comment: "Callers do not fail; they wait, and resume the moment this commits." An
+`ACCESS EXCLUSIVE` lock makes other sessions wait, but `statement_timeout`, a client or request
+deadline, or a dropped connection can all end a blocked call before the lock is released, and the
+migration's `SET LOCAL lock_timeout = '10s'` bounds only the migration's own wait, not the caller's.
+
+It is recorded in a dedicated section of the parked document instead of being corrected in place,
+because the diff is preserved byte-for-byte and an edit would invalidate the hash that makes the
+copy verifiable. The claim never reached production — the applied file on `main` does not contain
+that sentence — so the only exposure was the wording propagating into the successor migration, and
+the note closes that.
+
 ### Verified
 
 The security fix this round refines is live and unchanged: `public.adjust_inventory` reads 4334

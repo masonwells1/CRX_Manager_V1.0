@@ -57,11 +57,32 @@ would introduce a new error. Occurrences: `docs/changelog.d/2026-09-11-adjust-in
 `docs/changelog.d/2026-09-17-schema-registry-refresh-after-restamp.md` (twice), and
 `docs/manual/CURRENT_STATE.md`.
 
+## Known defect inside the preserved diff — do not carry it forward
+
+The diff's proposed header comment claims, of the app-wide stall during the apply:
+
+> Callers do not fail; they wait, and resume the moment this commits.
+
+**That is too absolute, and it must not be copied into the new forward migration.** An
+`ACCESS EXCLUSIVE` lock makes other sessions wait, but it cannot keep a blocked call alive:
+`statement_timeout`, a client or request deadline, or a dropped connection all end a waiting call
+before the lock is released. The migration's `SET LOCAL lock_timeout = '10s'` does not change that
+— it bounds only how long *this* migration waits to acquire the lock, and is not a caller-side
+budget. The accurate statement is that blocked callers wait and resume **provided** their own
+timeout and connection outlast the apply, and that some will fail if it does not.
+
+Flagged by CodeRabbit on PR #743. It is recorded here rather than corrected in place because the
+diff below is preserved byte-for-byte — editing it would invalidate the hash that makes this copy
+verifiable. The claim never reached production: the applied file
+(`20260911120000_…sql` on `main`) does not contain this sentence, so nothing live is wrong. The
+only risk was the wording propagating into the successor migration, and this note closes that.
+
 ## Provenance
 
 Recovered from a session scratchpad on 2026-09-20 and parked here because that directory is
 temporary. The diff is reproduced byte-for-byte; its sha256 as recovered was
-`4551d18f177ddf9c5842d42c933d48ac5ba99e9cf6dff2280bc4a8680d73b6d3`.
+`4551d18f177ddf9c5842d42c933d48ac5ba99e9cf6dff2280bc4a8680d73b6d3`. Verify a copy with:
+extract the fenced block, drop its first and last lines, and hash the remainder.
 
 ## The preserved diff — SOURCE MATERIAL, DO NOT APPLY
 
