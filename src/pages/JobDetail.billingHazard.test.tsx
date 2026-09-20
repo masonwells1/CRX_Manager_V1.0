@@ -527,6 +527,56 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(args.p_chemicals[0]).toMatchObject({ quantity: 0.1001, rate_per_acre: 0.0501 });
   }, 30000);
 
+  it('SAVES the exact converted-unit lower boundary with unchanged submitted values', async () => {
+    mockRpc.mockImplementation(async (rpc: string) => ({
+      data: rpc === 'save_job' ? { success: true, job_id: 'job-1', is_new: false } : null,
+      error: null,
+    }));
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 1.5992, unit: 'oz', rate_per_acre: 0.1, rate_unit: 'Lb/ac',
+    }, 1);
+    const buttons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    await clickSave(buttons.find((button) => !/recipe/i.test(button.textContent || '')) as HTMLElement);
+    await waitFor(() => expect(mockRpc.mock.calls.some((call) => call[0] === 'save_job')).toBe(true));
+    const call = mockRpc.mock.calls.find((entry) => entry[0] === 'save_job');
+    const args = call?.[1] as { p_fields: Array<Record<string, unknown>>; p_chemicals: Array<Record<string, unknown>> };
+    expect(args.p_fields[0].acres_to_treat).toBe(1);
+    expect(args.p_chemicals[0]).toMatchObject({ quantity: 1.5992, rate_per_acre: 0.1, unit: 'oz' });
+    expect(screen.queryByText(/This line cannot be saved/i)).toBeNull();
+  }, 30000);
+
+  it.each(['1000000000000000.05', '0.29999999999999999'])(
+    'REFUSES typed acreage %s that would silently lose precision before submission', async (acreage) => {
+      mockRpc.mockImplementation(async (rpc: string) => ({
+        data: rpc === 'save_job' ? { success: true, job_id: 'job-1', is_new: false } : null,
+        error: null,
+      }));
+      mountWith({
+        ...HAZARD_CHEM, quantity: 0, unit: 'Lb', rate_per_acre: 0, rate_unit: 'Lb/ac',
+        cost_per_unit_cents: 0, price_per_unit_cents: 0,
+      }, 1);
+      const locations = await waitFor(() => {
+        const button = screen.getAllByRole('button').find((entry) => /^locations/i.test(entry.textContent?.trim() || ''));
+        if (!button) throw new Error('Locations tab not found');
+        return button;
+      });
+      fireEvent.click(locations);
+      const acresInput = await waitFor(() => {
+        const label = screen.getAllByText('Acres').find((entry) => entry.parentElement?.querySelector('input'));
+        const input = label?.parentElement?.querySelector('input');
+        if (!input) throw new Error('Field acreage input not found');
+        return input;
+      });
+      fireEvent.change(acresInput, { target: { value: acreage } });
+      expect(acresInput.value).toBe(acreage);
+      const buttons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+      await clickSave(buttons.find((button) => !/recipe/i.test(button.textContent || '')) as HTMLElement);
+      await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/acreage.*precision/i)));
+      expect(mockRpc.mock.calls.map((call) => call[0])).not.toContain('save_job');
+    }, 30000,
+  );
+
   it('SAVES an exact-boundary quantity when acreage is split across decimal fields', async () => {
     // The payload sends 0.1 and 0.2 as separate field values, so PostgreSQL numeric sums
     // exact 0.3. A binary client sum of 0.30000000000000004 used to falsely block this row.
@@ -642,9 +692,10 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
   }, 30000);
 
   it.each([
-    ['non-finite', '1e999'],
-    ['negative', '-1'],
-  ])('keeps %s acreage blocked after an admin confirms the expired-license override', async (_case, acres) => {
+    ['non-finite', '1e999', /field acreage.*finite, non-negative number/i],
+    ['negative', '-1', /field acreage.*finite, non-negative number/i],
+    ['precision-losing', '1000000000000000.05', /field acreage.*precision/i],
+  ])('keeps %s acreage blocked after an admin confirms the expired-license override', async (_case, acres, message) => {
     // Reaching Assign Anyway proves the fail-closed guard remains inside performSave,
     // where the override calls directly, rather than only in the initial save handler.
     const expiredApplicator = {
@@ -677,7 +728,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     await waitFor(() => {
       expect(mockToast).toHaveBeenCalledWith(
         'error',
-        expect.stringMatching(/field acreage.*finite, non-negative number/i),
+        expect.stringMatching(message),
       );
     }, { timeout: 15000 });
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
