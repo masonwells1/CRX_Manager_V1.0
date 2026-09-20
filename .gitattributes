@@ -71,7 +71,7 @@ supabase/migrations/20260906120000_preview_field_app_season_follows_invoice_date
 supabase/migrations/20260908190000_field_app_invoice_cross_season_edit_guard.sql text eol=lf
 supabase/migrations/20260912165758_refuse_generic_field_invoice_creation.sql text eol=lf
 supabase/migrations/20260913040359_finish_generic_field_invoice_cutover.sql text eol=lf
-supabase/migrations/20260913152700_preserve_unchanged_source_invoice_dates.sql text eol=lf
+supabase/migrations/20260911130000_preserve_unchanged_source_invoice_dates.sql text eol=lf
 scripts/smoke/prove-preview-field-app-season.mjs text eol=lf
 # Six next_*_number generators year -> Chicago (2026-09-19, issue #617). Same rule:
 # the file pins md5(prosrc) for six bodies, and a CRLF smudge would fail every pin.
