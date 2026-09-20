@@ -12,14 +12,17 @@ migration byte changed; all four guard migrations remain LOCAL CANDIDATES - NOT 
   The resolved file is byte-identical to main.
 - `docs/reference/migration-history.md`: took main's restamped rows 914-923 and its row 928
   (`20260914100800_bind_transfer_invoice_intent`) unchanged, then appended this branch's four
-  candidates renumbered 928-931 -> **929-932**, which removes the row-928 collision main's
-  #704 restamp created. Resolution is purely additive over main; no main row was rewritten.
+  candidates renumbered 928-931 -> **930-933** (929 was taken by PR #726's
+  `20260908140000` when it merged on 2026-09-19), which removes the row collisions main's
+  #704 restamp and #726 created. Resolution is purely additive over main; no main row was rewritten.
 - The four authored stamps `20260908190000`, `20260912165758`, `20260913040359` and
   `20260913152700` all sort strictly ABOVE the current effective ordering high-water
   `20260908130000_bind_create_inventory_hold_receipt_to_intent` (applied live 2026-09-15,
   ledger version `20260915033227`). **No restamp is required.** They sort below the
-  merged-but-unapplied `20260914100100`..`20260914100900` set, which is deliberate and
-  already annotated `ordering-guard: ahead-of-pending` in each file.
+  merged-but-unapplied `20260914100100`..`20260914100900` set, which is deliberate.
+  NOTE: the `ordering-guard: ahead-of-pending` markers this paragraph originally cited were
+  REMOVED in round 2 below, after PR #726 merged; ordering is now strict and every older
+  pending migration must apply first.
 
 ### Merge-induced correction (not a CodeRabbit finding)
 
@@ -72,3 +75,6 @@ Clean full run on the merged tree after every fix: typecheck EXIT 0, lint EXIT 0
 `npm run test:agent-workflows` EXIT 0 (37 Codex adapters match their Claude sources).
 
 Repository merge does not apply any migration or authorize a live SQL or data change.
+
+Round 2 of the Codex exact-head review (after PR #726 merged) is recorded in
+`docs/changelog.d/2026-09-20-strict-migration-ordering-after-pr726.md`.

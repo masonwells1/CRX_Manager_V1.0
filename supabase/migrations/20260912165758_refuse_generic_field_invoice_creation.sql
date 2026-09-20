@@ -9,9 +9,11 @@
 -- READ COMMITTED is required during this transitional wrapper: its separate catalog
 -- lookup must see the current body, not a repeatable-read snapshot of this V1 marker.
 -- No rows, money math, dates, source creators, signature, owner or ACL change.
--- ordering-guard: ahead-of-pending Older unapplied commission/invoice-number candidates
--- already sort below live's authored high-water 20260908120000, verified read-only September
--- 12. They require their own forward renumber; this independent guard does not apply them.
+-- ORDERING: strict. No ahead-of-pending marker. The previous marker's reason was obsolete
+-- (the 20260905 candidates were restamped above this file) and it additionally waved through
+-- both 20260908140000_number_generators_year_chicago (PR #726, UNAPPLIED) and this PR's own
+-- 20260908190000 season guard, either of which stepping over would strand it. Apply every
+-- older pending migration first, in ascending order.
 -- idempotency-body-check: exempt This sole wrapper retains its real check_idempotency
 -- call and delegates unchanged key-only lookup/receipt semantics to the private writer.
 

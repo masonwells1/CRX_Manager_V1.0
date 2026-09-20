@@ -1,10 +1,13 @@
 -- 20260908190000_field_app_invoice_cross_season_edit_guard.sql
 -- STATUS: NOT APPLIED
 --
--- ordering-guard: ahead-of-pending The unapplied 20260905 commission and invoice-number
--- candidates already sort below live's authored high-water 20260908120000 (verified read-only
--- on 2026-09-12) and require their own forward renumber before apply. This PR #599 follow-up is independent and does not make
--- those older candidates any less applicable than they already are.
+-- ORDERING: strict. No ahead-of-pending marker. The previous marker named the 20260905
+-- commission/invoice-number candidates, which were restamped to 20260914100100..20260914100900
+-- and now sort ABOVE this file, so its stated reason was obsolete. Worse, it silently waved
+-- through 20260908140000_number_generators_year_chicago (PR #726, merged 2026-09-19, still
+-- UNAPPLIED), which sorts BELOW this file and must run first: applying this one ahead of it
+-- would make that migration permanently fail the ordering guard and strand the Chicago-year
+-- document-number correction, whose deadline is 31 December 2026. Apply 20260908140000 first.
 --
 -- Field-application invoices keep the season they were filed under. A date edit may
 -- move within that season, but it may not cross the October 1 boundary: doing so would

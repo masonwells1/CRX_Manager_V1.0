@@ -13,8 +13,9 @@
 -- retries; the advisory/transaction/prepared gates enforce the drain in SQL. Require
 -- exact-head proof, current read-only checks, live approval and postapply checks.
 -- No production execution is authorized by this pending file or its container proof.
--- ordering-guard: ahead-of-pending Older unapplied candidates require their own
--- forward renumber; this independently newer guard neither applies nor repairs them.
+-- ORDERING: strict. No ahead-of-pending marker; its reason was obsolete and it would have
+-- waved through 20260908140000 (PR #726, UNAPPLIED), the 20260908190000 season guard, and
+-- phase one. Every older pending migration applies first, in ascending order.
 -- idempotency-body-check: exempt The existing operation-scoped check_idempotency and
 -- delegated key-only receipt behavior remain intact; no new intent binding is claimed.
 
