@@ -21,11 +21,18 @@ No schema-shape section moved: 11 generated columns, 38 status enums, 94 tables 
 sequences are all unchanged. The database's shape had not drifted — only the record of what had
 been applied to it.
 
-Updated the `THIS IS THE CURRENT BOUNDARY` block in `docs/reference/migration-history.md` to the
-same live read (1004 ledger rows / 997 distinct names, `max(version)` `20260920052149`, effective
-ordering high-water `20260911120000_bind_adjust_inventory_receipt_to_intent`). That block is the
-only place the ledger boundary is recorded, and it had drifted in exactly the same way and by
-exactly the same two applies as the registry, so the two are corrected together.
+This change originally also rewrote the `THIS IS THE CURRENT BOUNDARY` block in
+`docs/reference/migration-history.md`, which had drifted by the same two applies. PR #736 landed
+that same correction first, with more detail (row numbers, apply order, and the downstream
+consequences for the parked cohorts), so this branch dropped its own version and took #736's
+wholesale. Nothing of this change's boundary edit survives in that file.
+
+Worth recording: the two boundary reads were taken independently and agree exactly — 1004 ledger
+rows / 997 distinct names, `max(version)` `20260920052149`, effective ordering high-water
+`20260911120000_bind_adjust_inventory_receipt_to_intent`, with
+`20260908140000_number_generators_year_chicago` applied earlier the same morning under
+`20260920051333`. That agreement is a cross-check on the registry values below, which come from the
+same read as the discarded block.
 
 ### Verification
 
@@ -48,5 +55,6 @@ exactly the same two applies as the registry, so the two are corrected together.
 ### Drift noted, not changed here
 
 PR #726's title still calls `20260908140000_number_generators_year_chicago` `PARKED, not applied`.
-The live ledger shows it applied on 2026-09-20 under version `20260920051333`. The boundary block
-now says to trust the ledger read over that title.
+The live ledger shows it applied on 2026-09-20 under version `20260920051333`, and the registry
+refreshed here now lists it among the applied names. Nothing in this change edits that PR title —
+trust the ledger read and the refreshed registry over it.
