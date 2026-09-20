@@ -329,6 +329,25 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   git("config", "--unset", "remote.pushDefault");
   git("config", "--unset", "remote.archive.mirror");
 
+  // Codex sol (2026-09-20, PR #630): a Windows destination ending in a backslash
+  // hid the option after it from the guard, because the POSIX word splitter binds
+  // `\ ` into the preceding word. PowerShell passes git two arguments there, so
+  // the predicates now read both ways. These drive the GUARD end to end — the
+  // library assertions alone would not prove the hard gate refuses.
+  for (const tail of [
+    "--mirror",
+    "--delete main",
+    "--receive-pack attacker HEAD:feature",
+    "--force-with-lease",
+  ]) {
+    const command = `git -C ${mirrorRepo} ${pushVerb} C:\\critical-bare-repo\\ ${tail}`;
+    const res = runHook("codex-push-guard.mjs", { cwd: mirrorRepo, tool_name: "Bash", tool_input: { command } });
+    const decision = res.stdout.trim()
+      ? JSON.parse(res.stdout)?.hookSpecificOutput?.permissionDecision ?? ""
+      : "";
+    eq(decision, "deny", `trailing-backslash destination does not hide \`${tail}\``);
+  }
+
   // A configured remote name may legally contain `/`, and git resolves
   // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
   // raw URL — which means "no remote.<name>.* applies" — so a mirrored

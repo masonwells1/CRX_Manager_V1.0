@@ -305,6 +305,29 @@ assert.equal(pushUsesBulkMode("git push origin --bran"), true);
 assert.equal(pushUsesBulkMode("git push origin --tags"), false, "--tags is not a bulk-ref mode");
 assert.equal(pushUsesBulkMode("git push origin feature"), false);
 
+// Codex sol (2026-09-20, PR #630): a Windows destination ending in a backslash
+// used to swallow the option after it, because the POSIX word splitter reads
+// `\ ` as an escaped space. PowerShell hands git two arguments there, so every
+// push predicate now judges both readings and keeps the dangerous answer.
+assert.equal(pushUsesBulkMode("git push C:\\critical-bare-repo\\ --mirror"), true);
+assert.equal(mainPushSource("git push C:\\critical-bare-repo\\ --delete main", "feature"), "DELETE");
+assert.equal(
+  pushNamesRemoteProgram("git push C:\\scratch\\repo\\ --receive-pack attacker HEAD:feature"),
+  true,
+);
+assert.equal(pushIsForced("git push \\\\server\\share\\ --force-with-lease"), true);
+assert.equal(
+  pushTargetsCurrentHead("git push C:\\critical-bare-repo\\ --mirror", "feature"),
+  false,
+  "a hidden bulk option must not read as the plain feature-branch push that stands the gate down",
+);
+// The extra reading must not disturb ordinary pushes, including a quoted Windows
+// path containing a space (where the backslash really is a separator).
+assert.equal(pushUsesBulkMode("git push C:\\scratch\\repo.git main"), false);
+assert.equal(mainPushSource("git push C:\\scratch\\repo.git main", "feature"), "main");
+assert.equal(pushIsForced('git push "C:\\scratch repo\\repo.git" feature'), false);
+assert.deepEqual(unknownPushOptions("git push origin feature"), []);
+
 // Codex round-2 (2026-07-13): unambiguous long-option abbreviations count as force.
 assert.equal(mainPushIsForced("git push origin main --force-w", "feature"), true);
 assert.equal(mainPushIsForced("git push origin main --force-with", "feature"), true);

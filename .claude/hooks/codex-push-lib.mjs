@@ -377,6 +377,28 @@ function splitShellArgs(value) {
   return splitShellWordsRaw(value).map(unquoteShellArg);
 }
 
+// Every argv a push's arguments can mean, because the guard reads text without
+// knowing which shell runs it. splitShellWordsRaw follows POSIX, where `\ ` binds
+// the space into the word — so a Windows destination ending in a backslash
+// swallows the option after it and `git push C:\repo\ --mirror` looks like ONE
+// word carrying no options. PowerShell hands git TWO arguments there, and the
+// option is real. Doubling every backslash makes the POSIX splitter treat each as
+// a literal character and still honour the space after it, which is exactly
+// PowerShell's argv; the pairs are collapsed back so a destination reads as typed.
+// Same union-of-readings shape as splitCommandSegments: callers deny when ANY
+// reading is dangerous, and allow only when EVERY reading is safe (Codex sol,
+// 2026-09-20 — the candidate missed --mirror, --delete and --receive-pack behind
+// a trailing-backslash destination while the base caught them).
+function pushArgReadings(argsText) {
+  const text = String(argsText || "");
+  const readings = [splitShellArgs(text)];
+  const doubled = text.replace(/\\/g, "\\\\");
+  if (doubled !== text) {
+    readings.push(splitShellArgs(doubled).map((word) => word.replace(/\\\\/g, "\\")));
+  }
+  return readings;
+}
+
 // The argv a program actually receives. Applied to the RAW word, never on top of
 // unquoteShellArg: `-X 'P"OST'` unquotes to `P"OST`, and re-reading THAT would
 // treat the surviving literal quote as syntax and resolve it back to `POST` —
@@ -531,7 +553,17 @@ export function mainPushSource(cmd, currentBranch) {
   const c = String(cmd || "");
   const m = c.match(GIT_PUSH_RE);
   if (!m) return null;
-  const tokens = splitShellArgs(m[1]);
+  // Judge every argv reading and keep the most dangerous answer: a deletion that
+  // only PowerShell's reading exposes is still a deletion. Positions differ
+  // between readings, so each reading is resolved whole rather than by unioning
+  // tokens (which would shift remote/refspec positions).
+  const sources = pushArgReadings(m[1])
+    .map((tokens) => mainPushSourceFromTokens(tokens, currentBranch));
+  if (sources.includes("DELETE")) return "DELETE";
+  return sources.find((source) => source !== null) ?? null;
+}
+
+function mainPushSourceFromTokens(tokens, currentBranch) {
   // Option-based deletion: `git push origin --delete main` / `-d main`. Git
   // accepts unambiguous long-option abbreviations, and the only push option
   // starting "--de" is --delete, so any --de… token is delete intent (Codex
@@ -576,7 +608,14 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
     .toLowerCase();
   if (argsText == null || !normalizedBranch
       || ["main", "master", "production"].includes(normalizedBranch)) return false;
-  const tokens = splitShellArgs(argsText);
+  // An ALLOW predicate, so every reading must agree: if any shell could read a
+  // bulk, delete or unknown option here, this is not the plain feature-branch
+  // push that stands the gate down.
+  return pushArgReadings(argsText)
+    .every((tokens) => tokensPushCurrentHeadOnly(tokens, normalizedBranch));
+}
+
+function tokensPushCurrentHeadOnly(tokens, normalizedBranch) {
   if (tokens.some((token) =>
     token === "--delete"
     || /^--de\S*$/.test(token)
@@ -607,17 +646,18 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
 // not make force intent disappear.
 export function pushIsForced(cmd) {
   const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
-  const tokens = splitShellArgs(args);
-  // Any long option starting "--force" is force intent: git accepts unambiguous
-  // abbreviations (`--force-w` = --force-with-lease), and every valid abbreviation
-  // of a force option itself starts with "--force" — anything shorter ("--forc")
-  // is ambiguous and git rejects it (Codex review 2026-07-13).
-  const forceFlag = tokens.some((token) =>
-    /^--force(?:$|[-=])/.test(token) ||
-    /^-[A-Za-z]*f[A-Za-z]*$/.test(token)
-  );
-  const forceRefspec = tokens.some((token) => token.startsWith("+") && token.length > 1);
-  return forceFlag || forceRefspec;
+  return pushArgReadings(args).some((tokens) => {
+    // Any long option starting "--force" is force intent: git accepts unambiguous
+    // abbreviations (`--force-w` = --force-with-lease), and every valid abbreviation
+    // of a force option itself starts with "--force" — anything shorter ("--forc")
+    // is ambiguous and git rejects it (Codex review 2026-07-13).
+    const forceFlag = tokens.some((token) =>
+      /^--force(?:$|[-=])/.test(token) ||
+      /^-[A-Za-z]*f[A-Za-z]*$/.test(token)
+    );
+    const forceRefspec = tokens.some((token) => token.startsWith("+") && token.length > 1);
+    return forceFlag || forceRefspec;
+  });
 }
 
 // Back-compat helper for callers that specifically care about main.
@@ -633,12 +673,11 @@ export function mainPushIsForced(cmd, currentBranch) {
 const BULK_PUSH_OPTS = ["--all", "--branches", "--mirror", "--prune"];
 export function pushUsesBulkMode(cmd) {
   const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
-  const tokens = splitShellArgs(args);
-  return tokens.some((token) => {
+  return pushArgReadings(args).some((tokens) => tokens.some((token) => {
     if (!token.startsWith("--") || token.length < 3) return false;
     const bare = token.split("=")[0];
     return BULK_PUSH_OPTS.some((opt) => opt.startsWith(bare));
-  });
+  }));
 }
 
 // Extract the DESTINATION paths from a free-form patch payload (Codex
@@ -950,11 +989,13 @@ const PUSH_SHORT_OPTS_KNOWN = new Set(["v", "q", "d", "n", "f", "u", "o", "4", "
 // than parsed.
 export function pushNamesRemoteProgram(cmd) {
   for (const push of eachPush(cmd)) {
-    for (const token of splitShellArgs(push.args)) {
-      if (token === "--") break;
-      const eq = token.indexOf("=");
-      const bare = eq === -1 ? token : token.slice(0, eq);
-      if (bare === "--receive-pack" || bare === "--exec") return true;
+    for (const tokens of pushArgReadings(push.args)) {
+      for (const token of tokens) {
+        if (token === "--") break;
+        const eq = token.indexOf("=");
+        const bare = eq === -1 ? token : token.slice(0, eq);
+        if (bare === "--receive-pack" || bare === "--exec") return true;
+      }
     }
   }
   return false;
@@ -1001,7 +1042,7 @@ export function executableTransportSettings(configOutput) {
 export function unknownPushOptions(cmd) {
   const unknown = [];
   for (const push of eachPush(cmd)) {
-    const tokens = splitShellArgs(push.args);
+    for (const tokens of pushArgReadings(push.args)) {
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === "--") break;
@@ -1024,8 +1065,9 @@ export function unknownPushOptions(cmd) {
       }
       if (eq === -1 && bare.includes("o")) i += 1;
     }
+    }
   }
-  return unknown;
+  return [...new Set(unknown)];
 }
 // The destination this push writes to: a remote NAME, a URL, or null when the
 // command names none (git then resolves its own default — see the guard).
