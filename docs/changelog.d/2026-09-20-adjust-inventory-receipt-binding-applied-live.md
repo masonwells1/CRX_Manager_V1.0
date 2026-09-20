@@ -51,8 +51,10 @@ to inspect.
 
 ### Documentation corrected in the same change
 
-- `docs/reference/migration-history.md` row 929 → APPLIED, with the ledger version and the
-  postflight evidence; the ordering note near the top no longer calls `20260911120000` pending.
+- `docs/reference/migration-history.md` row **930** (this migration; renumbered from 929, which
+  `20260908140000_number_generators_year_chicago` already held) → APPLIED, with the ledger version
+  and the postflight evidence; the ordering note near the top no longer calls `20260911120000`
+  pending.
 - `docs/reference/rpc-functions.md` → the live `adjust_inventory` contract, with the old
   replay-on-key-alone behaviour recorded as history.
 - `docs/manual/CURRENT_STATE.md` → the 09-14 "none of these is applied" reading is now superseded
@@ -95,6 +97,25 @@ pending, one of them an applied migration. After settling row 929's status token
 false pendings. The first attempt at that edit still failed the probe, because the explanatory prose
 quoted the old pending wording inside the same cell and the matcher fired on the quotation — the
 retiring edit must not restate it anywhere in the row.
+
+### The migration file's own STATUS header stays stale ON PURPOSE
+
+`20260911120000_…sql` lines 5-7 still read `STATUS: NOT APPLIED — DO NOT APPLY. LOCAL CANDIDATE`.
+CodeRabbit asked for that header to be corrected on delivery 10, and the request is **refused**:
+
+- `AGENTS.md`: *"never edit an applied migration."* The file is applied.
+- The apply proof binds the file's exact bytes (`queryHash f309ad89…`). Editing one comment
+  character changes that hash, so the SQL on disk would no longer be the SQL the proof and the
+  reviews were computed against. A migration whose recorded bytes no longer match the file is worse
+  than a stale comment — it silently invalidates the evidence trail for an applied change.
+- This was settled on 2026-09-10 and is recorded in `migration-history.md`: fix the docs after an
+  apply, **never the migration file itself, not even its header**.
+
+The reviewer's underlying concern is fair — an operator opening that file first reads the opposite
+instruction. The answer is that live status lives in the records that are *allowed* to change, and
+all of them now say applied: `migration-history.md` row 930, `rpc-functions.md`,
+`CURRENT_STATE.md`, `smoke-specs.json`, `.gitattributes`, and this entry. A migration file is a
+historical artifact of what was applied, not a status board.
 
 ### Not verified
 
