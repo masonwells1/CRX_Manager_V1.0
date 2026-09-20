@@ -24,7 +24,15 @@ is the builder.
 | Genuinely complex work where Luna is plainly out of its depth | `gpt-5.6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
-one-line reason to Mason when it does. Do not reach for it by reflex — Luna-first is the point.
+one-line reason to Mason when it does, in chat and in any run ledger. Do not reach for it by
+reflex — Luna-first is the point.
+
+> **"Once" means once per candidate SHA, not once per branch.** The Step 3B proof is bound to the
+> exact HEAD it reviewed, so **any commit after it — including a one-line fix for a Luna finding —
+> voids it and requires a fresh Sol pass.** The guards enforce this (they compare the proof's head
+> to the current one), so the failure mode is not an unreviewed merge; it is a workflow that
+> reports "ready to ship" while holding a proof the gate will reject. Sequence it so Sol runs
+> **last**: Luna clean → freeze the diff → Sol → push with no further commits.
 
 > **Why the split is not cosmetic.** Step 3B's wrapper is the ONLY thing that can mint the proof
 > the push and migration-apply guards demand, and `write-codex-push-proof.mjs` **unlinks any
@@ -96,24 +104,74 @@ Skip this step for frontend-only / docs-only diffs.
 
 ## Step 3A: Everyday review — Luna at xhigh (THE DEFAULT)
 
-This is what "have Codex review this" means unless the work has reached the ship gate. It is
-advisory: it mints nothing, deletes nothing, and touches no proof artifact, so it is safe to run
-as many rounds as the work needs.
+This is what "have Codex review this" means unless the work has reached the ship gate. It writes
+no proof JSON and touches no proof artifact, so it can never satisfy or corrupt a gate, and it is
+safe to run as many rounds as the work needs.
 
-**Run it from a NEUTRAL directory against a diff file — never with `-C <repo>`.** Pointing any
-Codex invocation at this repo loads `AGENTS.md` / `CLAUDE.md` / the review commands as project
-context, and those files instruct an agent to "run a Codex review" — which is the exact
-self-recursion documented under Step 3B. A neutral cwd plus `--skip-git-repo-check` has no agent
-instructions to recurse on, so the CRX failure classes are inlined into the prompt instead.
+**"Advisory" describes the OUTPUT, not the process — isolate it explicitly.** `--skip-git-repo-check`
+only disables repo detection; it grants no isolation. Without the three flags below the reviewer
+runs at `sandbox: danger-full-access` with your user configuration loaded, which means a live
+Supabase/Vercel/GitHub connector and write access, while reading a diff that is attacker-influenced
+text. Use exactly the flag set `scripts/overnight-codex-gate.mjs` uses — it is the combination
+proven not to deadlock:
+
+- `--ignore-user-config` — drops `~/.codex/config.toml`, so NO database or deploy connector is
+  loaded for the run, and the repo's Codex hooks do not fire.
+- `--ephemeral` — no persisted session.
+- `--sandbox read-only` — no file writes, no mutating SQL, no push, no deploy.
+
+> **Do not add `--sandbox read-only` without `--ignore-user-config`.** With user config loaded the
+> repo's Stop hook tries to write `.claude/session-state/stop-wrap-ack.json`, the read-only sandbox
+> refuses, the hook blocks the stop, and Codex retries forever — ~50 minutes of zero output growth
+> at low CPU, which reads exactly like a hung network call (observed 2026-09-08). The findings are
+> in the transcript immediately above the first `hook: Stop` line.
+
+**Run it from a NEUTRAL directory against a frozen diff file, not with `-C <repo>`.** Pointing
+Codex at this repo loads `AGENTS.md` / `CLAUDE.md` / the review commands as project context, and
+those files instruct an agent to "run a Codex review" — the exact self-recursion documented under
+Step 3B. A neutral cwd has no agent instructions to recurse on, so the CRX failure classes are
+inlined into the prompt instead.
+
+> **Precisely scoped, because `scripts/overnight-codex-gate.mjs` does pass `-C repoRoot`.** That is
+> pre-existing and not introduced by the Luna default. The recursion in 2026-08-23 was
+> `codex review <scope>` with **no prompt**: with nothing else to do, Codex followed the project
+> instructions it had just loaded. The wrapper always feeds a concrete task on stdin (a findings
+> digest or a staged diff to judge), so the loaded instructions compete with a real job rather than
+> being the only job. That difference is why it has not recursed — it is a mitigation, not a
+> guarantee, and the residual risk belongs to that wrapper, not to Step 3A. Do not cite the wrapper
+> as precedent for pointing a hand-rolled review at the repo.
+
+**Two mechanics this command gets right and a hand-rolled one gets wrong** (both observed
+2026-09-20, each costing a silently hung run):
+
+- **Feed the prompt on STDIN and let it close.** `codex exec` given a prompt *argument* still
+  reads stdin when stdin is not a TTY, so a backgrounded or piped run blocks forever on
+  `Reading additional input from stdin...` and produces a 39-byte capture with no error and no
+  timeout. Redirecting the prompt file in (`< "$WORK/PROMPT.md"`, no prompt argument) is the same
+  thing `overnight-codex-gate.mjs` does deliberately, and it also dodges the Windows ~32K argv cap.
+- **Pass `-C` a Windows-style path.** `codex.exe` is a Windows binary; a Git Bash `mktemp -d`
+  yields a POSIX path it cannot resolve. `cygpath -m` converts it to `C:/…` — forward slashes, so
+  it stays safe to use in shell string interpolation.
 
 ```bash
+set -o pipefail                          # else `tee | tail` hides a Codex launch/usage failure
 CODEX=$(ls -t /c/Users/mason/AppData/Local/OpenAI/Codex/bin/*/codex.exe 2>/dev/null | head -1)
 REPO="$(git rev-parse --show-toplevel)"
-WORK="$(mktemp -d)"                      # neutral: no repo agent-instruction files
+WORK="$(cygpath -m "$(mktemp -d)")"      # neutral dir, Windows-resolvable path
 
-# Freeze the exact diff under review. Match this to the Step 1 scope.
-git -C "$REPO" diff origin/main...HEAD > "$WORK/candidate.diff"
-wc -l "$WORK/candidate.diff"             # 0 lines = nothing to review; stop and say so
+# Freeze the exact diff under review, HONORING the Step 1 scope. Do NOT hard-code
+# origin/main...HEAD here: with SCOPE=--uncommitted the real change lives in the working
+# tree, a hard-coded three-dot diff comes back EMPTY, and Luna then "reviews" nothing and
+# reports clean. An empty diff must fail loudly, never pass quietly.
+case "$SCOPE" in
+  --base\ *)     git -C "$REPO" diff "${SCOPE#--base }...HEAD" ;;
+  --uncommitted) git -C "$REPO" add -AN . && git -C "$REPO" diff HEAD ;;
+  --commit\ *)   git -C "$REPO" show "${SCOPE#--commit }" ;;
+  *) echo "SCOPE unset or unrecognized: '$SCOPE' — set it in Step 1" >&2; exit 1 ;;
+esac > "$WORK/candidate.diff"
+
+[ -s "$WORK/candidate.diff" ] || { echo "EMPTY DIFF for scope '$SCOPE' — nothing was reviewed. Fix the scope; do NOT report this as clean." >&2; exit 1; }
+wc -l "$WORK/candidate.diff"
 
 cat > "$WORK/PROMPT.md" <<'EOF'
 You are an adversarial code reviewer for CRX Manager, a production operations app for an
@@ -141,11 +199,22 @@ or
 LUNA_REVIEW: FINDINGS <count>
 EOF
 
-"$CODEX" exec --skip-git-repo-check -C "$WORK" \
-  -m gpt-5.6-luna -c 'model_reasoning_effort="xhigh"' \
-  "Read PROMPT.md in this directory and carry out the review it specifies." \
-  2>&1 | tee "$WORK/luna-review.txt" | tail -80
+# Prompt on STDIN, no prompt argument — see the two mechanics above.
+"$CODEX" exec --skip-git-repo-check --ephemeral --ignore-user-config --sandbox read-only \
+  -C "$WORK" -m gpt-5.6-luna -c 'model_reasoning_effort="xhigh"' \
+  < "$WORK/PROMPT.md" 2>&1 | tee "$WORK/luna-review.txt" | tail -80
+echo "codex exit: ${PIPESTATUS[0]}"      # with pipefail set, a non-zero here means NO review
 ```
+
+If the capture ends at `Reading additional input from stdin...`, stdin was left open: the review
+never ran, and there is no error and no timeout to tell you so. Re-run with the redirect.
+
+**Translating the verdict for the rest of the pipeline.** Step 3A ends in `LUNA_REVIEW: CLEAN` or
+`LUNA_REVIEW: FINDINGS <n>`; `ship` and the gauntlet speak SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK.
+Map it yourself and say which you did: `CLEAN` → SHIP. `FINDINGS` with any BLOCKER or HIGH →
+NEEDS-WORK; fix and re-run Step 3A. `FINDINGS` that are only MED/LOW and you are deferring them →
+SHIP-WITH-FOLLOWUPS, listing each deferred item. **A Luna `CLEAN` maps to SHIP for the advisory
+step only — it is never the exact-SHA proof, which only Step 3B mints.**
 
 **Verify it actually ran.** A `tokens used` line in the output is the genuine-run marker. Without
 it — especially alongside `You've hit your usage limit` — Codex never started, and the wrapper's

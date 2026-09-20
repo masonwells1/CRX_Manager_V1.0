@@ -111,8 +111,9 @@ Keep full detail in the file, not the chat.
 If there are any BLOCKER or HIGH findings, offer to run `/codex-review` so a separate ephemeral
 Codex session validates them before Mason acts (the in-workflow skeptics only reduce false
 positives and do not satisfy this hard gate). That validation runs on `gpt-5.6-luna` at xhigh by
-default (2026-09-20); `gpt-5.6-sol` at high is reserved for the one end-of-run gate pass on a risky
-money / inventory / RLS / migration diff. Wait for his go-ahead.
+default (2026-09-20); `gpt-5.6-sol` at high is reserved for the one end-of-run gate pass. That gate
+covers the FULL risky set in `AGENTS.md` — money, inventory, auth, RLS, migration, permission, Edge
+Functions, or any other business-critical change — not a shortened list. Wait for his go-ahead.
 
 ## Hard rules
 - **Read-only.** No `Edit`/`Write` except the one report file. No `apply_migration`, no deploy, no `git commit`.

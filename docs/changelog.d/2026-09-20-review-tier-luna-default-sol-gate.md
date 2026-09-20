@@ -42,5 +42,8 @@ is what enforces "Luna until clean, then exactly one Sol" without relying on an 
   deliberately differ.
 
 **Proof:** `gpt-5.6-luna` at xhigh probed live 2026-09-20 (`tokens used 16,331` — the genuine-run
-marker), confirming credits returned and that the 2026-09-17 outage note was stale. Step 3A was then
-run end-to-end against this change's own diff.
+marker), confirming credits returned and that the 2026-09-17 outage note was stale.
+`overnight-codex-gate.mjs` was then executed on both branches and observed selecting the right tier:
+default → `model: gpt-5.6-luna` / `reasoning effort: xhigh`; `--sol` → `model: gpt-5.6-sol` /
+`reasoning effort: high`. `git diff origin/main...HEAD` over `.claude/hooks/`, `.codex/hooks/` and
+`scripts/write-codex-push-proof.mjs` is empty, so the gates are byte-identical to `main`.

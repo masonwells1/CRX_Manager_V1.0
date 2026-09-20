@@ -73,13 +73,15 @@ invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — i
 `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary
 version-proof, isolates user configuration, runs an ephemeral `codex exec --sandbox read-only` with
 the tier pinned explicitly, and closes stdin. Pass `--sol` to escalate one pass to `gpt-5.6-sol` at
-high effort when Luna is plainly out of its depth; the wrapper is advisory either way and mints no
-gate proof. Write the candidate digest to a file first, then:
+high effort when Luna is plainly out of its depth — and when you do, **record the one-line reason in
+`REPORT.md` alongside the model and effort**, so Sol spend in an unattended run is never silent. The
+wrapper is advisory either way and mints no gate proof. Write the candidate digest to a file first,
+then:
 ```bash
 # Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
 # Keep it to <=3-4 findings per call (more times out at high reasoning).
 cat > .claude/session-state/finding-gate-prompt.txt <<'EOF'
-Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access. This gate runs with `--ignore-user-config`, so NO database connector is loaded for it — ground against repo/migration files. For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
+Independent second-model gate for the CRX overnight bug hunt (Luna/xhigh by default; the run's actual model and effort are printed in the trace file — record THOSE, never a tier you assumed). READ-ONLY repo + migration access. This gate runs with `--ignore-user-config`, so NO database connector is loaded for it — ground against repo/migration files. For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
 <paste the 3-4 candidate findings here>
 EOF
 # Split streams — a `2>&1 | tee` merge pulls the multi-hundred-KB reasoning trace

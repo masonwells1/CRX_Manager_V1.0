@@ -12,7 +12,7 @@ Mason does not type this command name. Treat plain-English requests like these a
 | **Hunts** the bugs | Claude (Workflow) | **Codex** — `scripts/codex-hunt.mjs`, read-only |
 | **Confirms** a finding is real | Codex (finding-gate) | **Claude** — verifies against the LIVE DB + code, refutes false positives |
 | **Writes** the fix | Claude | **Claude** — through the project's seatbelt hooks |
-| **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/overnight-codex-gate.mjs` fix-glance (Sol/high) |
+| **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/overnight-codex-gate.mjs` fix-glance (Luna/xhigh by default since 2026-09-20; `--sol` escalates one pass, with the reason recorded) |
 
 **Independence is preserved on BOTH ends:** the model that *finds* (Codex) is not the model that *verifies* (Claude); the model that *writes* the fix (Claude) is not the model that *reviews* it (Codex). That two-model split is the load-bearing independence argument — different model, different failure modes on both the find→verify and the write→review hop.
 

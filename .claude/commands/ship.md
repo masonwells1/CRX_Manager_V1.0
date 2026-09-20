@@ -119,11 +119,17 @@ diff). It runs non-interactively, captures findings, and returns a verdict
 
 **Two tiers, in this order (Mason's standing decision, 2026-09-20).** Iterate on `gpt-5.6-luna` at
 xhigh — `/codex-review` Step 3A — fixing and re-running until it comes back clean. That is the
-whole review for ordinary reversible work. Only then, and only if the diff is risky (money /
-inventory / RLS / migration / permission / edge function), spend **exactly one** `gpt-5.6-sol`
-high-effort pass to mint the exact-SHA proof the push and merge guards require
+whole review for ordinary reversible work. Only then, and only if the diff is risky (money,
+inventory, auth, RLS, migration, permission, Edge Function, or otherwise business-critical), spend
+one `gpt-5.6-sol` high-effort pass to mint the exact-SHA proof the push and merge guards require
 (`/codex-review` Step 3B). Do not burn Sol rounds on iteration, and never route a Luna round
 through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
+
+**Sol must be the LAST thing before the push.** Its proof binds to the HEAD it reviewed, so any
+commit afterwards — including a one-line fix for a late finding — voids it and needs a fresh pass.
+Sequence: Luna clean → freeze → Sol → push with no further commits. Translate Luna's terminator
+into this command's vocabulary: `LUNA_REVIEW: CLEAN` → SHIP; any BLOCKER/HIGH → NEEDS-WORK;
+deferred MED/LOW only → SHIP-WITH-FOLLOWUPS, listing each deferral.
 
 Then act on the result like any other reviewer:
 - **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If the active session genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.
