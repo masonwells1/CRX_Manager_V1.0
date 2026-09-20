@@ -47,8 +47,13 @@ same read as the discarded block.
 
 ### Two things the refresh deliberately did not "fix"
 
-- The five `20260914100*` commission migrations still raise the session-staleness banner. They are
-  **written but not applied** — confirmed by name against the live ledger. The banner is correct.
+- Five of the eight `20260914100*` files on disk still raise the session-staleness banner:
+  `100200_commission_history_report_replay_guard`, `100400_enforce_commission_payment_business_date`,
+  `100500_commission_dates_follow_chicago_business_day`, `100600_latest_commission_recipient_label`
+  and `100800_bind_transfer_invoice_intent`. All five are **written but not applied** — confirmed by
+  name against the live ledger — so the banner is correct. Four are commission migrations; the
+  fifth, `100800_bind_transfer_invoice_intent`, is not, so do not describe the flagged set as
+  commission-only.
 - `997` distinct names against `1004` ledger rows is not a loss: seven migrations were applied twice
   under different versions, and the generator correctly counts unique names.
 
