@@ -12,8 +12,8 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-14 against the live ledger (read-only ledger query, which confirmed that none of
-the parked commission or next-invoice-number candidates below is applied; boundary figures are
+**Last verified: 2026-09-19 against the live ledger (read-only ledger query, which confirmed by name that none of
+the parked commission, next-invoice-number or six-generator year candidates below is applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
@@ -640,14 +640,33 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 |---|---|---|
 | `next_application_record_number` | `extract(year FROM current_date)` | `APP-<year>-nnnn` |
 | `next_commission_payment_number` | `to_char(CURRENT_DATE, 'YYYY')` | `CP-<year>-nnnn` |
-| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnn` |
+| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnnn` (five digits) |
 | `next_job_number` | `extract(year FROM current_date)` | `JOB-<year>-nnnn` |
 | `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
-| `next_return_number` | `extract(year FROM current_date)` | `RET-<year>-nnnn` |
+| `next_return_number` | `extract(year FROM current_date)` | `RMA-<year>-nnnn` (this table said `RET-`; live is `RMA-`) |
+
+**FIX WRITTEN 2026-09-19, NOT APPLIED (issue #617).** `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
+re-emits all six from their live `prosrc` (read read-only 2026-09-19) with only the year line changed,
+pins each live and candidate md5 (the candidate pins were computed on live as
+`md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
+`next_job_number` and `next_cycle_count_number` are called from the browser, so `authenticated` holds
+EXECUTE on those two and must keep it; the other four are postgres/service_role only.
+`scripts/smoke/prove-number-generators-year-chicago.mjs` (PostgreSQL 17 container pinned by digest, 142/142)
+proves the transcription byte-exact against the recorded live pins (the apply-time preflight re-checks live itself), shows the real bodies minting `-2029-` at
+20:00 Chicago on 31 December 2028 before the fix and `-2028-` after (years chosen so a missed clock
+substitution cannot pass by matching the real year), and makes each tested refusal fire by mutation (drift, owner, overload, signature, volatility, strictness, cost, support function, ACL grantees, grant option, missing roles; not the CR check or the timezone-data assertion).
+**Apply order — this file must go FIRST.** It is stamped `20260908140000`: above the live high-water
+`20260908130000` and below every other unapplied migration. That is the parked
+`20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
+`20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
+(`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
+checked with its own code: once this merges, the guard refuses every one of those until this file
+is applied. If any of them applies live first, this file is stranded and must be restamped above it.
+Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
-its advisory lock key, its `MAX()` scan **and** its returned number, exactly as `next_invoice_number`
-does — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
+its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
+for cycle counts, `8675309`, verified from the live bodies 2026-09-19) — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
 `next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
 `MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
 2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
