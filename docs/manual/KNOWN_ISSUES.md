@@ -676,12 +676,16 @@ the field-app files are free to apply in their own order.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
-for cycle counts, `8675309`, verified from the live bodies 2026-09-19) — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
-`next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
-`MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
-2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
-the December work is filed under the wrong year and consumes that year's first number.
-**That 31 December 2026 deadline is met: applied live 2026-09-20.**
+for cycle counts, `8675309`, verified from the live bodies 2026-09-19).
+
+**Pre-fix behaviour, for the record — no longer live since 2026-09-20.** A job created at 7 pm
+Chicago on 31 December 2026 got `JOB-2027-0001`. As with `next_invoice_number`, that was a
+**wrong-year label, not a duplicate**: `next_job_number` takes `MAX(...) + 1` over rows already
+matching that year under an advisory lock (verified against live 2026-09-05), so the real first job
+of 2027 would simply have become `JOB-2027-0002`. Nothing was overwritten; the December work was
+filed under the wrong year and consumed that year's first number. **Post-fix, that same job gets
+`JOB-2026-0001`** — the six generators now read the Chicago business date, so the 31 December 2026
+deadline is met.
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
 function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**
