@@ -13,8 +13,9 @@ read on project `rhyzpcqhnizqbxphqdkr` records **1004 ledger rows / 997 distinct
 `20260911120000_bind_adjust_inventory_receipt_to_intent` under `20260920052149`. Any candidate must
 sort ABOVE that high-water name-stamp, not merely above the previous one — which the parked
 `20260914100100`..`20260914100900` cohort already does, so it is clear to apply in its own order.
-The field-app season files (`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`)
-sort BELOW it and must be restamped before they can apply.
+Of the field-app season files, only `20260908190000` sorts BELOW that high-water and must be
+restamped before it can apply; `20260912165758`, `20260913040359` and `20260913152700` already sort
+above it.
 
 **Superseded 2026-09-17 boundary.** The prior read recorded **1002 ledger rows**, live `max(version)`
 **`20260915033227`**, and effective ordering high-water

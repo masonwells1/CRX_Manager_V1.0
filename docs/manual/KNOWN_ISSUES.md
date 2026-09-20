@@ -648,8 +648,9 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 
 **FIXED AND APPLIED LIVE 2026-09-20 (issue #617).** The table above describes the pre-fix live
 bodies; all six now take the year from `(now() AT TIME ZONE 'America/Chicago')::date`. Merged as
-`6171c0a20` (PR #726) and applied live 2026-09-20 under ledger version `20260920051333`, which is
-now the effective ordering high-water. Post-apply live verification, read-only: all six
+`6171c0a20` (PR #726) and applied live 2026-09-20 under ledger version `20260920051333`, which was
+the effective ordering high-water only briefly — `20260911120000` (#664) applied eight minutes
+later and superseded it. Post-apply live verification, read-only: all six
 `md5(prosrc)` equal the candidate pins, each body contains `America/Chicago`, and all six remain
 SECURITY DEFINER / `search_path=public, pg_temp` / owner `postgres`. The write-up below is the
 as-written record.
@@ -673,9 +674,10 @@ checked with its own code: once this merges, the guard refuses every one of thos
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
 **That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
 #664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
-The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; the
-field-app season files now sort BELOW it and must be restamped. Read the boundary block in
-`docs/reference/migration-history.md` before ordering anything.**
+The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; of the
+field-app season files only `20260908190000` now sorts BELOW it and must be restamped, while
+`20260912165758`, `20260913040359` and `20260913152700` already sort above it. Read the boundary
+block in `docs/reference/migration-history.md` before ordering anything.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,

@@ -3,7 +3,9 @@
 **What happened.** `supabase/migrations/20260908140000_number_generators_year_chicago.sql` merged as
 `6171c0a20` (PR #726) and was **applied live** on 2026-09-20 under ledger version `20260920051333`
 (B7 convention: the ledger row's `version` is the apply timestamp, its `name` carries the file's
-stamp). It is now the effective ordering high-water. Mason gave the attended go-ahead in session.
+stamp). It was the effective ordering high-water only briefly: `20260911120000` (#664) applied
+eight minutes later and superseded it, as the ordering section below records. Mason gave the
+attended go-ahead in session.
 
 The six generators — `next_application_record_number`, `next_commission_payment_number`,
 `next_cycle_count_number`, `next_job_number`, `next_po_number`, `next_return_number` — previously
@@ -60,9 +62,9 @@ the Supabase token was read from Windows Credential Manager in-process and never
 this file. With it applied, #664's `20260911120000_bind_adjust_inventory_receipt_to_intent` went
 live eight minutes later, at 05:21 UTC under ledger version `20260920052149`, and is now the
 effective ordering high-water (1004 ledger rows / 997 distinct names). The parked
-`20260914100100`..`20260914100900` cohort still sorts above that and is clear to apply; the
-field-app season files (`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`)
-sort below it and must be restamped.
+`20260914100100`..`20260914100900` cohort still sorts above that and is clear to apply; of the
+field-app season files only `20260908190000` sorts below it and must be restamped, while
+`20260912165758`, `20260913040359` and `20260913152700` already sort above it.
 
 **The migration file is unchanged.** Its `PARKED` header stays byte-exact to what ran; applied status
 lives in `docs/reference/migration-history.md` row 929 (corrected 2026-09-10 after the #646 finding).
