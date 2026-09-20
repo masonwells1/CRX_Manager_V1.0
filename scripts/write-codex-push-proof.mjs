@@ -566,6 +566,9 @@ export const CODEX_REVIEW_PERMISSION_PROFILE = "packet-review";
 // than by a hand-written list of repos. Writes and network stay fully denied.
 const HOME_CREDENTIAL_PATHS = [
   [".codex", "auth.json"],
+  // config.toml can carry inline MCP headers and env values. `--ignore-user-config`
+  // stops Codex loading it, not a model-issued command from reading it.
+  [".codex", "config.toml"],
   [".claude", ".credentials.json"],
   [".claude.json"],
   ["AppData", "Roaming", "Claude", "claude_desktop_config.json"],
@@ -644,7 +647,10 @@ export function codexReviewDenyReadPaths({
   }
   // codexReviewerEnvironment() keeps an operator's CODEX_HOME for auth, so its
   // credential file must be denied too, not only the default ~/.codex one.
-  if (codexHome) add(pathApi.join(codexHome, "auth.json"), true);
+  if (codexHome) {
+    add(pathApi.join(codexHome, "auth.json"), true);
+    add(pathApi.join(codexHome, "config.toml"), true);
+  }
 
   // Every project folder one level below the system drive root (C:\CRX_Manager,
   // C:\FarmRx, ...), plus every worktree of the repo under review.
