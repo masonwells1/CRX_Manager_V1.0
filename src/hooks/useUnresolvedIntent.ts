@@ -8,20 +8,30 @@ import { getIdempotencyBindingRejection, isDefinitiveRpcRejection } from '../lib
  * build that scope from the payload so that changed content mints a fresh key.
  * That is correct while the previous attempt's fate is known. It is dangerous
  * when it is not: if an RPC commits and the response is lost, the modal stays
- * open and editable, and editing a quantity is enough to mint a NEW key. The
- * RPCs behind these forms (`adjust_inventory`, `create_inventory_hold`,
- * `save_blend_recipe`) replay on the KEY ALONE and bind no payload, so the
- * server sees an unrelated request and applies the work a SECOND time —
- * double-counting stock, double-reserving a hold, or duplicating a record.
+ * open and editable, and editing a quantity is enough to mint a NEW key. A
+ * fresh key is an unrelated request to the server, which then applies the work
+ * a SECOND time — double-counting stock, double-reserving a hold, or
+ * duplicating a record.
+ *
+ * `save_blend_recipe` still replays on the KEY ALONE and binds no payload, so
+ * for that form this guard is the ONLY thing standing between a lost reply and
+ * a duplicate record. `adjust_inventory` and `create_inventory_hold` now bind
+ * the receipt to the actor and a request fingerprint server-side, so an edited
+ * retry there is refused rather than duplicated — but the guard still matters
+ * for them: a NEW key sidesteps the binding entirely, because the binding only
+ * compares requests that arrive under the SAME key.
  *
  * The safe rule is: while an attempt is unresolved, the only two legal moves
  * are retrying it UNCHANGED (which replays the receipt) or reloading to learn
  * what happened. Editing is not one of them. `refuseEdited()` enforces exactly that
  * and nothing wider — the identical payload is always allowed straight through.
  *
- * Verified read-only against the live catalog on 2026-09-08: none of the three
- * functions calls check_idempotency_intent, none stores a request_fingerprint, and
- * none raises IDEMPOTENCY_PAYLOAD_CONFLICT. They really do replay on the key alone.
+ * Verified read-only against the live catalog on 2026-09-20 (superseding the
+ * 2026-09-08 reading, when none of the three bound intent): `adjust_inventory`
+ * and `create_inventory_hold` now both call check_idempotency_intent and store a
+ * request_fingerprint — applied live 2026-09-20 (`20260911120000`) and
+ * 2026-09-15 (`20260908130000`). `save_blend_recipe` does neither and still
+ * replays on the key alone.
  *
  * An error is treated as unresolved unless it is a positively identified
  * server-side refusal. That includes the idempotency binding rejections: those

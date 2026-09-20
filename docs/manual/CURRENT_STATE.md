@@ -57,9 +57,11 @@ again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefi
 `20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
 by open PR #646. A read-only re-read on 2026-09-14 found the same figures, and confirmed that none of the
 seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`, `20260911120000`, or
-`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded:
-`20260908130000` applied live 2026-09-15 under ledger version `20260915033227` and now holds the
-boundary stated at the top of this section.)
+`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded twice:
+`20260908130000` applied live 2026-09-15 under ledger version `20260915033227`, and
+`20260911120000_bind_adjust_inventory_receipt_to_intent` applied live 2026-09-20 under ledger version
+`20260920052149`, which now holds the boundary. A read-only re-read on 2026-09-20 found 1004 ledger
+rows immediately after that apply.)
 
 **Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and was applied live on 2026-09-15 (see below).
 
