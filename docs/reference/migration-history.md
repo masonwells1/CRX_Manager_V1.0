@@ -4,13 +4,20 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-09-17. THIS IS THE CURRENT BOUNDARY.** A read-only ledger read on
-project `rhyzpcqhnizqbxphqdkr` records **1002 ledger rows**, live `max(version)`
-**`20260915033227`**, and effective ordering high-water
-**`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (PR #691) — applied live
-2026-09-15 under that version. Any candidate must sort ABOVE that name-stamp, not merely above the
-previous one. **Re-read read-only 2026-09-19: unchanged** — 1002 rows / 995 distinct names, same
-`max(version)` and high-water; `20260908140000_number_generators_year_chicago` (row 929) sorts above it.
+**Live-ledger capture — 2026-09-20. THIS IS THE CURRENT BOUNDARY.** A read-only ledger read on
+project `rhyzpcqhnizqbxphqdkr` records **1004 ledger rows** (997 distinct names), live `max(version)`
+**`20260920052149`**, and effective ordering high-water
+**`20260911120000_bind_adjust_inventory_receipt_to_intent`** (PR #739) — applied live
+2026-09-20 under that version. Any candidate must sort ABOVE that name-stamp, not merely above the
+previous one. `20260908140000_number_generators_year_chicago` (PR #726) was also applied live
+2026-09-20, under version `20260920051333`; it no longer sorts above the high-water, and its PR
+title still calls it PARKED — trust this ledger read, not that title.
+
+**Superseded 2026-09-17 boundary.** The prior read recorded **1002 ledger rows**, live `max(version)`
+`20260915033227`, and effective ordering high-water
+`20260908130000_bind_create_inventory_hold_receipt_to_intent` (PR #691) — applied live 2026-09-15
+under that version. Re-read read-only 2026-09-19: unchanged — 1002 rows / 995 distinct names. Both
+of its successors landed on 2026-09-20, which is what moved the boundary above.
 
 **Superseded 2026-09-08 post-apply boundary.** The prior read recorded **1001 ledger rows**, live
 `max(version)` `20260909023300`, and effective ordering high-water
