@@ -1,9 +1,32 @@
 -- ============================================================================
 -- adjust_inventory: refuse idempotency keys that carry ASCII control
 -- characters, and state the refused set exactly.
--- STATUS: NOT APPLIED — LOCAL CANDIDATE. Forward-only CREATE OR REPLACE of the
--- live adjust_inventory body. No DDL beyond that function, no data rewrite, no
--- new object.
+-- STATUS: NOT APPLIED — DO NOT APPLY. LOCAL CANDIDATE; forward-only
+-- CREATE OR REPLACE of the live adjust_inventory body. No DDL beyond that
+-- function, no data rewrite, no new object.
+--
+-- (That STATUS line's exact wording is load-bearing, not style. The parked-scan
+-- detector hasExplicitParkedMigrationHeader() in
+-- .claude/hooks/worktree-awareness-lib.mjs only accepts "NOT APPLIED" when it is
+-- followed by end-of-line or a separator plus "DO NOT APPLY". An earlier draft
+-- read "NOT APPLIED — LOCAL CANDIDATE." and matched NOTHING, which silently
+-- dropped this file from the parked set and degraded the whole worktree scan to
+-- UNKNOWN. Match the predecessor's wording exactly.)
+--
+-- STAMP: deliberately 20260911130000, NOT a 2026-09-20 stamp, though it was
+-- authored on 2026-09-20. It must sort ABOVE the live effective high-water
+-- 20260911120000 (whose body it replaces) and BELOW the eight parked
+-- 20260914100* files. A 2026-09-20 stamp would sort above all eight, and the
+-- pending-set guard (.claude/hooks/migration-pending-lib.mjs) then REFUSES the
+-- apply while any older migration is still pending — all eight are. The only
+-- escape would be an `ordering-guard: ahead-of-pending` marker, which raises the
+-- effective high-water and STRANDS all eight, forcing a ninth restamp round.
+-- Stamping below the band avoids both: nothing is stranded, no marker is needed,
+-- and the band still applies in its own order afterwards. Measured 2026-09-20:
+-- ZERO migrations on disk sort between 20260911120000 and 20260914100100, so
+-- this stamp lands in an empty gap and displaces nothing. Same technique, same
+-- reason as 20260908140000, which was stamped below this cohort so it could
+-- apply first without stranding it.
 --
 -- idempotency-body-check: exempt — the body below DOES enforce
 -- p_idempotency_key: it requires the key, calls public.check_idempotency_intent
@@ -55,11 +78,21 @@
 -- receipt INSERT, is reproduced verbatim. No argument, default, return shape or
 -- error message changes, so no frontend change is required.
 --
--- SCOPE OF THE REFUSAL, stated precisely because the old comment overclaimed:
--- under COLLATE "C" the refused set is the C0 control characters (U+0000 to
--- U+001F) plus DEL (U+007F). C1 controls, ZWSP, BOM, U+2028 and the soft hyphen
--- are NOT ASCII controls and still pass, provided the key also carries a
--- printable ASCII character. This migration does not claim to reject them.
+-- SCOPE OF THE REFUSAL, stated as MEASURED. The old comment overclaimed
+-- ("non-printable"); the first draft of THIS comment underclaimed by saying C1
+-- controls still pass. Measured on PostgreSQL 17 and confirmed read-only on
+-- live 2026-09-20, [[:cntrl:]] matches 64 code points in two ranges:
+--   U+0001-U+001F (C0), U+007F (DEL), and U+0080-U+009F (the whole C1 block).
+-- U+0000 is not reachable at all: PostgreSQL text rejects a null byte outright,
+-- so naming it as the low end of the range would be dead precision.
+-- Therefore C1 controls -- U+0085 NEL among them -- ARE refused. What is NOT
+-- refused, and still passes so long as the key also carries a printable ASCII
+-- character: NBSP (U+00A0), ZWSP (U+200B), BOM (U+FEFF), U+2028 and the soft
+-- hyphen (U+00AD). Each of those five was measured on live, not assumed.
+-- The COLLATE "C" is defensive pinning, NOT the cause of that set: the class
+-- matches the same 64 code points under the database default collation
+-- (en_US.UTF-8, libc). PostgreSQL hardwires the POSIX class ranges, so a
+-- collation change cannot silently widen or narrow this check.
 --
 -- ONE SUBSUMED TEST, deliberately left in place. `!~ '[^[:space:]]'` is now
 -- subsumed by `COLLATE "C" !~ '[!-~]'`: a key with no non-whitespace character
@@ -78,9 +111,18 @@
 -- bound receipt the trigger accepts. Taking the lock anyway would stall EVERY
 -- mutating RPC in the app, because they are all keyed and all touch that table.
 -- This migration therefore takes no table lock and does not pause app saving.
--- The only in-flight effect is that a call which slips through mid-swap may
--- still accept a control-character key. That is the very case being closed, and
--- it is not a correctness risk.
+-- The only in-flight effect, stated fully rather than waved past: a call that
+-- slips through mid-swap can still accept a control-character key and commit a
+-- receipt under it. That receipt is then PERMANENTLY UNREPLAYABLE — a retry on
+-- the same key now hits IDEMPOTENCY_KEY_REQUIRED instead of its committed
+-- result. That is precisely the stranding PREFLIGHT_STRANDED_RECEIPTS exists to
+-- prevent, and the preflight's SELECT takes no lock, so it cannot cover the
+-- window between its own snapshot and COMMIT. Blast radius is ONE stranded
+-- retry: it errors before any mutation, so no double stock change and no
+-- duplicate ledger row. Unreachable in practice, because no caller in this app
+-- can produce such a key — but it is a real residual, not "no correctness
+-- risk", and closing it would cost the app-wide write pause this migration is
+-- deliberately avoiding. That trade is the decision being made here.
 --
 -- RESIDUAL, KNOWN AND ACCEPTED: a NaN already stored in
 -- inventory.quantity_available is NOT repaired by this migration or by
@@ -101,14 +143,22 @@
 -- PREFLIGHT: check_idempotency_intent(text,text,uuid,text) and
 -- extensions.digest(bytea,text) installed; exactly one overload of
 -- adjust_inventory; owner postgres, plpgsql, SECURITY DEFINER,
--- search_path=public, pg_temp; the full argument list INCLUDING DEFAULTS equals
--- the pinned string; prosrc sha256 (CRLF-normalized) equal to the pinned
--- installed body, or on a re-run to the body this file emits — anything else (a
--- later hotfix) is refused; and ZERO unexpired (or NULL-expiry) adjust_inventory
--- receipts whose key this migration would newly reject, so applying can never
--- strand a live retry.
+-- search_path=public, pg_temp; VOLATILE, non-strict and non-leakproof (none of
+-- those three live in prosrc, so ALTER FUNCTION can change them without moving
+-- the body hash, and a replace that does not restate them silently resets them
+-- to defaults — they are pinned separately for that reason); the full argument
+-- list INCLUDING DEFAULTS equals the pinned string; prosrc sha256
+-- (CRLF-normalized) equal to the pinned installed body, or on a re-run to the
+-- body this file emits — anything else (a later hotfix) is refused; and, on a
+-- FIRST run only, ZERO unexpired (or NULL-expiry) adjust_inventory receipts
+-- whose key this migration would newly reject, so applying can never strand a
+-- live retry. That last check is skipped on a re-run: the body is already
+-- correct there and the operator has no action left but to wait, so enforcing
+-- it would make the advertised re-run path unusable.
 -- POSTFLIGHT: one overload, pinned argument list, postgres-owned SECURITY
--- DEFINER with the pinned search_path; installed body sha256 equals the body
+-- DEFINER with the pinned search_path; the installed body carries NO CR bytes
+-- (checked BEFORE the hash, which normalizes CRLF away and therefore cannot
+-- see them); installed body sha256 equals the body
 -- this file emits; the auth and role gates are PRESENT and both sit before the
 -- receipt lookup; the legacy key-only helpers are absent; the receipt carries
 -- both binding columns; the control-character test is present; ACL — anon
@@ -136,12 +186,16 @@ DECLARE
   v_sha      text;
   v_args     text;
   v_stranded integer;
+  v_volatile "char";
+  v_strict   boolean;
+  v_leakproof boolean;
+  v_rerun    boolean := false;
   v_args_pin text := 'p_inventory_id uuid, p_delta numeric, p_reason text, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text';
   -- sha256 of the body installed live by 20260911120000 (read 2026-09-20) and
   -- of the body THIS file emits, both CRLF-normalized. The constants live here,
   -- not in the body, so declaring them does not change the value they pin.
   v_installed_pin text := '9a503e549f42ad54fd9309d4843bab18f646731e5896c015734a61f524ca0af3';
-  v_new_pin       text := '09c2b0cce14a1b58ad5427e4434c8a082f4fa7ca40d15bcb4a8fb8b16be18b74';
+  v_new_pin       text := '841eededd4b3ced161c8379752a6561c446a121a3a20c10061a22ebb8e9579c8';
 BEGIN
   IF to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL THEN
     RAISE EXCEPTION
@@ -167,8 +221,10 @@ BEGIN
       v_count;
   END IF;
 
-  SELECT r.rolname, l.lanname, p.prosecdef, p.proconfig, p.prosrc
-    INTO v_owner, v_lang, v_secdef, v_config, v_src
+  SELECT r.rolname, l.lanname, p.prosecdef, p.proconfig, p.prosrc,
+         p.provolatile, p.proisstrict, p.proleakproof
+    INTO v_owner, v_lang, v_secdef, v_config, v_src,
+         v_volatile, v_strict, v_leakproof
     FROM pg_proc p
     JOIN pg_roles r ON r.oid = p.proowner
     JOIN pg_language l ON l.oid = p.prolang
@@ -186,6 +242,15 @@ BEGIN
   IF v_config IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] THEN
     RAISE EXCEPTION 'PREFLIGHT_SEARCH_PATH: % has proconfig %, expected {search_path=public, pg_temp}.', v_sig, v_config;
   END IF;
+  -- Volatility, strictness and leakproofness are NOT part of prosrc, so
+  -- ALTER FUNCTION can change any of them without moving the body hash below —
+  -- the pin cannot see such a hotfix, and a CREATE OR REPLACE that does not
+  -- restate them silently resets them to the defaults. Pin them separately.
+  IF v_volatile <> 'v' OR v_strict OR v_leakproof THEN
+    RAISE EXCEPTION
+      'PREFLIGHT_ATTRIBUTES: % has provolatile=%, proisstrict=%, proleakproof=%, expected v/false/false. Something altered the function outside its body; reconcile before replacing it.',
+      v_sig, v_volatile, v_strict, v_leakproof;
+  END IF;
 
   -- Only the reviewed installed body (first run) or this file's own body
   -- (re-run) may be replaced. A later hotfix to either is refused, so replaying
@@ -195,6 +260,7 @@ BEGIN
   IF v_sha = v_installed_pin THEN
     RAISE NOTICE 'adjust_inventory: installed body is the pinned 20260911120000 body; replacing it.';
   ELSIF v_sha = v_new_pin THEN
+    v_rerun := true;
     RAISE NOTICE 'adjust_inventory: installed body is already this file''s body; re-running.';
   ELSE
     RAISE EXCEPTION
@@ -214,15 +280,22 @@ BEGIN
   -- instead of their committed result. Refuse while any such receipt can still
   -- be redeemed. A NULL expires_at is never cleaned up, so it counts too.
   -- Measured on live 2026-09-20: zero adjust_inventory receipts of any kind.
-  SELECT count(*) INTO v_stranded
-    FROM public.idempotency_keys
-   WHERE operation = 'adjust_inventory'
-     AND (expires_at IS NULL OR expires_at > now())
-     AND idempotency_key COLLATE "C" ~ '[[:cntrl:]]';
-  IF v_stranded > 0 THEN
-    RAISE EXCEPTION
-      'PREFLIGHT_STRANDED_RECEIPTS: % unexpired adjust_inventory receipt(s) carry a control-character key and would stop replaying. Wait for them to expire (<= 24h) and re-run; never delete live receipts.',
-      v_stranded;
+  --
+  -- Skipped on a re-run. Once the new body is installed the damage this guard
+  -- prevents is already done or already impossible, and the operator has no
+  -- action left but to wait — so aborting a re-run of an ALREADY-CORRECT
+  -- function on this condition would make the advertised re-run path a lie.
+  IF NOT v_rerun THEN
+    SELECT count(*) INTO v_stranded
+      FROM public.idempotency_keys
+     WHERE operation = 'adjust_inventory'
+       AND (expires_at IS NULL OR expires_at > now())
+       AND idempotency_key COLLATE "C" ~ '[[:cntrl:]]';
+    IF v_stranded > 0 THEN
+      RAISE EXCEPTION
+        'PREFLIGHT_STRANDED_RECEIPTS: % unexpired adjust_inventory receipt(s) carry a control-character key and would stop replaying. Wait for them to expire (<= 24h) and re-run; never delete live receipts.',
+        v_stranded;
+    END IF;
   END IF;
 END
 $preflight$;
@@ -268,11 +341,23 @@ BEGIN
   END IF;
 
   -- Every adjustment gets a receipt a retry can find. Blank, whitespace-only
-  -- and ASCII-control-character keys are refused before any work. Scope stated
-  -- exactly, because "non-printable" would overclaim: under COLLATE "C" the
-  -- refused set is the C0 controls plus DEL. C1 controls, ZWSP, BOM, U+2028 and
-  -- the soft hyphen are not ASCII controls and still pass, so long as the key
-  -- also carries a printable ASCII character.
+  -- and control-character keys are refused before any work. Scope stated as
+  -- MEASURED, because "non-printable" overclaimed and a first draft of this
+  -- comment underclaimed: PostgreSQL hardwires the POSIX control class to 64
+  -- code points -- U+0001 to U+001F, DEL (U+007F), and the whole C1 block
+  -- U+0080 to U+009F. (U+0000 cannot occur: PostgreSQL text rejects a null byte
+  -- outright.) So C1 controls ARE refused. NBSP, ZWSP, BOM, U+2028 and the soft
+  -- hyphen are NOT, and still pass so long as the key also carries a printable
+  -- ASCII character.
+  -- The COLLATE "C" is defensive pinning, not what produces that set: the class
+  -- matches the same 64 code points under the database default collation.
+  -- The class literal appears EXACTLY ONCE in this body -- on the refusal line
+  -- below -- and the postflight COUNTS it rather than testing for its presence.
+  -- Never name the class in a comment here. An earlier draft did, and a
+  -- mutation run on 2026-09-20 proved that it DEFEATED the guard: deleting the
+  -- real check left the comment behind, the presence test still found the
+  -- token, and a body with no control-character refusal passed every postflight
+  -- check.
   IF p_idempotency_key IS NULL
      -- Subsumed by the [!-~] test below, which is the load-bearing one: a key
      -- with no non-whitespace character has no [!-~] character either, because
@@ -373,11 +458,12 @@ DO $verify$
 DECLARE
   v_sig      text := 'public.adjust_inventory(uuid,numeric,text,uuid,text)';
   v_args_pin text := 'p_inventory_id uuid, p_delta numeric, p_reason text, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text';
-  v_new_pin  text := '09c2b0cce14a1b58ad5427e4434c8a082f4fa7ca40d15bcb4a8fb8b16be18b74';
+  v_new_pin  text := '841eededd4b3ced161c8379752a6561c446a121a3a20c10061a22ebb8e9579c8';
   v_count integer;
   v_src   text;
   v_sha   text;
   v_role  text;
+  v_cntrl_hits integer;
 BEGIN
   IF to_regprocedure(v_sig) IS NULL THEN
     RAISE EXCEPTION 'POSTFLIGHT_MISSING: % is not installed.', v_sig;
@@ -406,6 +492,16 @@ BEGIN
   END IF;
 
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure(v_sig);
+  -- CR bytes first, because the pin below CANNOT see them: it normalizes
+  -- \r\n to \n before digesting, so a CRLF working tree installs CR bytes into
+  -- live prosrc and still matches. Without this assertion the eol=lf pin in
+  -- .gitattributes would be the ONLY defense, and a .gitattributes pin governs
+  -- future checkouts, not a tree that already holds the file with CRLF.
+  IF position(E'\r' IN v_src) > 0 THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_CR_BYTES: the installed adjust_inventory body carries % CR byte(s). The working tree was checked out with CRLF; re-checkout or `git add --renormalize` this file and re-apply.',
+      length(v_src) - length(replace(v_src, E'\r', ''));
+  END IF;
   v_sha := encode(
     extensions.digest(convert_to(replace(v_src, E'\r\n', E'\n'), 'UTF8'), 'sha256'), 'hex');
   IF v_sha <> v_new_pin THEN
@@ -431,7 +527,22 @@ BEGIN
   -- The fix itself. The body pin above already proves byte-equality, so this is
   -- belt-and-braces against a future edit that keeps the pin in step but drops
   -- the test: it names the thing this migration exists to add.
-  IF position('[[:cntrl:]]' IN v_src) = 0 THEN
+  --
+  -- COUNTED, not merely present, and that distinction is not theoretical. A
+  -- mutation run on 2026-09-20 removed the real refusal and recomputed both
+  -- pins; a bare presence test still PASSED, because an earlier draft of the
+  -- body comment mentioned the class by name and that mention satisfied it. A
+  -- substring test over a body that also documents itself proves nothing. So:
+  -- the class must appear EXACTLY ONCE, and that one occurrence must be the
+  -- refusal itself, matched with its operand and operator.
+  v_cntrl_hits := (length(v_src) - length(replace(v_src, '[[:cntrl:]]', '')))
+                  / length('[[:cntrl:]]');
+  IF v_cntrl_hits <> 1 THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_CONTROL_CHAR: expected the control class exactly once in the installed adjust_inventory body (the refusal itself), found %. A comment naming the class defeats this check — keep it out of comments.',
+      v_cntrl_hits;
+  END IF;
+  IF position('OR p_idempotency_key COLLATE "C" ~ ''[[:cntrl:]]''' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_CONTROL_CHAR: the installed adjust_inventory does not refuse control-character idempotency keys.';
   END IF;
 

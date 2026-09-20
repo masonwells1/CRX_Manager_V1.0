@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Full-chain proof for the local 20260920120000 adjust_inventory candidate:
+ * Full-chain proof for the local 20260911130000 adjust_inventory candidate:
  * idempotency keys carrying an ASCII control character are refused.
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a
@@ -34,8 +34,15 @@
  *      still passes.
  *
  * Exit code: 0 only on ADJUST_INVENTORY_CONTROL_CHAR_PASS. Any failure exits
- * non-zero. (The older adjust_inventory prover exits 0 on both outcomes; this
- * one deliberately does not.)
+ * non-zero, via `process.exitCode = 1` in the catch below.
+ *
+ * NOTE, because the opposite has been written down more than once: the older
+ * prove-adjust-inventory-intent-binding-real-schema.mjs does the SAME thing at
+ * its line 407 and is NOT fail-open. The belief that it "prints FAIL and still
+ * exits 0" comes from invoking it through a pipe — `node prover.mjs | tail`
+ * reports TAIL's exit status, not node's, so $? is 0 no matter what the prover
+ * did. Measured: `node -e "process.exitCode = 1"` exits 1, and the same command
+ * piped to `tail` exits 0. Run any prover unpiped if you intend to read $?.
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -49,7 +56,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-adjust-ctrlkey-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260920120000_refuse_control_character_adjust_inventory_keys.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260911130000_refuse_control_character_adjust_inventory_keys.sql');
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-adjust-inventory-control-character-keys.sql');
 const SIG = 'public.adjust_inventory(uuid,numeric,text,uuid,text)';
 const TRIGGER = 'refuse_unbound_adjust_inventory_receipt_20260911';

@@ -3,7 +3,7 @@
 -- text, WITHOUT refusing an ordinary key.
 --
 -- Covers adjust_inventory after
--- 20260920120000_refuse_control_character_adjust_inventory_keys.sql.
+-- 20260911130000_refuse_control_character_adjust_inventory_keys.sql.
 --
 -- CONTAINER ONLY: plants [SMOKE] auth.users / profiles / product / inventory
 -- rows itself, which the live-data guard correctly refuses. Run via
@@ -15,6 +15,12 @@
 --     plenty of printable ASCII) is refused with IDEMPOTENCY_KEY_REQUIRED;
 --   * a key carrying DEL (U+007F) is refused, which is the "plus DEL" half of
 --     the documented refused set;
+--   * a key carrying a C1 control (U+0085 NEL) is refused. PostgreSQL's
+--     [[:cntrl:]] covers U+0080-U+009F too, so the refused set is C0 + DEL + C1.
+--     An earlier draft of the migration header said C1 controls PASS; this case
+--     exists so that error cannot come back;
+--   * the boundary on the other side holds: NBSP (U+00A0), one code point above
+--     the C1 block, is ACCEPTED;
 --   * a key made only of non-ASCII text is refused -- not whitespace and not a
 --     control character, so the COLLATE "C" [!-~] test is the ONLY thing that
 --     refuses it. That is what makes that line load-bearing and the
@@ -44,7 +50,9 @@ DECLARE
   v_res      jsonb;
   v_nl_key   text;
   v_del_key  text;
+  v_c1_key   text;
   v_utf8_key text;
+  v_nbsp_key text;
   v_ok_key   text;
   v_zwsp_key text;
 BEGIN
@@ -75,7 +83,7 @@ BEGIN
   -- 1. Control-character and non-ASCII-only keys refused before any work
   ----------------------------------------------------------------------------
   -- A real-shaped key with a trailing newline. chr(10) is a C0 control. This
-  -- key carries 36 printable ASCII characters, so the pre-20260920120000 check
+  -- key carries 36 printable ASCII characters, so the pre-20260911130000 check
   -- ("at least one [!-~]") accepted it.
   v_nl_key := gen_random_uuid()::text || chr(10);
   BEGIN
@@ -95,6 +103,18 @@ BEGIN
     IF SQLERRM NOT LIKE 'IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
   END;
 
+  -- C1 control (U+0085 NEL). POSIX [[:cntrl:]] in PostgreSQL covers U+0080 to
+  -- U+009F as well as C0 and DEL, so this IS refused. An earlier draft of the
+  -- migration header claimed C1 controls pass; measured on live 2026-09-20 they
+  -- do not. This case exists so that claim can never drift back.
+  v_c1_key := gen_random_uuid()::text || chr(133);
+  BEGIN
+    PERFORM public.adjust_inventory(v_inv, 1, 'c1 key', v_admin, v_c1_key);
+    RAISE EXCEPTION 'SMOKE_FAIL: a key carrying a C1 control (U+0085) was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
+  END;
+
   -- Non-ASCII only (U+00E9 repeated). Not whitespace, so [^[:space:]] passes
   -- it; not a control character, so [[:cntrl:]] passes it. Only the COLLATE "C"
   -- [!-~] test refuses it.
@@ -108,7 +128,7 @@ BEGIN
 
   -- Refused BEFORE any work: no receipt, no ledger row, no stock movement.
   SELECT count(*) INTO v_count FROM public.idempotency_keys
-   WHERE idempotency_key IN (v_nl_key, v_del_key, v_utf8_key);
+   WHERE idempotency_key IN (v_nl_key, v_del_key, v_c1_key, v_utf8_key);
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: a refused key left % receipt(s)', v_count;
   END IF;
@@ -158,6 +178,21 @@ BEGIN
    WHERE product_id = v_product AND transaction_type = 'adjusted';
   IF v_qty <> 108 OR v_count <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the ZWSP key left qty % and % ledger row(s)', v_qty, v_count;
+  END IF;
+
+  -- NBSP (U+00A0) sits directly beside the C1 block that IS refused, so it is
+  -- the sharpest boundary case: one code point higher than U+009F and accepted.
+  v_nbsp_key := gen_random_uuid()::text || chr(160);
+  v_res := public.adjust_inventory(v_inv, 2, 'nbsp key', v_admin, v_nbsp_key);
+  IF v_res ->> 'status' IS DISTINCT FROM 'adjusted'
+     OR (v_res ->> 'new_quantity')::numeric IS DISTINCT FROM 110 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: an NBSP-bearing key was refused or misbehaved: % (the migration header claims it is accepted)', v_res;
+  END IF;
+  SELECT quantity_available INTO v_qty FROM public.inventory WHERE id = v_inv;
+  SELECT count(*) INTO v_count FROM public.inventory_transactions
+   WHERE product_id = v_product AND transaction_type = 'adjusted';
+  IF v_qty <> 110 OR v_count <> 3 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the NBSP key left qty % and % ledger row(s)', v_qty, v_count;
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

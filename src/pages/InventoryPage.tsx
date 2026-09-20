@@ -101,11 +101,17 @@ export default function InventoryPage() {
       p_allow_over_receive: false,
     }),
   });
-  // adjust_inventory and create_inventory_hold replay on the idempotency KEY
-  // ALONE: the server matches key + operation and never compares the actor or
-  // the payload (adjust: migration 20260317200000; holds: 20260507200000 and
-  // installed 20260630173022; intent binding 20260908130000 is still parked).
-  // So the browser has to guarantee that a request
+  // adjust_inventory and create_inventory_hold are BOUND to the actor and the
+  // exact request as of 2026-09-20: the server replays a receipt only for the
+  // same signed-in user and the same payload, and otherwise raises
+  // IDEMPOTENCY_ACTOR_MISMATCH or IDEMPOTENCY_INTENT_MISMATCH (holds:
+  // 20260908130000, applied live 2026-09-15; adjust: 20260911120000, applied
+  // live 2026-09-20). This block previously said both replay on the KEY ALONE
+  // and that the binding migrations were parked — true until those applies, and
+  // false now.
+  // The rule below did NOT change, and is if anything stricter: a changed
+  // payload under a retained key is now REFUSED rather than silently replaying
+  // the old result. So the browser still has to guarantee that a request
   // whose reply was lost is retried with its exact payload under its original
   // key, and is never edited into a "new" request. The old per-open resetKey()
   // did the opposite: closing and reopening the dialog after a lost reply

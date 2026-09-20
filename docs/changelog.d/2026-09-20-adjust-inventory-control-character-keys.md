@@ -1,6 +1,6 @@
 ## 2026-09-20 — adjust_inventory refuses control-character idempotency keys (LOCAL CANDIDATE, not applied)
 
-New migration `supabase/migrations/20260920120000_refuse_control_character_adjust_inventory_keys.sql`,
+New migration `supabase/migrations/20260911130000_refuse_control_character_adjust_inventory_keys.sql`,
 **not applied**. It finishes the review round left open when
 `20260911120000_bind_adjust_inventory_receipt_to_intent` went live on 2026-09-20 (ledger version
 `20260920052149`) and merged as `17826e9c3` — that delivery shipped the body as reviewed, so the two
@@ -33,10 +33,22 @@ body shows a single changed hunk: the check gains
 the `check_idempotency_intent` call, the stock math, the ledger row and the bound receipt insert are
 reproduced byte-for-byte.
 
-**Scope, stated exactly rather than aspirationally.** Under `COLLATE "C"` the refused set is the C0
-controls plus DEL. C1 controls, ZWSP, BOM, U+2028 and the soft hyphen are not ASCII controls and
-still pass. The smoke chain asserts a ZWSP-bearing key is **accepted**, so if a later change starts
-refusing it the chain fails and the claim has to be rewritten instead of quietly widened.
+**Scope, stated as measured — and the first draft of this got it wrong.** I originally wrote that C1
+controls still pass. They do not. Measured on PostgreSQL 17 and confirmed read-only against live on
+2026-09-20, `[[:cntrl:]]` matches 64 code points in two ranges: **U+0001–U+001F, DEL (U+007F), and
+the whole C1 block U+0080–U+009F**. So C1 controls ARE refused. What is not refused, and still
+passes when the key also carries a printable ASCII character: NBSP (U+00A0), ZWSP (U+200B), BOM
+(U+FEFF), U+2028 and the soft hyphen.
+
+That error is worth naming rather than quietly fixing: this migration exists *because* a comment
+about this exact check was inaccurate, and the first correction was inaccurate in the other
+direction. The smoke chain now pins **both** edges — a U+0085 NEL key must be refused, and an NBSP
+key (one code point above the C1 block) must be accepted — so neither version of the mistake can
+return silently.
+
+The `COLLATE "C"` is defensive pinning, not the cause of that set: the class matches the same 64
+code points under the database default collation, because PostgreSQL hardwires the POSIX class
+ranges.
 
 **One test is now redundant, and the body says which one.** `!~ '[^[:space:]]'` is subsumed by
 `COLLATE "C" !~ '[!-~]'`, because `[!-~]` excludes the space. A comment marks the subsumed line as
@@ -74,7 +86,25 @@ by that range would miss `100800`. Corrected in
 `2026-09-17-schema-registry-refresh-after-restamp.md` twice); those record what those deliveries
 proved at the time and are left as history rather than rewritten.
 
-This migration sorts above every file in that band, so it adds no ordering constraint of its own.
+### Stamp: `20260911130000`, deliberately below that band
+
+A first draft stamped this `20260920120000` and claimed that sorting above the band "adds no
+ordering constraint of its own." That is backwards, and the migration-drift review caught it.
+Sorting **above** the band is exactly what creates a constraint: the pending-set guard in
+`.claude/hooks/migration-pending-lib.mjs` refuses an apply while any **older** migration is still
+pending, and all eight are. `scripts/apply-migration-file.mjs` — the path this changelog tells you
+to use — is precisely the one that would have blocked.
+
+Both escapes were bad. Applying the eight first means waiting on work that is itself blocked. Adding
+an `ordering-guard: ahead-of-pending` marker raises the effective high-water and **strands all
+eight**, forcing a ninth restamp round — a real cost, for a hygiene fix with zero affected live
+receipts.
+
+Stamping below the band needs neither. Measured 2026-09-20: **zero** migrations on disk sort between
+`20260911120000` and `20260914100100`, so `20260911130000` lands in an empty gap. It sorts above the
+live effective high-water `20260911120000` (so it is discovered, not skipped) and below all eight
+(so nothing is stranded, and the band still applies in its own order afterwards). This is the same
+technique, for the same reason, as `20260908140000`.
 
 ### Proof
 
@@ -101,9 +131,17 @@ post-baseline migrations, ending in `ADJUST_INVENTORY_CONTROL_CHAR_PASS`:
 - the chain reaches `SMOKE_PASS_ROLLBACK`, the candidate re-applies cleanly via the re-run pin path,
   and the chain still passes.
 
-The prover **exits non-zero on failure**. Row 930's prover prints its FAIL token and still exits 0;
-this one does not inherit that, and the failure path was observed directly — two earlier runs of
-this prover failed and returned exit code 1.
+The prover **exits non-zero on failure**, observed directly: two earlier runs of it failed and
+returned exit code 1.
+
+**A correction to a claim this project has repeated more than once.** Earlier notes (including the
+brief for this work) said row 930's prover "prints its FAIL token and still exits 0", and a separate
+task was opened to fix that. It is not true — that prover sets `process.exitCode = 1` at its line
+407, exactly as this one does. The real cause is invocation: `node prover.mjs | tail` reports
+**tail's** exit status, not node's, so `$?` reads 0 no matter what the prover did. Measured:
+`node -e "process.exitCode = 1"` exits 1; the same command piped to `tail` exits 0. Run a prover
+unpiped if you intend to read `$?`. The separate fail-open task is chasing a bug that does not
+exist and should be closed.
 
 Still required before any live apply: a fresh exact-SHA `gpt-5.6-sol` review of the final head, and
 Mason's explicit approval in chat. Apply through `scripts/apply-migration-file.mjs` (dry run, then
