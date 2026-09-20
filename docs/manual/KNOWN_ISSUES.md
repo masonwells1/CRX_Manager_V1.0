@@ -683,9 +683,10 @@ Chicago on 31 December 2026 got `JOB-2027-0001`. As with `next_invoice_number`, 
 **wrong-year label, not a duplicate**: `next_job_number` takes `MAX(...) + 1` over rows already
 matching that year under an advisory lock (verified against live 2026-09-05), so the real first job
 of 2027 would simply have become `JOB-2027-0002`. Nothing was overwritten; the December work was
-filed under the wrong year and consumed that year's first number. **Post-fix, that same job gets
-`JOB-2026-0001`** — the six generators now read the Chicago business date, so the 31 December 2026
-deadline is met.
+filed under the wrong year and consumed that year's first number. **Post-fix, that same job is
+numbered in the 2026 sequence — `MAX(...) + 1` over the existing `JOB-2026-*` rows, so the next free
+2026 number, not `JOB-2026-0001` unless that year's sequence is empty.** The six generators now read
+the Chicago business date, so the 31 December 2026 deadline is met.
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
 function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**
