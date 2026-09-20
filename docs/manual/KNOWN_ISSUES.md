@@ -63,8 +63,9 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-08 against the live ledger (read-only `list_migrations`; the figures from
-that read are recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
+**Last verified: 2026-09-14 against the live ledger (read-only ledger query, which confirmed that none of
+the parked commission or next-invoice-number candidates below is applied; boundary figures are
+recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it
@@ -82,18 +83,25 @@ and diverge, so reading the boundary off `version` gives a plausible wrong answe
 returns garbage, because legacy non-timestamp rows (`year_end_summary`, `void_vendor_bill_rpc`, …)
 sort above digits — use `where name ~ '^[0-9]{14}'`. **Treat any row count or `max(version)` in
 that capture as a point-in-time observation, not a fact** — any lane applying a migration moves
-them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-05. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260908130000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
+them, so re-read live rather than trusting them. Only the ledger header was re-read on 2026-09-08. The live `create_inventory_hold` surface described in the OPEN 2026-09-05 manual-hold entry below was separately re-read READ-ONLY on 2026-09-06 for the `20260908130000` candidate's preconditions (no boundary facts restated here on purpose — see that entry and the migration header).
 The F2 item below was last re-verified against live on 2026-09-04
 (post-apply function bodies, grants, and a three-principal behavioral simulation); every other
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
-nine-file disk-vs-live migration drift confirmed 2026-09-04 and its open owning PRs.
+disk-vs-live migration record, including PR #599's file, which reached `main` when that PR merged on
+2026-09-11 (`791bc3d86`).
 
-Six local commission candidates (`20260905200000` through `20260905210000`, excluding superseded `20260905200500`) remain unapplied;
-the complete six-file set was restamped together on 2026-09-05 evening, after a #606 apply moved the
+Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`
+and the separate transfer wrapper below) remain unapplied;
+the complete six-file set was restamped together on 2026-09-05 evening (and again on 2026-09-14, from
+`20260905200000`..`20260905210000`, after `20260908120000_close_pr535_live_gaps` applied live), after a #606 apply moved the
 live ordering boundary above most of the set, and the set's relative order was preserved during the
 restamp. This file deliberately does not name that boundary — re-read it from the live-ledger capture
 in `docs/reference/migration-history.md` before any apply decision.
-The label repair (`20260905210000`, renumbered from `20260905020100` on 2026-09-05 so it runs last)
+A seventh unapplied candidate, the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent`
+(formerly `20260908130800`), sorts between `20260914100600` and the repair; it must apply after the
+Chicago-date cutover `20260914100500` (formerly `20260905200400`), its first-apply prerequisite.
+The label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 so it runs last, and restamped with the set on 2026-09-14;
+on PR #638's branch it briefly sat at `20260908130000` and `20260908130900`) stays after the transfer wrapper so it still runs last. It
 addresses 34 un-settled opening snapshots that hold an order UUID and unknown customer label despite
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes. The settlement-recipient guard closes the live case where a batch prepared for A
@@ -101,13 +109,30 @@ could still credit A after its commission was reassigned to B; until that candid
 approved and applied, production still carries that narrow stale-batch risk. Until the parked
 business-date guard is separately approved and applied, a noncanonical writer can still store a
 commission payment date after the current America/Chicago business date. The unified
-`20260905200400` candidate makes commission dates inherit their source documents and moves every
+`20260914100500` candidate makes commission dates inherit their source documents and moves every
 affected source-document writer off UTC `CURRENT_DATE` under one writer-drain lock boundary. Its
 same-transaction compatibility triggers reject a cached pre-cutover body at its first affected DML
 with `CHICAGO_DATE_CUTOVER_RETRY`, so a backend that resolved an old PL/pgSQL plan before the lock
 drain cannot commit a stale Chicago date after the unified cutover;
 `20260905200500` was superseded before apply, so the September 30 cutover cannot commit in two
 separate migrations and neither behavior is live.
+The parked transfer wrapper refuses to run at any isolation level but READ COMMITTED, then takes
+ACCESS EXCLUSIVE on the receipt table, which drains every transaction that has already read or
+written it. Its 5-second lock timeout bounds only the wait for that lock; the lock is then held
+until commit, so the rest of the file must commit within 3 seconds for queued receipt reads and
+writes to stay under an 8-second `authenticated` statement timeout. That 8 seconds is the
+migration file's own stated assumption, not a value verified from the live database, and the
+3-second post-lock budget is not enforced by the file (must fix before apply, issue #669). Under that lock it deletes expired unbound transfer receipts: a legacy call
+still waiting on its key's advisory lock is not drained, and could otherwise replay such a receipt
+after cutover with no actor or job check. An owner-only receipt trigger then rejects a cached
+pre-cutover body that reaches the insert with `TRANSFER_INVOICE_INTENT_CUTOVER_RETRY` and rolls it
+back, so the caller can retry through the intent-bound wrapper. Because of that delete, the repo's
+apply guard classes the file as destructive: it needs an attended apply whose approval names the
+receipt deletion. Residuals: a legacy caller at REPEATABLE READ or SERIALIZABLE whose snapshot
+predates cutover could still read a deleted receipt (live runs READ COMMITTED with no role
+override), and a legacy call that started before cutover can still replay a bound receipt that a
+wrapper call commits for the same key afterwards. Both job-invoice screens refuse a result for a
+different job. The live transfer function remains unchanged until an approved apply.
 The final label-selection candidate replaces alphabetical historical-name selection with the latest
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
@@ -162,7 +187,7 @@ they applied later the same day at `20260903124710` and `20260903124741`, so **a
 see the PR #535 paragraph near the top of this file, which is the current statement. This block is
 kept as the point-in-time record of the 990-row read, not as current state. Read ordering from the
 authored NAME, not `version` — searching this ledger by version stamp finds none of them even though
-all are applied. See the OPEN 2026-09-03 entry below for the source-on-branch-only consequence.
+all are applied. See the now-resolved 2026-09-03 entry below for the historical source-on-branch-only consequence.
 The PR #361 function/schema surface was separately refreshed from a live schema dump on 2026-08-27;
 that evidence supports the six pending return-credit candidates without superseding the newer ledger
 capture above.
@@ -535,14 +560,13 @@ instrumentation. Both migrations are applied and must not be edited.
 
 ---
 
-## OPEN 2026-09-03 — six migrations applied live on 2026-09-03 have no file on `main`
+## RESOLVED 2026-09-08 — six migrations applied live on 2026-09-03 now have files on `main`
 
-**Severity: LOW while it lasts — live is HEALTHY. This is a source-of-truth gap, not a defect.**
-All six migrations from PR #535's branch `codex/gauntlet-s9-safety-20260831` were applied live on
-2026-09-03. Their files exist only on that unmerged branch; `origin/main` does not contain them
-(verified 2026-09-03 by a GitHub read of `refs/heads/main`, which returns 404 for the first file).
-This entry originally listed four; the last two applied later the same day and are added here rather
-than left to a second entry:
+**Resolution:** PR #535 merged on 2026-09-08 and landed all six exact migration files on `main`.
+From 2026-09-03 until that merge, the files existed only on branch
+`codex/gauntlet-s9-safety-20260831`; live stayed healthy, but source control did not fully describe
+production. This entry originally listed four; the last two applied later the same day and are
+included here for provenance:
 
 | Authored name | Ledger version |
 |---|---|
@@ -561,11 +585,10 @@ last two migrations not yet being applied — is **CLEARED**: both applied on 20
 `update_vendor_bill` was verified live as a single 9-argument overload accepting
 `p_confirm_po_overage` and `p_po_overage_reason`, so the branch's call resolves.
 
-**Consequence while this is open.** PR #581 (schema-registry refresh) is parked behind #535: its
-Codex proof returned BLOCKERS because the registry asserts a live high-water whose `20260831*`
-migrations have no file on `main`. #535 must merge before #581, and no separate registry refresh
-should be run in the meantime — #581 redoes it. `npm run agent-health` reports the same condition as
-a session-staleness WARN, which is expected and not a new finding.
+**Historical consequence while this was open.** PR #581's schema-registry refresh was parked behind PR #535
+because the registry asserted a live high-water whose `20260831*` migrations had no file on
+`main`. PR #535's merge removed that ordering blocker; any registry refresh still follows its own
+current proof gates.
 
 **This is the FOURTH occurrence of this class.** See the CLOSED 2026-08-11 entry ("three migrations
 are live but their source files are not yet on `main`") and the CLOSED 2026-08-13 entry ("six
@@ -575,7 +598,7 @@ files automatically. Each occurrence has been closed individually by landing the
 recurrence itself is the standing finding, and a ledger-vs-tracked-files reconciliation check is the
 durable fix.
 
-**Closes when PR #535 merges**, which lands all six files under `supabase/migrations/`.
+**Closed by PR #535's 2026-09-08 merge**, which landed all six files under `supabase/migrations/`.
 
 ---
 
@@ -619,7 +642,7 @@ failed for a reason unrelated to its assertion. Both mocks now mirror the hook's
 ---
 ## PARKED 2026-09-05 (WRITTEN, REVIEWED, PROVEN — NOT APPLIED) — invoice numbers take their year from UTC, so the last six hours of 31 December are numbered into the next year
 
-**Migration file:** `supabase/migrations/20260905090000_next_invoice_number_year_chicago.sql`.
+**Migration file:** `supabase/migrations/20260914100100_next_invoice_number_year_chicago.sql`.
 **Deadline: 31 December 2026** — months out, which is why this is parked rather than rushed.
 **Mason applies it himself.** Nothing about it has been applied, and the standing hands-free
 migration allowance was deliberately not used.
@@ -650,7 +673,8 @@ and `20260904180000` (both applied live 2026-09-04) and the settled ~2026-07-10 
   misclassify three already-applied migrations as pending. Refresh it from a live ledger read first.
 - The `20260905090000` stamp was the correct next slot on 2026-09-05 (effective high-water by NAME
   was `20260904180000`), but a parked file's timestamp perishes. Re-derive it immediately before
-  apply and expect renumbering.
+  apply and expect renumbering. (It was restamped to `20260914100100` on 2026-09-14, after
+  `20260908120000_close_pr535_live_gaps` applied live.)
 
 Also re-run `scripts/smoke/prove-next-invoice-number-year-chicago.mjs` (35/35 at parking time, real
 PostgreSQL 17 container) and confirm the live body still matches pin `b53499d0…` — a drifted body
@@ -682,7 +706,7 @@ the December work is filed under the wrong year and consumes that year's first n
 **Same 31 December 2026 deadline.**
 The fix is the same one line each, against their live bodies, using the same pin-and-prove pattern;
 they were deliberately not bundled into the parked migration because that file is pinned to one
-function's body md5. **Do not close this family when `20260905090000` is applied.**
+function's body md5. **Do not close this family when `20260914100100` (formerly `20260905090000`) is applied.**
 
 The general lesson, worth more than the six fixes: **a sweep proves only the question it asked.**
 Searching for `now()` cannot clear `CURRENT_DATE`, and on a UTC server the two are the same bug.
@@ -813,8 +837,8 @@ database side.** Post-apply read-only verification: both bodies at their candida
 (`e3fc9bd9…`, `29d699a8…`), ZERO current-season-helper calls, ZERO UTC current-date tokens, one
 overload each, SECDEF + `search_path` and grants unchanged. The companion frontend fix
 (`src/pages/FieldApplicationInvoice.tsx`, which defaulted its transaction date in UTC) ships with
-PR #599 and reaches production only on merge — until then that page can still pre-fill tomorrow's
-date after ~7 pm Chicago, though the season it produces will now agree with whatever date it sends.
+PR #599, which merged on 2026-09-11 (`791bc3d86`); before that merge the page could pre-fill tomorrow's
+date after ~7 pm Chicago, though the season it produced already agreed with whatever date it sent.
 Historical description of the defect follows. **WAS OPEN, DEADLINE 2026-09-30 — `season` was still UTC in two of those four bodies.**
 `_save_invoice_lineage_unaware_impl_20260827` and `_save_field_app_invoice_impl_20260714` stamp
 `season` from `current_season()` = `compute_season(CURRENT_DATE)`, which the migration did not
@@ -928,7 +952,7 @@ priced, and widening it would have added untested surface to a deadline-bound mo
 fixing `JobDetail.tsx:1342` on its own merits**, ahead of the cosmetic ones. Tracked so the next
 person does not mistake the invoice-date sweep for a whole-app one.
 
-## SERVER HALF FIXED LIVE 2026-09-08; FRONTEND NOT YET MERGED — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
+## FIXED — SERVER HALF APPLIED LIVE 2026-09-08, FRONTEND MERGED 2026-09-11 (PR #599) — the field-app split PREVIEW priced from the UTC clock while SAVE priced from the invoice date
 
 **Status as of 2026-09-08: the server half IS APPLIED LIVE** (ledger version `20260908045843`), with
 Mason's explicit in-conversation approval. Verified from the live catalog — one overload, 5 arguments,
@@ -937,8 +961,12 @@ separately through a real PostgREST call in both the 5- and 4-argument shapes, e
 `42501` rather than `PGRST202`, which proves the API layer resolves the new signature AND that the
 legacy 4-argument caller still works through the DEFAULT.
 
-**The frontend half is still on PR #599 and NOT merged, so the defect is still visible to users.**
-The order is deliberate and must not be reversed: the database is backward compatible (a 4-argument
+**The frontend half MERGED on 2026-09-11 in PR #599 (`791bc3d86`), so the DB-first window is
+closed.** Deployment evidence read here on 2026-09-12: GitHub Production deployment `6394599950`
+for that commit reports state `success` (2026-09-11 13:57:07Z) and `https://croprxsolutions.app`
+returns 200. That is deployment evidence only — the screen-level observation that the season now
+follows the invoice date belongs to the #599 lane's own verification and is not re-checked here.
+The order was deliberate and must not be reversed: the database is backward compatible (a 4-argument
 call resolves through the DEFAULT), so DB-first is safe, whereas merging the frontend first would
 send a fifth named argument to a 4-argument function and return `PGRST202` on EVERY Preview click —
 not merely the season edge case.
@@ -958,12 +986,12 @@ mutants — the fix removed, the stored season ignored, and the `anon` REVOKE dr
 `docs/changelog.d/2026-09-06-preview-field-app-season-follows-invoice-date.md` and row 918 of
 `docs/reference/migration-history.md`.
 
-**This entry stays open until PR #599's frontend half is merged and observed on production.** The
-server half is applied (above); the only remaining gate is the merge itself, which needs the exact-SHA
-proof `pr-merge-guard` requires. Everything below this line is the 2026-09-04 report as written at
+**Both halves have shipped:** the server half applied live on 2026-09-08 and the frontend half merged
+on 2026-09-11 (above). No merge gate remains; the only open item is the screen-level observation,
+which belongs to the #599 lane. Everything below this line is the 2026-09-04 report as written at
 the time, kept for provenance. Where it says the live function has no date or season parameter, or
 that a migration is still needed, that was true until `20260906120000` applied on 2026-09-08 and is
-NOT the live state now; the caller-side change it asks for is the frontend half on PR #599.
+NOT the live state now; the caller-side change it asks for shipped as the frontend half of PR #599.
 
 ### HISTORICAL — the original report (2026-09-04), superseded on the server side 2026-09-08
 
@@ -1774,21 +1802,45 @@ invisible. (c) The identity pin uses the key's own name, so two sites calling th
 are not told apart. (d) The record-scoping check proves a declaration contains a route-id scope, not
 that the RPC sends that id or that the payload carries nothing else. (e) The scanner detects only
 reset-before-**assert**; a reset placed before the CALL that uses the key is a real defect of the
-same consequence and is not looked for at all — two live instances in `JobDetail`. (f) Line
-comments and string literals are stripped before matching (round 5: a comment mentioning
-`assertRpcResult` between a call and an early reset used to hide the reset entirely, and a comment
-mentioning `.update(` used to invent one), but a MULTI-LINE `/* … */` block is still not handled.
-(g) The same stripping removes whole TEMPLATE LITERALS including their `${…}` interpolations, so a
-reset executed inside an interpolation is invisible, and because stripping is line-based a multi-line
-template body still reads as code. (h) Only the hit scan is stripped: `classify()` and `aliasNames()`
-still read RAW lines, so a comment or string containing `onClick=`, `.throwOnError()` or a recovery
-marker can excuse a real hit, and one containing `resetKey:` can invent an alias. (i) The
+same consequence and is not looked for at all — two live instances in `JobDetail`. (f) and (g) **CLOSED 2026-09-13
+(`fe462c8a0`; recorded 2026-09-18, CodeRabbit on PR #719).** (f) said a MULTI-LINE `/* … */` block
+escaped the per-line strip; (g) said template literals were removed whole, hiding a reset inside a
+`${…}` interpolation, while a multi-line template body still read as code. `findResetBeforeAssert()`
+now scans `maskNonCode()` of the whole file before the per-line strip, the same mask `classify()`
+uses, so block comments and template text are masked across lines and a `${…}` interpolation stays
+code. The `classify()` cases for multi-line block comments and templates, including the
+interpolation positive control, exercise that mask. (h) **CLOSED 2026-09-17 (CodeRabbit on PR #708, then PR #712).**
+`aliasNames()` used to read RAW source, so a comment or string containing `resetKey:` could invent an
+alias. Both of its call sites now pass masked text: the sweep's `aliasResetPattern()` inside
+`findResetBeforeAssert()`, and the pinned-site label in the known-unfixed-sites test, which also
+labels sites from the masked line. A regression case asserts that the raw view still invents the
+alias while the masked view does not, so the fix cannot silently become a no-op. `classify()` no
+longer reads raw source either (2026-09-10, CodeRabbit on
+PR #638): all three of its windows are read from source whose comments, string contents,
+template-literal text and regex-literal bodies are masked from the top of the file, across lines —
+so a `/* … */` block or a template opened above a window still counts, and a template's `${…}`
+interpolation stays code. Comment, string and template text can no longer supply `onClick=`,
+`.throwOnError()` or a recovery marker, and neither can a regex the scanner RECOGNISES as a regex
+literal. That recognition is the limit of the guarantee, because the mask is a scanner, not a
+lexer: a `/` after `]`, `}` or `<` is still read as division, so a regex literal written in one of
+those positions stays visible and its text CAN still supply those three tokens (the statement-block
+`}` case is tracked in issue #686, deferred by Mason on 2026-09-14). A `/` after `)` is
+recognised only when that `)` closes an `if`, `for` (including `for await`), `while`, `switch` or `catch` head (2026-09-12,
+CodeRabbit's third round on PR #638: a regex used as a control statement's body was excusing a
+reset). A keyword or control head counts only when it is not a property name: a word whose nearest
+non-space character before it is `.` (as in `obj.return / 2` or `helpers.if(a) / 2`) is read as a
+property, so the `/` after it stays division (2026-09-13, CodeRabbit's fifth round on PR #668: the
+false regex masked a mutating call and could excuse a reset). A `//` inside JSX text masks the rest
+of its line. (i) The
 "no mutating call between handler and reset" rule covers `.rpc`/`.update`/`.delete`/
 `functions.invoke` but NOT `.insert()` or `.upsert()`, which therefore neither block an
 intent-rotation excuse nor set the scanner's call state. (j) `siteIdentifiers()` attributes
 `foo.bar.resetKey()` to `bar.resetKey`, can double-count when an alias is itself named `resetKey`,
-and does not order multiple tokens sharing one line. Closing (a), (b), (f), (g) and (h) needs a real
-tokenizer, not a line scan.
+and does not order multiple tokens sharing one line. Closing (a) and (b) needs a real
+tokenizer, not a line scan. The same applies to the JSX gap noted above — CodeRabbit raised it again
+on PR #712 (2026-09-17), asking that the mask distinguish JSX text from strings, comments, templates
+and regex literals. That is the tokenizer, so it stays deferred with #686 rather than being attempted
+inside a delivery PR.
 
 (k) **A route-id scope binds the record the ROUTE names, not the record the REQUEST sends** — added
 2026-09-04 from CodeRabbit's round-2 finding on PR #584, after the route-scope fix itself had landed.

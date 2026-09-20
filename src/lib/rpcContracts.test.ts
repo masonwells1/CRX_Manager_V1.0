@@ -2695,8 +2695,34 @@ function registryMigrationHighWater(): string {
     'schema-registry.json'
   );
   const registry = JSON.parse(readFileSync(registryPath, 'utf8')) as {
-    _meta?: { migrations_high_water?: string };
+    _meta?: { migrations_high_water?: string; applied_migration_names?: string[] };
   };
+  // The boundary must be read in FILENAME space, because that is what the
+  // discovery rule compares (`timestamp > highWater`, where timestamp is a
+  // migration's authored 14-digit filename prefix).
+  //
+  // `_meta.migrations_high_water` is the ledger's APPLY-TIME version, which
+  // Supabase assigns at apply and which bears no relation to the authored
+  // stamp. Using it here under-discovers: after the 2026-09-17 refresh it read
+  // 20260915033227, which sorts ABOVE the seven authored-20260914100* files
+  // that are NOT applied and NOT in the generated types, so their RPCs dropped
+  // out of the mutator inventory and their exemptions read as stale. The
+  // constant below documents the same trap from the other direction.
+  //
+  // So the boundary is the MAX AUTHORED STAMP among applied ledger names, with
+  // the apply-time number kept only as the fallback for a registry whose names
+  // carry no stamps. This is the same rule
+  // scripts/check-migration-hard-rules.mjs, .claude/hooks/migration-ordering-lib.mjs
+  // and session-staleness.mjs already apply, for the same reason.
+  const names = registry._meta?.applied_migration_names;
+  if (Array.isArray(names)) {
+    const authored = names
+      .map((name) => /^(\d{14})_/.exec(String(name))?.[1])
+      .filter((stamp): stamp is string => Boolean(stamp))
+      .sort();
+    const newest = authored[authored.length - 1];
+    if (newest) return newest;
+  }
   return registry._meta?.migrations_high_water || '';
 }
 

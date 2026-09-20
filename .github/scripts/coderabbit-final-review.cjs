@@ -10,6 +10,9 @@ const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
 const GITHUB_ACTIONS_APP_ID = 15368;
 const GATE_CHECK_NAME = 'final-review-gate';
+// Policy since #706: closing keeps the superseded PR's branch, commits, comments
+// and findings; leaving it open buried real work under stale copies.
+const FRESH_PR_GUIDANCE = 'open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment';
 // Keep the old display name for completed trusted runs created before activation.
 const TRUSTED_GATE_CHECK_NAMES = new Set([GATE_CHECK_NAME, 'coderabbit candidate snapshot', 'coderabbit candidate lifecycle']);
 const RESET_ACTIONS = new Set([
@@ -907,7 +910,7 @@ async function recordCandidateBirth({ github, context, core }) {
     if (!birth || birth.headSha !== snapshot.headSha || birth.baseSha !== snapshot.baseSha
       || birth.prCreatedAt !== snapshot.prCreatedAt || birth.creatorId !== snapshot.creatorId
       || birth.repoId !== snapshot.repoId || birth.repoFullName !== snapshot.repoFullName
-      || birth.pullNumber !== snapshot.pullNumber) throw new Error('candidate birth is conflicting or unverifiable; use a fresh PR');
+      || birth.pullNumber !== snapshot.pullNumber) throw new Error(`candidate birth is conflicting or unverifiable; ${FRESH_PR_GUIDANCE}`);
     core.notice('Original candidate birth already recorded; no duplicate snapshot was posted.');
     return { status: 'birth_recorded', duplicate: true };
   }
@@ -921,10 +924,10 @@ async function inspectCandidateBirth({ github, owner, repo, pullNumber, headSha,
     && String(comment.body || '').startsWith(CANDIDATE_BIRTH_PREFIX));
   const birth = candidates.length === 1 ? parseCandidateBirth(candidates[0]) : null;
   if (!birth || birth.pullNumber !== pullNumber || birth.repoFullName !== `${owner}/${repo}`) {
-    throw new Error('immutable original candidate birth is missing or unverifiable; use a fresh PR after the trusted opened workflow is available');
+    throw new Error(`immutable original candidate birth is missing or unverifiable; after the trusted opened workflow is available, ${FRESH_PR_GUIDANCE}`);
   }
   if (birth.headSha !== headSha || birth.baseSha !== baseSha) {
-    throw new Error('candidate head or base changed since PR creation; preserve this PR and use a fresh PR');
+    throw new Error(`candidate head or base changed since PR creation; ${FRESH_PR_GUIDANCE}`);
   }
   const [response, trusted] = await Promise.all([
     github.rest.actions.getWorkflowRun({ owner, repo, run_id: birth.runId }),
@@ -959,7 +962,7 @@ async function inspectNativeDispatchReceipt({ github, owner, repo, pullNumber, h
     const receipts = comments.map(parseNativeDispatchReceipt).filter((receipt) => receipt?.headSha === headSha);
     if (receipts.length !== 1) throw new Error('native dispatch requires exactly one head/base receipt');
     const receipt = receipts[0];
-    if (receipt.baseSha !== baseSha) throw new Error('native dispatch base changed; a fresh delivery PR is required');
+    if (receipt.baseSha !== baseSha) throw new Error(`native dispatch base changed; ${FRESH_PR_GUIDANCE}`);
     const [response, trusted] = await Promise.all([
       github.rest.actions.getWorkflowRun({ owner, repo, run_id: receipt.runId }),
       resolveTrustedGateWorkflowProvenance({ github, owner, repo, selfRunId, core }),
@@ -1005,7 +1008,7 @@ async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, he
     const receipts = comments.map(parseNativeDispatchReceipt).filter(Boolean);
     if (events.some((event) => ['base_ref_changed', 'base_ref_force_pushed', 'head_ref_force_pushed'].includes(event.event))
       || receipts.some((receipt) => receipt.headSha !== birth.headSha || receipt.baseSha !== birth.baseSha)) {
-      throw new Error('the PR candidate was retargeted, rewritten or changed; preserve it and use a fresh PR');
+      throw new Error(`the PR candidate was retargeted, rewritten or changed; ${FRESH_PR_GUIDANCE}`);
     }
     let activeEvents = 0;
     for (const event of dispatches) {
@@ -1015,11 +1018,11 @@ async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, he
       // must have exactly one Actions label event after its receipt.
       if (activeReceipt && dispatchedAt >= Math.floor(activeReceipt.requestedAfter / 1000) * 1000) {
         if (normalize(event.actor?.login) !== ACTIONS_BOT_LOGIN || ++activeEvents > 1) {
-          throw new Error('an out-of-band or duplicate native request overlaps this receipt; use a fresh PR');
+          throw new Error(`an out-of-band or duplicate native request overlaps this receipt; ${FRESH_PR_GUIDANCE}`);
         }
         continue;
       }
-      throw new Error('an untracked native review attempt cannot be attributed to this unchanged candidate; use a fresh PR');
+      throw new Error(`an untracked native review attempt cannot be attributed to this unchanged candidate; ${FRESH_PR_GUIDANCE}`);
     }
     if (activeReceipt && activeEvents !== 1) throw new Error('the active native receipt has no unique provider-label event');
     return { verified: true };
@@ -1409,7 +1412,11 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
     const failures = await removeLabelsIndependently(github, owner, repo, pullNumber, [REQUESTED_LABEL, READY_LABEL]);
     if (failures.length) throw new Error(`label cleanup failed: ${failures.join('; ')}`);
     await confirmProviderAbsent();
-    core.setFailed(`CodeRabbit was not dispatched (${reason}); unspent state was cleared after verified cleanup. Re-apply ${READY_LABEL} after correcting the blocker; a new commit is unnecessary.`);
+    // Relabelling a PR whose candidate can never be revalidated only repeats this block.
+    const nextStep = String(reason).includes(FRESH_PR_GUIDANCE)
+      ? `Apply ${READY_LABEL} on the fresh PR once its checks pass`
+      : `Re-apply ${READY_LABEL} after correcting the blocker`;
+    core.setFailed(`CodeRabbit was not dispatched (${reason}); unspent state was cleared after verified cleanup. ${nextStep}; a new commit is unnecessary.`);
     return { status: 'blocked', headSha, reason };
   } catch (error) {
     if (cleanupStarted) {
@@ -1447,7 +1454,7 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
   }
   if (existing.reviewed) {
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
-      reason: 'a prior same-head review cannot prove this head/base request; a fresh delivery PR is required' });
+      reason: `a prior same-head review cannot prove this head/base request; ${FRESH_PR_GUIDANCE}` });
   }
   if (!existing.reviewed) {
     // Label creation is deliberate setup, not a side effect of asking for a
@@ -1471,7 +1478,7 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
     { owner, repo, issue_number: pullNumber, per_page: 100 });
   if (!Array.isArray(comments) || comments.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === expectedHeadSha)) {
     return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
-      reason: 'this head already has a potentially spent native attempt; a fresh delivery PR is required' });
+      reason: `this head already has a potentially spent native attempt; ${FRESH_PR_GUIDANCE}` });
   }
 
   const priorHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Disposable PostgreSQL 17 proof for
- *   supabase/migrations/20260905200400_commission_dates_follow_chicago_business_day.sql
+ *   supabase/migrations/20260914100500_commission_dates_follow_chicago_business_day.sql
  *
  * The candidate atomically replaces the commission helpers AND their four UTC-stamping
  * document writers. A fixed-order writer drain occurs before any preflight/DDL, so the
@@ -50,7 +50,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-commission-dates-chicago-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260905200400_commission_dates_follow_chicago_business_day.sql');
+const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260914100500_commission_dates_follow_chicago_business_day.sql');
 const REVIEWED_PREIMAGE = path.join(ROOT, 'supabase', 'migrations', '20260722174029_commission_split_recipient_ids.sql');
 const REPLAY_STOP_BEFORE = '20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 const FUNCS = ['_insert_commissions_for_order', '_insert_commissions_for_job'];
@@ -427,7 +427,7 @@ try {
   const applying = psqlProcess({ wrap: wrapByName.get('candidate.sql') ?? false });
   const applyingDone = collect(applying);
   applying.stdin.end('\\i /tmp/candidate.sql\n');
-  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'orders' AND l.mode = 'ShareRowExclusiveLock' AND NOT l.granted)") === 't', 'candidate waiting on writer drain');
+  await waitFor(() => scalar("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'orders' AND l.mode = 'AccessExclusiveLock' AND NOT l.granted)") === 't', 'candidate waiting on writer drain');
   assert.deepEqual(bodyState(), rebuild, 'while the old writer holds its lock, no partial helper DDL may be visible');
   holder.stdin.end('COMMIT;\n');
   assert.equal((await holderDone).status, 0, 'writer holder must release cleanly');
@@ -468,7 +468,7 @@ try {
 
   // PHASE 5: replay safety. A migration that aborts on its OWN output is fail-closed but
   // hostile to a re-run, so the candidate accepts the post-image md5 as well as the
-  // pre-image — the same two-value shape 20260905200200 uses for its recorder pins.
+  // pre-image — the same two-value shape 20260914100300 uses for its recorder pins.
   log(`PHASE 5 post-image md5s: ${JSON.stringify(afterBodies)}`);
   const replay = psql('\\i /tmp/candidate.sql', { allowFailure: true, wrap: wrapByName.get('candidate.sql') ?? false });
   assert.deepEqual(bodyState(), afterBodies, 're-applying must leave the converted bodies in place');
@@ -529,7 +529,7 @@ try {
   // proves the top-level lock is the deterministic drain boundary, not a cosmetic
   // statement that happens to be rescued by a later DDL lock.
   restoreHelpers();
-  const lockBlock = "SET LOCAL lock_timeout = '10s';\nLOCK TABLE public.orders,\n           public.invoices,\n           public.jobs,\n           public.commissions\n  IN SHARE ROW EXCLUSIVE MODE;\n";
+  const lockBlock = "SET LOCAL lock_timeout = '10s';\nLOCK TABLE public.orders,\n           public.invoices\n  IN ACCESS EXCLUSIVE MODE;\nLOCK TABLE public.jobs IN SHARE ROW EXCLUSIVE MODE;\nLOCK TABLE public.commissions IN ACCESS EXCLUSIVE MODE;\n";
   const lockMutant = candidateSql.replace(lockBlock, "SET LOCAL lock_timeout = '10s';\n-- MUTATION: writer-drain lock removed.\n");
   assert.notEqual(lockMutant, candidateSql, 'lock mutation did not alter the candidate');
   copyText(lockMutant, 'lock-mutant.sql', workDir);
