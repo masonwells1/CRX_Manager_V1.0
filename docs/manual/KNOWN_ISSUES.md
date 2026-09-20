@@ -2191,15 +2191,29 @@ The lock lives in that one browser. Tracked as its own item: OPEN 2026-09-11 (ex
 request) above.
 
 
-## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
+## CLOSED 2026-09-20 — Different-unit chemical quantity guard now converts with exact decimals
 
-`chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
-JavaScript `Number` arithmetic before comparing the quantity and tolerance. PostgreSQL `save_job`
-uses exact `numeric` arithmetic, so a value extremely close to a converted-unit boundary can still be
-classified differently in the browser. The server remains the authoritative fail-closed check; the
-remaining risk is a misleading client refusal or a save that reaches the server and is then refused.
-Keep this separate from the equal-unit exact-decimal fix, and replace the converted-unit math with an
-exact rational/decimal conversion in a focused follow-up.
+**Closed by the change that carries this entry** (candidate `a568b8dca`, the #582 client follow-up
+that replaced #653/#728/#730). The focused follow-up this item asked for is the change itself, so the
+two land together rather than leaving the entry OPEN against its own fix.
+
+The defect as filed: `chemLineBillingHazard` converted rows whose rate and stock units differ using
+JavaScript `Number` arithmetic before comparing the quantity against the tolerance, while PostgreSQL
+`save_job` compares with exact `numeric`, so a value extremely close to a converted-unit boundary
+could be classified differently in the browser than on the server.
+
+What replaced it: `quantityIsWithinSqlTolerance` now takes the source and target unit sizes and
+**cross-multiplies integer unit sizes** instead of dividing or rounding converted decimals, so the
+whole comparison — quantity, expected value, the per-acre slack, the `0.1` cap and the `0.0001`
+floor — is carried out in scaled integers (`BigInt`) that mirror
+`abs(qty - convert(rate * acres)) <= greatest(0.0001, least(convert(0.00005 * acres), convert(0.1)))`
+exactly. Unit sizes are read from the same `LIQUID_UNIT_SIZE` / `DRY_UNIT_SIZE` tables the converter
+uses and are gated on `Number.isSafeInteger(size) && size > 0`, so an unknown or inherited unit
+property cannot prove safety — the row stays flagged. The dry-fluid refusal ahead of it is unchanged.
+
+Scope note, so this is not read as more than it is: the server remains the authoritative fail-closed
+check. This closes the *client/server classification divergence* at converted-unit boundaries; it did
+not move any authority into the browser, and no migration or live change was part of it.
 
 
 ## CLOSED 2026-09-05 — Server acreage refusal is merged and applied live
