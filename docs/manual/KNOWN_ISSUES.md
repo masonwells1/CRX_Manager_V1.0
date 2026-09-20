@@ -12,8 +12,8 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-14 against the live ledger (read-only ledger query, which confirmed that none of
-the parked commission or next-invoice-number candidates below is applied; boundary figures are
+**Last verified: 2026-09-19 against the live ledger (read-only ledger query, which confirmed by name that none of
+the parked commission, next-invoice-number or six-generator year candidates below is applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
@@ -370,6 +370,54 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
+
+**Status.** Accepted as a known residual by Mason on 2026-09-20, in chat, when the cost of closing
+it was put to him. **Do not re-open it as a finding, and do not write a migration for it without
+asking him again.**
+
+**What is live.** `20260911120000_bind_adjust_inventory_receipt_to_intent` applied 2026-09-20
+(ledger version `20260920052149`; live `adjust_inventory` prosrc 4334 chars, md5
+`22f1f7d0bd190ce74efb5ad3a8379677`; cutover trigger
+`refuse_unbound_adjust_inventory_receipt_20260911` installed). Its key check refuses NULL and blank
+keys and requires at least one printable character — `p_idempotency_key COLLATE "C" !~ '[!-~]'` —
+but a key that carries a printable character **beside** a control character still passes.
+
+**Why it is accepted, not fixed.** There is no live defect and no caller that can reach it. Both
+browser call sites mint plain-ASCII keys client-side, and the applied body already authenticates,
+refuses a forged `p_performed_by`, requires an ACTIVE admin, and binds the receipt to the actor and
+a payload fingerprint before any replay. Closing it means re-emitting a live money-path function in
+a new forward migration pinning `9a503e54…` → a new body, plus CI, a fresh exact-SHA `gpt-5.6-sol`
+review, and Mason's apply approval — a full protected-delivery cycle for hardening nothing can
+currently trigger.
+
+**The written fix exists but is stranded.** Branch `claude/bind-adjust-inventory-receipt-delivery-20260917`
+HEAD `143da828f` (unpushed) adds `OR p_idempotency_key COLLATE "C" ~ '[[:cntrl:]]'` and moves both
+body pins to `457cfb00…`. **That branch can no longer be applied**: it edits an applied migration
+(against the CRX hard rule), and its preflight accepts only `ef485890…` or its own `457cfb00…`,
+while live is now `9a503e54…`, so it aborts with `PREFLIGHT_BODY`. If this is ever taken up, it must
+become a **new forward migration**, not an edit of `20260911120000`.
+
+**Never tested, in either direction.** Neither
+`scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs` nor
+`scripts/smoke/smoke-adjust-inventory-intent-binding.sql` covers a control-character key; they cover
+only the NULL and blank cases. Any future attempt must add that case.
+
+**Related wording trap.** Under `COLLATE "C"` a `[[:cntrl:]]` test refuses only C0 controls and DEL.
+C1 controls, ZWSP, BOM, U+2028 and the soft hyphen still pass, so the behaviour is "ASCII control
+characters", never "non-printable".
+
+**Also carried forward unfixed (postflight only, no effect on the applied body):** the postflight
+checks `position('AUTH_REQUIRED' …) >` without a presence check, so a body with no auth check at all
+would satisfy it. Moot for the applied migration — its postflight already ran and passed against the
+real body — but the shape should not be copied into a new one.
+
+**Separately, still open and NOT covered by this entry:** `inventory.quantity_available` has no
+CHECK constraint, so a pre-existing NaN in that column still propagates. The applied body refuses
+NaN *deltas*; it does not repair a NaN already stored.
+
+---
+
 ## OPEN (ACCEPTED by Mason) 2026-09-13 — a SUSPENDED second tab can still send a stale batch adjustment after another tab's batch froze and finished
 
 **Status.** Accepted as a known limit by Mason on 2026-09-13 ("ship with known limit") when the
@@ -718,14 +766,33 @@ calendar date — identical rollover, identical six-hour window (re-verified rea
 |---|---|---|
 | `next_application_record_number` | `extract(year FROM current_date)` | `APP-<year>-nnnn` |
 | `next_commission_payment_number` | `to_char(CURRENT_DATE, 'YYYY')` | `CP-<year>-nnnn` |
-| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnn` |
+| `next_cycle_count_number` | `EXTRACT(YEAR FROM CURRENT_DATE)` | `CC-<year>-nnnnn` (five digits) |
 | `next_job_number` | `extract(year FROM current_date)` | `JOB-<year>-nnnn` |
 | `next_po_number` | `extract(year FROM current_date)` | `PO-<year>-nnnn` |
-| `next_return_number` | `extract(year FROM current_date)` | `RET-<year>-nnnn` |
+| `next_return_number` | `extract(year FROM current_date)` | `RMA-<year>-nnnn` (this table said `RET-`; live is `RMA-`) |
+
+**FIX WRITTEN 2026-09-19, NOT APPLIED (issue #617).** `supabase/migrations/20260908140000_number_generators_year_chicago.sql`
+re-emits all six from their live `prosrc` (read read-only 2026-09-19) with only the year line changed,
+pins each live and candidate md5 (the candidate pins were computed on live as
+`md5(replace(prosrc, old, new))`), and asserts the per-function ACL on both directions:
+`next_job_number` and `next_cycle_count_number` are called from the browser, so `authenticated` holds
+EXECUTE on those two and must keep it; the other four are postgres/service_role only.
+`scripts/smoke/prove-number-generators-year-chicago.mjs` (PostgreSQL 17 container pinned by digest, 142/142)
+proves the transcription byte-exact against the recorded live pins (the apply-time preflight re-checks live itself), shows the real bodies minting `-2029-` at
+20:00 Chicago on 31 December 2028 before the fix and `-2028-` after (years chosen so a missed clock
+substitution cannot pass by matching the real year), and makes each tested refusal fire by mutation (drift, owner, overload, signature, volatility, strictness, cost, support function, ACL grantees, grant option, missing roles; not the CR check or the timezone-data assertion).
+**Apply order — this file must go FIRST.** It is stamped `20260908140000`: above the live high-water
+`20260908130000` and below every other unapplied migration. That is the parked
+`20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
+`20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
+(`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
+checked with its own code: once this merges, the guard refuses every one of those until this file
+is applied. If any of them applies live first, this file is stranded and must be restamped above it.
+Still needed: exact-SHA Sol review, then Mason's attended apply before 31 December 2026.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
-its advisory lock key, its `MAX()` scan **and** its returned number, exactly as `next_invoice_number`
-does — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
+its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
+for cycle counts, `8675309`, verified from the live bodies 2026-09-19) — so a job created at 7 pm Chicago on 31 December 2026 gets `JOB-2027-0001`. As with
 `next_invoice_number`, that is a **wrong-year label, not a duplicate**: `next_job_number` takes
 `MAX(...) + 1` over rows already matching that year under an advisory lock (verified against live
 2026-09-05), so the real first job of 2027 simply becomes `JOB-2027-0002`. Nothing is overwritten;
@@ -2172,13 +2239,20 @@ browser only if it did not go through. **Fix:** an admin "verified, clear this r
 records who cleared it and what they checked.
 
 
-## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+## RESOLVED 2026-09-15 (migration `20260908130000` APPLIED LIVE as ledger version `20260915033227`; code merged in PR #691) — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold
 
 **Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
 coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
 defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
 free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
-Mason's explicit OK at the time; the result decides whether the apply moves up.
+Mason's explicit OK at the time; the result decides whether the apply moves up. **Done 2026-09-15:** the
+migration applied before the due date, so per Mason's 2026-09-14 decision the pre-apply check was skipped
+and a read-only look-back ran after the apply. All 29 `inventory_holds` rows ever created (newest 2026-04-28)
+were made by staff who are active admins today, and the `created_by` foreign key rules out a persisted
+hold with a missing profile. The look-back cannot show whether either defect was exercised: `p_force` is
+not stored on the hold, and the old body's `IF p_force` / `AND NOT p_force` meant a NULL `p_force`
+skipped the free-stock check even for an admin; and profile state is read as of today, not as of each
+hold's creation.
 
 The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
 dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
@@ -2211,7 +2285,9 @@ insert boundaries pass without standalone context, while the receipt trigger sti
 stale context naming a different key. Rerun succeeds; deliberately changed insert-barrier code is
 refused and preserved. This supersedes the old residual acceptance and absence of literal interleaving
 proof. The boundary test does not execute every automatic sync RPC end to end.
-**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+**APPLIED LIVE 2026-09-15 03:32Z** (ledger version `20260915033227`), with Mason's in-chat approval
+and a fresh CLEAN `gpt-5.6-sol`/high apply proof; see `docs/reference/migration-history.md` row 927.
+The text that follows is the pre-apply record. Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
 and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
 `proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
 `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the
@@ -2250,15 +2326,29 @@ The lock lives in that one browser. Tracked as its own item: OPEN 2026-09-11 (ex
 request) above.
 
 
-## OPEN 2026-09-04 — Different-unit chemical quantity guard still uses floating-point conversion
+## CLOSED 2026-09-20 — Different-unit chemical quantity guard now converts with exact decimals
 
-`chemLineBillingHazard` checks chemical rows whose rate and stock units differ by converting with
-JavaScript `Number` arithmetic before comparing the quantity and tolerance. PostgreSQL `save_job`
-uses exact `numeric` arithmetic, so a value extremely close to a converted-unit boundary can still be
-classified differently in the browser. The server remains the authoritative fail-closed check; the
-remaining risk is a misleading client refusal or a save that reaches the server and is then refused.
-Keep this separate from the equal-unit exact-decimal fix, and replace the converted-unit math with an
-exact rational/decimal conversion in a focused follow-up.
+**Closed by the change that carries this entry** (candidate `a568b8dca`, the #582 client follow-up
+that replaced #653/#728/#730). The focused follow-up this item asked for is the change itself, so the
+two land together rather than leaving the entry OPEN against its own fix.
+
+The defect as filed: `chemLineBillingHazard` converted rows whose rate and stock units differ using
+JavaScript `Number` arithmetic before comparing the quantity against the tolerance, while PostgreSQL
+`save_job` compares with exact `numeric`, so a value extremely close to a converted-unit boundary
+could be classified differently in the browser than on the server.
+
+What replaced it: `quantityIsWithinSqlTolerance` now takes the source and target unit sizes and
+**cross-multiplies integer unit sizes** instead of dividing or rounding converted decimals, so the
+whole comparison — quantity, expected value, the per-acre slack, the `0.1` cap and the `0.0001`
+floor — is carried out in scaled integers (`BigInt`) that mirror
+`abs(qty - convert(rate * acres)) <= greatest(0.0001, least(convert(0.00005 * acres), convert(0.1)))`
+exactly. Unit sizes are read from the same `LIQUID_UNIT_SIZE` / `DRY_UNIT_SIZE` tables the converter
+uses and are gated on `Number.isSafeInteger(size) && size > 0`, so an unknown or inherited unit
+property cannot prove safety — the row stays flagged. The dry-fluid refusal ahead of it is unchanged.
+
+Scope note, so this is not read as more than it is: the server remains the authoritative fail-closed
+check. This closes the *client/server classification divergence* at converted-unit boundaries; it did
+not move any authority into the browser, and no migration or live change was part of it.
 
 
 ## CLOSED 2026-09-05 — Server acreage refusal is merged and applied live

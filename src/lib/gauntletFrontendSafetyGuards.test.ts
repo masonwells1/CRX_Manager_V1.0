@@ -204,11 +204,13 @@ describe('gauntlet caller-side safety guards', () => {
     expect(integrity).toContain('setNegatives([]);');
   });
 
-  // Regression guard for the Sol BLOCKERS verdict on ef82064a. The server still
-  // replays these RPCs on the key alone, but hold and adjustment now bind a key
-  // and payload together in a durable intent record. Their RPCs must therefore
-  // use the frozen request, never live form state: this is not a reduction back
-  // to a bare getKey(). Retirement and PO actions retain payload-scoped keys.
+  // Regression guard for the Sol BLOCKERS verdict on ef82064a. Hold and
+  // adjustment now bind the actor and payload SERVER-side as well (migrations
+  // 20260908130000 applied 2026-09-15 and 20260911120000 applied 2026-09-20),
+  // and both bind a key and payload together in a durable intent record. Their
+  // RPCs must therefore use the frozen request, never live form state: this is
+  // not a reduction back to a bare getKey(). Retirement and PO actions still
+  // replay on the key alone and retain payload-scoped keys.
   it('keeps replay-on-key-only RPCs bound to their current payload', () => {
     const inventory = source('src/pages/InventoryPage.tsx');
     const purchaseOrder = source('src/pages/PurchaseOrderDetail.tsx');

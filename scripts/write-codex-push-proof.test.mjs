@@ -14,11 +14,12 @@ import {
   CODEX_VERDICT_TOKEN,
   CODEX_REVIEW_EFFORT,
   CODEX_REVIEW_MODEL,
-  CODEX_REVIEW_PERMISSION_CONFIG,
   CODEX_REVIEW_PERMISSION_PROFILE,
   codexExecutable,
   codexPushProofPath,
+  codexReviewDenyReadPaths,
   codexReviewerEnvironment,
+  codexReviewPermissionConfig,
   codexReviewProofVerdict,
   createSanitizedReviewWorkspace,
   DEFAULT_TIMEOUT_SEC,
@@ -100,7 +101,8 @@ assert.ok(
   "prompt demands the machine verdict token in both forms",
 );
 
-const args = buildCodexExecArgs({ root: "/repo/root", prompt, platform: "win32" });
+const permissionConfig = codexReviewPermissionConfig(["C:\\Users\\me\\.codex\\auth.json", "C:\\Repo\\.env.local"], "win32");
+const args = buildCodexExecArgs({ root: "/repo/root", prompt, platform: "win32", permissionConfig });
 assert.deepEqual(
   args,
   [
@@ -121,19 +123,103 @@ assert.deepEqual(
     "-c",
     'default_permissions="packet-review"',
     "-c",
-    CODEX_REVIEW_PERMISSION_CONFIG,
+    permissionConfig,
     "--disable",
     "hooks",
     "-",
   ],
 );
-// SECURITY: an OS-enforced deny-root profile exposes only minimal runtime files
-// plus the sanitized packet. `-` feeds the fixed prompt through stdin with
+// SECURITY: Codex 0.155's elevated Windows sandbox requires `:root` read, so the
+// profile is whole-disk read with credential stores and `.env` files denied, no
+// writes, and no network. `-` feeds the fixed prompt through stdin with
 // shell:false, so metacharacters can never execute.
 assert.ok(args.includes(`default_permissions="${CODEX_REVIEW_PERMISSION_PROFILE}"`));
-assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes('":root" = "deny"'));
-assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes('":workspace_roots" = { "." = "read" }'));
-assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes("network = { enabled = false }"));
+assert.equal(
+  permissionConfig,
+  'permissions.packet-review={ filesystem = { ":root" = "read", ":minimal" = "read", ' +
+    '":workspace_roots" = { "." = "read" }, "C:\\\\Users\\\\me\\\\.codex\\\\auth.json" = "deny", ' +
+    '"C:\\\\Repo\\\\.env.local" = "deny" }, network = { enabled = false } }',
+  "deny paths are TOML-escaped basic-string keys and network stays disabled",
+);
+assert.ok(!codexReviewPermissionConfig([], "win32").includes("write"), "the reviewer profile never grants writes");
+// Only Windows' elevated sandbox needs whole-disk read; elsewhere reads stay packet-only.
+assert.equal(
+  codexReviewPermissionConfig(["/home/me/.codex/auth.json"], "linux"),
+  'permissions.packet-review={ filesystem = { ":root" = "deny", ":minimal" = "read", ' +
+    '":workspace_roots" = { "." = "read" } }, network = { enabled = false } }',
+  "non-Windows reviewers keep the deny-root profile",
+);
+
+// Deny paths are discovered by SHAPE: home credential stores plus `.env*` secret
+// files one level below the drive root and in every worktree — never templates,
+// symlinks resolved to their targets, never whole project trees (a deny ACE on a big tree takes hours
+// to propagate and blocks every other sandboxed Codex session inside it).
+{
+  const fakeTree = {
+    "C:\\": ["CRX_Manager", "FarmRx", "Windows", "notes.txt"],
+    "C:\\CRX_Manager": [".env", ".env.local", ".env.example", ".env.staging.example", "package.json", "src"],
+    "C:\\FarmRx": [".env.local", ".ENV.template", ".envrc"],
+    "C:\\Windows": ["System32"],
+    "C:\\CRX_Manager\\.claude\\worktrees\\wt": [".env.local", ".env.link"],
+  };
+  const files = new Set([
+    "C:\\CRX_Manager\\.env",
+    "C:\\CRX_Manager\\.env.local",
+    "C:\\FarmRx\\.env.local",
+    "C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.local",
+    "C:\\Users\\me\\.codex\\auth.json",
+    "C:\\Users\\me\\.git-credentials",
+    "D:\\secrets\\real.env",
+    "D:\\alt-codex\\auth.json",
+    "C:\\git-home\\.git-credentials",
+  ]);
+  const dirs = new Set(["C:\\Users\\me\\.ssh", "C:\\CRX_Manager\\src"]);
+  const links = new Map([["C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.link", "D:\\secrets\\real.env"]]);
+  const denies = codexReviewDenyReadPaths({
+    sourceRoot: "C:\\CRX_Manager\\.claude\\worktrees\\wt",
+    home: "C:\\Users\\me",
+    // A Git Bash HOME that differs from os.homedir() must be denied as well.
+    extraHomes: ["C:\\git-home", "C:\\Users\\me"],
+    codexHome: "D:\\alt-codex",
+    platform: "win32",
+    listWorktrees: () => ["C:\\CRX_Manager", "C:\\CRX_Manager\\.claude\\worktrees\\wt"],
+    readDir: (dir) => {
+      if (!(dir in fakeTree)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return fakeTree[dir];
+    },
+    stat: (target) => {
+      if (!files.has(target) && !dirs.has(target)) {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      return { isFile: () => files.has(target), isDirectory: () => dirs.has(target) };
+    },
+    realpath: (target) => {
+      if (links.has(target)) return links.get(target);
+      if (!files.has(target) && !dirs.has(target)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return target;
+    },
+  });
+  assert.deepEqual(denies, [
+    "C:\\CRX_Manager\\.claude\\worktrees\\wt\\.env.local",
+    "C:\\CRX_Manager\\.env",
+    "C:\\CRX_Manager\\.env.local",
+    "C:\\FarmRx\\.env.local",
+    "C:\\Users\\me\\.codex\\auth.json",
+    "C:\\Users\\me\\.git-credentials",
+    "C:\\Users\\me\\.ssh",
+    "C:\\git-home\\.git-credentials",
+    "D:\\alt-codex\\auth.json",
+    "D:\\secrets\\real.env",
+  ]);
+}
+// Sibling worktrees hold their own `.env` files, so a worktree list that cannot be
+// read is a hole in the deny list. The real (uninjected) enumeration must refuse.
+assert.throws(
+  () => codexReviewDenyReadPaths({ sourceRoot: path.join(tmpdir(), "crx-not-a-repo-9f3a1c") }),
+  /Could not enumerate the worktrees/,
+  "an unreadable worktree list must refuse to build a review sandbox",
+);
+
 assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
 assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
 assert.ok(args.includes("--ignore-user-config"));
