@@ -16,12 +16,23 @@ previous one. **Re-read read-only 2026-09-19: unchanged** — 1002 rows / 995 di
 captured ledger above.** Rows 930-933 carry authored stamps `20260908190000`, `20260912165758`,
 `20260913040359` and `20260913152700`. Every one sorts strictly ABOVE the current effective
 ordering high-water `20260908130000_bind_create_inventory_hold_receipt_to_intent`, so none is
-stranded and none needs a restamp. They also sort BELOW the merged-but-unapplied
-`20260914100100`-`20260914100900` set; that is deliberate and carries the `ordering-guard:
-ahead-of-pending` annotation in each file, because these guards are independent of that set and
-neither apply nor repair it. The parked inventory candidate in row 927 is a separate lane.
-Re-read both the live ledger and the pending queue immediately before any owner-authorized
-apply; this note is not apply permission and not an ahead-of-pending waiver.
+stranded and none needs a restamp.
+
+**ORDERING IS STRICT. None of these files carries an `ordering-guard: ahead-of-pending`
+marker.** An earlier revision of this paragraph said they did; that was true before
+2026-09-20 and is no longer. The three markers were REMOVED after PR #726 merged
+`20260908140000_number_generators_year_chicago` (UNAPPLIED), which sorts BELOW all four
+of these files and whose own header states it must apply first. The markers would have
+silently waved it through, and applying these ahead of it would make it permanently fail
+the ordering guard and strand the Chicago-year document-number correction (deadline
+31 December 2026). **Apply `20260908140000` first, then these four in ascending order.**
+The executable guard now enforces this: `20260908190000` refuses while `20260908140000`
+is pending, and `20260912165758` refuses while either of those is.
+
+They also sort BELOW the merged-but-unapplied `20260914100100`-`20260914100900` set;
+those are a separate lane that these guards neither apply nor repair, as is the parked
+inventory candidate in row 927. Re-read both the live ledger and the pending queue
+immediately before any owner-authorized apply; this note is not apply permission.
 
 **Superseded 2026-09-08 post-apply boundary.** The prior read recorded **1001 ledger rows**, live
 `max(version)` `20260909023300`, and effective ordering high-water
