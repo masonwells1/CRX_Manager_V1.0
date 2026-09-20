@@ -391,21 +391,44 @@ a new forward migration pinning `9a503e54…` → a new body, plus CI, a fresh e
 review, and Mason's apply approval — a full protected-delivery cycle for hardening nothing can
 currently trigger.
 
-**The written fix exists but is stranded.** Branch `claude/bind-adjust-inventory-receipt-delivery-20260917`
-HEAD `143da828f` (unpushed) adds `OR p_idempotency_key COLLATE "C" ~ '[[:cntrl:]]'` and moves both
-body pins to `457cfb00…`. **That branch can no longer be applied**: it edits an applied migration
-(against the CRX hard rule), and its preflight accepts only `ef485890…` or its own `457cfb00…`,
-while live is now `9a503e54…`, so it aborts with `PREFLIGHT_BODY`. If this is ever taken up, it must
-become a **new forward migration**, not an edit of `20260911120000`.
+**A forward migration now exists and is PARKED, not applied (2026-09-20).** The decision above still
+stands — this is recorded so the shelf is findable, not to re-open it. A later session built the fix
+as a proper new forward migration and Mason re-affirmed the accept when it was put to him a second
+time.
 
-**Never tested, in either direction.** Neither
-`scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs` nor
-`scripts/smoke/smoke-adjust-inventory-intent-binding.sql` covers a control-character key; they cover
-only the NULL and blank cases. Any future attempt must add that case.
+- Branch `claude/adjust-inventory-control-char-keys-20260920`, HEAD `4bcb1d5e3` (pushed, **no PR**).
+- `supabase/migrations/20260911130000_refuse_control_character_adjust_inventory_keys.sql` — a
+  forward `CREATE OR REPLACE` pinning the live body `9a503e54…` → a new body `841eeded…`. Stamped
+  deliberately below the eight pending `20260914100*` migrations, since the pending-set guard in
+  `.claude/hooks/migration-pending-lib.mjs` refuses an apply while an **older** migration is pending.
+- Superseded: the earlier branch `claude/bind-adjust-inventory-receipt-delivery-20260917` HEAD
+  `143da828f` (unpushed) **still cannot be applied** — it edits an applied migration, and its
+  preflight accepts only `ef485890…` or `457cfb00…` while live is `9a503e54…`
+  (`PREFLIGHT_BODY`). Do not revive that one.
+- **Known-open on the parked branch, if it is ever taken up:** two postflight assertions were proven
+  defeatable by review — the cutover-trigger check no longer inspects the trigger function's body,
+  and the control-character check is satisfied by a *commented-out* clause. Four documents also still
+  carry the pre-correction scope wording below.
 
-**Related wording trap.** Under `COLLATE "C"` a `[[:cntrl:]]` test refuses only C0 controls and DEL.
-C1 controls, ZWSP, BOM, U+2028 and the soft hyphen still pass, so the behaviour is "ASCII control
-characters", never "non-printable".
+**Now tested, on the parked branch only.** The applied-migration provers
+(`scripts/smoke/prove-adjust-inventory-intent-binding-real-schema.mjs`,
+`scripts/smoke/smoke-adjust-inventory-intent-binding.sql`) still cover only the NULL and blank
+cases. The parked branch adds `prove-adjust-inventory-control-character-keys.mjs` and its chain,
+which reproduce the gap on a byte-identical replay of the live body and then close it. Nothing on
+`main` covers a control-character key.
+
+**Related wording trap — corrected 2026-09-20.** An earlier version of this entry said a
+`COLLATE "C"` `[[:cntrl:]]` test "refuses only C0 controls and DEL" and that C1 controls pass.
+**The C1 half is measured-false.** On PostgreSQL 17.6 the class matches **exactly 64** code points —
+U+0001–U+001F, U+007F (DEL) **and the whole C1 block U+0080–U+009F (32 of 32)** — and the default
+collation matches the same 64, so `COLLATE "C"` is defensive pinning rather than the cause of that
+set. `chr(0)` is refused by PostgreSQL outright, so 31 + 1 + 32 = 64 is exact. NBSP, ZWSP, BOM,
+U+2028 and the soft hyphen genuinely do pass; that half was right. Measured three times
+independently — a container prover plus two reviewers, each of which predicted the opposite and
+tested rather than reasoned. The intuition that trips everyone is that `COLLATE "C"` selects the
+ASCII regex strategy and therefore *looks* like it should cap the class at ASCII; it does not for
+`[[:cntrl:]]`. **Enumerate the code points in a container; do not reason from the collation.** The
+behaviour is still fairly described as "control characters", never as "non-printable".
 
 **Also carried forward unfixed (postflight only, no effect on the applied body):** the postflight
 checks `position('AUTH_REQUIRED' …) >` without a presence check, so a body with no auth check at all
