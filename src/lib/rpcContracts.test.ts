@@ -2747,6 +2747,34 @@ function registryMigrationHighWater(): string {
 // AFTER 2026-09-03 12:47 UTC lands, together with src/types/supabase.ts
 // regenerated from production — at that point the generated-names arm covers
 // these RPCs on its own.
+// The two 20260914100* commission candidates below were added on 2026-09-17,
+// when this PR's registry refresh moved migrations_high_water from
+// 20260904152221 to the 20260915033227 ledger version of the applied hold
+// migration. Both files are authored 20260914100*, so they went from ABOVE the
+// high-water to BELOW it, the `timestamp > highWater` arm of the discovery rule
+// went false, and their trigger-only recorders dropped out of the mutator
+// inventory — which surfaced as their MUTATOR_INVENTORY_EXEMPT entries reading
+// stale. Registering them keeps the recorders under the guard instead of
+// deleting the exemptions that describe them.
+//   20260914100300 last defines record_commission_settlement_event;
+//   20260914100900 last defines record_commission_earned_state.
+// Clear them only once src/types/supabase.ts is regenerated from production
+// after these apply, at which point the generated-names arm covers them.
+// The seven entries after them fell below the same high-water move but went
+// unnoticed, because the reverse check below only recognised the PENDING
+// APPLY wording while their rows said LOCAL CANDIDATE ... not applied. Once
+// the reverse check learned that wording it named exactly these seven: the
+// other five commission restamps, 20260908120000, and this PR's own
+// 20260911120000 adjust_inventory binding. 20260908120000 had in fact applied
+// live on 2026-09-08 (ledger 20260909023300) and its row now says so; it stays
+// registered for the same reason as the 20260831* entries — applied, but the
+// generated types have not been regenerated since. 20260914100800 (PR #721)
+// was added on 2026-09-19 when the widened reverse check named it after a main merge.
+// PR #722 then moved registryMigrationHighWater() to the newest AUTHORED stamp
+// among applied names (20260908130000 at that refresh), so the 2026091* entries
+// here now sort above the boundary and are discovered without registration. They
+// stay registered so a later refresh that moves the boundary past them cannot
+// silently drop them; clear them on the same type-regeneration rule as above.
 const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',
@@ -2754,6 +2782,16 @@ const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831212415',
   '20260831233000',
   '20260831235900',
+  '20260914100300',
+  '20260914100900',
+  '20260908120000',
+  '20260911120000',
+  '20260914100100',
+  '20260914100200',
+  '20260914100400',
+  '20260914100500',
+  '20260914100600',
+  '20260914100800',
 ]);
 
 /**
@@ -2780,15 +2818,33 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
   // clearing it would silently drop these RPCs from the inventory.
   const timestamps = new Set<string>();
   for (const timestamp of MIGRATIONS_AWAITING_TYPE_REGENERATION) {
-    const row = lines.find((line) =>
+    // A timestamp can carry more than one row: 20260914100100 keeps a preserved
+    // HISTORICAL DUPLICATE ordering record (row 925) above its active
+    // local-candidate record (row 917). Judging only the first row in file order
+    // would reject a correctly recorded migration, so any one row stating a
+    // recognised status is enough.
+    const rows = lines.filter((line) =>
       new RegExp(`^\\|\\s*\\d+\\s*\\|\\s*${timestamp}\\s*\\|`).test(line),
     );
-    if (!row) {
+    if (rows.length === 0) {
       throw new Error(`Registered migration ${timestamp} has no docs/reference/migration-history.md row.`);
     }
-    if (!/\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)) {
+    // "LOCAL CANDIDATE - not applied" is the third wording migration-history
+    // actually uses for an unapplied candidate, and it means exactly what
+    // PENDING APPLY means here. Accepting only the first two spellings made a
+    // whole class of pending row impossible to register: the row is real and
+    // correctly worded, yet registering its timestamp threw. That is how the
+    // 20260914100* commission candidates could not be kept in the mutator
+    // inventory once the registry high-water moved above them. The phrasing
+    // matches the same LOCAL CANDIDATE ... NOT APPLIED shape that
+    // localCandidateMigrationPathsFromHistory keys on, so the two guards agree
+    // on which rows are pending.
+    const statesRecognisedStatus = (row: string) =>
+      /\*\*(PENDING APPLY|APPLIED LIVE)\b/i.test(row)
+      || /\bLOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b/i.test(row);
+    if (!rows.some(statesRecognisedStatus)) {
       throw new Error(
-        `Migration-history row for ${timestamp} must start its purpose with PENDING APPLY or APPLIED LIVE: ${row}`,
+        `Migration-history row for ${timestamp} must state PENDING APPLY, APPLIED LIVE, or LOCAL CANDIDATE ... NOT APPLIED: ${rows[0]}`,
       );
     }
     timestamps.add(timestamp);
@@ -2816,7 +2872,9 @@ function migrationsAwaitingTypeRegeneration(): Set<string> {
   // comparison would have demanded it and been wrong.
   const highWater = registryMigrationHighWater();
   const unregisteredBelowHighWater = lines
-    .map((line) => line.match(/^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*\*\*PENDING APPLY\b/i)?.[1])
+    .map((line) => line.match(
+      /^\|\s*\d+\s*\|\s*(\d{14})\s*\|\s*(?:\*\*PENDING APPLY\b|\*\*LOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b)/i,
+    )?.[1])
     .filter((timestamp): timestamp is string => Boolean(timestamp))
     .filter((timestamp) => timestamp <= highWater && !timestamps.has(timestamp));
   if (unregisteredBelowHighWater.length > 0) {

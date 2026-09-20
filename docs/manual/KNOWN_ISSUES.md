@@ -54,6 +54,47 @@ apply remain separate gates. The session closeout and still-open audit follow-up
 in `docs/handoffs/2026-09-12-pr-comment-session-closeout.md`; historical audit counts do not
 constitute a current defect list or clearance of the remaining P2 inventory.
 
+**SCOPE OF THE TWO CUTOVER PHASES — read this before quoting them.** Phases 1 and 2 close
+`public.save_invoice(jsonb,jsonb,text)` and nothing else. Both pin, fence and replace that one
+function by name and OID. "Generic field-invoice creation is refused" is therefore true of
+`save_invoice` and **NOT true of the database as a whole**: the order-pipeline RPCs remain an open
+creation path, tracked as CRX-LIFE-001 immediately below. Neither the migration filename
+`20260912165758_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
+`finish_generic_field_invoice_cutover` should be read as a claim about any other entry point.
+
+## OPEN 2026-09-20 — CRX-LIFE-001: a sales rep can create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
+
+**Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
+`main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of
+the season-guard candidate on 2026-09-20 and is recorded here because that PR's cutover phases make
+a scoped claim that could otherwise be misread as covering it (see the scope note above).
+
+`create_invoice_from_order(uuid, uuid, text, text)` and `create_split_invoices_from_order(...)` both
+accept a caller-supplied `p_invoice_type text DEFAULT 'chemical_sale'` and insert it into `invoices`
+**unchanged**, with no allow-list and no rejection of `field_application`:
+
+- `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql:108` and `:122`
+- `supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql:157` and `:426`
+- `supabase/migrations/20260719044912_trust_only_post_revoke_split_provenance.sql:382`
+
+Both retain `GRANT EXECUTE` to `authenticated`, and their internal role checks admit **admins and
+sales reps** — ordinary application actors, not database owners. So an authenticated sales rep can
+pass `p_invoice_type => 'field_application'` and produce an order-backed field-application invoice
+with no field, grower-share, job, blend-ticket or season workflow behind it. That breaks the
+documented invariant that field-application invoices never pass through the order pipeline, and can
+corrupt AR, commissions, field reporting and the field-app lifecycle assumptions.
+
+`20260620210000_field_app_invoice_type_lock_trigger` does **not** cover this. It fires only on
+`UPDATE` across the `field_application` boundary, never on `INSERT`.
+
+**Exposure is not yet measured.** No live read has been taken of how many `field_application`
+invoices carry an `order_id`, so the blast radius is unknown; that read needs Mason's approval at
+the time. **Fix shape:** a new migration refusing `field_application` in both order RPCs, plus an
+INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
+reviewed change with its own container proof — not as an add-on to the season guards. Awaiting
+Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped season closure first
+with this gap documented rather than hold the September 30 season deadline for it.
+
 **Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
 superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
 trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on
@@ -2167,13 +2208,20 @@ browser only if it did not go through. **Fix:** an admin "verified, clear this r
 records who cleared it and what they checked.
 
 
-## OPEN 2026-09-05 — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold (fix written and proven, not applied)
+## RESOLVED 2026-09-15 (migration `20260908130000` APPLIED LIVE as ledger version `20260915033227`; code merged in PR #691) — a manual-hold retry that races the original is told it FAILED, so the operator's next click books a second hold
 
 **Owner:** the PR #624 lane (worktree `inventory-idempotency-key-reset-888161`), reassignable by the fleet
 coordinator. **Exposure assessment due 2026-09-18:** a read-only look at live holds for the two server
 defects the parked migration closes while it stays unapplied: a NULL `p_force` that skips the admin and
 free-stock checks, and holds created by staff whose profile is missing or inactive. The live read needs
-Mason's explicit OK at the time; the result decides whether the apply moves up.
+Mason's explicit OK at the time; the result decides whether the apply moves up. **Done 2026-09-15:** the
+migration applied before the due date, so per Mason's 2026-09-14 decision the pre-apply check was skipped
+and a read-only look-back ran after the apply. All 29 `inventory_holds` rows ever created (newest 2026-04-28)
+were made by staff who are active admins today, and the `created_by` foreign key rules out a persisted
+hold with a missing profile. The look-back cannot show whether either defect was exercised: `p_force` is
+not stored on the hold, and the old body's `IF p_force` / `AND NOT p_force` meant a NULL `p_force`
+skipped the free-stock check even for an admin; and profile state is read as of today, not as of each
+hold's creation.
 
 The live `create_inventory_hold` body (the `20260630173022` parked_010 body — the 2026-07-27 production
 dump proves it IS installed; earlier notes calling it "parked, never applied" were wrong) reads its
@@ -2206,7 +2254,9 @@ insert boundaries pass without standalone context, while the receipt trigger sti
 stale context naming a different key. Rerun succeeds; deliberately changed insert-barrier code is
 refused and preserved. This supersedes the old residual acceptance and absence of literal interleaving
 proof. The boundary test does not execute every automatic sync RPC end to end.
-**No live apply is authorized.** Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
+**APPLIED LIVE 2026-09-15 03:32Z** (ledger version `20260915033227`), with Mason's in-chat approval
+and a fresh CLEAN `gpt-5.6-sol`/high apply proof; see `docs/reference/migration-history.md` row 927.
+The text that follows is the pre-apply record. Mason authorized a read-only live check on 2026-09-06 (15:39-15:42 UTC)
 and every preflight condition held: one overload, owner `postgres`, `plpgsql`, SECURITY DEFINER,
 `proconfig = {search_path=public, pg_temp}`, the pinned argument list with defaults,
 `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` for the 4,046-character body whose sha256 is the
