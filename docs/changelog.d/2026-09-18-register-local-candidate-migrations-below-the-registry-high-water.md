@@ -36,5 +36,10 @@ migrations (`20260908130000`), not the apply-time ledger version. The `2026091*`
 that boundary and are discovered on their own. They stay registered as a backstop, and the widened
 reverse check still names any pending migration that falls below a future boundary.
 
-Nothing was applied to the live database. `20260911120000` remains a local candidate awaiting Mason's
-explicit approval.
+Nothing was applied to the live database *by this change*. At the time of writing `20260911120000`
+was still awaiting Mason's explicit approval.
+
+> **STATUS SUPERSEDED 2026-09-20:** `20260911120000` has since been **APPLIED LIVE** (ledger version
+> `20260920052149`) on Mason's explicit in-chat approval. See
+> `2026-09-20-adjust-inventory-receipt-binding-applied-live.md`. The sentence above is the record as
+> it stood on 2026-09-18.

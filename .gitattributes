@@ -263,7 +263,7 @@ scripts/smoke/fixtures/invoice-date-fallbacks-live-bodies-20260903.sql -text dif
 # checkout would install bytes the pins were never computed against and abort mid-apply.
 supabase/migrations/20260904180000_invoice_season_follows_invoice_date.sql text eol=lf
 scripts/smoke/prove-invoice-season-follows-invoice-date.mjs text eol=lf
-# adjust_inventory receipt binding (CRX-IDEM-01, 2026-09-11, NOT applied). The migration
+# adjust_inventory receipt binding (CRX-IDEM-01, authored 2026-09-11, applied live 2026-09-20). The migration
 # sha256-pins the live body it replaces and the body it emits, and the guarded apply proof
 # binds the file's exact bytes; the prover streams the migration and the smoke chain into
 # PostgreSQL. Pin all three so Windows and Linux run the same reviewed evidence.
