@@ -40,7 +40,7 @@ ordering high-water is the newest applied row's effective stamp:
 `20260920052149`, applied live 2026-09-20 via #664; verified live read-only 2026-09-20, 1004 ledger
 rows). A candidate must now sort above the `20260911120000` name-stamp.
 
-**Superseded boundary — row 928's 09-15 apply.** Until the 09-20 applies the high-water was
+**Superseded boundary — row 927's 09-15 apply.** Until the 09-20 applies the high-water was
 **`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
 `20260915033227`, applied live 2026-09-15 via PR #691; verified live read-only 2026-09-17, 1002
 ledger rows).
