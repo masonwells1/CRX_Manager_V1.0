@@ -39,6 +39,12 @@ On top of it, **this loop deliberately launches the hunter with no database conn
 | Tier | What | Action this cycle |
 |---|---|---|
 | 🟢 Green | `fixKind` = `frontend-only` / `docs-or-test` — reversible, no DB/RLS/money-schema change | After the Codex fix-glance SHIPs + `typecheck`/`build`/`test` clean: **commit to the debug branch** |
+
+> **The fix-glance is an advisory Luna pass, not a ship gate — the name is historical.** It mints
+> no proof. A green row above authorizes a commit to the *debug branch* only. Any fix touching
+> money, inventory, auth, RLS, migrations, permissions or an Edge Function still needs the
+> exact-SHA `gpt-5.6-sol` proof from `/codex-review` Step 3B before it can be pushed, and the push
+> guard will refuse it without one. Never read a Luna `VERDICT: SHIP` as that proof.
 | 🟡 Yellow | `fixKind` = `migration` / `edge-fn` | Draft + rolled-back-validate against live (zero prod footprint) + plain-English explanation → **PARK** in `REPORT.md` |
 | 🔴 Red | push / deploy / live-apply / prod data | **Never autonomous** — wait for Mason |
 

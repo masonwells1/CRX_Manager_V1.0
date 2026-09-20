@@ -54,6 +54,11 @@ const timeoutSec = tIdx > -1 ? Number(process.argv[tIdx + 1]) || 540 : 540
 const useSol = process.argv.includes('--sol')
 const reviewModel = useSol ? CODEX_REVIEW_MODEL : 'gpt-5.6-luna'
 const reviewEffort = useSol ? CODEX_REVIEW_EFFORT : 'xhigh'
+// Log the tier WE selected, rather than relying on the CLI banner. An unattended loop is
+// required to record the model and effort that produced a verdict; if that record depends on
+// optional CLI output, a banner change silently makes the audit trail unfalsifiable. stderr,
+// so it lands in the trace file and never contaminates the stdout verdict.
+console.error(`[overnight-codex-gate] tier: ${reviewModel} / ${reviewEffort}${useSol ? ' (--sol)' : ' (default)'}`)
 
 const prompt = readFileSync(promptFile, 'utf8')
 if (!prompt.trim()) fail('prompt file is empty')

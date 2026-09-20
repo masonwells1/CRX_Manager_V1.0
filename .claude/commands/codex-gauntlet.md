@@ -110,6 +110,8 @@ Do not claim a database or money fix is ready from code inspection alone.
 
 Use `/codex-review` with the selected scope. If the direct Codex CLI fails to resolve, fall back to `/codex-cross-review`.
 
+**The fallback packet defaults to Luna/xhigh too — for a risky change you must say so and run it on Sol.** `/codex-cross-review` produces a paste-able packet whose reviewer tier is whatever the packet states. A clean Luna packet is an advisory round, not the exact-SHA `gpt-5.6-sol` proof the push and apply guards require, and the CLI being unavailable does not lower that bar: if the CLI cannot run at all, the Sol proof cannot be minted and the risky change parks until it can.
+
 **Order matters: Luna rounds first, the Sol proof last.** Iterate on `/codex-review` **Step 3A**
 (`gpt-5.6-luna` at xhigh, advisory, mints nothing) until it comes back clean. `write-codex-push-proof.mjs`
 is **Step 3B** — the Sol proof — and running it before the diff is settled wastes a Sol pass and is

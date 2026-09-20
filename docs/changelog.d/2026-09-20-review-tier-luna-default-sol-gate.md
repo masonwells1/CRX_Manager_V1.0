@@ -36,8 +36,14 @@ is what enforces "Luna until clean, then exactly one Sol" without relying on an 
 - `.claude/commands/ship.md`, `codex-gauntlet.md`, `review-workflow.md`, `overnight-bug-hunt.md`,
   `codex-driven-bug-hunt.md` — Luna-first ordering, Sol named as the single end gate.
 - `scripts/overnight-codex-gate.mjs` — defaults to `gpt-5.6-luna`/`xhigh`; new `--sol` flag restores
-  `gpt-5.6-sol`/`high` for one pass. It imports the Sol constants from `write-codex-push-proof.mjs`
-  rather than redefining them, so the proof identity has a single source and cannot drift.
+  `gpt-5.6-sol`/`high` for one pass, and the wrapper now logs the tier it selected to stderr rather
+  than leaving the audit trail dependent on the CLI banner. Its `--sol` values are imported from
+  `write-codex-push-proof.mjs` rather than redefined, so this wrapper cannot drift from the proof
+  WRITER. **That is not a repo-wide single source, and this entry previously over-claimed that it
+  was:** `migration-apply-lib.mjs`, `codex-push-lib.mjs` and the `.codex/` mirror each still carry
+  their own independent copy of the required model/effort. Changing the required tier means
+  changing every one of them together; changing one alone makes the writer and the validators
+  disagree, and a proof is then either rejected or accepted at the wrong tier.
 - `docs/reference/agent-guardrails.md` — header note on why the advisory tier and the gate identity
   deliberately differ.
 
