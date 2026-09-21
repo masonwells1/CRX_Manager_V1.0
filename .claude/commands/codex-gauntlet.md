@@ -110,11 +110,19 @@ Do not claim a database or money fix is ready from code inspection alone.
 
 Use `/codex-review` with the selected scope. If the direct Codex CLI fails to resolve, fall back to `/codex-cross-review`.
 
+**The fallback packet defaults to Luna/xhigh too — for a risky change you must say so and run it on Sol.** `/codex-cross-review` produces a paste-able packet whose reviewer tier is whatever the packet states. A clean Luna packet is an advisory round, not the exact-SHA `gpt-5.6-sol` proof the push and apply guards require, and the CLI being unavailable does not lower that bar: if the CLI cannot run at all, the Sol proof cannot be minted and the risky change parks until it can.
+
+**Order matters: Luna rounds first, the Sol proof last.** Iterate on `/codex-review` **Step 3A**
+(`gpt-5.6-luna` at xhigh, advisory, mints nothing) until it comes back clean. `write-codex-push-proof.mjs`
+is **Step 3B** — the Sol proof — and running it before the diff is settled wastes a Sol pass and is
+self-defeating: the proof binds to the HEAD it reviewed, so the very next fix commit voids it. For
+ordinary reversible work Step 3A is the whole review; Step 3B is only for a risky diff.
+
 **Do not invoke `codex review <scope>` directly — it self-recurses in this repo.** It loads this
 file and `AGENTS.md` as context, follows their "run a Codex review" instruction into a *nested*
 review, then kills its own process tree while still exiting 0 with no verdict (2026-08-23, twice).
-Run `node scripts/write-codex-push-proof.mjs` instead, which reviews a sanitized snapshot pair
-with no agent-instruction files in it. Full detail in `.claude/skills/codex-review/SKILL.md`.
+Use Step 3A or Step 3B, both of which review a sanitized snapshot or a frozen diff with no
+agent-instruction files in it. Full detail in `.claude/skills/codex-review/SKILL.md`.
 
 **That wrapper serves the `--base origin/main` scope only.** Its base is pinned to
 `origin/main...HEAD` by design and it fails closed on a dirty worktree, so it cannot honor the
@@ -136,10 +144,21 @@ grep -cE '^CODEX_PROOF_VERDICT:[[:space:]]*CLEAN[[:space:]]*$' .claude/session-s
 1": a clean run legitimately reports `2`, because the capture holds both a structured section and
 the raw transcript. Anything with `0` is `UNVERIFIED`/`BLOCKED` per Step 2, never clean.
 
-The hard gate is a separate ephemeral `gpt-5.6-sol` high-effort review session; Terra may build and
-Luna may take low-risk work, but adversarial review always goes to Sol. Step 4 evidence verification
-reduces false positives; it is NOT a substitute for the Sol gate. The re-review in Step 5 (sub-item 2)
-must use the same Codex scope and Sol/high settings.
+Adversarial review runs on `gpt-5.6-luna` at xhigh by default (Mason's standing review-tier
+decision, 2026-09-20) — a gauntlet is many rounds, and the cheap tier is what makes that
+affordable. Iterate on Luna until it comes back clean. The re-review in Step 5 (sub-item 2) must
+use the same Codex scope and the same Luna/xhigh settings.
+
+The **hard gate** is unchanged: a separate ephemeral `gpt-5.6-sol` high-effort session for a risky
+change in the full `AGENTS.md` set (money, inventory, auth, RLS, migration, permission, Edge
+Functions, other business-critical). Step 4 evidence verification reduces false positives; it is
+NOT a substitute for that Sol gate, and neither is a clean Luna round. Terra may build; Luna may
+take low-risk work.
+
+**Sol runs LAST, once per candidate SHA — not once per gauntlet.** The proof binds to the HEAD it
+reviewed. If a Step 5 re-review round changes the diff after Sol has passed, that proof is void and
+a fresh Sol pass is required before push; the guards will reject the stale one. So do not report
+`SHIP` on the strength of a Luna re-review sitting on top of a Sol proof minted at an earlier SHA.
 
 ### Step 4: Verify Findings
 

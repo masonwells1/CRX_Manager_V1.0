@@ -109,8 +109,16 @@ Keep full detail in the file, not the chat.
 ## Step 5 — Offer Codex cross-review (do not auto-run)
 
 If there are any BLOCKER or HIGH findings, offer to run `/codex-review` so a separate ephemeral
-Codex `gpt-5.6-sol` high-effort session validates them before Mason acts (the in-workflow skeptics
-only reduce false positives and do not satisfy this hard gate). Wait for his go-ahead.
+Codex session validates them before Mason acts (the in-workflow skeptics only reduce false
+positives and do not satisfy this hard gate). That validation runs on `gpt-5.6-luna` at xhigh by
+default (2026-09-20); `gpt-5.6-sol` at high is reserved for the one end-of-run gate pass. That gate
+covers the FULL risky set in `AGENTS.md` — money, inventory, auth, RLS, migration, permission, Edge
+Functions, or any other business-critical change — not a shortened list. Wait for his go-ahead.
+
+**A clean Luna validation does not close a risky finding.** This command is read-only and ends in a
+report, so say so explicitly in that report: for any risky-set change, the fix still requires the
+exact-SHA `gpt-5.6-sol` proof from `/codex-review` Step 3B before it can be pushed. Never present a
+Luna-validated risky finding to Mason as "reviewed and ready".
 
 ## Hard rules
 - **Read-only.** No `Edit`/`Write` except the one report file. No `apply_migration`, no deploy, no `git commit`.
