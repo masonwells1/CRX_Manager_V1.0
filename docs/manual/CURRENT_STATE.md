@@ -25,12 +25,20 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-20 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1004 rows / 997 distinct names, `max(version)` `20260920052149` — two
+**Last verified: 2026-09-21 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1008 rows / 1001 distinct names, `max(version)` `20260921141901`). Four
+commission-cohort files applied live on 2026-09-21 between 14:14 and 14:19 UTC —
+`20260914100100_next_invoice_number_year_chicago` (`20260921141423`),
+`20260914100200_commission_history_report_replay_guard` (`20260921141451`),
+`20260914100300_refuse_stale_commission_payment_recipient` (`20260921141740`) and
+`20260914100400_enforce_commission_payment_business_date` (`20260921141901`) — so the effective
+ordering high-water is now `20260914100400`; `20260914100500`, `100600`, `100800` and `100900` are
+still not applied, and the 2026-09-20 figures below are superseded by this read. The schema
+registry has not been regenerated since those four applies.** Carried forward from the 2026-09-20
+read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
-`20260920052149`, which is now the effective ordering high-water; the
-`20260914100100`..`20260914100900` candidates are still not applied); schema shape last re-read 2026-09-20 by the live-introspection regeneration
+`20260920052149`; schema shape last re-read 2026-09-20 by the live-introspection regeneration
 of `.claude/schema-registry.json`, through ledger version `20260920052149`.** That rebuild left all
 eight schema-shape sections byte-identical to the registry it replaced — 11 generated columns, 38
 status enums, 94 tables without `updated_at`, 119 parsed CHECK IN-lists, 221 skipped constraints,
@@ -699,6 +707,12 @@ The three headline items:
   reserved-pool redesign before it can be revisited.
 - **OCR REI/PHI extraction** (re-entry interval / pre-harvest interval from
   label images) — deferred; flagged as a safety trap if done carelessly.
+
+Also parked, 2026-09-21: the customer-document byte boundary (PR #635's successor). The
+`customer-document-files` Edge Function is **not deployed** and migration
+`20260914100450_customer_document_bytes_server_only.sql` is **not applied**. Until both are live,
+live Storage still lets a document's uploader, and admins, sign download links that outlive the
+document's removal. Live holds no customer documents yet. Order and detail: `KNOWN_ISSUES.md`.
 
 ## 5. Environment facts
 
