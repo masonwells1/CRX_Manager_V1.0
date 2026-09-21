@@ -14,13 +14,18 @@ revision of this paragraph named. Two migrations applied that morning: `20260908
 `20260920051333`, then `20260911120000` under `20260920052149`. **Do not reapply `20260908140000`.**
 
 **All four of this branch's guard migrations now sort above that boundary**, and their ascending
-stamp order is also their apply order: `20260911125000` → `20260911130000` → `20260912165758` →
-`20260913040359`. Two were restamped on 2026-09-20 —
+stamp order is also their apply order: `20260914101000` → `20260914101100` → `20260914101200` →
+`20260914101300`. Two were restamped on 2026-09-20 —
 `20260908190000_field_app_invoice_cross_season_edit_guard` → `20260911125000`, because it sorted
 below the new high-water, and `20260913152700_preserve_unchanged_source_invoice_dates` →
 `20260911130000`, because at its old stamp it sorted after both cutover phases while its own header
-required it to run right after the season guard. Reasons are recorded in rows 931 and 934 of
-`docs/reference/migration-history.md`. This branch also
+required it to run right after the season guard. **On 2026-09-21 all four moved again, as one
+block and in the same internal order, to `20260914101000`..`20260914101300`**: Mason decided that
+the eight parked `20260914100100`..`20260914100900` commission migrations go live FIRST, and at
+the old stamps all four sorted below that cohort. **Reverse hazard: none of the four may be applied
+live before all eight commission migrations are**, or the whole cohort is stranded; the pending-set
+guard reads only `origin/main`, so it cannot catch this while this PR is unmerged. Reasons are
+recorded in rows 931-934 of `docs/reference/migration-history.md`. This branch also
 carries main's registry rebuild (PR #722, `--from-introspection`, `generated_at 2026-09-17`,
 `migrations_high_water 20260915033227`), which supersedes the September 12 regeneration this
 section previously described; it records already-applied identities, not any of the four pending
@@ -30,9 +35,9 @@ Live `save_invoice(jsonb,jsonb,text)` remains the original wrapper at body md5
 `9a34478d405a1a3b8233cabcdfb39691`; `preview_field_app_invoice_split` remains at
 `83f6600412ced085d0876a3c7339ff12`. The filed-season helpers are absent. Live `save_job`
 remains the null-acreage refusal body `8acf34542105a90212ddb0a5e7c5d272`.
-The filed-season edit guard, phase-one `20260912165758_refuse_generic_field_invoice_creation.sql`,
-phase-two `20260913040359_finish_generic_field_invoice_cutover.sql`, and unchanged-source-date
-correction `20260911130000_preserve_unchanged_source_invoice_dates.sql` all remain
+The filed-season edit guard, phase-one `20260914101200_refuse_generic_field_invoice_creation.sql`,
+phase-two `20260914101300_finish_generic_field_invoice_cutover.sql`, and unchanged-source-date
+correction `20260914101100_preserve_unchanged_source_invoice_dates.sql` all remain
 **LOCAL CANDIDATES — NOT APPLIED**. Public-save creation/refusal, retries, existing
 edits, prior-season job/blend creation, replay drift and a byte-identical original-wrapper
 mutation passed in disposable PostgreSQL. This is local behavior proof, not live deployment.

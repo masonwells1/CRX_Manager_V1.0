@@ -14,8 +14,10 @@
 -- both 20260908140000_number_generators_year_chicago (PR #726) and this PR's own season
 -- guard, either of which stepping over would have stranded it. 20260908140000 APPLIED LIVE
 -- 2026-09-20 (ledger version 20260920051333), so do NOT reapply it. This file is THIRD of
--- the four: apply 20260911125000, then 20260911130000, then this one, then 20260913040359.
--- Apply every older pending migration first, in ascending order.
+-- the four: apply 20260914101000, then 20260914101100, then this one, then 20260914101300.
+-- Apply every older pending migration first, in ascending order -- including all eight
+-- 20260914100* commission migrations (restamped 2026-09-21 above them; see the season
+-- guard's header for the reverse hazard).
 -- idempotency-body-check: exempt This sole wrapper retains its real check_idempotency
 -- call and delegates unchanged key-only lookup/receipt semantics to the private writer.
 

@@ -148,7 +148,7 @@
  * Exits 0 only if every phase passes, including the mutation phases, which must FAIL.
  */
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -162,10 +162,10 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const CANDIDATE = path.join(MIGRATIONS, '20260906120000_preview_field_app_season_follows_invoice_date.sql');
-const CROSS_SEASON_GUARD = path.join(MIGRATIONS, '20260911125000_field_app_invoice_cross_season_edit_guard.sql');
-const UNCHANGED_DATE_GUARD = path.join(MIGRATIONS, '20260911130000_preserve_unchanged_source_invoice_dates.sql');
-const GENERIC_CUTOVER_BARRIER = path.join(MIGRATIONS, '20260912165758_refuse_generic_field_invoice_creation.sql');
-const GENERIC_CREATION_GUARD = path.join(MIGRATIONS, '20260913040359_finish_generic_field_invoice_cutover.sql');
+const CROSS_SEASON_GUARD = path.join(MIGRATIONS, '20260914101000_field_app_invoice_cross_season_edit_guard.sql');
+const UNCHANGED_DATE_GUARD = path.join(MIGRATIONS, '20260914101100_preserve_unchanged_source_invoice_dates.sql');
+const GENERIC_CUTOVER_BARRIER = path.join(MIGRATIONS, '20260914101200_refuse_generic_field_invoice_creation.sql');
+const GENERIC_CREATION_GUARD = path.join(MIGRATIONS, '20260914101300_finish_generic_field_invoice_cutover.sql');
 const SAVE_SIDE = path.join(MIGRATIONS, '20260904180000_invoice_season_follows_invoice_date.sql');
 const PREDECESSOR = path.join(MIGRATIONS, '20260904160000_invoice_date_fallbacks_chicago.sql');
 // The migration that last emitted the 4-argument preview body live still runs.
@@ -1491,6 +1491,17 @@ try {
   // removes. Keep this assertion adjacent to the two above it; they are one contract.
   assert.ok(barrierIndex > unchangedDateGuardIndex,
     'cutover barrier must follow the unchanged-date guard, which must apply before either phase');
+  // Mason decided on 2026-09-21 that the eight parked 20260914100* commission migrations go live
+  // BEFORE these four. Strict ordering refuses anything that sorts below the newest applied
+  // stamp, so all four candidates must sort ABOVE every file of that cohort, or applying the
+  // cohort first would strand them. Read from the directory, not from the selected list, so the
+  // check holds whether or not the replay includes the cohort.
+  const commissionCohort = readdirSync(MIGRATIONS).filter((name) => /^20260914100\d{3}_.*\.sql$/.test(name)).sort();
+  assert.equal(commissionCohort.length, 8, `expected the eight 20260914100* commission migrations, found ${commissionCohort.length}`);
+  for (const candidate of [CROSS_SEASON_GUARD, UNCHANGED_DATE_GUARD, GENERIC_CUTOVER_BARRIER, GENERIC_CREATION_GUARD]) {
+    assert.ok(path.basename(candidate) > commissionCohort.at(-1),
+      `${path.basename(candidate)} must sort above ${commissionCohort.at(-1)}: the commission cohort applies first`);
+  }
   const stopIdx = migrations.findIndex((m) => path.basename(m) === REPLAY_STOP_BEFORE);
   assert.notEqual(stopIdx, -1, `replay stop marker ${REPLAY_STOP_BEFORE} is not in the ledger-selected list`);
   for (const [index, migration] of migrations.slice(0, stopIdx).entries()) {

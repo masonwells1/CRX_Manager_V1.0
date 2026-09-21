@@ -8,10 +8,10 @@
 
 **Local generic-creation follow-up, September 12–13 (NOT APPLIED; no live-count change):**
 Both phases retain the existing `save_invoice(jsonb,jsonb,text)` public RPC contract.
-Phase 1, `20260912165758_refuse_generic_field_invoice_creation.sql`, installs the
+Phase 1, `20260914101200_refuse_generic_field_invoice_creation.sql`, installs the
 advisory cutover barrier but deliberately continues to allow generic
 `field_application` creation and committed receipt retries. The bypass is NOT closed
-after phase 1. Phase 2, `20260913040359_finish_generic_field_invoice_cutover.sql`,
+after phase 1. Phase 2, `20260914101300_finish_generic_field_invoice_cutover.sql`,
 must commit in a separate transaction and refuses installation while any unexpired
 generic `save_invoice` receipt remains. Only after phase 2 commits does the public
 RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
@@ -41,7 +41,7 @@ Other SQL errors and uncertain transport failures are never automatically retrie
 `runCriticalAction` remains reporting/loading-state handling, not mutation replay.
 
 **Unchanged source dates, September 13 (LOCAL; NOT APPLIED):**
-`20260911130000_preserve_unchanged_source_invoice_dates.sql` follows the existing
+`20260914101100_preserve_unchanged_source_invoice_dates.sql` follows the existing
 guard and preserves each invoice member's own unchanged stored date, including
 prior-season job/blend invoices created with today's date. Preview still prices
 each member from its own filed season. Unchanged-date restoration does not

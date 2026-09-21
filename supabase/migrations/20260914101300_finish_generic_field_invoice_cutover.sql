@@ -1,5 +1,5 @@
 -- STATUS: NOT APPLIED. PR #652 PHASE 2. No applied migration is edited.
--- Require separately COMMITTED phase 1 (20260912165758), then take its advisory
+-- Require separately COMMITTED phase 1 (20260914101200), then take its advisory
 -- key exclusively. If V1 holders remain, refuse installation rather than wait;
 -- arrivals during installation fail fast rather than wait on old code.
 -- A fresh READ COMMITTED catalog/safety scan refuses ANY other open database
@@ -16,8 +16,10 @@
 -- ORDERING: strict. No ahead-of-pending marker; its reason was obsolete and it would have
 -- waved through 20260908140000 (PR #726), the season guard and phase one. 20260908140000
 -- APPLIED LIVE 2026-09-20 (ledger version 20260920051333), so do NOT reapply it. This file
--- is LAST of the four: apply 20260911125000, then 20260911130000, then 20260912165758, then
--- this one. Every older pending migration applies first, in ascending order.
+-- is LAST of the four: apply 20260914101000, then 20260914101100, then 20260914101200, then
+-- this one. Every older pending migration applies first, in ascending order -- including
+-- all eight 20260914100* commission migrations (restamped 2026-09-21 above them; see the
+-- season guard's header for the reverse hazard).
 -- idempotency-body-check: exempt The existing operation-scoped check_idempotency and
 -- delegated key-only receipt behavior remain intact; no new intent binding is claimed.
 

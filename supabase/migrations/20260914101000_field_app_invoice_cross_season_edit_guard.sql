@@ -1,4 +1,4 @@
--- 20260911125000_field_app_invoice_cross_season_edit_guard.sql
+-- 20260914101000_field_app_invoice_cross_season_edit_guard.sql
 -- STATUS: NOT APPLIED
 --
 -- ORDERING: strict. No ahead-of-pending marker. The previous marker named the 20260905
@@ -16,8 +16,20 @@
 -- At its old stamp this file sorted BELOW that high-water, which the ledger requires a
 -- candidate to sort above. Nothing about this file's behaviour changed; only its position.
 -- It is still the FIRST of the four field-invoice candidates to apply, and the unchanged-date
--- correction 20260911130000 still depends on the two guard identities created here and must
--- follow it. Apply order: THIS FILE, 20260911130000, 20260912165758, 20260913040359.
+-- correction 20260914101100 still depends on the two guard identities created here and must
+-- follow it. Apply order: THIS FILE, 20260914101100, 20260914101200, 20260914101300.
+--
+-- RESTAMPED AGAIN 2026-09-21: all four field-invoice candidates moved as one block from
+-- 20260911125000/20260911130000/20260912165758/20260913040359 to
+-- 20260914101000/20260914101100/20260914101200/20260914101300, keeping their internal order.
+-- Mason decided on 2026-09-21 that the eight parked commission migrations
+-- 20260914100100..20260914100900 go live FIRST; at the old stamps all four of these sorted
+-- BELOW that cohort and the strict ordering guard would have refused every one of them
+-- after it applied. REVERSE HAZARD: now that these sort ABOVE the cohort, applying any of
+-- them live BEFORE all eight 20260914100* files are applied would strand the whole
+-- commission cohort instead. The pending-set guard reads only origin/main, so it cannot
+-- catch this while the field-invoice PR is unmerged -- the operator must check it.
+-- Nothing about this file's behaviour changed; only its position.
 --
 -- Field-application invoices keep the season they were filed under. A date edit may
 -- move within that season, but it may not cross the October 1 boundary: doing so would

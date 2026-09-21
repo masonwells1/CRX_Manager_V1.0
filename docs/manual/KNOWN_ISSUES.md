@@ -26,12 +26,12 @@ Fresh whole-branch review of local corrected commit `d93106e8e` then found a HIG
 bypass through generic `save_invoice`, which the UPDATE-only trigger misses. Root reproduced
 it through the public authenticated RPC. Compatibility review rejected a universal INSERT
 guard because legitimate job/blend creators carry source season with today's invoice date.
-The earlier one-phase refusal in `20260912165758_refuse_generic_field_invoice_creation.sql`
+The earlier one-phase refusal in `20260914101200_refuse_generic_field_invoice_creation.sql`
 then failed the added COMMITTED-retry transition regression (Sol/high `f6cb05b369`, 18:15Z).
 It remains NOT APPLIED and is now repurposed as phase 1: preserve original generic creation,
 below-cost and key-only receipt semantics while installing a fail-fast shared barrier,
 transitional READ COMMITTED requirement and fresh V1 catalog fence. New phase 2,
-`20260913040359_finish_generic_field_invoice_cutover.sql`, requires phase 1 separately
+`20260914101300_finish_generic_field_invoice_cutover.sql`, requires phase 1 separately
 committed, no old open/prepared work and no still-valid generic receipt before installing
 NEW-field refusal. Refusal leaves existing legitimate retries working until natural expiry.
 Do not manufacture actor/payload bindings for legacy generic receipts or delete/backfill them.
@@ -59,7 +59,7 @@ constitute a current defect list or clearance of the remaining P2 inventory.
 function by name and OID. "Generic field-invoice creation is refused" is therefore true of
 `save_invoice` and **NOT true of the database as a whole**: the order-pipeline RPCs remain an open
 creation path, tracked as CRX-LIFE-001 immediately below. Neither the migration filename
-`20260912165758_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
+`20260914101200_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
 `finish_generic_field_invoice_cutover` should be read as a claim about any other entry point.
 
 ## OPEN 2026-09-20 — CRX-LIFE-001: a sales rep can create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
@@ -835,17 +835,18 @@ substitution cannot pass by matching the real year), and makes each tested refus
 `20260908130000` and below every other unapplied migration. That is the parked
 `20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
 `20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
-(`20260911125000`, `20260911130000`, `20260912165758`, `20260913040359`). The pending-migration guard
+(`20260914101000`, `20260914101100`, `20260914101200`, `20260914101300`). The pending-migration guard
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
 **That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
 #664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
 The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply. Of the
 field-app season files `20260908190000` sorted BELOW it and had to be restamped; **that was done on
-2026-09-20 — it is now `20260911125000`** — so all four now sort above the high-water and their
-ascending stamp order is also their apply order: `20260911125000`, `20260911130000`,
-`20260912165758`, `20260913040359`. (`20260913152700` was restamped to `20260911130000` the same
-day for a separate ordering defect.) Read the boundary block in
+2026-09-20 — it became `20260911125000`** (and `20260913152700` became `20260911130000` the same day
+for a separate ordering defect). **On 2026-09-21 all four moved again, as one block, to
+`20260914101000`, `20260914101100`, `20260914101200`, `20260914101300`** — ascending stamp order is
+still their apply order — because Mason decided the `20260914100100`..`20260914100900` commission
+cohort goes live FIRST. **None of the four may be applied before all eight of that cohort.** Read the boundary block in
 `docs/reference/migration-history.md` before ordering anything.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
