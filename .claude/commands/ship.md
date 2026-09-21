@@ -110,13 +110,33 @@ If the migration touches a CHECK constraint, function with an existing name, or 
 
 ## Step 6 — Codex gate (automated cross-review)
 
-Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
+Decide if the change is **Codex-worthy**: it touches anything in the full `AGENTS.md` risky set — money, inventory, auth, RLS/RPC security, a migration, permissions, an Edge Function, or another business-critical path. Decide from what the diff *does*, not from whether the push guard flagged it; its detector misses some auth surfaces. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
 
-If worthy, run a **separate Codex review pinned to `gpt-5.6-sol` at high effort directly via the
-headless CLI** — invoke `/codex-review` (scope `--base origin/main`, after `git fetch origin`, so a
-stale local `main` can't distort the diff). It runs `codex review` non-interactively, captures
-findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict
+If worthy, run a **separate Codex review directly via the headless CLI** — invoke `/codex-review`
+(scope `--base origin/main`, after `git fetch origin`, so a stale local `main` can't distort the
+diff). It runs non-interactively, captures findings, and returns a verdict
 (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
+
+**Two tiers, in this order (Mason's standing decision, 2026-09-20).** Iterate on `gpt-5.6-luna` at
+xhigh — `/codex-review` Step 3A — fixing and re-running until **no BLOCKER or HIGH remains**
+(deliberately deferred MED/LOW do not block the Sol pass). That is the
+whole review for ordinary reversible work. Only then, and only if the diff is risky (money,
+inventory, auth, RLS, migration, permission, Edge Function, or otherwise business-critical), spend
+one `gpt-5.6-sol` high-effort pass to mint the exact-SHA proof the push and merge guards require
+(`/codex-review` Step 3B). Do not burn Sol rounds on iteration, and never route a Luna round
+through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
+
+**Sol must be the LAST thing before the push — so it does NOT run in this step.** Its proof binds
+to the HEAD it reviewed and the proof writer requires a clean, committed worktree, so any commit
+afterwards — including Step 7's docs commit — voids it. Run only the Luna rounds here; the Sol pass
+runs at the end of Step 7, on the final commit. Sequence: Luna clean (Step 6) → docs + commit
+(Step 7) → Sol on that exact HEAD → push (Step 8) with no further commits. Translate Luna's terminator
+into this command's vocabulary: `LUNA_REVIEW: CLEAN` → SHIP; any BLOCKER/HIGH → NEEDS-WORK;
+deferred MED/LOW only → SHIP-WITH-FOLLOWUPS, listing each deferral. **That SHIP is the advisory
+step's verdict, not permission to push a risky change** — it means "proceed to the Sol pass", and
+on a risky diff the branch is not shippable until Step 3B has minted the exact-SHA proof. Do not
+report a risky change as ready on a Luna SHIP alone; the push guard is the last line of defence,
+not the intended one.
 
 Then act on the result like any other reviewer:
 - **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If the active session genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.
@@ -134,6 +154,10 @@ Update the docs the change touched: `docs/reference/migration-history.md`, `rpc-
 Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it reports (stale counts, missing migration-history rows) rather than committing around it.
 
 Immediately inspect repository and branch state with `git status --short --branch` and `git branch --show-current`, then commit **on the branch** with a clear message. The fast husky pre-commit hook runs private-artifact containment, staged SQL/frontend checks, conditional agent-parity/dependency checks, and the ledger guard (2026-07-13); lint/typecheck/build/tests already ran above and remain enforced at pre-push/CI rather than repeating at commit. A commit staging agent-surface files (`.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, any `.codex/` file, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, `scripts/normalize-eol.mjs`, `scripts/agent-health-check.mjs`, `scripts/run-claude-review.mjs`, `scripts/write-codex-push-proof.mjs`, `scripts/sync-agent-workflows.mjs`, or a new `supabase/migrations/*.sql` file) must also stage a ledger update in the same commit — a new `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` entry (preferred), or `docs/CHANGELOG.md`, a `docs/manual/*.md`, `docs/reference/agent-guardrails.md`, `docs/reference/migration-history.md`, or a `docs/loops/` ledger. Step 7's changelog.d entry normally satisfies this. The entry must be ADDED by this commit and must actually describe the change: modifying, renaming, or emptying an existing entry does not count, and neither does a bare date heading. If the hook rejects, fix and retry (never `--no-verify`).
+
+**Risky diff: run the one Sol pass now** — `/codex-review` Step 3B on this committed HEAD, with a
+clean worktree. This is the final action before Step 8's push; if Sol finds something, fix it,
+commit, and run Sol again, because the new commit voided the proof.
 
 ## Step 8 — The production decision
 

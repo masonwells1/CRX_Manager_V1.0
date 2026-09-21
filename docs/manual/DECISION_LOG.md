@@ -7,6 +7,34 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-20 — everyday code review moves to `gpt-5.6-luna` at xhigh; Sol becomes a once-at-the-end gate
+
+**Source:** Mason's decision in this session on 2026-09-20, driven by Codex token cost. He asked for
+Luna at xhigh as the standing reviewer, with Sol reserved for genuinely complex work, and for money
+work specifically: iterate on Luna until fully clean, then take exactly one Sol pass.
+
+**Decision.** `gpt-5.6-luna` at `xhigh` is the default reviewer for every iterating review round, on
+every kind of work. `gpt-5.6-sol` at `high` is no longer the everyday reviewer; it is the
+once-at-the-end ship gate, run after Luna is clean, and only for a risky money / inventory / auth /
+RLS / migration / permission / Edge Function or other business-critical diff (the full `AGENTS.md` set). An agent may escalate a round to Sol early for genuinely complex work
+but must state the one-line reason.
+
+**What was deliberately NOT changed.** The proof-identity checks in
+`.claude/hooks/migration-apply-lib.mjs` (`REQUIRED_CODEX_MODEL` / `REQUIRED_CODEX_EFFORT`),
+`.claude/hooks/codex-push-lib.mjs` (`proofValid`), their tests, and the `.codex/` mirror still
+hard-require `gpt-5.6-sol` at `high`. Mason was offered the option of loosening them so a Luna proof
+could satisfy the gates and declined. The asymmetry is the enforcement mechanism: the cheap tier
+physically cannot satisfy the gate, so "Luna until clean, then exactly one Sol" holds even if an
+agent forgets this entry.
+
+**What this forbids/implies.** Luna reviews advisory-only, via `/codex-review` Step 3A or
+`scripts/overnight-codex-gate.mjs` (default tier; `--sol` opts up). Never route a Luna round through
+`scripts/write-codex-push-proof.mjs` — it unlinks the existing proof for the current HEAD when it
+starts, so doing so destroys a valid Sol proof and mints one the guards reject. Never run a Codex
+review with `-C <repo>` on an advisory path: repo agent-instruction files tell the reviewer to run a
+review and it self-recurses (observed 2026-08-23); Step 3A runs from a neutral directory against a
+frozen diff file with the CRX failure classes inlined. Do not "fix" the guards to accept Luna.
+
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 
 **Source:** Mason's decision on 2026-09-05, after the 2026-09-05 analysis recorded in `docs/manual/KNOWN_ISSUES.md`.
