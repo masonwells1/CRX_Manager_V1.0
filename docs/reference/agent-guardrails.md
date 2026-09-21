@@ -30,6 +30,14 @@ outside-hard-link limitations in `docs/manual/KNOWN_ISSUES.md`.
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: run the `regen-schema-registry` live-introspection workflow.
 >
+> **Review tier vs. gate identity (2026-09-20).** Everyday iterating review runs on `gpt-5.6-luna` at xhigh and is
+> advisory — it mints no proof and touches no proof artifact. Every review-proof identity check documented below is
+> unchanged and still hard-requires `gpt-5.6-sol` at `high` (`migration-apply-lib.mjs` `REQUIRED_CODEX_MODEL` /
+> `REQUIRED_CODEX_EFFORT`, `codex-push-lib.mjs` `proofValid`, and the `.codex/` mirror). That asymmetry is the point:
+> it is what makes "Luna until clean, then exactly one Sol" enforced in code rather than in an agent's memory. A Luna
+> round must never be routed through `scripts/write-codex-push-proof.mjs`, which unlinks the existing proof for the
+> current HEAD at the start of a run. See `docs/manual/DECISION_LOG.md`, 2026-09-20.
+>
 > Last reconciled against `.claude/settings.json` and `.codex/hooks.json` hook wiring on 2026-09-04 (lean instruction review: the startup-reminder row now documents task-routed loading, and an accidental duplicate of the hook reference was removed). Previous reconciliation 2026-08-27 (first harness-simplification tranche:
 > the UserPromptSubmit and PostToolUse commands now enter through one event router apiece while preserving the existing rule modules;
 > Codex's MCP-only guards now use `mcp__.*` matcher parity with Claude; and Codex's `production-action-guard.mjs` deliberately remains
