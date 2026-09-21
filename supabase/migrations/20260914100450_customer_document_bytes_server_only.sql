@@ -157,29 +157,31 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_PATH_UNIQUE: full UNIQUE (storage_path) is missing.';
   END IF;
 
-  -- The path's folder must be the row's own customer.
+  -- The path's folder must be the row's own customer. Pinned to its exact
+  -- definition, so a weakened check under the same name stops the apply.
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conrelid = 'public.customer_documents'::regclass
        AND conname = 'customer_documents_path_matches_customer_check'
        AND contype = 'c'
        AND convalidated
+       AND pg_get_constraintdef(oid) = 'CHECK (((split_part(storage_path, ''/''::text, 1) = (customer_id)::text) AND (split_part(storage_path, ''/''::text, 2) <> ''''::text) AND (storage_path !~~ ''%/%/%''::text)))'
   ) THEN
-    RAISE EXCEPTION 'POSTFLIGHT_PATH_CUSTOMER: path-matches-customer check is missing or not validated.';
+    RAISE EXCEPTION 'POSTFLIGHT_PATH_CUSTOMER: path-matches-customer check is missing, not validated, or changed.';
   END IF;
 
   -- Upload tokens carry no size or type limit of their own; the bucket's
-  -- limits are what bind the uploaded bytes.
+  -- limits are what bind the uploaded bytes. They must match what the page and
+  -- function accept exactly: wider lets other files in, narrower breaks uploads.
   IF NOT EXISTS (
     SELECT 1 FROM storage.buckets
      WHERE id = 'customer-documents'
-       AND file_size_limit IS NOT NULL
-       AND file_size_limit <= 20971520
+       AND file_size_limit = 20971520
        AND allowed_mime_types IS NOT NULL
-       AND cardinality(allowed_mime_types) > 0
        AND allowed_mime_types <@ ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']::text[]
+       AND allowed_mime_types @> ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']::text[]
   ) THEN
-    RAISE EXCEPTION 'POSTFLIGHT_BUCKET_LIMITS: customer-documents size or type limits are missing or wider than the function allows.';
+    RAISE EXCEPTION 'POSTFLIGHT_BUCKET_LIMITS: customer-documents size or type limits differ from the 20 MiB PDF/JPEG/PNG/WebP the function allows.';
   END IF;
 END;
 $postflight$;

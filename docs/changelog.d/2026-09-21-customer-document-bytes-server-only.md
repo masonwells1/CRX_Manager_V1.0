@@ -19,7 +19,8 @@
   could not be revoked (proven locally: refused with a file present, applied once emptied). It locks
   `storage.objects` before that check, so no upload can slip in between the check and the drops, and
   its postflight asserts the rules it inherits (objects RLS on, full `UNIQUE (storage_path)`, the
-  path-matches-customer check, the bucket's size and type limits). Supersedes
+  path-matches-customer check pinned to its exact definition, the bucket's exact 20 MiB and four-type
+  limits). Supersedes
   the never-applied `20260908054649` candidate on PR #635's branch, which never reached `main`.
 - **Documents tab** (`CustomerDocuments.tsx`, new `src/lib/customerDocumentFiles.ts`) uploads and
   downloads only through the function, and refreshes its list after a refused download or a failed
