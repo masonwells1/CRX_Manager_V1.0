@@ -191,6 +191,14 @@ ok(!ghApiMutates("gh pr view 12"), "pr view is not an api call");
 // a later change to that behaviour is a deliberate one.
 ok(ghApiMutates("gh api graphql -f query='query { repository { id } }'"), "a field-bearing GraphQL read is still an HTTP POST (fail-closed)");
 ok(!ghApiMutates("gh api graphql"), "graphql with no fields and no method is not classified as mutating");
+// A long option's detached value is its value, never a flag (Codex sol,
+// 2026-09-21): gh reads `-iX=GET` below as the template and POSTs the field.
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments -f body=test --template -iX=GET"), "a --template value shaped like -X GET does not hide a field POST");
+ok(ghApiMutates("gh api -X POST repos/o/r/issues/1/comments --jq -XGET"), "a --jq value shaped like -XGET does not override an explicit POST");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments --header -XGET -f body=x"), "a --header value is skipped too");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments --raw-field -XGET"), "a detached --raw-field still counts as a field, and its value is not a flag");
+ok(!ghApiMutates("gh api repos/o/r/issues/1 --template -XPOST"), "and the other way: a --template value shaped like -XPOST is not a POST");
+eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/9/merge --template -XGET"), { selector: "9", repo: "o/r", auto: false }, "a --template value does not hide a REST merge from the merge gate");
 ok(!ghApiMutates("ghost api -X POST repos/o/r/issues/1"), "a neighbouring binary is not gh");
 ok(!ghApiMutates("npm run build"), "unrelated command ignored");
 

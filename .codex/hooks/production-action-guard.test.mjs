@@ -1636,6 +1636,9 @@ try {
     "gh.ps1 api -X POST repos/crop/crx/issues/1/comments -f body=x",
     "gh.bat api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'",
     "gh -R crop/crx api -X POST repos/crop/crx/issues/1/comments -f body=x",
+    // A long option's detached value is never a flag (Codex sol, 2026-09-21).
+    "gh api repos/crop/crx/issues/1/comments -f body=test --template -iX=GET",
+    "gh api -X POST repos/crop/crx/actions/workflows/ci.yml/dispatches --jq -XGET -f ref=main",
   ]) {
     assert.equal(evaluateProductionAction({
       toolName: "PowerShell",
