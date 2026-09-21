@@ -104,10 +104,14 @@ carries that file's `JOB_ACRES_NOT_FINITE` refusal.
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
 `20260920052149`, which is now the effective ordering high-water; the
-`20260914100100`..`20260914100900` candidates are still not applied); schema shape last re-read 2026-09-05 by the live-introspection regeneration
-of `.claude/schema-registry.json`, through ledger version `20260904152221`.** The registry's applied
-migration list includes both routine-only migrations from that refresh:
-`20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
+`20260914100100`..`20260914100900` candidates are still not applied); schema shape last re-read 2026-09-20 by the live-introspection regeneration
+of `.claude/schema-registry.json`, through ledger version `20260920052149`.** That rebuild left all
+eight schema-shape sections byte-identical to the registry it replaced — 11 generated columns, 38
+status enums, 94 tables without `updated_at`, 119 parsed CHECK IN-lists, 221 skipped constraints,
+160 column entries, 7 sequences — so the shape itself has not drifted; the only changes were the
+applied boundary (`20260915033227` to `20260920052149`) and that morning's two applies joining the
+applied-migration name list. The registry's applied migration list also still includes the
+routine-only `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
 `20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
 ordering high-water is the newest applied row's effective stamp:
 **`20260911120000_bind_adjust_inventory_receipt_to_intent`** (row 930, ledger version
