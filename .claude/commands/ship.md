@@ -110,7 +110,7 @@ If the migration touches a CHECK constraint, function with an existing name, or 
 
 ## Step 6 — Codex gate (automated cross-review)
 
-Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
+Decide if the change is **Codex-worthy**: it touches anything in the full `AGENTS.md` risky set — money, inventory, auth, RLS/RPC security, a migration, permissions, an Edge Function, or another business-critical path. Decide from what the diff *does*, not from whether the push guard flagged it; its detector misses some auth surfaces. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
 
 If worthy, run a **separate Codex review directly via the headless CLI** — invoke `/codex-review`
 (scope `--base origin/main`, after `git fetch origin`, so a stale local `main` can't distort the

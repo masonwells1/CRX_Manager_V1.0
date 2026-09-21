@@ -20,7 +20,7 @@ is the builder.
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
 | Every iterating review round | `gpt-5.6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — risky money / inventory / RLS / migration / permission diff, once Luna is clean | `gpt-5.6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Final gate — risky money / inventory / auth / RLS / migration / permission / Edge Function diff, once Luna is clean | `gpt-5.6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
 | Genuinely complex work where Luna is plainly out of its depth | `gpt-5.6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
@@ -352,8 +352,11 @@ one-line reason. This is still the advisory path — it mints no proof.
 
 ## Step 3B: Ship gate — exactly one Sol proof
 
-**Only after Step 3A is clean, and only for a risky diff** (money / inventory / RLS / migration /
-permission / edge function, or any diff that trips `RISKY_PATH_RES`). For ordinary reversible work
+**Only after Step 3A is clean, and only for a risky diff** — the full `AGENTS.md` set: money /
+inventory / auth / RLS / migration / permission / Edge Function / other business-critical, **whether
+or not** the diff trips `RISKY_PATH_RES`. The push guard's path/content detector is a backstop, not
+the definition: it does not recognize every auth surface (e.g. a login-redirect edit in
+`src/pages/`), so "the push went through without asking" never means Sol was not required. For ordinary reversible work
 Step 3A is the whole review — do not spend a Sol round on it.
 
 > ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper

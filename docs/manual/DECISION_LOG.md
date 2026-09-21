@@ -15,8 +15,8 @@ work specifically: iterate on Luna until fully clean, then take exactly one Sol 
 
 **Decision.** `gpt-5.6-luna` at `xhigh` is the default reviewer for every iterating review round, on
 every kind of work. `gpt-5.6-sol` at `high` is no longer the everyday reviewer; it is the
-once-at-the-end ship gate, run after Luna is clean, and only for a risky money / inventory / RLS /
-migration / permission diff. An agent may escalate a round to Sol early for genuinely complex work
+once-at-the-end ship gate, run after Luna is clean, and only for a risky money / inventory / auth /
+RLS / migration / permission / Edge Function or other business-critical diff (the full `AGENTS.md` set). An agent may escalate a round to Sol early for genuinely complex work
 but must state the one-line reason.
 
 **What was deliberately NOT changed.** The proof-identity checks in
