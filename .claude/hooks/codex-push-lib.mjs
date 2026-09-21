@@ -214,22 +214,23 @@ export function pushHiddenByShellComposition(cmd) {
     // REWRITING: a word whose quote/escape syntax means the parsers below are
     // reading something other than what the shell will hand git.
     splitShellWordsRaw(push.args).some((word) => shellCompositionWord(word) !== unquoteShellArg(word)) ||
-    // DISAGREEMENT: the POSIX and PowerShell readings name a different ref as the
-    // one landing on main. The Windows-path exemption above lets a trailing
-    // backslash through, and in `git push origin --repo C:\x\ evil:main` POSIX
-    // binds the space and reads source `C` while PowerShell pushes `evil` — so
-    // the proof would be checked against the wrong ref (Codex sol, 2026-09-21).
-    // Only a disagreement is refused; `git push C:\scratch\repo.git HEAD:x`
-    // reads the same both ways and still passes.
-    pushReadingsDisagreeOnMainSource(push.args)
+    // DISAGREEMENT: the POSIX and PowerShell readings split the arguments into
+    // different words. The Windows-path exemption above lets a trailing
+    // backslash through, and then every parser downstream is reading a command
+    // that one of the two shells will not run. Codex found this twice, through
+    // two different consequences: `git push origin --repo C:\x\ evil:main` read
+    // source `C` while PowerShell pushes `evil`, and
+    // `git push --repo C:\x\ <crx-url> HEAD:main` hid the destination so the
+    // proof gate stood down (Codex sol, 2026-09-21). Refusing the disagreement
+    // itself closes every consequence at once. Ordinary Windows paths — bare or
+    // quoted, with or without spaces — split the same both ways and still pass.
+    pushReadingsDisagree(push.args)
   );
 }
 
-// The branch name only matters for a bare `git push`, and it is the same for
-// every reading, so a fixed placeholder isolates what the WORDS decide.
-function pushReadingsDisagreeOnMainSource(argsText) {
-  const sources = pushArgReadings(argsText).map((tokens) => mainPushSourceFromTokens(tokens, "__current__"));
-  return new Set(sources).size > 1;
+function pushReadingsDisagree(argsText) {
+  const readings = pushArgReadings(argsText).map((tokens) => JSON.stringify(tokens));
+  return new Set(readings).size > 1;
 }
 
 // Text a shell computes rather than passes through: a variable, a substitution,

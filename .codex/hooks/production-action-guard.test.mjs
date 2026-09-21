@@ -1263,6 +1263,18 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
+  // A trailing Windows backslash makes the POSIX and PowerShell readings split
+  // the push differently; the destination then vanished and the proof gate
+  // stood down (Codex sol, 2026-09-21). Both guards refuse the disagreement.
+  const splitDisagreement =
+    `git -C "${risky.repo}" push --repo C:\\x\\ https://github.com/masonwells1/CRX_Manager_V1.0.git HEAD:main`;
+  claudeGuard = runClaudePushGuard(splitDisagreement, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard refuses a push whose shell readings disagree");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: splitDisagreement },
+    repoDir: risky.repo,
+  }).blocked, true, "Codex guard refuses a push whose shell readings disagree");
   claudeGuard = runClaudePushGuard(`git.exe -C "${risky.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard gates git.exe pushes");
   claudeGuard = runClaudePushGuard(`cd "${risky.repo}" && git push origin HEAD:main`, projectRoot);

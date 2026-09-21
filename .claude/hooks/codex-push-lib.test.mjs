@@ -1272,6 +1272,21 @@ assert.equal(
   pushHiddenByShellComposition("git push origin --repo C:\\x evil:main"), false,
   "and a Windows value with no trailing backslash is not a disagreement",
 );
+// Same root cause, second consequence (Codex sol, 2026-09-21): the readings
+// disagreed on the DESTINATION, so the CRX proof gate stood down. The check now
+// refuses any split disagreement, which covers both.
+assert.equal(
+  pushHiddenByShellComposition("git push --repo C:\\x\\ https://github.com/masonwells1/CRX_Manager_V1.0.git HEAD:main"), true,
+  "readings that disagree on the destination are refused",
+);
+assert.equal(
+  pushHiddenByShellComposition('git push "C:\\scratch repo\\repo.git" HEAD:feature'), false,
+  "a quoted Windows path with a space splits the same both ways and still passes",
+);
+assert.equal(
+  pushHiddenByShellComposition("git push C:\\scratch\\repo.git HEAD:main"), false,
+  "a bare Windows path to main is still analysed normally, not refused as ambiguous",
+);
 
 // ── round 18: a destination that names a PROGRAM, not an address ─────────────
 // `ext::<command>` is git's remote-helper syntax: delivery is handed to an
