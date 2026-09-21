@@ -62,9 +62,24 @@ apply would fail.** An earlier revision of this paragraph told operators to appl
 wrong.
 
 The executable pending-set guard, not the stamp, decides what may apply, and it must be re-run
-immediately before any owner-authorized apply — against a registry refreshed from a live read,
-because the committed snapshot predates both 2026-09-20 applies and will name already-applied
-migrations as blockers.
+immediately before any owner-authorized apply. As of the 2026-09-20 registry refresh (PR #745) the
+committed snapshot matches live at high-water `20260911120000`, so the guard no longer names
+already-applied migrations as blockers; re-read the live ledger anyway before applying.
+
+**APPLY-WINDOW RULE: `20260911125000` and `20260911130000` must go in ONE approved window, and
+`20260911125000` must not be left committed on its own.** The season guard's
+`_assert_field_app_invoice_date_in_filed_season` rejects a field-app invoice whose supplied date
+computes to a different season **even when that date is UNCHANGED**, and the public preview always
+calls it — so between the two, previews of legitimate prior-season job/blend-created invoices are
+broken. `20260911130000` is what adds the missing "an unchanged stored date is not a date edit"
+condition. Both are unapplied, so this has never reached production and must not: if
+`20260911130000` fails (its `LOCK TABLE public.invoices` uses a 15s `lock_timeout`, so a busy table
+is the realistic failure), **retry it immediately rather than moving on or walking away.** Do not
+start either cutover phase until the correction is in. Raised as a Codex MEDIUM on 2026-09-20 —
+the reviewer's preferred fix was to fold the corrected predicate into the season guard so no
+committed boundary is ever unsafe; that is a behavioural rewrite of money-path SQL plus its
+container proof, so it is recorded here as an apply-time constraint and left for Mason to decide
+rather than absorbed into this delivery.
 
 **Superseded 2026-09-08 post-apply boundary.** The prior read recorded **1001 ledger rows**, live
 `max(version)` `20260909023300`, and effective ordering high-water
