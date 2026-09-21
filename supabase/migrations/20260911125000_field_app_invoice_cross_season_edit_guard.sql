@@ -30,6 +30,16 @@
 -- reviewed 20260906120000 preview implementation remains byte-identical behind a private,
 -- owner-only name; this migration does not retype its money calculations.
 
+-- Pin the migration session's search_path BEFORE any check runs. pg_get_triggerdef() renders
+-- the trigger's function SCHEMA-QUALIFIED when public is not visible in the current session,
+-- so the exact-text trigger comparisons below (preflight and postflight) would see
+-- "EXECUTE FUNCTION public.guard_field_app_invoice_season_date()" instead of the unqualified
+-- form they pin, reject a perfectly valid trigger and abort. Fail-closed, but it strands the
+-- apply. Verified on PostgreSQL 17: with search_path = public, pg_temp the definition renders
+-- "EXECUTE FUNCTION g()"; with search_path = pg_temp the same trigger renders
+-- "EXECUTE FUNCTION public.g()". This also matches the search_path both guard functions pin.
+SET LOCAL search_path = public, pg_temp;
+
 -- Drain current invoice writers before installing the guard. A writer either commits under
 -- the old contract before this lock is granted or resumes after commit with the trigger live.
 SET LOCAL lock_timeout = '10s';

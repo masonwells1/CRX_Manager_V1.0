@@ -19,6 +19,12 @@
 -- The owner-only SECURITY DEFINER assertion still inspects all live group members
 -- through RLS, and the existing row trigger still protects every table writer.
 
+-- Pin the migration session's search_path BEFORE any check runs, for the same reason as
+-- 20260911125000: pg_get_triggerdef() schema-qualifies the trigger's function when public is
+-- not visible, so this file's preflight and postflight trigger comparisons would reject a
+-- valid trigger and abort the apply. Fail-closed, but it strands the apply. Verified on
+-- PostgreSQL 17.
+SET LOCAL search_path = public, pg_temp;
 SET LOCAL lock_timeout = '15s';
 SET LOCAL statement_timeout = '60s';
 LOCK TABLE public.invoices IN SHARE ROW EXCLUSIVE MODE;
