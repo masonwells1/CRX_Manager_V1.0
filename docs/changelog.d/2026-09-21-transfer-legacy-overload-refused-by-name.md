@@ -38,10 +38,11 @@ this session. Four were applied live on 2026-09-21 and verified from the live ca
 | `20260914100300_refuse_stale_commission_payment_recipient` | `20260921141740` |
 | `20260914100400_enforce_commission_payment_business_date` | `20260921141901` |
 
-`20260914100500`, `20260914100600`, `20260914100800` and `20260914100900` are **not applied**. The
-migration-history rows for the four applied files, the boundary block, `CURRENT_STATE.md`,
-`KNOWN_ISSUES.md` and the schema registry are updated in one records change once the cohort
-finishes.
+`20260914100500`, `20260914100600`, `20260914100800` and `20260914100900` are **not applied**. This
+change marks the four applied rows in `docs/reference/migration-history.md` as applied live. The
+boundary block, `CURRENT_STATE.md`, `KNOWN_ISSUES.md`, the schema registry and the
+`LIVE_HIGH_WATER_ROW` pin in `scripts/smoke/prove-commission-migration-plan-order.mjs` are updated in
+one records change once the cohort finishes.
 
 **Proof observed.**
 
