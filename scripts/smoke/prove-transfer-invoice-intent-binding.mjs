@@ -400,9 +400,16 @@ try {
   ('expired-bound-transfer', 'transfer_job_to_invoice', '{}'::jsonb, '${RACE_ACTOR}', 'bound', now() - interval '1 hour'),
   ('expired-half-bound-transfer', 'transfer_job_to_invoice', '{}'::jsonb, '${RACE_ACTOR}', NULL, now() - interval '1 hour')`);
 
+  // A resurrected legacy (uuid, uuid) overload must not block cutover: the file
+  // drops it before the preflight counts exactly one public overload. (Live has
+  // none; 20260515999999 removed it. A four-argument overload still refuses, above.)
+  sql("CREATE FUNCTION public.transfer_job_to_invoice(p_job_id uuid, p_performed_by uuid) RETURNS jsonb LANGUAGE sql AS $$ SELECT '{}'::jsonb $$");
+
   // The successful first apply runs as the cutover session of the race.
   const race = await raceLegacyReplayAcrossCutover(name, staged);
   assert.equal(race.applied.status, 0, `cutover must apply while the legacy call is held:\n${race.applied.stderr}`);
+  assert.equal(scalar("SELECT to_regprocedure('public.transfer_job_to_invoice(uuid,uuid)') IS NULL"), 't', 'the legacy two-argument overload is dropped by the cutover');
+  assert.equal(scalar("SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'transfer_job_to_invoice'"), '1', 'exactly one public transfer overload remains after cutover');
   assert.notEqual(race.legacy.status, 0, 'the held legacy call must not replay the expired receipt');
   assert.match(race.legacy.stderr, /TRANSFER_INVOICE_INTENT_CUTOVER_RETRY/);
   assert.doesNotMatch(race.legacy.stdout, new RegExp(RACE_CACHED_INVOICE));

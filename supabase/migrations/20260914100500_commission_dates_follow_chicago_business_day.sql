@@ -31,6 +31,14 @@ LOCK TABLE public.orders,
 LOCK TABLE public.jobs IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.commissions IN ACCESS EXCLUSIVE MODE;
 
+-- The legacy two-argument transfer overload was removed by
+-- 20260515999999_drop_legacy_transfer_job_to_invoice_overload and live carries
+-- only (uuid, uuid, text), so this is a no-op there. It states that removal in
+-- this file, which replaces transfer_job_to_invoice(uuid, uuid, text), before
+-- the preflight below requires exactly one overload of each coordinated writer;
+-- any other extra overload still refuses.
+DROP FUNCTION IF EXISTS public.transfer_job_to_invoice(uuid, uuid);
+
 -- A transaction can retain an already-resolved PL/pgSQL body across the lock
 -- drain. The compatibility trigger below closes that cached-body straggler: an
 -- old body reaches its first target DML without this transaction-local marker
