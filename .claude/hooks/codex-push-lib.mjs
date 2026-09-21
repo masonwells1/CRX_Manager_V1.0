@@ -2376,6 +2376,51 @@ function ghBinaryMentioned(text) {
   return GH_BIN_RE.test(text) || GH_BIN_RE.test(splitShellArgv(text).join(" "));
 }
 
+// gh's shorts for `pr merge`, read off gh's own manual on 2026-09-20. Exactly
+// five take a VALUE: `-A` (--author-email), `-b` (--body), `-F` (--body-file),
+// `-t` (--subject), and the inherited `-R` (--repo). `-d` (--delete-branch),
+// `-m` (--merge), `-r` (--rebase) and `-s` (--squash) are BOOLEAN.
+//
+// Case is load-bearing: gh's shorts are case-SENSITIVE, so `-F` (--body-file)
+// must not be conflated with `-f`, nor `-R` (--repo) with `-r` (--rebase).
+//
+// Getting this list wrong loses the PR SELECTOR or the REPOSITORY, and the
+// guards then vet a DIFFERENT pull request than the one gh merges — every
+// downstream check (objections, green checks, risky diff, exact-SHA proof) runs
+// against a safe PR while another one lands:
+//   `<merge> -dr 789`             `-r` read as value-taking swallowed `789`, so
+//                                 the guard vetted the current branch's PR.
+//   `<merge> -dR other/repo 789`  the bundled repository value was dropped, so
+//                                 the guard vetted 789 in THIS repository.
+//   `<merge> -A someone 789`      `-A` read as boolean made `someone` the
+//                                 selector instead of `789`.
+// (Codex sol, 2026-09-20 — the first two measured base-blocks/candidate-allows.)
+const GH_MERGE_VALUE_SHORTS = "AbFtR";
+
+// pflag BUNDLES boolean shorts, so a value-taking short can sit at the end of a
+// cluster: `-db` is `-d` then `-b`. Everything after the first value-taking
+// letter is that option's value; when nothing follows it, the NEXT word is.
+// Modelled by SHAPE, exactly like ghApiShortCluster below.
+//
+// Reading only the standalone spelling let `<merge> 123 -db --disable-auto
+// --admin --squash` parse as a cancellation: gh took `--disable-auto` as the
+// body VALUE and performed an ADMINISTRATOR merge while the guard stood down
+// (Codex sol, 2026-09-20 — measured base blocked:true, candidate blocked:false).
+function ghMergeShortCluster(word) {
+  if (!/^-[A-Za-z]/.test(word) || word.startsWith("--")) return null;
+  for (let index = 1; index < word.length; index += 1) {
+    const letter = word[index];
+    // A non-letter ends the cluster. `-d=true` is one BOOLEAN carrying a value,
+    // not a bundle, and walking past the `=` would read `true` as more shorts —
+    // whose `t` would then swallow the PR number as a --subject.
+    if (!/[A-Za-z]/.test(letter)) return null;
+    if (!GH_MERGE_VALUE_SHORTS.includes(letter)) continue;
+    // The rest of the word is this option's value; empty means the NEXT word is.
+    return { letter, value: word.slice(index + 1).replace(/^=/, ""), attached: index + 1 < word.length };
+  }
+  return null;
+}
+
 // `gh pr merge` with global flags possibly between words (`gh -R o/r pr merge`).
 // Over-matching (e.g. `gh pr view merge-notes`) only routes a read through the
 // gate, which fails safe.
@@ -2386,33 +2431,18 @@ export function ghMergeRequest(command) {
   // word as typed: `gh pr me""rge 123 --squash` reached gh as a plain merge and
   // returned null here, so the whole merge gate never ran (measured).
   const words = splitShellArgv(text);
-  // Options whose NEXT word is a value. Long names are matched lowercased (gh
-  // accepts them case-insensitively); short names are matched with their case
-  // intact, because gh's shorts are case-SENSITIVE and lowercasing conflates
-  // `-F` (`--body-file`) with `-f`. `-r` is not a gh flag and is kept only
-  // because consuming one extra word costs nothing.
+  // Long options whose NEXT word is a value, matched lowercased because gh
+  // accepts long names case-insensitively. The `--name=value` spellings never
+  // reach here — they carry their own value and consume no following word.
+  // Shorts are read by GH_MERGE_VALUE_SHORTS above, which keeps their case.
   const longValueFlags = new Set(["--repo", "--match-head-commit", "--subject", "--body", "--body-file"]);
-  const shortValueFlags = new Set(["-R", "-r", "-t", "-b", "-F"]);
-  // pflag BUNDLES boolean shorts: `-db` is `-d` (delete-branch) then `-b`
-  // (body). The value-taking flag in a bundle swallows the REST of that token if
-  // any characters follow it, and otherwise the NEXT word. Reading only
-  // standalone `-b` let `<merge> 123 -db --disable-auto --admin --squash` parse
-  // as a cancellation: gh takes `--disable-auto` as the body VALUE and performs
-  // an ADMINISTRATOR merge, while the guard stood down (Codex sol, 2026-09-20 —
-  // measured base blocked:true, candidate blocked:false).
-  const bundleTakesNextWord = (word) => {
-    if (!/^-[A-Za-z]+$/.test(word) || word.startsWith("--")) return false;
-    const chars = word.slice(1);
-    for (let position = 0; position < chars.length; position += 1) {
-      if (!shortValueFlags.has(`-${chars[position]}`)) continue;
-      // A value-taking short consumes the next word only when nothing follows it
-      // inside this token; otherwise the remainder IS its value.
-      return position === chars.length - 1;
-    }
-    return false;
+  const takesValue = (word) => {
+    if (longValueFlags.has(word.toLowerCase())) return true;
+    const cluster = ghMergeShortCluster(word);
+    // A short whose value is ATTACHED (`-bhello`, `-b=hello`) consumes nothing
+    // further; only a bare one reaches into the next word.
+    return Boolean(cluster) && !cluster.attached;
   };
-  const takesValue = (word) =>
-    longValueFlags.has(word.toLowerCase()) || shortValueFlags.has(word) || bundleTakesNextWord(word);
   // Which words gh reads as an OPTION rather than as some option's VALUE. Every
   // keyword test below asks this first, because a word in a value position is
   // data: `gh pr merge 123 --body '--disable-auto' --admin --squash` performs an
@@ -2497,12 +2527,21 @@ export function ghMergeRequest(command) {
       admin = !(value === "0" || value === "f" || value === "false");
       continue;
     }
-    if (takesValue(stripped)) {
+    if (longValueFlags.has(lower)) {
       // The value word itself is skipped by the isValue pass above, so this only
       // has to read it — advancing the index here as well would step past the
       // word AFTER the value.
-      const value = words[index + 1] || "";
-      if (lower === "--repo" || stripped === "-R" || stripped === "-r") repo = value;
+      if (lower === "--repo") repo = words[index + 1] || "";
+      continue;
+    }
+    const cluster = ghMergeShortCluster(stripped);
+    if (cluster) {
+      // `-R` carries the repository in EVERY spelling it can take: bare
+      // (`-R o/r`), attached (`-Ro/r`, `-R=o/r`), and bundled behind booleans
+      // (`-dR o/r`). Reading only the bare one dropped the repository from
+      // `<merge> -dR other/repo 789`, so the guard vetted 789 in THIS repository
+      // while gh merged other/repo#789 (Codex sol, 2026-09-20).
+      if (cluster.letter === "R") repo = cluster.attached ? cluster.value : (words[index + 1] || "");
       continue;
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;

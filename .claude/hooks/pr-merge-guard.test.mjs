@@ -39,6 +39,23 @@ eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.disabl
   "a bundled value-taking short swallows the next word, so it is not a cancellation");
 eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.admin, true,
   "...and the administrator flag is still seen");
+// Which shorts take a VALUE decides which PULL REQUEST the gate vets. Reading
+// `-r` (--rebase) as value-taking swallowed the selector, reading `-A`
+// (--author-email) as a boolean promoted its value to the selector, and a
+// bundled `-R` lost the repository — each aims the whole gate at a different PR
+// than gh merges (Codex sol, 2026-09-20 round 4; measured against gh's manual).
+eq(ghMergeRequest("gh pr merge -dr 789 --squash")?.selector, "789",
+  "-r is --rebase, a boolean: it must not swallow the PR selector");
+eq(ghMergeRequest("gh pr merge -A someone@example.com 789 --squash")?.selector, "789",
+  "-A is --author-email and takes a value: its value is not the PR selector");
+eq(ghMergeRequest("gh pr merge -dR other/repo 789 --squash")?.repo, "other/repo",
+  "a bundled -R still carries the repository");
+eq(ghMergeRequest("gh pr merge -dR other/repo 789 --squash")?.selector, "789",
+  "...and the selector after it is still read");
+eq(ghMergeRequest("gh pr merge -dRother/repo 789 --squash")?.repo, "other/repo",
+  "an attached bundled -R carries the repository");
+eq(ghMergeRequest("gh pr merge -R=other/repo 789 --squash")?.repo, "other/repo",
+  "-R=value carries the repository");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");

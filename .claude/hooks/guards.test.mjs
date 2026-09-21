@@ -383,6 +383,24 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const shortCancel = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: `gh ${mergeVerb} 5 -d --disable-auto` } });
   eq(shortCancel.stdout.trim(), "", "a cancellation with a boolean short stays allowed");
 
+  // Codex sol (2026-09-20, round 4): which shorts take a VALUE decides which
+  // pull request the gate vets. `-r` is --rebase (boolean) and `-A` is
+  // --author-email (a value), so reading them the other way round aimed every
+  // downstream check — objections, green checks, risky diff, exact-SHA proof —
+  // at a DIFFERENT PR than gh merges. A bundled `-R` lost the repository the
+  // same way. The discriminating evidence is the parser-level selector/repo
+  // assertions in pr-merge-guard.test.mjs, measured against gh's own manual;
+  // these confirm the whole guard process still refuses the spellings.
+  for (const command of [
+    `gh ${mergeVerb} -dr 789 --squash`,
+    `gh ${mergeVerb} -dR other/repo 789 --squash`,
+    `gh ${mergeVerb} -A someone@example.com 789 --squash`,
+  ]) {
+    const res3 = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command } });
+    const parsed3 = res3.stdout.trim() ? JSON.parse(res3.stdout)?.hookSpecificOutput ?? {} : {};
+    eq(parsed3.permissionDecision, "deny", `a bundled short never lands an unvetted merge: ${command}`);
+  }
+
   // A configured remote name may legally contain `/`, and git resolves
   // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
   // raw URL — which means "no remote.<name>.* applies" — so a mirrored
