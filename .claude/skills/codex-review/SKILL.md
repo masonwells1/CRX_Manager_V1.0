@@ -482,7 +482,10 @@ Notes:
 
 ## Step 4: Parse, present, and act
 
-1. Read back `.claude/session-state/codex-review-latest.txt`.
+1. Read back the result of the step you actually ran. **After Step 3A (Luna)**: `$WORK/luna-final.txt`
+   — the validated final message (`$WORK/luna-review.txt` is the full transcript). **After Step 3B
+   (Sol)**: `.claude/session-state/codex-review-latest.txt`. Never read `codex-review-latest.txt` after
+   a Luna round: only the Sol wrapper writes it, so it holds an OLDER review's findings and verdict.
 2. Present findings to the user grouped by severity, each with its `file:line` and a
    one-line "agree / disagree + why" from the active session. **Be honest where the active
    session disagrees** — the separate reviewer is valuable only when disagreement stays visible.

@@ -60,7 +60,8 @@ const reviewEffort = useSol ? CODEX_REVIEW_EFFORT : 'xhigh'
 // is the moment of escalation.
 const rIdx = process.argv.indexOf('--reason')
 const solReason = rIdx > -1 ? String(process.argv[rIdx + 1] || '').trim() : ''
-if (useSol && !solReason) {
+// An option token is not a reason: `--sol --reason --timeout 600` must refuse, not record "--timeout".
+if (useSol && (!solReason || solReason.startsWith('--'))) {
   fail('--sol requires --reason "<why Luna was not enough>" — Sol escalation must never be silent')
 }
 // Log the tier WE selected, rather than relying on the CLI banner. An unattended loop is

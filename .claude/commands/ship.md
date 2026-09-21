@@ -126,9 +126,11 @@ one `gpt-5.6-sol` high-effort pass to mint the exact-SHA proof the push and merg
 (`/codex-review` Step 3B). Do not burn Sol rounds on iteration, and never route a Luna round
 through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
 
-**Sol must be the LAST thing before the push.** Its proof binds to the HEAD it reviewed, so any
-commit afterwards — including a one-line fix for a late finding — voids it and needs a fresh pass.
-Sequence: Luna clean → freeze → Sol → push with no further commits. Translate Luna's terminator
+**Sol must be the LAST thing before the push — so it does NOT run in this step.** Its proof binds
+to the HEAD it reviewed and the proof writer requires a clean, committed worktree, so any commit
+afterwards — including Step 7's docs commit — voids it. Run only the Luna rounds here; the Sol pass
+runs at the end of Step 7, on the final commit. Sequence: Luna clean (Step 6) → docs + commit
+(Step 7) → Sol on that exact HEAD → push (Step 8) with no further commits. Translate Luna's terminator
 into this command's vocabulary: `LUNA_REVIEW: CLEAN` → SHIP; any BLOCKER/HIGH → NEEDS-WORK;
 deferred MED/LOW only → SHIP-WITH-FOLLOWUPS, listing each deferral. **That SHIP is the advisory
 step's verdict, not permission to push a risky change** — it means "proceed to the Sol pass", and
@@ -152,6 +154,10 @@ Update the docs the change touched: `docs/reference/migration-history.md`, `rpc-
 Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it reports (stale counts, missing migration-history rows) rather than committing around it.
 
 Immediately inspect repository and branch state with `git status --short --branch` and `git branch --show-current`, then commit **on the branch** with a clear message. The fast husky pre-commit hook runs private-artifact containment, staged SQL/frontend checks, conditional agent-parity/dependency checks, and the ledger guard (2026-07-13); lint/typecheck/build/tests already ran above and remain enforced at pre-push/CI rather than repeating at commit. A commit staging agent-surface files (`.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, any `.codex/` file, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, `scripts/check-*`, `scripts/validate-*`, `scripts/verify-*`, `scripts/normalize-eol.mjs`, `scripts/agent-health-check.mjs`, `scripts/run-claude-review.mjs`, `scripts/write-codex-push-proof.mjs`, `scripts/sync-agent-workflows.mjs`, or a new `supabase/migrations/*.sql` file) must also stage a ledger update in the same commit — a new `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` entry (preferred), or `docs/CHANGELOG.md`, a `docs/manual/*.md`, `docs/reference/agent-guardrails.md`, `docs/reference/migration-history.md`, or a `docs/loops/` ledger. Step 7's changelog.d entry normally satisfies this. The entry must be ADDED by this commit and must actually describe the change: modifying, renaming, or emptying an existing entry does not count, and neither does a bare date heading. If the hook rejects, fix and retry (never `--no-verify`).
+
+**Risky diff: run the one Sol pass now** — `/codex-review` Step 3B on this committed HEAD, with a
+clean worktree. This is the final action before Step 8's push; if Sol finds something, fix it,
+commit, and run Sol again, because the new commit voided the proof.
 
 ## Step 8 — The production decision
 
