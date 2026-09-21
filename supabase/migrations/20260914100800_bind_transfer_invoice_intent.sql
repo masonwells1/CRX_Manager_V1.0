@@ -78,6 +78,13 @@ SET LOCAL lock_timeout = '5s';
 -- touched the table and is not drained; the expired-receipt purge covers it.
 LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;
 
+-- The legacy two-argument overload was removed by
+-- 20260515999999_drop_legacy_transfer_job_to_invoice_overload and live carries
+-- only (uuid, uuid, text), so this is a no-op there. It states that removal in
+-- the file that replaces the function, before the preflight below counts
+-- exactly one public overload; any other extra overload still refuses.
+DROP FUNCTION IF EXISTS public.transfer_job_to_invoice(uuid, uuid);
+
 DO $preflight$
 DECLARE
   v_public regprocedure := to_regprocedure('public.transfer_job_to_invoice(uuid,uuid,text)');
