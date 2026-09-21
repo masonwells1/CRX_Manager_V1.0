@@ -409,6 +409,8 @@ the PR (ships the page that calls it); apply the migration — promptly, because
 (`20260914100500` onward) behind it. The migration applied first would break the Documents tab until
 the other two land. The migration refuses to apply if the bucket already holds any file, because a
 link minted under the old rules in that window could not be revoked; a refusal means a person decides.
+It locks the Storage objects table before that check, so no upload can land between the check and the
+policy drops (a Luna review finding; live `postgres` holds the rights the lock needs).
 Before the apply, refresh the schema registry and applied-migration snapshot so the pending-migration
 guard sees the 2026-09-21 commission applies. After the apply, a live check should confirm the five
 browser policies are gone, the shape constraint exists, and the Documents tab uploads and downloads.

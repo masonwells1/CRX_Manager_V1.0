@@ -16,7 +16,8 @@
   `%` variant) of a removed document's path. Stamped between the live high-water `20260914100400`
   and the waiting `20260914100500` so it strands nothing; apply it promptly after merge. Its
   preflight refuses a non-empty bucket, since a link minted under the old rules before the apply
-  could not be revoked (proven locally: refused with a file present, applied once emptied). Supersedes
+  could not be revoked (proven locally: refused with a file present, applied once emptied). It locks
+  `storage.objects` before that check, so no upload can slip in between the check and the drops. Supersedes
   the never-applied `20260908054649` candidate on PR #635's branch, which never reached `main`.
 - **Documents tab** (`CustomerDocuments.tsx`, new `src/lib/customerDocumentFiles.ts`) uploads and
   downloads only through the function, and refreshes its list after a refused download or a failed

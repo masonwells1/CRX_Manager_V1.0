@@ -32,6 +32,10 @@
 
 SET LOCAL lock_timeout = '10s';
 
+-- Take the lock DROP POLICY needs anyway BEFORE the empty-bucket check, so no
+-- browser can upload and sign an object between that check and the drops.
+LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
+
 DO $preflight$
 DECLARE
   v_bad_paths integer;

@@ -15,7 +15,10 @@
 //   node scripts/smoke/prove-customer-document-bytes-server-only.mjs --phase=before
 //     Old policies: asserts the P1 hole is REAL (a rep's long-lived signed URL
 //     still serves bytes after soft delete). Proves the harness can see it.
-//   Apply supabase/migrations/20260914100450_customer_document_bytes_server_only.sql, then
+//   Empty the bucket through the Storage API (service role) — the migration's
+//   preflight refuses a non-empty bucket by design, and --phase=before leaves an
+//   object behind — then apply
+//   supabase/migrations/20260914100450_customer_document_bytes_server_only.sql, then
 //   node scripts/smoke/prove-customer-document-bytes-server-only.mjs --phase=after
 //     Asserts browser users cannot read or sign at all, the Edge Function upload/
 //     download flow works, a soft-deleted document stops downloading, and no
