@@ -79,11 +79,17 @@ SET LOCAL lock_timeout = '5s';
 LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;
 
 -- The legacy two-argument overload was removed by
--- 20260515999999_drop_legacy_transfer_job_to_invoice_overload and live carries
--- only (uuid, uuid, text), so this is a no-op there. It states that removal in
--- the file that replaces the function, before the preflight below counts
--- exactly one public overload; any other extra overload still refuses.
-DROP FUNCTION IF EXISTS public.transfer_job_to_invoice(uuid, uuid);
+-- 20260515999999_drop_legacy_transfer_job_to_invoice_overload, and live carries
+-- only (uuid, uuid, text). A surviving (uuid, uuid) copy is schema drift whose
+-- owner, body and grants are unknown, so this file refuses by name rather than
+-- dropping it; the preflight below still refuses any other extra overload.
+DO $legacy_transfer_overload$
+BEGIN
+  IF to_regprocedure('public.transfer_job_to_invoice(uuid,uuid)') IS NOT NULL THEN
+    RAISE EXCEPTION 'TRANSFER_INVOICE_INTENT_PREFLIGHT: legacy transfer_job_to_invoice(uuid, uuid) overload is present; 20260515999999 should have removed it';
+  END IF;
+END
+$legacy_transfer_overload$;
 
 DO $preflight$
 DECLARE
