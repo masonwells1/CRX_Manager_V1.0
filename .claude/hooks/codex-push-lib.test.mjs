@@ -1257,6 +1257,21 @@ assert.equal(
   pushHiddenByShellComposition("npm run build"), false,
   "and a command with no push in any reading is left alone",
 );
+// Codex sol, 2026-09-21: the Windows-path exemption let a trailing backslash
+// through, and the two readings then named different sources — POSIX `C`,
+// PowerShell `evil` — so the proof was checked against the wrong ref.
+assert.equal(
+  pushHiddenByShellComposition("git push origin --repo C:\\x\\ evil:main"), true,
+  "readings that disagree on the ref landing on main are refused",
+);
+assert.equal(
+  pushHiddenByShellComposition("git push C:\\scratch\\repo.git HEAD:feature"), false,
+  "a Windows local-repo push reads the same both ways and still passes",
+);
+assert.equal(
+  pushHiddenByShellComposition("git push origin --repo C:\\x evil:main"), false,
+  "and a Windows value with no trailing backslash is not a disagreement",
+);
 
 // ── round 18: a destination that names a PROGRAM, not an address ─────────────
 // `ext::<command>` is git's remote-helper syntax: delivery is handed to an
