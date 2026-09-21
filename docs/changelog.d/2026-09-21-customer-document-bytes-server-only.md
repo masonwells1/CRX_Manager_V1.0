@@ -17,7 +17,9 @@
   and the waiting `20260914100500` so it strands nothing; apply it promptly after merge. Its
   preflight refuses a non-empty bucket, since a link minted under the old rules before the apply
   could not be revoked (proven locally: refused with a file present, applied once emptied). It locks
-  `storage.objects` before that check, so no upload can slip in between the check and the drops. Supersedes
+  `storage.objects` before that check, so no upload can slip in between the check and the drops, and
+  its postflight asserts the rules it inherits (objects RLS on, full `UNIQUE (storage_path)`, the
+  path-matches-customer check, the bucket's size and type limits). Supersedes
   the never-applied `20260908054649` candidate on PR #635's branch, which never reached `main`.
 - **Documents tab** (`CustomerDocuments.tsx`, new `src/lib/customerDocumentFiles.ts`) uploads and
   downloads only through the function, and refreshes its list after a refused download or a failed
@@ -28,7 +30,7 @@
   merge-coupling findings and the compliance reviewer's four MED findings are fixed.
 - **Proof observed:** `scripts/smoke/prove-customer-document-bytes-server-only.mjs` against a real
   local Supabase stack whose bucket policies matched live's md5s. Before the migration, 5/5: a rep's
-  one-year signed URL still returned the bytes after soft delete. After it, 29/29, and the same attack
+  one-year signed URL still returned the bytes after soft delete. After it, 30/30, and the same attack
   fails at every step. The real `customerDocumentFiles.ts` helper also ran end to end against that
   stack. Deno unit tests cover the request and path rules; Vitest covers the helper.
 - **Not verified:** a browser click-through of the Documents tab (the page needs the full schema,

@@ -33,11 +33,29 @@ async function readRequestText(req: Request): Promise<string> {
   if (declared && /^\d+$/.test(declared) && Number(declared) > MAX_REQUEST_BODY_BYTES) {
     throw new RequestBodyTooLargeError();
   }
-  const text = await req.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_REQUEST_BODY_BYTES) {
-    throw new RequestBodyTooLargeError();
+  if (!req.body) return "";
+  // Stream with a running cap: a chunked body or a false Content-Length must
+  // not be buffered whole before it is refused.
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_REQUEST_BODY_BYTES) {
+      await reader.cancel();
+      throw new RequestBodyTooLargeError();
+    }
+    chunks.push(value);
   }
-  return text;
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
 }
 
 // storage-js 2.57 reports a missing object as a StorageUnknownError whose

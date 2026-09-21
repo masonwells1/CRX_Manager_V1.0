@@ -395,7 +395,7 @@ download and refuses removed documents. The path-shape rule closes a second rout
 found: without it, a new document row naming a look-alike of a removed document's path (a `#`, `?` or
 `%` variant) could fetch the removed file. Proven against a real local Supabase stack by
 `scripts/smoke/prove-customer-document-bytes-server-only.mjs`: the leak reproduces before the fix
-(5/5) and every attack step fails after it (29/29).
+(5/5) and every attack step fails after it (30/30).
 
 **Accepted residuals.** An upload whose document row then fails to save leaves its file behind with
 no row; nothing can read it (only the function serves bytes, and only for live rows), so it is left
@@ -410,7 +410,11 @@ the PR (ships the page that calls it); apply the migration — promptly, because
 the other two land. The migration refuses to apply if the bucket already holds any file, because a
 link minted under the old rules in that window could not be revoked; a refusal means a person decides.
 It locks the Storage objects table before that check, so no upload can land between the check and the
-policy drops (a Luna review finding; live `postgres` holds the rights the lock needs).
+policy drops (a Luna review finding; live `postgres` holds the rights the lock needs). Its final
+checks also refuse to finish unless the older rules this design relies on still hold: row security on
+the Storage objects table, a path that can never be reused (even after a soft delete), a path whose
+folder is the row's own customer, and the bucket's 20 MiB / four-type limits (all confirmed on live
+2026-09-21; each check was shown to stop the migration when its rule was broken locally).
 Before the apply, refresh the schema registry and applied-migration snapshot so the pending-migration
 guard sees the 2026-09-21 commission applies. After the apply, a live check should confirm the five
 browser policies are gone, the shape constraint exists, and the Documents tab uploads and downloads.

@@ -137,5 +137,49 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'POSTFLIGHT_PATH_SHAPE: storage_path shape constraint is missing or not validated.';
   END IF;
+
+  -- The rest of the design leans on rules from 20260717013415; confirm each
+  -- still holds rather than trusting that migration's text.
+
+  -- With no policies left, RLS being on is what keeps browsers out entirely.
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'storage.objects'::regclass) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_OBJECTS_RLS: row level security is off on storage.objects.';
+  END IF;
+
+  -- A path can never be reused, even after its row is soft-deleted, so a new
+  -- row cannot name a removed document's object.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'public.customer_documents'::regclass
+       AND conname = 'customer_documents_storage_path_key'
+       AND pg_get_constraintdef(oid) = 'UNIQUE (storage_path)'
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_PATH_UNIQUE: full UNIQUE (storage_path) is missing.';
+  END IF;
+
+  -- The path's folder must be the row's own customer.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'public.customer_documents'::regclass
+       AND conname = 'customer_documents_path_matches_customer_check'
+       AND contype = 'c'
+       AND convalidated
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_PATH_CUSTOMER: path-matches-customer check is missing or not validated.';
+  END IF;
+
+  -- Upload tokens carry no size or type limit of their own; the bucket's
+  -- limits are what bind the uploaded bytes.
+  IF NOT EXISTS (
+    SELECT 1 FROM storage.buckets
+     WHERE id = 'customer-documents'
+       AND file_size_limit IS NOT NULL
+       AND file_size_limit <= 20971520
+       AND allowed_mime_types IS NOT NULL
+       AND cardinality(allowed_mime_types) > 0
+       AND allowed_mime_types <@ ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']::text[]
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_BUCKET_LIMITS: customer-documents size or type limits are missing or wider than the function allows.';
+  END IF;
 END;
 $postflight$;

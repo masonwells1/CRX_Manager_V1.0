@@ -255,6 +255,26 @@ async function runAfter(admin, rep, otherRep, driver, customerA) {
     action: 'prepare_upload', customer_id: customerA, filename: 'x.html', mime_type: 'text/html', size_bytes: 10,
   });
   check('a disallowed file type is refused', wrongType.status === 400, `HTTP ${wrongType.status}`);
+
+  // A chunked body carries no Content-Length, so only the streaming cap can stop it.
+  const { data: session } = await rep.client.auth.getSession();
+  const oversized = new TextEncoder().encode(`{"action":"download","pad":"${'x'.repeat(64 * 1024)}"}`);
+  const chunked = await fetch(`${url}/functions/v1/${FUNCTION}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.session.access_token}`,
+      apikey: anonKey,
+      'Content-Type': 'application/json',
+    },
+    body: new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < oversized.byteLength; i += 1024) controller.enqueue(oversized.subarray(i, i + 1024));
+        controller.close();
+      },
+    }),
+    duplex: 'half',
+  });
+  check('an oversized chunked request is refused', chunked.status === 413, `HTTP ${chunked.status}`);
 }
 
 async function main() {
