@@ -15,8 +15,12 @@ after phase 1. Phase 2, `20260914101300_finish_generic_field_invoice_cutover.sql
 must commit in a separate transaction and refuses installation while any unexpired
 generic `save_invoice` receipt remains. Only after phase 2 commits does the public
 RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
-remain the supported creation paths; existing generic field edits, other types and
-below-cost/idempotency delegation remain unchanged. A universal INSERT draft was rejected.
+remain the supported creation paths. Other generic field edits, other types and
+below-cost/idempotency delegation remain unchanged, with two exceptions that apply to
+every writer, generic or not: a date or `invoice_type` change on an invoice that is, or
+becomes, a field-application invoice must pass the filed-season date validation (an
+unchanged stored date is not an edit), and a change to the filed `season` itself is
+refused. A universal INSERT draft was rejected.
 
 Phase 2 also REQUIRES total database transaction quiescence: no other open
 transaction (`pg_stat_activity.xact_start IS NOT NULL`) and no prepared transaction,

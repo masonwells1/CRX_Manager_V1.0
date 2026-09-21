@@ -22,7 +22,9 @@ stamps all four field-app candidates sorted below that cohort, so the strict ord
 have refused them once it applied. Their ascending stamp order is still their apply order:
 **`20260914101000` → `20260914101100` → `20260914101200` → `20260914101300`.**
 **COMMISSION-FIRST RULE (reverse hazard): none of these four may be applied live until all eight
-`20260914100*` commission migrations are.** Applying one early would strand the whole cohort below
+`20260914100*` commission migrations are — that is, only after `20260914100900` is applied live.**
+The cohort is planned in two batches (`100100`–`100600`, then `100800` and `100900`); applying
+these four after the first batch alone would strand `100800` and `100900`. Applying one early would strand the whole cohort below
 it. The pending-set guard reads only `origin/main`, so it cannot catch this while the field-invoice
 PR is unmerged — the operator must check it by hand. The container prover asserts the stamp
 relationship on every run.
