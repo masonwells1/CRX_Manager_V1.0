@@ -193,7 +193,15 @@ WORK="$(cygpath -m "$(mktemp -d)")"      # neutral dir, Windows-resolvable path
 # then RUN while we build the payload — before Codex's read-only sandbox exists. BOTH flags are
 # needed: --no-ext-diff does NOT disable textconv. This is the one part of the advisory path that
 # executes outside the sandbox.
-GITD=(git -C "$REPO" --no-pager -c diff.external= -c core.pager=cat)
+# Clean/smudge FILTERS are a second door: a `.gitattributes` in the diff can select `filter=<name>`,
+# and `git diff HEAD` runs that filter's clean program on working-tree files — --no-textconv does not
+# stop it (reproduced 2026-09-21). Neutralize every filter configured at any level, by name.
+NOFILTER=()
+for n in $(git -C "$REPO" config --name-only --get-regexp '^filter\..*\.(clean|smudge|process)$' \
+             | sed -E 's/^filter\.(.*)\.(clean|smudge|process)$/\1/' | sort -u); do
+  NOFILTER+=(-c "filter.$n.clean=" -c "filter.$n.smudge=" -c "filter.$n.process=" -c "filter.$n.required=false")
+done
+GITD=(git -C "$REPO" --no-pager -c diff.external= -c core.pager=cat "${NOFILTER[@]}")
 set -e   # an extraction failure must abort, not silently yield a partial diff
 case "$SCOPE" in
   --base\ *)     "${GITD[@]}" diff --no-ext-diff --no-textconv "${SCOPE#--base }...HEAD" ;;
