@@ -12,7 +12,7 @@ Mason does not type this command name. Treat plain-English requests like these a
 | **Hunts** the bugs | Claude (Workflow) | **Codex** — `scripts/codex-hunt.mjs`, read-only |
 | **Confirms** a finding is real | Codex (finding-gate) | **Claude** — verifies against the LIVE DB + code, refutes false positives |
 | **Writes** the fix | Claude | **Claude** — through the project's seatbelt hooks |
-| **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/overnight-codex-gate.mjs` fix-glance (Sol/high) |
+| **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/overnight-codex-gate.mjs` fix-glance (Luna/xhigh by default since 2026-09-20; `--sol` escalates one pass, with the reason recorded) |
 
 **Independence is preserved on BOTH ends:** the model that *finds* (Codex) is not the model that *verifies* (Claude); the model that *writes* the fix (Claude) is not the model that *reviews* it (Codex). That two-model split is the load-bearing independence argument — different model, different failure modes on both the find→verify and the write→review hop.
 
@@ -41,6 +41,12 @@ On top of it, **this loop deliberately launches the hunter with no database conn
 | 🟢 Green | `fixKind` = `frontend-only` / `docs-or-test` — reversible, no DB/RLS/money-schema change | After the Codex fix-glance SHIPs + `typecheck`/`build`/`test` clean: **commit to the debug branch** |
 | 🟡 Yellow | `fixKind` = `migration` / `edge-fn` | Draft + rolled-back-validate against live (zero prod footprint) + plain-English explanation → **PARK** in `REPORT.md` |
 | 🔴 Red | push / deploy / live-apply / prod data | **Never autonomous** — wait for Mason |
+
+> **The fix-glance is an advisory Luna pass, not a ship gate — the name is historical.** It mints
+> no proof. A green row authorizes a commit to the *debug branch* only. Any fix touching money,
+> inventory, auth, RLS, migrations, permissions or an Edge Function still needs the exact-SHA
+> `gpt-5.6-sol` proof from `/codex-review` Step 3B before it can be pushed, and the push guard will
+> refuse it without one. Never read a Luna `VERDICT: SHIP` as that proof.
 
 > **All shell snippets below run in Claude Code's Bash tool (POSIX sh / git-bash), not PowerShell.** The loop session must run them via the Bash tool.
 
@@ -112,8 +118,10 @@ git add <the-fix's-files>
 git diff --quiet -- docs/app-workflow-map.html || git add docs/app-workflow-map.html   # stage the map IFF this fix changed it
 git status --porcelain                       # the staged set MUST equal what the commit will contain
 { echo "Review this staged diff for the CRX codex-driven hunt. It must fully fix: <finding>. Judge correctness + money / idempotency / actor / lifecycle bugs + whether it introduces a NEW bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/codex-fix-glance-prompt.txt
-# Adversarial review gate — use the Sol/high gate wrapper (pins gpt-5.6-sol at high effort,
-# --ignore-user-config, read-only), NOT the spark hunter wrapper. stdout = verdict, stderr = trace.
+# Adversarial review gate — use the gate wrapper (pins the model explicitly, --ignore-user-config,
+# read-only), NOT the spark hunter wrapper. Defaults to gpt-5.6-luna at xhigh since 2026-09-20;
+# add `--sol --reason "<why>"` for a gpt-5.6-sol/high pass on genuinely complex work; the wrapper
+# REFUSES --sol without a reason, so escalated spend is never silent. stdout = verdict, stderr = trace.
 node scripts/overnight-codex-gate.mjs .claude/session-state/codex-fix-glance-prompt.txt --timeout 600 \
   > .claude/session-state/codex-fix-glance-latest.txt 2> .claude/session-state/codex-fix-glance-trace.txt
 [ $? -ne 0 ] && echo "Codex fix-glance run FAILED — treat as NEEDS-WORK; do NOT commit."

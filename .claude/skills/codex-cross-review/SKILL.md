@@ -44,7 +44,7 @@ Structure (the template below is authoritative; `docs/audits/2026-06-09-codex-fo
 **Date:** <YYYY-MM-DD>
 **Requested by:** Mason (CRX Manager)
 **Reviewer:** Codex (independent second opinion)
-**Reviewer model (required):** `gpt-5.6-sol` at high reasoning effort — the settled adversarial-gate model (2026-07-30). Do not run this packet on a lighter tier.
+**Reviewer model (required):** `gpt-5.6-luna` at xhigh reasoning effort — the default review tier since 2026-09-20. Escalate this packet to `gpt-5.6-sol` at high effort only for a risky money / inventory / auth / RLS / migration / permission / Edge Function change, or for genuinely complex work Luna is out of its depth on — but a pasted reply is an **advisory second opinion only, never the gate pass**: it cannot mint the head-bound proof (see the merge-gate note below), so a risky change reviewed this way stays PARKED until `/codex-review` Step 3B can run. Whichever tier runs, pin it explicitly and record it on the packet; never leave it to workstation configuration.
 **Claude session:** <one-line context, e.g. "post-implementation review of B7/B8/B9 fixes">
 
 ---
