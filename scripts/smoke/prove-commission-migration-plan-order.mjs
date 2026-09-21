@@ -83,6 +83,11 @@ const WRAPPABLE_PLAN_NAMES = [...PARKED_COMMISSION_NAMES, NEXT_INVOICE_YEAR];
 // 20260905185938_refuse_null_job_field_acres) forced the 2026-09-14 restamp.
 // Pinned so the LEDGER phase never abstains when the gitignored snapshot is absent (CI); when
 // the snapshot is present it is unioned in, so the bar can only rise, never fall.
+// Scope: this pin feeds only this prover's check of the named parked commission set below. It
+// gates no other migration. The apply-time ordering guard judges every file against a snapshot
+// that scripts/apply-migration-file.mjs rebuilds from the live ledger. This prover still assumes
+// the whole set is parked; on 2026-09-21 20260914100100-100400 were applied live, so it is
+// re-baselined (pin, parked list and replay) in the records change once the cohort finishes.
 const LIVE_HIGH_WATER_ROW = '20260911120000_bind_adjust_inventory_receipt_to_intent';
 // The names the parked set carried before the 2026-09-14 restamp — the negative control for
 // the LEDGER phase. All six sort below the row above.
