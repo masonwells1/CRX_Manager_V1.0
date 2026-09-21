@@ -1683,6 +1683,19 @@ try {
     nowMs: now,
     runGh: () => { throw new Error("--disable-auto should not resolve a PR"); },
   }).blocked, false, "--disable-auto cancels auto-merge and is not a landing");
+  // ...but a `--disable-auto` sitting in `--author-email`'s value position is
+  // data, and the command is a real merge that must reach the gate (Codex sol,
+  // 2026-09-21: the long form was missing from the value list, so this stood down).
+  let authorEmailReachedGate = false;
+  const authorEmailMerge = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --author-email --disable-auto --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => { authorEmailReachedGate = true; throw new Error("gh unavailable in this test"); },
+  });
+  assert.equal(authorEmailMerge.blocked, true, "an --author-email value shaped like --disable-auto does not stand the gate down");
+  assert.equal(authorEmailReachedGate, true, "...the merge reaches the gate and tries to resolve the PR");
   // Backtracking is MEASURED, not assumed: a hook that can be stalled is a hook
   // that can be timed out, and silence from a killed PreToolUse hook means ALLOW.
   for (const pathological of [

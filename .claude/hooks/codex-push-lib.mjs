@@ -2450,7 +2450,13 @@ export function ghMergeRequest(command) {
   // accepts long names case-insensitively. The `--name=value` spellings never
   // reach here — they carry their own value and consume no following word.
   // Shorts are read by GH_MERGE_VALUE_SHORTS above, which keeps their case.
-  const longValueFlags = new Set(["--repo", "--match-head-commit", "--subject", "--body", "--body-file"]);
+  // Checked against gh's manual for `pr merge` (2026-09-21): these six are every
+  // long option that takes a value. `--author-email` was missing while its short
+  // `-A` was listed, so `<merge> 123 --author-email --disable-auto --squash` read
+  // the value as a cancellation and the whole gate stood down (Codex sol).
+  const longValueFlags = new Set([
+    "--author-email", "--body", "--body-file", "--match-head-commit", "--repo", "--subject",
+  ]);
   const takesValue = (word) => {
     if (longValueFlags.has(word.toLowerCase())) return true;
     const cluster = ghMergeShortCluster(word);
@@ -2581,7 +2587,9 @@ const GH_API_VALUE_SHORTS = "XFfHqtp";
 // value is the next word whatever it looks like, so it must be skipped before
 // that word is read as a flag: in `gh api … -f body=x --template -iX=GET`, gh
 // takes `-iX=GET` as the template and POSTs, while the short-cluster walk read
-// it as `-X GET` and reported a read (Codex sol, 2026-09-21).
+// it as `-X GET` and reported a read (Codex sol, 2026-09-21). Matched
+// lowercased: if gh accepts a case variant it is the same option, and if it does
+// not, gh refuses the command before sending anything.
 const GH_API_VALUE_LONGS = new Set([
   "--cache", "--field", "--header", "--hostname", "--input", "--jq",
   "--method", "--preview", "--raw-field", "--template",
@@ -2618,7 +2626,7 @@ export function ghApiMergeRequest(command) {
     const word = words[index];
     if (word === "--method") { method = String(words[index + 1] || "").toUpperCase(); index += 1; continue; }
     if (word.startsWith("--method=")) { method = word.slice("--method=".length).toUpperCase(); continue; }
-    if (GH_API_VALUE_LONGS.has(word)) { index += 1; continue; }
+    if (GH_API_VALUE_LONGS.has(word.toLowerCase())) { index += 1; continue; }
     const cluster = ghApiShortCluster(word);
     if (cluster) {
       if (cluster.letter === "X") {
@@ -2929,8 +2937,8 @@ export function ghApiMutates(command) {
       methodExplicit = true;
     } else if (/^(?:--field|--raw-field|--input)=/.test(word)) {
       hasFields = true;
-    } else if (GH_API_VALUE_LONGS.has(word)) {
-      if (["--field", "--raw-field", "--input"].includes(word)) hasFields = true;
+    } else if (GH_API_VALUE_LONGS.has(word.toLowerCase())) {
+      if (["--field", "--raw-field", "--input"].includes(word.toLowerCase())) hasFields = true;
       index += 1; // the detached value is never a flag
     } else {
       // Every short spelling — separate, attached, `=`-attached and bundled

@@ -48,6 +48,15 @@ eq(ghMergeRequest("gh pr merge -dr 789 --squash")?.selector, "789",
   "-r is --rebase, a boolean: it must not swallow the PR selector");
 eq(ghMergeRequest("gh pr merge -A someone@example.com 789 --squash")?.selector, "789",
   "-A is --author-email and takes a value: its value is not the PR selector");
+// The LONG form of -A was missing from the value list (Codex sol, 2026-09-21).
+eq(ghMergeRequest("gh pr merge 123 --author-email --disable-auto --squash")?.disableAuto, false,
+  "--author-email takes a value: a --disable-auto in that position is not a cancellation");
+eq(ghMergeRequest("gh pr merge --author-email someone@example.com 789 --squash")?.selector, "789",
+  "...and its value is not the PR selector");
+eq(ghMergeRequest("gh pr merge 123 --author-email --admin --squash")?.admin, false,
+  "a value position is data in the other direction too");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments -f body=x --TEMPLATE -iX=GET"),
+  "gh api long options are matched whatever their case");
 eq(ghMergeRequest("gh pr merge -dR other/repo 789 --squash")?.repo, "other/repo",
   "a bundled -R still carries the repository");
 eq(ghMergeRequest("gh pr merge -dR other/repo 789 --squash")?.selector, "789",
