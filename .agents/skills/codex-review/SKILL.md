@@ -196,11 +196,13 @@ WORK="$(cygpath -m "$(mktemp -d)")"      # neutral dir, Windows-resolvable path
 # Clean/smudge FILTERS are a second door: a `.gitattributes` in the diff can select `filter=<name>`,
 # and `git diff HEAD` runs that filter's clean program on working-tree files — --no-textconv does not
 # stop it (reproduced 2026-09-21). Neutralize every filter configured at any level, by name.
+# A while-read loop, NOT `for n in $(…)`: an unquoted substitution glob-expands a driver named `*`
+# against repo filenames, so that driver would escape neutralization.
 NOFILTER=()
-for n in $(git -C "$REPO" config --name-only --get-regexp '^filter\..*\.(clean|smudge|process)$' \
-             | sed -E 's/^filter\.(.*)\.(clean|smudge|process)$/\1/' | sort -u); do
+while IFS= read -r n; do
   NOFILTER+=(-c "filter.$n.clean=" -c "filter.$n.smudge=" -c "filter.$n.process=" -c "filter.$n.required=false")
-done
+done < <(git -C "$REPO" config --name-only --get-regexp '^filter\..*\.(clean|smudge|process)$' \
+           | sed -E 's/^filter\.(.*)\.(clean|smudge|process)$/\1/' | sort -u)
 GITD=(git -C "$REPO" --no-pager -c diff.external= -c core.pager=cat "${NOFILTER[@]}")
 set -e   # an extraction failure must abort, not silently yield a partial diff
 case "$SCOPE" in
@@ -234,6 +236,15 @@ esac > "$WORK/candidate.diff"
 set +e
 
 [ -s "$WORK/candidate.diff" ] || { echo "EMPTY DIFF for scope '$SCOPE' — nothing was reviewed. Fix the scope; do NOT report this as clean." >&2; exit 1; }
+# OPAQUE CHANGES: a binary file, or a text file marked `-diff` in .gitattributes (this repo marks
+# security-sensitive baseline SQL that way), reaches the payload as "Binary files … differ" with NO
+# content. Luna would review nothing for that file and could still answer CLEAN with a valid canary.
+# Fail closed and name the files; they need Sol (Step 3B) or a human look, never a Luna "clean".
+if grep -Eq '^(Binary files .* differ|GIT binary patch)$' "$WORK/candidate.diff"; then
+  grep -E '^Binary files .* differ$' "$WORK/candidate.diff" >&2
+  echo "OPAQUE CHANGE — the file(s) above carry no reviewable content. Step 3A does NOT cover them; review them another way and never report this round as clean for them." >&2
+  exit 1
+fi
 wc -l "$WORK/candidate.diff"
 
 cat > "$WORK/INSTRUCTIONS.md" <<'EOF'
