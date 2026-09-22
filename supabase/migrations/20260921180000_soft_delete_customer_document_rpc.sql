@@ -86,9 +86,9 @@
 -- or an admin since demoted to a rep, cannot read a receipt for a customer
 -- they can no longer see.
 --
--- Atomicity: no BEGIN/COMMIT of its own. Apply ONLY through
--- scripts/apply-migration-file.mjs (or psql -1), which wraps the whole file in
--- one transaction.
+-- Atomicity: no BEGIN/COMMIT of its own. Apply live ONLY through
+-- scripts/apply-migration-file.mjs, which wraps the whole file in one
+-- transaction; `psql -1` is for the disposable local prover, never live.
 --
 -- PREFLIGHT: check_idempotency_intent(text,text,uuid,text) installed as a
 -- postgres-owned SECURITY DEFINER function not executable by anon,
