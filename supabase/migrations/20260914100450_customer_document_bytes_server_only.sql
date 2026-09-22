@@ -121,6 +121,24 @@ BEGIN
       v_unscoped_policies;
   END IF;
 
+  -- The check above skips a missing expression. A policy with no governing
+  -- expression (no USING on SELECT/UPDATE/DELETE/ALL, no WITH CHECK on INSERT)
+  -- names no bucket at all; PostgreSQL 17 was observed to grant nothing through
+  -- one, but it is drift either way, so it stops the apply for a look.
+  SELECT array_agg(p.polname ORDER BY p.polname)
+    INTO v_unscoped_policies
+    FROM pg_policy p
+   WHERE p.polrelid = 'storage.objects'::regclass
+     AND (
+       (p.polcmd = 'a' AND p.polwithcheck IS NULL)
+       OR (p.polcmd <> 'a' AND p.polqual IS NULL)
+     );
+
+  IF v_unscoped_policies IS NOT NULL THEN
+    RAISE EXCEPTION 'POSTFLIGHT_UNSCOPED: storage.objects policies with no bucket condition: %.',
+      v_unscoped_policies;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM storage.buckets
      WHERE id = 'customer-documents' AND public = false

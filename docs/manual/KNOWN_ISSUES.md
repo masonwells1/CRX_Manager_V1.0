@@ -397,8 +397,10 @@ found: without it, a new document row naming a look-alike of a removed document'
 `scripts/smoke/prove-customer-document-bytes-server-only.mjs`: the leak reproduces before the fix
 (5/5) and every attack step fails after it (30/30). Luna round 3 (2026-09-21) tightened two
 postflight checks to exact matches (the path-matches-customer rule's definition, and the bucket's
-size and type limits); its BLOCKER, that a storage policy with no condition grants everything, was
-refuted locally: on Postgres 17 such a policy let an authenticated user read and insert nothing.
+size and type limits). Its BLOCKER, that a storage policy with no condition grants everything, did
+not reproduce locally (on Postgres 17 such a policy let an authenticated user read, insert and
+delete nothing), but Sol raised it again, so the postflight now refuses any such policy as drift
+(none on live 2026-09-21; SELECT, INSERT and ALL variants each refused locally).
 
 **Accepted residuals.** An upload whose document row then fails to save leaves its file behind with
 no row; nothing can read it (only the function serves bytes, and only for live rows), so it is left
