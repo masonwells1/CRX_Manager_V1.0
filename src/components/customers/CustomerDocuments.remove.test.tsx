@@ -91,7 +91,9 @@ describe('CustomerDocuments Remove', () => {
     expect(screen.queryByText('License.pdf')).not.toBeInTheDocument();
   });
 
-  it('keeps the same key after an uncertain failure so the retry replays the receipt', async () => {
+  // Key retention only; that the server then replays rather than re-running is
+  // proven against the real schema by the prover.
+  it('sends the same key again after an uncertain failure', async () => {
     rpcMock
       .mockResolvedValueOnce({ data: null, error: { message: 'Failed to fetch' } })
       .mockResolvedValueOnce(success);
