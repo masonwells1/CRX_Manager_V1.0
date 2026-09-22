@@ -12,9 +12,19 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-20 against the live ledger (read-only ledger query, which confirmed by name that the
-six-generator year fix `20260908140000` IS applied, and that the parked commission and
-next-invoice-number candidates below are still not; boundary figures are
+**A sales rep cannot remove a customer document (found 2026-09-21; fix PARKED, not applied).** The
+Documents tab's Remove made a direct UPDATE that PostgreSQL refuses for reps ("new row violates
+row-level security policy"), because `customer_documents_rep_select` hides soft-deleted rows and an
+UPDATE's new row is checked against SELECT policies. Admins are unaffected; live held 0 customer
+documents on 2026-09-21, so nobody has hit it. Fix: `20260921180000_soft_delete_customer_document_rpc`
+(new RPC, no policy change; migration-history row 931), applied only after the parked commission
+files and with Mason's approval, then the page change that calls it.
+
+**Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
+commission-cohort files `20260914100100`..`20260914100400` ARE applied, and that `20260914100500`,
+`100600`, `100800`, `100900` and `20260921180000` are not; entries below that still call the first four
+candidates predate that apply). The 2026-09-20 pass had confirmed the
+six-generator year fix `20260908140000` IS applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of

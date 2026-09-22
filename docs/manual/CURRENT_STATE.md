@@ -25,8 +25,17 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-20 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1004 rows / 997 distinct names, `max(version)` `20260920052149` — two
+**Last verified: 2026-09-21 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1008 rows / 1001 distinct names, `max(version)` `20260921141901`).** Four
+commission-cohort files applied live on 2026-09-21 — `20260914100100`, `20260914100200`,
+`20260914100300`, `20260914100400` — so the effective ordering high-water is now
+**`20260914100400_enforce_commission_payment_business_date`**; `20260914100500`, `100600`, `100800`
+and `100900` are still parked above it, followed by the parked
+`20260921180000_soft_delete_customer_document_rpc` (sales reps cannot yet remove customer
+documents; see KNOWN_ISSUES), which must apply after them. The schema registry has NOT been
+regenerated for those four applies; the sentence below about its 2026-09-20 rebuild still stands.
+
+**Superseded 2026-09-20 ledger header, kept for provenance.** It read 1004 rows / 997 distinct names, `max(version)` `20260920052149` — two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
 `20260920052149`, which is now the effective ordering high-water; the
@@ -38,11 +47,12 @@ status enums, 94 tables without `updated_at`, 119 parsed CHECK IN-lists, 221 ski
 applied boundary (`20260915033227` to `20260920052149`) and that morning's two applies joining the
 applied-migration name list. The registry's applied migration list also still includes the
 routine-only `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied row's effective stamp:
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). As of 2026-09-20 (superseded
+by the 2026-09-21 header above) the effective
+ordering high-water was the newest applied row's effective stamp:
 **`20260911120000_bind_adjust_inventory_receipt_to_intent`** (row 930, ledger version
 `20260920052149`, applied live 2026-09-20 via #664; verified live read-only 2026-09-20, 1004 ledger
-rows). A candidate must now sort above the `20260911120000` name-stamp.
+rows). At that time a candidate had to sort above the `20260911120000` name-stamp.
 
 **Superseded boundary — row 927's 09-15 apply.** Until the 09-20 applies the high-water was
 **`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
