@@ -103,9 +103,11 @@
 -- before the receipt lookup in the source (a text-position check — the
 -- prover is what proves the behaviour); no key-only
 -- check_idempotency/save_idempotency call; ACL is EXACTLY the owner and
--- authenticated — any other grantee (PUBLIC, anon, service_role, metabase_ro
--- or a drifted grant surviving CREATE OR REPLACE) fails the apply. Every
--- non-owner grant is revoked before the one GRANT, so a re-run converges.
+-- authenticated. Grants to PUBLIC, anon, authenticated and service_role are
+-- revoked before the one GRANT (so a re-run converges and the Supabase
+-- defaults are cleared); a grant to ANY OTHER role — metabase_ro, or any
+-- drifted grant surviving CREATE OR REPLACE — is not revoked here and fails
+-- the apply, so a human looks at it.
 -- ROLLBACK: a NEW forward migration that DROPs
 -- public.soft_delete_customer_document(uuid, text). The page would then fail
 -- closed on Remove (function not found) for every role until it is reverted.
@@ -130,17 +132,24 @@ BEGIN
      WHERE p.oid = to_regprocedure(v_helper_sig)
        AND p.proowner = 'postgres'::regrole
        AND p.prosecdef
+       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
        AND position('operation IS DISTINCT FROM p_operation' IN p.prosrc) > 0
        AND position('request_actor_id IS DISTINCT FROM p_actor' IN p.prosrc) > 0
        AND position('request_fingerprint IS DISTINCT FROM p_fingerprint' IN p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'PREFLIGHT_HELPER_SHAPE: % is not a postgres-owned SECURITY DEFINER function that compares the receipt operation, actor and fingerprint.', v_helper_sig;
   END IF;
-  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
-    IF has_function_privilege(v_role, v_helper_sig, 'EXECUTE') THEN
-      RAISE EXCEPTION 'PREFLIGHT_ACL: % can execute %; the receipt binding relies on it being reachable only from postgres-owned SECURITY DEFINER functions.', v_role, v_helper_sig;
-    END IF;
-  END LOOP;
+  -- No grantee other than the owner, at all (PUBLIC, anon, authenticated,
+  -- service_role, metabase_ro, anything): the receipt binding relies on the
+  -- helper being reachable only from postgres-owned SECURITY DEFINER code.
+  IF EXISTS (
+    SELECT 1
+      FROM pg_proc p, aclexplode(p.proacl) a
+     WHERE p.oid = to_regprocedure(v_helper_sig)
+       AND a.grantee <> p.proowner
+  ) OR (SELECT proacl IS NULL FROM pg_proc WHERE oid = to_regprocedure(v_helper_sig)) THEN
+    RAISE EXCEPTION 'PREFLIGHT_ACL: % must be executable by its owner only (a NULL ACL means the PUBLIC default).', v_helper_sig;
+  END IF;
   IF to_regprocedure('extensions.digest(bytea,text)') IS NULL THEN
     RAISE EXCEPTION
       'PREFLIGHT_MISSING_HELPER: extensions.digest(bytea, text) is not installed (pgcrypto).';
@@ -190,8 +199,16 @@ BEGIN
        AND t.tgfoid = to_regprocedure('public.guard_customer_document_update()')
        AND t.tgenabled = 'O'
        AND t.tgtype = 19
+       AND t.tgqual IS NULL          -- no WHEN clause that could skip it
+       AND cardinality(t.tgattr::int2[]) = 0   -- not UPDATE OF <columns>
+  ) OR NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+     WHERE p.oid = to_regprocedure('public.guard_customer_document_update()')
+       AND position('soft-deleted customer documents cannot be modified' IN p.prosrc) > 0
+       AND position('soft-delete attribution must match the acting user' IN p.prosrc) > 0
   ) THEN
-    RAISE EXCEPTION 'PREFLIGHT_TRIGGER: customer_documents_guard_editable_fields is missing, disabled, or not BEFORE UPDATE FOR EACH ROW; the function relies on it for immutability and deleted_by attribution.';
+    RAISE EXCEPTION 'PREFLIGHT_TRIGGER: customer_documents_guard_editable_fields is missing, disabled, conditional, column-limited, not BEFORE UPDATE FOR EACH ROW, or its function no longer refuses edits to removed rows and forged attribution; the function relies on it.';
   END IF;
 
   SELECT count(*) INTO v_count

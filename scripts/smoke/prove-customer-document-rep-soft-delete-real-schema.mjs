@@ -128,7 +128,16 @@ function selected() {
     if (!OPTIONAL_PARKED.has(name)) assert.ok(skipped.some((f) => path.basename(f) === name), `${name} must be in the replay plan (re-check the PARKED list against the live ledger)`);
   }
   for (const file of skipped) {
-    if (OPTIONAL_PARKED.has(path.basename(file))) continue;
+    if (OPTIONAL_PARKED.has(path.basename(file))) {
+      // Skipping it is only sound while it leaves this table's row policies,
+      // triggers and grants alone.
+      const sql = readFileSync(file, 'utf8');
+      assert.ok(
+        !/(POLICY\s+\w+\s+ON\s+public\.customer_documents|TRIGGER[^;]*ON\s+public\.customer_documents|(GRANT|REVOKE)[^;]*ON\s+(TABLE\s+)?public\.customer_documents|guard_customer_document_update|soft_delete_customer_document)/i.test(sql),
+        `${path.basename(file)} now changes customer_documents policies, triggers or grants; replay it or re-think the skip`,
+      );
+      continue;
+    }
     assert.ok(!/customer_documents|soft_delete_customer_document/i.test(readFileSync(file, 'utf8')), `${path.basename(file)} touches customer documents; skipping it would change the proof`);
   }
   return before.filter((f) => !PARKED.has(path.basename(f)));
