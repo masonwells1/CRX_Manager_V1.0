@@ -217,8 +217,12 @@ async function runAfter(admin, rep, otherRep, driver, customerA) {
   const repDelete = await softDelete(rep, documentId);
   console.log(`INFO  rep soft delete (separate known bug): ${repDelete.error ? `refused — ${repDelete.error.message}` : 'allowed'}`);
 
-  const deleted = await softDelete(admin, documentId);
-  check('admin soft-deletes the document', !deleted.error && deleted.data?.length === 1, deleted.error?.message);
+  // Once that bug is fixed the rep's delete lands and the admin's would match
+  // no row, so only fall back to the admin when the rep's did not delete it.
+  const deleted = !repDelete.error && repDelete.data?.length === 1
+    ? repDelete
+    : await softDelete(admin, documentId);
+  check('the document is soft-deleted', !deleted.error && deleted.data?.length === 1, deleted.error?.message);
 
   const afterDeleteRep = await invoke(rep, { action: 'download', document_id: documentId });
   check('SOFT DELETE REVOKES: rep download is refused after delete', afterDeleteRep.status === 404, `HTTP ${afterDeleteRep.status}`);

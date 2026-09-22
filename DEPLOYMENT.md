@@ -127,6 +127,13 @@ source but NOT deployed (2026-09-21); it must be deployed before migration
 `ALLOWED_ORIGIN` plus the platform-provided Supabase keys. The function-specific secrets below must be
 present wherever the corresponding function uses them.
 
+That migration refuses to apply (`PREFLIGHT_OBJECTS`) if the `customer-documents` bucket holds any
+file, because a browser could have signed a link to it under the old policies. The bucket was empty
+with zero document rows on 2026-09-21, so apply the migration right after the merge that ships the
+function-based Documents tab, before anyone uploads. If it refuses anyway, stop: list each object
+and its `customer_documents` row, and let Mason decide per file. Never empty the bucket blindly to
+get past the check.
+
 | Secret | Purpose | How to set |
 |--------|---------|------------|
 | `ALLOWED_ORIGIN` | CORS origin for Edge Function responses. Must exactly match `https://croprxsolutions.app` (no trailing slash). | `npx supabase secrets set ALLOWED_ORIGIN=https://croprxsolutions.app --project-ref rhyzpcqhnizqbxphqdkr` |
