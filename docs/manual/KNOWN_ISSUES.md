@@ -17,8 +17,9 @@ Documents tab's Remove made a direct UPDATE that PostgreSQL refuses for reps ("n
 row-level security policy"), because `customer_documents_rep_select` hides soft-deleted rows and an
 UPDATE's new row is checked against SELECT policies. Admins are unaffected; live held 0 customer
 documents on 2026-09-21, so nobody has hit it. Fix: `20260921180000_soft_delete_customer_document_rpc`
-(new RPC, no policy change; migration-history row 931), applied only after the parked commission
-files and with Mason's approval, then the page change that calls it.
+(new RPC, no policy change; migration-history row 931), applied only after the parked
+`20260914100450` (PR #761) and commission files and with Mason's approval, then the page change
+that calls it.
 
 **Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
 commission-cohort files `20260914100100`..`20260914100400` ARE applied, and that `20260914100500`,

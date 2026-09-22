@@ -5,10 +5,13 @@
 -- STATUS: NOT APPLIED — PARKED CANDIDATE. Adds ONE new function; no table,
 -- policy, trigger or data change.
 --
--- APPLY ORDER: this stamp sorts ABOVE the parked commission cohort
--- (20260914100500, 100600, 100800, 100900). Applying it first would raise the
--- live ordering high-water past those files and strand them. Apply it only
--- after the cohort has applied (or after they are deliberately restamped).
+-- APPLY ORDER: apply only after EVERY parked candidate stamped below
+-- 20260921180000 that still sorts above the live high-water has applied (or
+-- been deliberately restamped); applying this first would raise the ordering
+-- high-water past them and strand them. On 2026-09-21 that was
+-- 20260914100450_customer_document_bytes_server_only (PR #761, same table,
+-- independent of this file) and the commission files 20260914100500, 100600,
+-- 100800 and 100900. Re-read the live ledger by name before applying.
 --
 -- idempotency-body-check: exempt — the body below DOES enforce
 -- p_idempotency_key: it requires the key, calls public.check_idempotency_intent
@@ -55,33 +58,53 @@
 --   and the table does NOT force row security, so the UPDATE is not subject
 --   to the rep SELECT policy. The preflight refuses to install if that stops
 --   being true, because the function would then fail for reps again.
--- LOCKS: the document row FOR UPDATE, then (rep path) the customer row
--- FOR SHARE, so a concurrent reassignment of the customer waits for this
--- transaction instead of racing the assignment check. Nothing that locks
--- customers FOR UPDATE takes a customer_documents lock, so there is no cycle.
+-- A removal is PERMANENT: guard_customer_document_update refuses every edit
+-- to a soft-deleted row, for admins too, and nothing restores one. So the
+-- races below are closed with locks rather than accepted.
+-- LOCKS: the caller's own profile row FOR SHARE (a concurrent deactivation or
+-- role change waits for this transaction, so an account being switched off
+-- cannot squeeze in one removal), then ONE statement that locks the document
+-- FOR UPDATE and its customer FOR SHARE and applies the assignment test in
+-- the same WHERE clause. A rep therefore never locks a document of a customer
+-- that is not theirs, and a concurrent reassignment of the customer waits for
+-- this transaction; if the reassignment commits first, PostgreSQL re-checks
+-- the WHERE clause against the new row and the rep is refused.
+-- A deadlock is possible only against a transaction that locks the same
+-- customer and then a document of it in the opposite order (for example a
+-- hard DELETE of the customer, whose foreign-key check reaches the document).
+-- PostgreSQL detects it and cancels one side (40P01); nothing commits for the
+-- cancelled side and the page keeps its key, so a retry is safe.
 -- IDEMPOTENCY: the request is fingerprinted (actor, document id);
 -- check_idempotency_intent replays only a receipt bound to THIS actor and
 -- THIS document, refuses another actor (IDEMPOTENCY_ACTOR_MISMATCH) and a
--- different document under the same key (IDEMPOTENCY_INTENT_MISMATCH).
--- RESIDUAL, KNOWN AND ACCEPTED: the caller's own profile is read, not locked;
--- a deactivation committed in the same instant as the call can still see one
--- removal succeed. A removal is a reversible-by-admin metadata flag, not money.
+-- different document under the same key (IDEMPOTENCY_INTENT_MISMATCH). Keys
+-- longer than 255 characters are refused; the page's keys are ~105.
+-- RESIDUAL, KNOWN AND ACCEPTED: a user demoted from admin to active rep who
+-- retries their own admin-era removal with its key inside the receipt's 24h
+-- life is handed that receipt (which names the customer). They chose that
+-- document themselves while authorised, so nothing new is exposed.
 --
 -- Atomicity: no BEGIN/COMMIT of its own. Apply ONLY through
 -- scripts/apply-migration-file.mjs (or psql -1), which wraps the whole file in
 -- one transaction.
 --
--- PREFLIGHT: check_idempotency_intent(text,text,uuid,text) and
--- extensions.digest(bytea,text) installed, the helper not executable by anon,
--- authenticated or service_role; idempotency_keys carries both binding
--- columns; customer_documents owned by postgres, row security enabled and NOT
--- forced; guard_customer_document_update trigger present and enabled; no
--- other overload of soft_delete_customer_document.
+-- PREFLIGHT: check_idempotency_intent(text,text,uuid,text) installed as a
+-- postgres-owned SECURITY DEFINER function not executable by anon,
+-- authenticated or service_role; extensions.digest(bytea,text) installed;
+-- idempotency_keys carries both binding columns; customer_documents and
+-- customers owned by postgres with row security NOT forced (the function's
+-- reads and locks must not be filtered by the rep policies);
+-- customer_documents_guard_editable_fields present, enabled, BEFORE UPDATE
+-- FOR EACH ROW; no other overload of soft_delete_customer_document.
 -- POSTFLIGHT: exactly one overload with the pinned argument list;
 -- postgres-owned SECURITY DEFINER plpgsql with search_path=public, pg_temp;
--- the role gate sits before the receipt lookup (position-checked); no
--- key-only check_idempotency/save_idempotency call; ACL — only authenticated
--- (and the owner) can execute.
+-- AUTH_REQUIRED, INSUFFICIENT_ROLE and IDEMPOTENCY_KEY_REQUIRED all appear
+-- before the receipt lookup in the source (a text-position check — the
+-- prover is what proves the behaviour); no key-only
+-- check_idempotency/save_idempotency call; ACL is EXACTLY the owner and
+-- authenticated — any other grantee (PUBLIC, anon, service_role, metabase_ro
+-- or a drifted grant surviving CREATE OR REPLACE) fails the apply. Every
+-- non-owner grant is revoked before the one GRANT, so a re-run converges.
 -- ROLLBACK: a NEW forward migration that DROPs
 -- public.soft_delete_customer_document(uuid, text). The page would then fail
 -- closed on Remove (function not found) for every role until it is reverted.
@@ -99,6 +122,17 @@ BEGIN
   IF to_regprocedure(v_helper_sig) IS NULL THEN
     RAISE EXCEPTION
       'PREFLIGHT_MISSING_HELPER: % is not installed (20260811130000).', v_helper_sig;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+     WHERE p.oid = to_regprocedure(v_helper_sig)
+       AND p.proowner = 'postgres'::regrole
+       AND p.prosecdef
+       AND position('request_actor_id IS DISTINCT FROM p_actor' IN p.prosrc) > 0
+       AND position('request_fingerprint IS DISTINCT FROM p_fingerprint' IN p.prosrc) > 0
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_HELPER_SHAPE: % is not a postgres-owned SECURITY DEFINER function that compares the receipt actor and fingerprint.', v_helper_sig;
   END IF;
   FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
     IF has_function_privilege(v_role, v_helper_sig, 'EXECUTE') THEN
@@ -134,7 +168,17 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PREFLIGHT_TABLE: public.customer_documents must be owned by postgres with row security enabled and NOT forced; otherwise this SECURITY DEFINER UPDATE would still be refused by the rep SELECT policy.';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+     WHERE c.oid = 'public.customers'::regclass
+       AND c.relowner = 'postgres'::regrole
+       AND NOT c.relforcerowsecurity
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_TABLE: public.customers must be owned by postgres with row security NOT forced; the assignment check reads and locks it as the owner.';
+  END IF;
 
+  -- tgtype 19 = FOR EACH ROW (1) | BEFORE (2) | UPDATE (16).
   IF NOT EXISTS (
     SELECT 1
       FROM pg_trigger t
@@ -143,8 +187,9 @@ BEGIN
        AND t.tgname = 'customer_documents_guard_editable_fields'
        AND t.tgfoid = to_regprocedure('public.guard_customer_document_update()')
        AND t.tgenabled = 'O'
+       AND t.tgtype = 19
   ) THEN
-    RAISE EXCEPTION 'PREFLIGHT_TRIGGER: customer_documents_guard_editable_fields is missing or disabled; the function relies on it for immutability and deleted_by attribution.';
+    RAISE EXCEPTION 'PREFLIGHT_TRIGGER: customer_documents_guard_editable_fields is missing, disabled, or not BEFORE UPDATE FOR EACH ROW; the function relies on it for immutability and deleted_by attribution.';
   END IF;
 
   SELECT count(*) INTO v_count
@@ -182,20 +227,24 @@ BEGIN
   END IF;
 
   -- Same predicates as is_admin() / is_sales_rep(): active profiles only.
+  -- FOR SHARE holds off a concurrent deactivation or role change until this
+  -- (permanent) removal has committed or rolled back.
   SELECT p.role = 'admin'
     INTO v_is_admin
     FROM public.profiles p
    WHERE p.id = v_actor
      AND p.role IN ('admin', 'sales_rep')
-     AND p.is_active = true;
+     AND p.is_active = true
+     FOR SHARE;
   IF v_is_admin IS NULL THEN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE: Only active admins and sales reps can remove customer documents';
   END IF;
 
   IF p_idempotency_key IS NULL
+     OR length(p_idempotency_key) > 255
      OR p_idempotency_key !~ '[^[:space:]]'
      OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
-    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: soft_delete_customer_document requires p_idempotency_key';
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: soft_delete_customer_document requires a p_idempotency_key of at most 255 characters';
   END IF;
 
   IF p_document_id IS NULL THEN
@@ -220,28 +269,22 @@ BEGIN
     RETURN v_replay -> 'result';
   END IF;
 
+  -- One statement: find the active document, apply the assignment test, and
+  -- lock only a row the caller may remove (document FOR UPDATE, customer
+  -- FOR SHARE so a concurrent reassignment waits; if one commits first,
+  -- PostgreSQL re-checks this WHERE clause against the new customer row).
+  -- Missing, removed and not-yours are one error: no existence probe for reps.
   SELECT d.customer_id
     INTO v_customer_id
     FROM public.customer_documents d
+    JOIN public.customers c ON c.id = d.customer_id
    WHERE d.id = p_document_id
      AND d.deleted_at IS NULL
-     FOR UPDATE;
+     AND (v_is_admin OR c.assigned_sales_rep = v_actor)
+     FOR UPDATE OF d
+     FOR SHARE OF c;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
-  END IF;
-
-  -- A rep may remove only documents of a customer assigned to them right now.
-  -- FOR SHARE makes a concurrent reassignment wait for this transaction.
-  IF NOT v_is_admin THEN
-    PERFORM 1
-       FROM public.customers c
-      WHERE c.id = v_customer_id
-        AND c.assigned_sales_rep = v_actor
-        FOR SHARE;
-    IF NOT FOUND THEN
-      -- Same message as a missing document: no existence probe for reps.
-      RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
-    END IF;
   END IF;
 
   -- guard_customer_document_update still fires and requires deleted_by to be
@@ -276,7 +319,10 @@ END;
 $soft_delete$;
 
 ALTER FUNCTION public.soft_delete_customer_document(uuid, text) OWNER TO postgres;
-REVOKE ALL ON FUNCTION public.soft_delete_customer_document(uuid, text) FROM PUBLIC, anon, service_role;
+-- Clear every non-owner grant first (Supabase default privileges, or any grant
+-- a CREATE OR REPLACE would keep), then grant exactly one. The postflight
+-- refuses any other grantee that still survives.
+REVOKE ALL ON FUNCTION public.soft_delete_customer_document(uuid, text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.soft_delete_customer_document(uuid, text) TO authenticated;
 
 COMMENT ON FUNCTION public.soft_delete_customer_document(uuid, text) IS
@@ -290,6 +336,7 @@ DECLARE
   v_count      integer;
   v_src        text;
   v_role       text;
+  v_grantees   text;
 BEGIN
   IF to_regprocedure(v_sig) IS NULL THEN
     RAISE EXCEPTION 'POSTFLIGHT_MISSING: % is not installed.', v_sig;
@@ -320,28 +367,38 @@ BEGIN
 
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure(v_sig);
   IF position('public.check_idempotency_intent(' IN v_src) = 0
+     OR position('INSUFFICIENT_ROLE' IN v_src) = 0
      OR position('INSUFFICIENT_ROLE' IN v_src) > position('public.check_idempotency_intent(' IN v_src)
+     OR position('AUTH_REQUIRED' IN v_src) = 0
      OR position('AUTH_REQUIRED' IN v_src) > position('public.check_idempotency_intent(' IN v_src)
+     OR position('IDEMPOTENCY_KEY_REQUIRED' IN v_src) = 0
+     OR position('IDEMPOTENCY_KEY_REQUIRED' IN v_src) > position('public.check_idempotency_intent(' IN v_src)
      OR position('check_idempotency(' IN v_src) > 0
      OR position('save_idempotency(' IN v_src) > 0
      OR position('request_actor_id, request_fingerprint' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_BODY: the installed soft_delete_customer_document does not authenticate and role-check before its bound receipt lookup.';
   END IF;
 
+  -- The ACL must be EXACTLY {owner, authenticated}. Any role that can execute
+  -- a function reading auth.uid() can also set request.jwt.claims and act as
+  -- any user, so an extra grantee (PUBLIC, anon, service_role, metabase_ro, a
+  -- drifted grant) is a real boundary breach, not noise.
+  SELECT string_agg(g.name, ',' ORDER BY g.name)
+    INTO v_grantees
+    FROM (
+      SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS name
+        FROM pg_proc p, aclexplode(p.proacl) a
+       WHERE p.oid = to_regprocedure(v_sig)
+         AND a.grantee <> p.proowner
+    ) g;
+  IF v_grantees IS DISTINCT FROM 'authenticated' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_ACL: % must be executable by exactly the owner and authenticated; non-owner grantees are %.', v_sig, COALESCE(v_grantees, '(none)');
+  END IF;
   FOREACH v_role IN ARRAY ARRAY['anon', 'service_role'] LOOP
     IF has_function_privilege(v_role, v_sig, 'EXECUTE') THEN
       RAISE EXCEPTION 'POSTFLIGHT_ACL: % can execute %.', v_role, v_sig;
     END IF;
   END LOOP;
-  IF EXISTS (
-    SELECT 1
-      FROM pg_proc p, aclexplode(p.proacl) a
-     WHERE p.oid = to_regprocedure(v_sig)
-       AND a.grantee = 0
-       AND a.privilege_type = 'EXECUTE'
-  ) THEN
-    RAISE EXCEPTION 'POSTFLIGHT_ACL: PUBLIC can execute %.', v_sig;
-  END IF;
   IF NOT has_function_privilege('authenticated', v_sig, 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTFLIGHT_ACL: authenticated cannot execute %.', v_sig;
   END IF;

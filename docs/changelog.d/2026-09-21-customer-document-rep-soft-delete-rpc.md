@@ -18,9 +18,10 @@ table policy, trigger or data changes. `guard_customer_document_update` still en
 and `deleted_by = auth.uid()`. A policy change was rejected because it would let reps read removed
 documents.
 
-**Apply order.** The stamp sorts above the parked commission cohort (`20260914100500`, `100600`,
-`100800`, `100900`), so it applies only after those, or it would strand them. Applying it needs
-Mason's explicit approval.
+**Apply order.** The stamp sorts above every parked candidate still above the live high-water:
+`20260914100450` (PR #761, same table, independent) and the commission files `20260914100500`,
+`100600`, `100800`, `100900`. It applies only after those, or it would strand them. Applying it
+needs Mason's explicit approval.
 
 **Frontend.** The page change that calls the RPC ships in a separate PR held until the function is
 live. Merging it earlier would break Remove for admins too, and `rpcFixtureLiveDiff.test.ts`
@@ -35,12 +36,16 @@ skipped) in a throwaway Supabase PostgreSQL 17 container. It then runs as `authe
 - **Key misuse:** the same key on another document is `IDEMPOTENCY_INTENT_MISMATCH`, and another
   rep using it is `IDEMPOTENCY_ACTOR_MISMATCH`.
 - **Refusals:** unassigned, removed and missing documents are all `CUSTOMER_DOCUMENT_NOT_FOUND`.
-  Driver and deactivated rep are `INSUFFICIENT_ROLE`, a blank key is refused, and anon and
-  service_role are denied.
+  Driver and deactivated rep are `INSUFFICIENT_ROLE`, a blank or over-255-character key is
+  refused, and anon and service_role are denied.
+- **Locks:** a removal waits while another session holds the rep's profile row (a deactivation in
+  progress) or the customer row (a reassignment in progress). A removal is permanent, since the
+  guard trigger blocks every edit to a removed row, so these races are closed rather than accepted.
 - **No other change:** the removed row stays hidden from reps, the rep's direct UPDATE is still
   refused, and editing notes still works.
 - **Admin, re-apply and mutation:** the admin removes any customer's document, and the file
-  re-applies cleanly. A mutation run with the assignment check deleted lets the unassigned rep
+  re-applies cleanly. An extra `metabase_ro` grant makes the re-apply fail its exact-ACL
+  postflight. A mutation run with the assignment check deleted lets the unassigned rep
   through, so the refusal assertion is proven to test the check.
 
 Result: `CUSTOMER_DOCUMENT_REP_SOFT_DELETE_PROOF_PASS`.

@@ -21,19 +21,22 @@
  *      another rep holding the key is IDEMPOTENCY_ACTOR_MISMATCH;
  *   5. NOBODY GAINS ACCESS: an unassigned rep, a removed document, and a
  *      missing document are the same CUSTOMER_DOCUMENT_NOT_FOUND; a driver and
- *      a deactivated rep are INSUFFICIENT_ROLE; a blank key is refused; anon
- *      and service_role cannot execute the function; the rep still cannot see
- *      the removed row, and the rep's direct soft-delete UPDATE is still
- *      refused (no policy changed);
+ *      a deactivated rep are INSUFFICIENT_ROLE; a blank or 256-character key
+ *      is refused; anon and service_role cannot execute the function; the rep
+ *      still cannot see the removed row, and the rep's direct soft-delete
+ *      UPDATE is still refused (no policy changed);
+ *   5b. LOCKS: with another session holding the rep's profile row, or the
+ *      customer row, the removal waits (lock timeout) and changes nothing;
  *   6. an admin can remove a document of any customer;
- *   7. the candidate re-applies cleanly;
- *   8. MUTATION: with the assignment check removed from the body, step 5's
+ *   7. the candidate re-applies cleanly, and an extra grantee (metabase_ro)
+ *      makes the re-apply fail its exact-ACL postflight;
+ *   8. MUTATION: with the assignment test removed from the body, step 5's
  *      unassigned-rep refusal fails — so that assertion really tests the check.
  */
 import assert from 'node:assert/strict';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -163,6 +166,30 @@ function expectRefusal(call, pattern, label) {
   assert.equal(call.ok, false, `${label}: expected a refusal, got ${call.last}`);
   assert.match(call.error, pattern, `${label}: wrong refusal:\n${call.error}`);
 }
+/** Open a session that takes a row lock and keeps it until releaseLock(). */
+function holdLock(lockSql) {
+  const child = spawn('docker', [...psqlArgs(), '-A', '-t'], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+  return new Promise((resolve, reject) => {
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`lock holder never reported LOCK_HELD:\n${err}`)); }, 15_000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { err += chunk; });
+    child.stdout.on('data', (chunk) => {
+      out += chunk;
+      if (out.includes('LOCK_HELD')) { clearTimeout(timer); resolve(child); }
+    });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.stdin.write(`BEGIN;\n${lockSql}\nSELECT 'LOCK_HELD';\n`);
+  });
+}
+function releaseLock(child) {
+  return new Promise((resolve) => {
+    child.on('close', resolve);
+    child.stdin.end('ROLLBACK;\n');
+  });
+}
 function docState(id) {
   return scalar(`SELECT coalesce(deleted_by::text, 'live') || '|' || updated_at::text FROM public.customer_documents WHERE id = '${id}';`);
 }
@@ -197,7 +224,7 @@ function seed() {
   psql(`INSERT INTO public.customer_documents (id,customer_id,document_type,storage_path,filename,mime_type,size_bytes,uploaded_by,source) VALUES ${docs.join(',')};`);
 }
 
-function main() {
+async function main() {
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   ready();
   for (const name of ['20260727174805_extensions.sql', '20260727174805_acl_lockdown.sql', '20260727174805_platform_overlay.sql', '20260727174805_cron_jobs.sql', '20260727174805_migration_history.sql']) docker(['cp', path.join(BASELINE, name), `${NAME}:/tmp/${name}`]);
@@ -287,6 +314,7 @@ function main() {
   psql(`UPDATE public.customers SET assigned_sales_rep = '${REP2}' WHERE id = '${CUSTOMER_OTHER}';`);
   expectRefusal(removeAs(REP, DOC.roleCheck, null), /IDEMPOTENCY_KEY_REQUIRED/, 'missing key');
   expectRefusal(removeAs(REP, DOC.roleCheck, '   '), /IDEMPOTENCY_KEY_REQUIRED/, 'blank key');
+  expectRefusal(removeAs(REP, DOC.roleCheck, 'k'.repeat(256)), /IDEMPOTENCY_KEY_REQUIRED/, '256-character key');
   expectRefusal(removeAs(REP, DOC.roleCheck, 'prover-anon-key', 'anon'), /permission denied for function soft_delete_customer_document/, 'anon');
   expectRefusal(removeAs(REP, DOC.roleCheck, 'prover-service-key', 'service_role'), /permission denied for function soft_delete_customer_document/, 'service_role');
   assert.match(docState(DOC.roleCheck), /^live\|/, 'a refused caller changed the role-check document');
@@ -297,23 +325,49 @@ function main() {
   assert.ok(repNotes.ok && repNotes.last === DOC.second, `rep can no longer edit notes (existing access lost):\n${repNotes.error}`);
   console.log('[prover] no new access: unassigned/removed/missing -> NOT_FOUND; driver/inactive -> INSUFFICIENT_ROLE; blank key refused; anon/service_role denied; removed row still hidden; policies unchanged');
 
+  // 5b. LOCKS: while another session holds the rep's profile row (a
+  // deactivation in progress) or the customer row (a reassignment in
+  // progress), the removal must WAIT, not run on the pre-change state. A short
+  // lock_timeout turns "waited" into an observable 55P03, and nothing commits.
+  for (const [label, holder] of [
+    ['profile (deactivation in progress)', `SELECT 1 FROM public.profiles WHERE id = '${REP}' FOR UPDATE;`],
+    ['customer (reassignment in progress)', `SELECT 1 FROM public.customers WHERE id = '${CUSTOMER_MINE}' FOR UPDATE;`],
+  ]) {
+    const held = await holdLock(holder);
+    try {
+      const blocked = runAs(REP, `SET LOCAL lock_timeout = '750ms';\nSELECT public.soft_delete_customer_document('${DOC.roleCheck}'::uuid, 'prover-lock-${label.split(' ')[0]}')::text;`);
+      expectRefusal(blocked, /canceling statement due to lock timeout/, `removal while the ${label} is locked`);
+    } finally {
+      await releaseLock(held);
+    }
+    assert.match(docState(DOC.roleCheck), /^live\|/, `removal ran past a held ${label} lock`);
+  }
+  console.log('[prover] locks: removal waits on a held profile row and a held customer row');
+
   // 6. Admin path.
   const adminRemove = removeAs(ADMIN, DOC.other, 'prover-admin-key');
   assert.ok(adminRemove.ok, `admin removal failed:\n${adminRemove.error}`);
   assert.match(docState(DOC.other), new RegExp(`^${ADMIN}\\|`), 'admin removal not stamped');
   console.log('[prover] admin removed a document of a customer not assigned to them');
 
-  // 7. Re-apply.
+  // 7. Re-apply, and the exact-ACL postflight.
   const reapplied = apply('candidate.sql', true);
   assert.equal(reapplied.status, 0, `candidate failed to re-apply:\n${reapplied.output}`);
   assert.equal(scalar(`SELECT count(*) FROM pg_proc WHERE proname = 'soft_delete_customer_document';`), '1');
-  console.log('[prover] candidate re-applies cleanly; one overload');
+  psql(`GRANT EXECUTE ON FUNCTION ${SIG} TO metabase_ro;`);
+  const drifted = apply('candidate.sql', true);
+  assert.notEqual(drifted.status, 0, 'candidate re-applied over a drifted metabase_ro grant');
+  assert.match(drifted.output, /POSTFLIGHT_ACL: .* non-owner grantees are authenticated,metabase_ro/, drifted.output);
+  psql(`REVOKE EXECUTE ON FUNCTION ${SIG} FROM metabase_ro;`);
+  const clean = apply('candidate.sql', true);
+  assert.equal(clean.status, 0, `candidate failed to re-apply after the drift was removed:\n${clean.output}`);
+  console.log('[prover] candidate re-applies cleanly; one overload; a drifted extra grantee fails the apply');
 
-  // 8. MUTATION: drop the assignment check; the unassigned refusal must now fail.
-  const guard = /  IF NOT v_is_admin THEN\n[\s\S]*?\n  END IF;\n\n  -- guard_customer_document_update/;
+  // 8. MUTATION: drop the assignment test; the unassigned refusal must now fail.
+  const guard = /AND \(v_is_admin OR c\.assigned_sales_rep = v_actor\)/;
   stageSql(CANDIDATE, 'mutant.sql', (sql) => {
-    assert.ok(guard.test(sql), 'mutation anchor (assignment check) not found in the candidate');
-    return sql.replace(guard, '  -- guard_customer_document_update');
+    assert.ok(guard.test(sql), 'mutation anchor (assignment test) not found in the candidate');
+    return sql.replace(guard, 'AND (v_is_admin OR true)');
   });
   const mutant = apply('mutant.sql', true);
   assert.equal(mutant.status, 0, `mutant failed to apply:\n${mutant.output}`);
@@ -329,5 +383,5 @@ function main() {
   console.log('CUSTOMER_DOCUMENT_REP_SOFT_DELETE_PROOF_PASS before=rls_refused fix=rep_removes replay=bound no_new_access=true admin=ok reapply=ok mutation=detected');
 }
 
-try { main(); }
+try { await main(); }
 finally { docker(['rm', '-f', NAME], { allowFailure: true }); }
