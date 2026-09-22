@@ -19,8 +19,9 @@ and `deleted_by = auth.uid()`. A policy change was rejected because it would let
 documents.
 
 **Apply order.** The stamp sorts above every parked candidate still above the live high-water:
-`20260914100450` (PR #761, same table, independent) and the commission files `20260914100500`,
-`100600`, `100800`, `100900`. It applies only after those, or it would strand them. Applying it
+`20260914100450` (PR #761, same table, independent) and the commission files `20260914100800` and
+`100900` (`100500` and `100600` applied live later on 2026-09-21). It applies only after those, or it
+would strand them. Applying it
 needs Mason's explicit approval.
 
 **Frontend.** The page change that calls the RPC ships in a separate PR held until the function is
@@ -28,8 +29,8 @@ live. Merging it earlier would break Remove for admins too, and `rpcFixtureLiveD
 blocks that merge.
 
 **Proof.** `node scripts/smoke/prove-customer-document-rep-soft-delete-real-schema.mjs` builds the
-2026-07-27 baseline plus the 93 applied post-baseline migrations (the 4 parked commission files
-skipped) in a throwaway Supabase PostgreSQL 17 container. It then runs as `authenticated`:
+2026-07-27 baseline plus the 95 applied post-baseline migrations (the 2 parked commission files
+`100800` and `100900` skipped, and PR #761's file skipped once it is on disk) in a throwaway Supabase PostgreSQL 17 container. It then runs as `authenticated`:
 - **Before:** the rep's direct UPDATE is refused by RLS and the admin's succeeds.
 - **After:** the assigned rep removes the document with `deleted_by` set to the rep, and the
   same-key replay returns the same result without rewriting the row.
