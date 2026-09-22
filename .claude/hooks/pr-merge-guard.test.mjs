@@ -23,20 +23,22 @@ function ok(v, m) { assert.ok(v, m); pass++; }
 function eq(a, b, m) { assert.deepEqual(a, b, m); pass++; }
 
 // ── ghMergeRequest ───────────────────────────────────────────────────────────
-eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, admin: false, disableAuto: false }, "plain merge parses");
-eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true, admin: false, disableAuto: false }, "--auto detected");
-eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, admin: false, disableAuto: false }, "global -R between gh and pr");
-eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, admin: false, disableAuto: false }, "repo= form, selectorless (current branch)");
+eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, admin: false }, "plain merge parses");
+eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", auto: true, admin: false }, "--auto detected");
+eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, admin: false }, "global -R between gh and pr");
+eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, admin: false }, "repo= form, selectorless (current branch)");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
-// A cancellation is reported, not swallowed: the guard stands down for it only
-// after refusing a composed command, so a substitution can no longer smuggle a
-// second merge past a silent gate (Codex sol, 2026-09-20).
-eq(ghMergeRequest("gh pr merge 5 --disable-auto")?.disableAuto, true, "--disable-auto is reported as a cancellation");
+// `--disable-auto` gets no special treatment: it parses as an ordinary merge
+// request, so every gate runs (Mason, 2026-09-21, after Codex found repeated
+// flags, value positions and substitutions each stood the gate down).
+eq(ghMergeRequest("gh pr merge 5 --disable-auto"), { selector: "5", repo: "", auto: false, admin: false },
+  "--disable-auto is an ordinary merge request, not a cancellation that skips the gate");
+eq(ghMergeRequest("gh pr merge 123 --disable-auto=true --disable-auto=false --squash")?.selector, "123",
+  "repeated --disable-auto flags are an ordinary merge request too");
 // pflag bundles boolean shorts: `-db` is `-d` then `-b`, so the NEXT word is the
-// body VALUE and the cancellation flag never reaches gh — while `--admin` does
-// (Codex sol, 2026-09-20 round 3).
-eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.disableAuto, false,
-  "a bundled value-taking short swallows the next word, so it is not a cancellation");
+// body VALUE — while `--admin` still reaches gh (Codex sol, 2026-09-20 round 3).
+eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.selector, "123",
+  "a bundled value-taking short swallows the next word, and the selector is still read");
 eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.admin, true,
   "...and the administrator flag is still seen");
 // Which shorts take a VALUE decides which PULL REQUEST the gate vets. Reading
@@ -49,8 +51,8 @@ eq(ghMergeRequest("gh pr merge -dr 789 --squash")?.selector, "789",
 eq(ghMergeRequest("gh pr merge -A someone@example.com 789 --squash")?.selector, "789",
   "-A is --author-email and takes a value: its value is not the PR selector");
 // The LONG form of -A was missing from the value list (Codex sol, 2026-09-21).
-eq(ghMergeRequest("gh pr merge 123 --author-email --disable-auto --squash")?.disableAuto, false,
-  "--author-email takes a value: a --disable-auto in that position is not a cancellation");
+eq(ghMergeRequest("gh pr merge --author-email --squash 123")?.selector, "123",
+  "--author-email takes a value: the word after it is its value, not a flag or the selector");
 eq(ghMergeRequest("gh pr merge --author-email someone@example.com 789 --squash")?.selector, "789",
   "...and its value is not the PR selector");
 eq(ghMergeRequest("gh pr merge 123 --author-email --admin --squash")?.admin, false,
@@ -68,7 +70,7 @@ eq(ghMergeRequest("gh pr merge -R=other/repo 789 --squash")?.repo, "other/repo",
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
-eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, admin: false, disableAuto: false }, "gh token anywhere still matches (fails safe)");
+eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, admin: false }, "gh token anywhere still matches (fails safe)");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
 
 // ── the gh binary is a SHAPE, not a list of extensions ───────────────────────
@@ -116,7 +118,7 @@ ok(ghMergeRequest("gh pr merge 42 --ADMIN")?.admin === true, "--ADMIN is the sam
 ok(ghMergeRequest("gh pr merge 42 --admin=true")?.admin === true, "--admin=true detected");
 ok(ghMergeRequest("gh pr merge 42 --admin=false")?.admin === false, "--admin=false asks for no bypass and stands down");
 ok(ghMergeRequest("gh pr merge 42 --squash")?.admin === false, "an ordinary merge is not an admin merge");
-eq(ghMergeRequest("gh pr merge 42 --admin"), { selector: "42", repo: "", auto: false, admin: true, disableAuto: false }, "--admin does not eat the selector");
+eq(ghMergeRequest("gh pr merge 42 --admin"), { selector: "42", repo: "", auto: false, admin: true }, "--admin does not eat the selector");
 
 // ── --auto=false is an IMMEDIATE merge (Codex bot P1 on PR #541) ─────────────
 // gh accepts `--auto=false` as "do not auto-merge", so that command lands the PR

@@ -2482,26 +2482,15 @@ export function ghMergeRequest(command) {
   const mergeIndex = words.findIndex((word, index) =>
     index > prIndex && optionAt(index) && word.toLowerCase() === "merge");
   if (mergeIndex === -1) return null;
-  // `--disable-auto` cancels a pending auto-merge — it does not land anything,
-  // so the gate stands down for it. Only in an option position, and only when it
-  // is actually asking to disable: `--disable-auto=false` does the opposite.
-  //
-  // REPORTED, not returned as null. Standing down inside the parser hid the whole
-  // command from the caller, and the caller's composition checks — command
-  // substitution, a second merge, a raw REST merge — run only on a command it was
-  // given. So `<merge> 1 --disable-auto --body "$(<merge> 2 --admin --squash)"`
-  // ran its INNER administrator merge with the gate silent. The shell normalization
-  // added on this branch is what made the quoted spelling reach this test, so the
-  // stand-down has to happen in the CALLER, after it has refused composed commands
-  // (Codex sol, 2026-09-20 — measured: base denied, candidate allowed).
-  const disableAuto = words.some((word, index) => {
-    if (!optionAt(index)) return false;
-    const lower = word.toLowerCase();
-    if (lower === "--disable-auto") return true;
-    if (!lower.startsWith("--disable-auto=")) return false;
-    const value = lower.slice("--disable-auto=".length);
-    return value === "1" || value === "t" || value === "true";
-  });
+  // `--disable-auto` gets NO special treatment: a merge command that carries it
+  // is gated like any other merge. Standing the gate down for "a cancellation
+  // lands nothing" was the one place these guards were looser than a plain merge,
+  // and every spelling of it became a way around the gate — a value position
+  // (`--author-email --disable-auto`), a substitution, and repeated flags where
+  // gh keeps the LAST value (`--disable-auto=true --disable-auto=false` merges).
+  // Codex sol found each of those on PR #630 (2026-09-20/21); Mason chose to
+  // remove the stand-down rather than model every spelling. Cancelling an
+  // auto-merge is rare, and being checked like a merge costs nothing.
   let selector = "";
   let repo = "";
   let auto = false;
@@ -2568,7 +2557,7 @@ export function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
-  return { selector, repo, auto, admin, disableAuto };
+  return { selector, repo, auto, admin };
 }
 
 // gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`

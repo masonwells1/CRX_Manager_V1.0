@@ -361,9 +361,24 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   eq(parsed.permissionDecision, "deny", "a quoted cancellation does not hide a nested admin merge");
   ok(/command substitution/.test(parsed.permissionDecisionReason ?? ""), "refused as a composed command");
 
-  // ...while a real cancellation still lands nothing and stays allowed.
-  const cancel = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: `gh ${mergeVerb} 5 --disable-auto` } });
-  eq(cancel.stdout.trim(), "", "a plain cancellation is still allowed");
+  // `--disable-auto` no longer stands the gate down (Mason, 2026-09-21): every
+  // spelling of that shortcut became a bypass. A plain one now reaches the gate,
+  // which is shown with gh made unreachable — the gate must try to resolve the
+  // PR, fail, and refuse, rather than stay silent.
+  const runHookWithoutGh = (command) => spawnSync(process.execPath, [path.join(__dirname, "pr-merge-guard.mjs")], {
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+    encoding: "utf8",
+    env: { ...process.env, PATH: "", Path: "" },
+  });
+  for (const command of [
+    `gh ${mergeVerb} 5 --disable-auto`,
+    `gh ${mergeVerb} 5 -d --disable-auto`,
+    `gh ${mergeVerb} 123 --disable-auto=true --disable-auto=false --squash`,
+  ]) {
+    const gated = runHookWithoutGh(command);
+    const gatedDecision = gated.stdout.trim() ? JSON.parse(gated.stdout)?.hookSpecificOutput?.permissionDecision : "";
+    eq(gatedDecision, "deny", `--disable-auto reaches the merge gate instead of standing it down: ${command}`);
+  }
 
   // Codex sol (2026-09-20, round 3): pflag BUNDLES boolean shorts, so `-db` is
   // `-d` then `-b` and gh takes the next word as the body VALUE — the
@@ -379,9 +394,6 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
     const parsed2 = res2.stdout.trim() ? JSON.parse(res2.stdout)?.hookSpecificOutput ?? {} : {};
     eq(parsed2.permissionDecision, "deny", `a cancellation never excuses --admin: ${command}`);
   }
-  // A cancellation carrying a BOOLEAN short is still just a cancellation.
-  const shortCancel = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: `gh ${mergeVerb} 5 -d --disable-auto` } });
-  eq(shortCancel.stdout.trim(), "", "a cancellation with a boolean short stays allowed");
 
   // Codex sol (2026-09-20, round 4): which shorts take a VALUE decides which
   // pull request the gate vets. `-r` is --rebase (boolean) and `-A` is

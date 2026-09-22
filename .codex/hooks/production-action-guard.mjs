@@ -1676,15 +1676,7 @@ export function evaluateProductionAction({
         "parser never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
       );
     }
-    // `--disable-auto` CANCELS a pending auto-merge and lands nothing, so the
-    // gate stands down — but only here, after the raw-transport, GraphQL and
-    // substitution refusals above have inspected this segment. The parser used to
-    // swallow the whole command, so a substitution could smuggle a second,
-    // administrator merge past a silent gate (Codex sol, 2026-09-20).
-    // ...and only for a PURE cancellation: a command that also carries `--admin`
-    // is an administrator merge whatever else it asks for, so it falls through to
-    // the refusal below (Codex sol, 2026-09-20).
-    if (ghRequest?.disableAuto && !ghRequest.admin) continue;
+    // `--disable-auto` is gated like any merge; see ghMergeRequest for why.
     if (ghRequest?.unsupportedGraphql) {
       return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
     }

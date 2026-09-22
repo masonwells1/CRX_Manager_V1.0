@@ -1684,30 +1684,28 @@ try {
       runGh: () => { throw new Error(`benign command entered the merge gate: ${command}`); },
     }).blocked, false, `benign gh-adjacent command is unaffected: ${command}`);
   }
-  // `gh pr merge --disable-auto` CANCELS a pending auto-merge; it lands nothing.
-  // The shared parser stands the gate down for it, which the local copy did not.
-  // Pinned deliberately: this is the one behaviour the import LOOSENS, and it is
-  // loosened for a command that cannot merge.
-  assert.equal(evaluateProductionAction({
-    toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --disable-auto" },
-    repoDir: risky.repo,
-    nowMs: now,
-    runGh: () => { throw new Error("--disable-auto should not resolve a PR"); },
-  }).blocked, false, "--disable-auto cancels auto-merge and is not a landing");
-  // ...but a `--disable-auto` sitting in `--author-email`'s value position is
-  // data, and the command is a real merge that must reach the gate (Codex sol,
-  // 2026-09-21: the long form was missing from the value list, so this stood down).
-  let authorEmailReachedGate = false;
-  const authorEmailMerge = evaluateProductionAction({
-    toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --author-email --disable-auto --squash" },
-    repoDir: risky.repo,
-    nowMs: now,
-    runGh: () => { authorEmailReachedGate = true; throw new Error("gh unavailable in this test"); },
-  });
-  assert.equal(authorEmailMerge.blocked, true, "an --author-email value shaped like --disable-auto does not stand the gate down");
-  assert.equal(authorEmailReachedGate, true, "...the merge reaches the gate and tries to resolve the PR");
+  // `--disable-auto` gets no stand-down (Mason, 2026-09-21). Codex found three
+  // spellings that turned the shortcut into a bypass — a value position, a
+  // substitution, and repeated flags where gh keeps the last value — so every
+  // command carrying it now reaches the merge gate, as it always did here.
+  for (const command of [
+    "gh pr merge 123 --disable-auto",
+    "gh pr merge 123 --author-email --disable-auto --squash",
+    "gh pr merge 123 --disable-auto=true --disable-auto=false --squash",
+    "gh pr merge 123 --disable-auto=1 --disable-auto=0 --squash",
+    "gh pr merge 123 --disable-a\"\"uto --disable-auto=false --squash",
+  ]) {
+    let reachedGate = false;
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { reachedGate = true; throw new Error("gh unavailable in this test"); },
+    });
+    assert.equal(verdict.blocked, true, `--disable-auto does not stand the gate down: ${command}`);
+    assert.equal(reachedGate, true, `...the command reaches the gate and tries to resolve the PR: ${command}`);
+  }
   // Backtracking is MEASURED, not assumed: a hook that can be stalled is a hook
   // that can be timed out, and silence from a killed PreToolUse hook means ALLOW.
   for (const pathological of [
@@ -1799,16 +1797,6 @@ try {
       runGh: () => { throw new Error(`a read-only gh api call entered a gate: ${command}`); },
     }).blocked, false, `a quote that SURVIVES to gh is not read as syntax: ${command}`);
   }
-  // `--disable-auto` stands the gate down; the splice must not smuggle a merge
-  // past it in either direction — the spliced spelling still cancels, nothing
-  // lands, and the gate still stands down.
-  assert.equal(evaluateProductionAction({
-    toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --disable-a\"\"uto" },
-    repoDir: risky.repo,
-    nowMs: now,
-    runGh: () => { throw new Error("--disable-auto should not resolve a PR") },
-  }).blocked, false, "a spliced --disable-auto is still recognised as a cancellation");
   // The same splice against the PUSH route. codex-push-guard.mjs has refused
   // these since Codex's nineteenth 2026-07-30 review; this guard never imported
   // the check, so `git push origin HEAD:m""ain` returned blocked:false here and

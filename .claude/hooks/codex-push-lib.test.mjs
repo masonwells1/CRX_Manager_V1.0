@@ -2791,15 +2791,12 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ]) {
     assert.equal(ghMergeRequest(command), null, `a benign neighbour still stands the merge gate down: ${command}`);
   }
-  // A cancellation is REPORTED as one, in every spelling, rather than making the
-  // parser return null: the caller stands the gate down for it, but only after it
-  // has refused a composed command. Returning null here hid the substitution that
-  // carried a second, administrator merge (Codex sol, 2026-09-20).
+  // `--disable-auto`, in every spelling, is an ordinary merge request that the
+  // gate vets (Mason, 2026-09-21 — the stand-down it used to get became a bypass).
   for (const command of ["gh pr merge 123 --disable-auto", 'gh pr merge 123 --disable-a""uto']) {
-    assert.equal(ghMergeRequest(command)?.disableAuto, true, `a cancellation is reported: ${command}`);
+    assert.deepEqual(ghMergeRequest(command), { selector: "123", repo: "", auto: false, admin: false },
+      `--disable-auto parses as an ordinary merge request: ${command}`);
   }
-  assert.equal(ghMergeRequest("gh pr merge 123 --squash")?.disableAuto, false,
-    "an ordinary merge is not a cancellation");
   assert.equal(ghApiMergeRequest('gh api --met""hod=PUT repos/o/r/pulls/123/merge')?.selector, "123",
     "a spliced REST merge resolves through the merge route rather than slipping past it");
 
@@ -2869,20 +2866,20 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     assert.ok(request, `a merge whose body merely CONTAINS --disable-auto is still a merge: ${command}`);
     assert.equal(request.admin, true, `and its --admin flag is still seen: ${command}`);
   }
-  // The stand-down itself must survive, in every spelling that really disables —
-  // as a REPORTED cancellation the caller acts on, after it has refused composed
-  // commands (Codex sol, 2026-09-20).
+  // There is no stand-down left to spell around: every one of these is a merge
+  // request the gate vets (Mason, 2026-09-21). The repeated-flag pair is the
+  // spelling that broke the old shortcut — gh keeps the LAST value, so it merges.
   for (const command of [
     "gh pr merge 123 --disable-auto",
     'gh pr merge 123 --disable-a""uto',
     "gh pr merge 123 --disable-auto=true",
+    "gh pr merge 123 --disable-auto=true --disable-auto=false --squash",
+    "gh pr merge 123 --disable-auto=1 --disable-auto=0 --squash",
+    "gh pr merge 123 --disable-auto=false --admin",
   ]) {
-    assert.equal(ghMergeRequest(command)?.disableAuto, true,
-      `a real --disable-auto is reported as a cancellation: ${command}`);
+    assert.equal(ghMergeRequest(command)?.selector, "123",
+      `--disable-auto never stands the gate down, in any spelling: ${command}`);
   }
-  // `--disable-auto=false` asks gh NOT to disable, so it must not stand down.
-  assert.ok(ghMergeRequest("gh pr merge 123 --disable-auto=false --admin"),
-    "--disable-auto=false does not disable anything, so the gate still runs");
   // A value must not be mistaken for the PR selector either.
   assert.equal(ghMergeRequest("gh pr merge --body 456 123 --squash")?.selector, "123",
     "the word after --body is its value, not the PR number");
