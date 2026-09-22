@@ -79,10 +79,11 @@
 -- THIS document, refuses another actor (IDEMPOTENCY_ACTOR_MISMATCH) and a
 -- different document under the same key (IDEMPOTENCY_INTENT_MISMATCH). Keys
 -- longer than 255 characters are refused; the page's keys are ~105.
--- RESIDUAL, KNOWN AND ACCEPTED: a user demoted from admin to active rep who
--- retries their own admin-era removal with its key inside the receipt's 24h
--- life is handed that receipt (which names the customer). They chose that
--- document themselves while authorised, so nothing new is exposed.
+-- A REPLAY IS RE-AUTHORISED: the role gate runs first, and a rep's replay is
+-- honoured only while the receipt's customer is still assigned to them —
+-- otherwise it is the same CUSTOMER_DOCUMENT_NOT_FOUND. So a reassigned rep,
+-- or an admin since demoted to a rep, cannot read a receipt for a customer
+-- they can no longer see.
 --
 -- Atomicity: no BEGIN/COMMIT of its own. Apply ONLY through
 -- scripts/apply-migration-file.mjs (or psql -1), which wraps the whole file in
@@ -263,8 +264,19 @@ BEGIN
     p_idempotency_key, 'soft_delete_customer_document', v_actor, v_fingerprint
   );
   IF v_replay IS NOT NULL THEN
-    IF jsonb_typeof(v_replay -> 'result') IS DISTINCT FROM 'object' THEN
+    IF jsonb_typeof(v_replay -> 'result') IS DISTINCT FROM 'object'
+       OR v_replay -> 'result' ->> 'customer_id' IS NULL THEN
       RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    -- A replay returns only what the caller could do NOW: a rep whose customer
+    -- has since been reassigned gets the same refusal as any other rep.
+    IF NOT v_is_admin AND NOT EXISTS (
+      SELECT 1
+        FROM public.customers c
+       WHERE c.id = (v_replay -> 'result' ->> 'customer_id')::uuid
+         AND c.assigned_sales_rep = v_actor
+    ) THEN
+      RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
     END IF;
     RETURN v_replay -> 'result';
   END IF;

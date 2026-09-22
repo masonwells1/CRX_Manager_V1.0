@@ -55,7 +55,13 @@ const PARKED = new Set([
   '20260914100600_latest_commission_recipient_label.sql',
   '20260914100800_bind_transfer_invoice_intent.sql',
   '20260914100900_repair_commission_history_label_snapshots.sql',
+  '20260914100450_customer_document_bytes_server_only.sql',
 ]);
+// PR #761's parked file reaches disk only once that PR merges. It is skipped
+// while unapplied, like the rest; it does touch customer_documents, but only
+// its storage objects and a storage_path CHECK, which this function never
+// changes.
+const OPTIONAL_PARKED = new Set(['20260914100450_customer_document_bytes_server_only.sql']);
 
 const ADMIN = '5d000000-0000-4000-8000-00000000000a';
 const REP = '5d000000-0000-4000-8000-00000000000b';
@@ -118,8 +124,11 @@ function selected() {
   assert.ok(candidate >= 0, 'soft_delete_customer_document candidate must be selected for post-baseline replay');
   const before = all.slice(0, candidate);
   const skipped = before.filter((f) => PARKED.has(path.basename(f)));
-  assert.equal(skipped.length, PARKED.size, 'every declared parked file must be in the replay plan (re-check the PARKED list against the live ledger)');
+  for (const name of PARKED) {
+    if (!OPTIONAL_PARKED.has(name)) assert.ok(skipped.some((f) => path.basename(f) === name), `${name} must be in the replay plan (re-check the PARKED list against the live ledger)`);
+  }
   for (const file of skipped) {
+    if (OPTIONAL_PARKED.has(path.basename(file))) continue;
     assert.ok(!/customer_documents|soft_delete_customer_document/i.test(readFileSync(file, 'utf8')), `${path.basename(file)} touches customer documents; skipping it would change the proof`);
   }
   return before.filter((f) => !PARKED.has(path.basename(f)));
@@ -245,7 +254,7 @@ async function main() {
     const name = `m-${i}.sql`; stageSql(file, name); const r = apply(name, true);
     if (r.status !== 0) throw new Error(`source replay failed at ${path.basename(file)}:\n${r.output}`);
   }
-  console.log(`[prover] replayed ${migrations.length} applied post-baseline migrations (skipped ${PARKED.size} parked)`);
+  console.log(`[prover] replayed ${migrations.length} applied post-baseline migrations (parked files skipped)`);
   assert.equal(scalar(`SELECT count(*) FROM pg_proc WHERE proname = 'soft_delete_customer_document';`), '0', 'function must not exist before the candidate');
 
   seed();
@@ -288,6 +297,13 @@ async function main() {
   expectRefusal(removeAs(REP, DOC.second, 'prover-rep-key-1'), /IDEMPOTENCY_INTENT_MISMATCH/, 'same key, different document');
   assert.match(docState(DOC.second), /^live\|/, 'intent mismatch removed the second document');
   expectRefusal(removeAs(REP2, DOC.fix, 'prover-rep-key-1'), /IDEMPOTENCY_ACTOR_MISMATCH/, 'another rep holding the key');
+  // A replay is re-authorised: once the customer is reassigned, the rep's own
+  // key no longer returns the receipt.
+  psql(`UPDATE public.customers SET assigned_sales_rep = '${REP2}' WHERE id = '${CUSTOMER_MINE}';`);
+  expectRefusal(removeAs(REP, DOC.fix, 'prover-rep-key-1'), /CUSTOMER_DOCUMENT_NOT_FOUND/, 'replay after the customer was reassigned');
+  psql(`UPDATE public.customers SET assigned_sales_rep = '${REP}' WHERE id = '${CUSTOMER_MINE}';`);
+  const replayBack = removeAs(REP, DOC.fix, 'prover-rep-key-1');
+  assert.ok(replayBack.ok && replayBack.result.document_id === DOC.fix, `replay after re-assignment back failed:\n${replayBack.error}`);
   console.log('[prover] replay: same key replays; different document -> INTENT_MISMATCH; other rep -> ACTOR_MISMATCH');
 
   // 5. Nobody gains access.
