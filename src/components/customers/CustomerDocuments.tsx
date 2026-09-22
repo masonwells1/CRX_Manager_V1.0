@@ -292,8 +292,10 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
         p_idempotency_key: idempotencyKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ document_id?: unknown }>(data, 'soft_delete_customer_document');
-      if (result.document_id !== documentToDelete.id) {
+      const result = assertRpcResult<{ document_id?: unknown; customer_id?: unknown }>(data, 'soft_delete_customer_document');
+      // The activity row is filed under this page's customer, so the server
+      // must confirm both the document and the customer it belongs to.
+      if (result.document_id !== documentToDelete.id || result.customer_id !== customerId) {
         throw new Error('The server confirmed a different document; refresh and try again.');
       }
       resetRemoveKeyFor(documentToDelete.id);

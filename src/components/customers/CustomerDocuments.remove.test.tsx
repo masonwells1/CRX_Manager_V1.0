@@ -133,8 +133,11 @@ describe('CustomerDocuments Remove', () => {
     expect(logActivityMock).not.toHaveBeenCalled();
   });
 
-  it('refuses a success that confirms a different document', async () => {
-    rpcMock.mockResolvedValueOnce({ data: { ...success.data, document_id: 'doc-other' }, error: null });
+  it.each([
+    ['a different document', { document_id: 'doc-other' }],
+    ['a different customer', { customer_id: 'customer-other' }],
+  ])('refuses a success that confirms %s', async (_label, override) => {
+    rpcMock.mockResolvedValueOnce({ data: { ...success.data, ...override }, error: null });
     render(<CustomerDocuments customerId="customer-1" userId="rep-1" />);
     await confirmRemove();
     await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('error', 'The server confirmed a different document; refresh and try again.'));
