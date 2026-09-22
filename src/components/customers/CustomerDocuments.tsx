@@ -272,7 +272,12 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
       const result = assertRpcResult<{ document_id?: unknown; customer_id?: unknown }>(data, 'soft_delete_customer_document');
       // The activity row is filed under this page's customer, so the server
       // must confirm both the document and the customer it belongs to.
-      if (result.document_id !== documentToDelete.id || result.customer_id !== customerId) {
+      // UUIDs compare case-insensitively: PostgreSQL returns lowercase, a route
+      // parameter may not be.
+      const sameId = (value: unknown, expected: string) => (
+        typeof value === 'string' && value.toLowerCase() === expected.toLowerCase()
+      );
+      if (!sameId(result.document_id, documentToDelete.id) || !sameId(result.customer_id, customerId)) {
         throw new Error('The server confirmed a different document; refresh and try again.');
       }
       resetRemoveKeyFor(documentToDelete.id);
