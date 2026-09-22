@@ -35,6 +35,10 @@ SET LOCAL lock_timeout = '10s';
 
 -- Take the lock DROP POLICY needs anyway BEFORE the empty-bucket check, so no
 -- browser can upload and sign an object between that check and the drops.
+-- It blocks Storage reads and writes for EVERY bucket until this transaction
+-- ends, so apply in a quiet window; the work under it is a few catalog checks
+-- on an empty bucket. This file must run as one transaction (LOCK TABLE and
+-- SET LOCAL need one); scripts/apply-migration-file.mjs wraps it in BEGIN/COMMIT.
 LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
 
 DO $preflight$

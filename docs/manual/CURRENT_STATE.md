@@ -34,7 +34,11 @@ commission-cohort files applied live on 2026-09-21 between 14:14 and 14:19 UTC â
 `20260914100400_enforce_commission_payment_business_date` (`20260921141901`) â€” so the effective
 ordering high-water is now `20260914100400`; `20260914100500`, `100600`, `100800` and `100900` are
 still not applied, and the 2026-09-20 figures below are superseded by this read. The schema
-registry has not been regenerated since those four applies.** Carried forward from the 2026-09-20
+registry has not been regenerated since those four applies. **Update, read-only ledger read 2026-09-22
+UTC:** `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`) and
+`20260914100600_latest_commission_recipient_label` (`20260922020038`) have since applied, so the
+effective ordering high-water is now `20260914100600`; `20260914100700` (the customer-document
+candidate), `20260914100800` and `20260914100900` are not applied.** Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
