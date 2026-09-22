@@ -20,7 +20,8 @@
 -- 20260914101000, THIS FILE, 20260914101200 (phase 1), 20260914101300 (phase 2).
 -- No business-row backfill, deletion, new grant, table, column, or pricing change.
 -- The owner-only SECURITY DEFINER assertion still inspects all live group members
--- through RLS, and the existing row trigger still protects every table writer.
+-- through RLS for the preview, and the row trigger still protects every table writer by
+-- validating the written row against its OWN filed season (never another member's).
 
 -- Pin the migration session's search_path BEFORE any check runs, for the same reason as
 -- 20260914101000: pg_get_triggerdef() schema-qualifies the trigger's function when public is
@@ -60,8 +61,8 @@ BEGIN
     RAISE EXCEPTION 'PREFLIGHT_UNCHANGED_DATE_CONTRACT: identity, defaults, owner, return shape, security, volatility, or search path drift';
   END IF;
   IF (md5(v_assert.prosrc), md5(v_guard.prosrc)) NOT IN (
-      ('2a4a3b079b4f18d07730fc1aa11eae96', '5544c40616425704bd65431bdf7dd29e'),
-      ('1a6d088f4696f2429c034e0f178d4e94', 'b820796a423cbe606d8e01a7926850a5')) THEN
+      ('2a4a3b079b4f18d07730fc1aa11eae96', 'd8c4bbd4517c5986807d7eca058260b6'),
+      ('1a6d088f4696f2429c034e0f178d4e94', '0005b29c0b10e26efed981ce6cdaf18d')) THEN
     RAISE EXCEPTION 'PREFLIGHT_UNCHANGED_DATE_BODY: unknown or partially installed guard pair';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_proc p,
@@ -141,7 +142,6 @@ BEGIN
           NEW.season, make_date(NEW.season - 1, 10, 1), make_date(NEW.season, 9, 30)
           USING ERRCODE = 'check_violation';
       END IF;
-      PERFORM public._assert_field_app_invoice_date_in_filed_season(OLD.id, NEW.invoice_date);
     END IF;
   END IF;
   RETURN NEW;
@@ -165,7 +165,7 @@ BEGIN
       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[])
      OR NOT EXISTS (SELECT 1 FROM pg_proc p
       WHERE p.oid = 'public.guard_field_app_invoice_season_date()'::regprocedure
-      AND md5(p.prosrc) = 'b820796a423cbe606d8e01a7926850a5' AND p.prosecdef AND p.provolatile = 'v'
+      AND md5(p.prosrc) = '0005b29c0b10e26efed981ce6cdaf18d' AND p.prosecdef AND p.provolatile = 'v'
       AND p.proowner = 'postgres'::regrole AND p.prorettype = 'trigger'::regtype
       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]) THEN
     RAISE EXCEPTION 'POSTFLIGHT_UNCHANGED_DATE_BODY: corrected guard contract drift';

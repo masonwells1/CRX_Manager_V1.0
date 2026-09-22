@@ -788,6 +788,8 @@
     },
     "save_field_app_invoice": {
       "chain": "smoke-field-app-split-penny-exact.sql",
+      "container_only": true,
+      "container_prover": "prove-preview-field-app-season.mjs",
       "description": "Field-app parity and save/post serialization: a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd); invoice_shares and acres tie exactly; an idempotent retry creates no duplicate; save/group-post serialize on the immutable group ID before ordered row locking; and a save after real group posting is rejected before invoice lines can change.",
       "covers": [
         "save_field_app_invoice",
