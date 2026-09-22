@@ -10,7 +10,7 @@
   every customer; sales reps only their assigned customers; other roles, inactive profiles, and
   signed-out callers are refused. A missing file answers 404; any other Storage failure reaches
   Sentry as a 500.
-- **New migration `20260914100450_customer_document_bytes_server_only.sql` (history row 935):** drops
+- **New migration `20260914100700_customer_document_bytes_server_only.sql` (history row 935):** drops
   all five browser Storage policies on the `customer-documents` bucket and adds
   `customer_documents_storage_path_shape_check`, so no document row can name a look-alike (`#`, `?`,
   `%` variant) of a removed document's path. Stamped between the live high-water `20260914100400`

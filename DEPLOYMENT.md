@@ -121,9 +121,9 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 
 Seven JWT-protected Edge Functions were active in production when verified on 2026-08-09:
 `create-user`, `setup-blend-tickets-storage`, `process-blend-ticket`, `process-document`,
-`send-email`, `reset-user-password`, and `epa-lookup`. An eighth, `customer-document-files`, is in
-source but NOT deployed (2026-09-21); it must be deployed before migration
-`20260914100450_customer_document_bytes_server_only.sql` is applied, and it needs only
+`send-email`, `reset-user-password`, and `epa-lookup`. An eighth, `customer-document-files`, was
+deployed as v1 on 2026-09-22 UTC; it must stay deployed before migration
+`20260914100700_customer_document_bytes_server_only.sql` is applied, and it needs only
 `ALLOWED_ORIGIN` plus the platform-provided Supabase keys. The function-specific secrets below must be
 present wherever the corresponding function uses them.
 

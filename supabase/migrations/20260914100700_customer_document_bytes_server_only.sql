@@ -23,12 +23,13 @@
 -- BEFORE applying this migration, or the Documents tab cannot upload or
 -- download until both are live. Apply it promptly after that merge: while this
 -- file is on main and unapplied, the pending-migration guard holds every later
--- stamp (20260914100500 onward) behind it.
+-- stamp (20260914100800 onward) behind it.
 --
--- STAMP: authored 2026-09-21 but stamped 20260914100450 so it sorts above the
--- live high-water 20260914100400 and below the still-parked 20260914100500..
--- 20260914100900, letting it apply without stranding them. If 20260914100500
--- applies first, restamp this file above the new high-water.
+-- STAMP: authored 2026-09-21 as 20260914100450, restamped 20260914100700 the
+-- same day after 20260914100500 and 20260914100600 applied live. It sorts above
+-- that high-water and below the still-parked 20260914100800..20260914100900,
+-- letting it apply without stranding them. If 20260914100800 applies first,
+-- restamp this file above the new high-water.
 
 SET LOCAL lock_timeout = '10s';
 

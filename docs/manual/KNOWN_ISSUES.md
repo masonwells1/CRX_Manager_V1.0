@@ -15,8 +15,10 @@ below; they live in `docs/reference/migration-history.md`.
 **Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
 `20260914100100` through `20260914100400` — including the next-invoice-number year fix — were applied
 live that day, that `20260914100500`, `100600`, `100800` and `100900` are still not, and that the
-customer-document candidate `20260914100450` has never been applied; entries below that still call
-the first four "parked" predate that read. The 2026-09-20 read had confirmed by name that the
+customer-document candidate (then `20260914100450`) has never been applied; entries below that still call
+the first four "parked" predate that read. A 2026-09-22 UTC read-only ledger read confirmed by name that
+`20260914100500` and `100600` have since applied, so the customer-document candidate was restamped
+`20260914100700` and is still not applied. The 2026-09-20 read had confirmed by name that the
 six-generator year fix `20260908140000` IS applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
@@ -389,7 +391,7 @@ page, which a rep can bypass.
 
 **The fix (successor to PR #635).** Browsers lose every Storage policy on the bucket, and each
 document's `storage_path` must be exactly the shape the server issues
-(`20260914100450_customer_document_bytes_server_only.sql`, migration-history row 935). Bytes move only
+(`20260914100700_customer_document_bytes_server_only.sql`, migration-history row 935). Bytes move only
 through the new `customer-document-files` Edge Function, which re-checks the document row on every
 download and refuses removed documents. The path-shape rule closes a second route the security review
 found: without it, a new document row naming a look-alike of a removed document's path (a `#`, `?` or

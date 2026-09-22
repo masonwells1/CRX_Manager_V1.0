@@ -18,7 +18,7 @@
 //   Empty the bucket through the Storage API (service role) — the migration's
 //   preflight refuses a non-empty bucket by design, and --phase=before leaves an
 //   object behind — then apply
-//   supabase/migrations/20260914100450_customer_document_bytes_server_only.sql, then
+//   supabase/migrations/20260914100700_customer_document_bytes_server_only.sql, then
 //   node scripts/smoke/prove-customer-document-bytes-server-only.mjs --phase=after
 //     Asserts browser users cannot read or sign at all, the Edge Function upload/
 //     download flow works, a soft-deleted document stops downloading, and no

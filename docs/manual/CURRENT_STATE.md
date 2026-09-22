@@ -708,9 +708,10 @@ The three headline items:
 - **OCR REI/PHI extraction** (re-entry interval / pre-harvest interval from
   label images) — deferred; flagged as a safety trap if done carelessly.
 
-Also parked, 2026-09-21: the customer-document byte boundary (PR #635's successor). The
-`customer-document-files` Edge Function is **not deployed** and migration
-`20260914100450_customer_document_bytes_server_only.sql` is **not applied**. Until both are live,
+Also in flight, 2026-09-21: the customer-document byte boundary (PR #635's successor). The
+`customer-document-files` Edge Function was **deployed live as v1 on 2026-09-22 UTC** with Mason's
+in-chat approval (ACTIVE; signed-out calls refused; preflight answers the production origin), and migration
+`20260914100700_customer_document_bytes_server_only.sql` is **not applied**. Until both are live,
 live Storage still lets a document's uploader, and admins, sign download links that outlive the
 document's removal. Live holds no customer documents yet. Order and detail: `KNOWN_ISSUES.md`.
 
