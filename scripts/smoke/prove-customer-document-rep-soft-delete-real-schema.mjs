@@ -206,7 +206,25 @@ function directSoftDelete(uid, id, returning) {
   return runAs(uid, `UPDATE public.customer_documents SET deleted_at = now(), deleted_by = '${uid}' WHERE id = '${id}' AND deleted_at IS NULL${returning ? ' RETURNING id' : ''};`);
 }
 
+// Only an admin may change is_active (_guard_profile_role_lock), so this runs
+// with the admin's claims.
+function setActive(uid, active) {
+  psql(`BEGIN;
+    SELECT set_config('request.jwt.claims', '{"sub":"${ADMIN}","role":"authenticated"}', true);
+    SELECT set_config('request.jwt.claim.sub', '${ADMIN}', true);
+    UPDATE public.profiles SET is_active = ${active} WHERE id = '${uid}';
+    COMMIT;`);
+}
+
 function seed() {
+  // The baseline auth.users is a stub; deactivating a profile fires
+  // _sync_auth_access_on_profile_active, which writes the real column set.
+  psql(`
+    ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
+    CREATE TABLE IF NOT EXISTS auth.sessions (user_id uuid);
+    CREATE TABLE IF NOT EXISTS auth.refresh_tokens (user_id varchar);
+    GRANT DELETE ON auth.sessions, auth.refresh_tokens TO postgres;
+  `, { user: 'supabase_admin' });
   psql(`
     INSERT INTO auth.users (id,email,raw_user_meta_data) VALUES
       ('${ADMIN}','doc-prover-admin@example.invalid','{"full_name":"[PROVER] Doc Admin","role":"admin"}'::jsonb),
@@ -304,6 +322,11 @@ async function main() {
   psql(`UPDATE public.customers SET assigned_sales_rep = '${REP}' WHERE id = '${CUSTOMER_MINE}';`);
   const replayBack = removeAs(REP, DOC.fix, 'prover-rep-key-1');
   assert.ok(replayBack.ok && replayBack.result.document_id === DOC.fix, `replay after re-assignment back failed:\n${replayBack.error}`);
+  // The role gate runs BEFORE the receipt lookup: a deactivated rep replaying
+  // their own valid key is refused, not handed the receipt.
+  setActive(REP, false);
+  expectRefusal(removeAs(REP, DOC.fix, 'prover-rep-key-1'), /INSUFFICIENT_ROLE/, 'deactivated rep replaying their own key');
+  setActive(REP, true);
   console.log('[prover] replay: same key replays; different document -> INTENT_MISMATCH; other rep -> ACTOR_MISMATCH');
 
   // 5. Nobody gains access.
@@ -313,19 +336,7 @@ async function main() {
   expectRefusal(removeAs(REP, MISSING_DOC, 'prover-rep-key-4'), /CUSTOMER_DOCUMENT_NOT_FOUND/, 'missing document');
   expectRefusal(removeAs(DRIVER, DOC.roleCheck, 'prover-driver-key'), /INSUFFICIENT_ROLE/, 'driver');
   psql(`UPDATE public.customers SET assigned_sales_rep = '${INACTIVE_REP}' WHERE id = '${CUSTOMER_OTHER}';`);
-  // Only an admin may deactivate a profile (_guard_profile_role_lock), and the
-  // deactivation trigger writes the real auth column set the baseline stubs.
-  psql(`
-    ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
-    CREATE TABLE IF NOT EXISTS auth.sessions (user_id uuid);
-    CREATE TABLE IF NOT EXISTS auth.refresh_tokens (user_id varchar);
-    GRANT DELETE ON auth.sessions, auth.refresh_tokens TO postgres;
-  `, { user: 'supabase_admin' });
-  psql(`BEGIN;
-    SELECT set_config('request.jwt.claims', '{"sub":"${ADMIN}","role":"authenticated"}', true);
-    SELECT set_config('request.jwt.claim.sub', '${ADMIN}', true);
-    UPDATE public.profiles SET is_active = false WHERE id = '${INACTIVE_REP}';
-    COMMIT;`);
+  setActive(INACTIVE_REP, false);
   expectRefusal(removeAs(INACTIVE_REP, DOC.other, 'prover-inactive-key'), /INSUFFICIENT_ROLE/, 'deactivated assigned rep');
   psql(`UPDATE public.customers SET assigned_sales_rep = '${REP2}' WHERE id = '${CUSTOMER_OTHER}';`);
   expectRefusal(removeAs(REP, DOC.roleCheck, null), /IDEMPOTENCY_KEY_REQUIRED/, 'missing key');

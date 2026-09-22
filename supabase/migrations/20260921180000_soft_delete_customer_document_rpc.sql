@@ -130,10 +130,11 @@ BEGIN
      WHERE p.oid = to_regprocedure(v_helper_sig)
        AND p.proowner = 'postgres'::regrole
        AND p.prosecdef
+       AND position('operation IS DISTINCT FROM p_operation' IN p.prosrc) > 0
        AND position('request_actor_id IS DISTINCT FROM p_actor' IN p.prosrc) > 0
        AND position('request_fingerprint IS DISTINCT FROM p_fingerprint' IN p.prosrc) > 0
   ) THEN
-    RAISE EXCEPTION 'PREFLIGHT_HELPER_SHAPE: % is not a postgres-owned SECURITY DEFINER function that compares the receipt actor and fingerprint.', v_helper_sig;
+    RAISE EXCEPTION 'PREFLIGHT_HELPER_SHAPE: % is not a postgres-owned SECURITY DEFINER function that compares the receipt operation, actor and fingerprint.', v_helper_sig;
   END IF;
   FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
     IF has_function_privilege(v_role, v_helper_sig, 'EXECUTE') THEN
@@ -270,13 +271,17 @@ BEGIN
     END IF;
     -- A replay returns only what the caller could do NOW: a rep whose customer
     -- has since been reassigned gets the same refusal as any other rep.
-    IF NOT v_is_admin AND NOT EXISTS (
-      SELECT 1
-        FROM public.customers c
-       WHERE c.id = (v_replay -> 'result' ->> 'customer_id')::uuid
-         AND c.assigned_sales_rep = v_actor
-    ) THEN
-      RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
+    -- FOR SHARE, as on the first call: a concurrent reassignment waits, or, if
+    -- it committed first, the re-checked row no longer matches.
+    IF NOT v_is_admin THEN
+      PERFORM 1
+         FROM public.customers c
+        WHERE c.id = (v_replay -> 'result' ->> 'customer_id')::uuid
+          AND c.assigned_sales_rep = v_actor
+          FOR SHARE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
+      END IF;
     END IF;
     RETURN v_replay -> 'result';
   END IF;
