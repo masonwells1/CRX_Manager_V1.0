@@ -96,7 +96,10 @@
 -- customers owned by postgres with row security NOT forced (the function's
 -- reads and locks must not be filtered by the rep policies);
 -- customer_documents_guard_editable_fields present, enabled, BEFORE UPDATE
--- FOR EACH ROW; no other overload of soft_delete_customer_document.
+-- FOR EACH ROW, unconditional and all-column, with guard_customer_document_update
+-- matching its pinned body md5; no other overload of soft_delete_customer_document.
+-- NOT CHECKED (platform-wide, not specific to this function): roles that
+-- inherit EXECUTE through membership in authenticated.
 -- POSTFLIGHT: exactly one overload with the pinned argument list;
 -- postgres-owned SECURITY DEFINER plpgsql with search_path=public, pg_temp;
 -- AUTH_REQUIRED, INSUFFICIENT_ROLE and IDEMPOTENCY_KEY_REQUIRED all appear
@@ -202,13 +205,15 @@ BEGIN
        AND t.tgqual IS NULL          -- no WHEN clause that could skip it
        AND cardinality(t.tgattr::int2[]) = 0   -- not UPDATE OF <columns>
   ) OR NOT EXISTS (
+    -- The guard's body is pinned exactly (md5 of the LF-normalized source,
+    -- read read-only from live 2026-09-21: 1086 characters), so any drift in
+    -- its enforcement — not just in its messages — refuses the install.
     SELECT 1
       FROM pg_proc p
      WHERE p.oid = to_regprocedure('public.guard_customer_document_update()')
-       AND position('soft-deleted customer documents cannot be modified' IN p.prosrc) > 0
-       AND position('soft-delete attribution must match the acting user' IN p.prosrc) > 0
+       AND md5(replace(p.prosrc, E'\r\n', E'\n')) = '49056708bdd24900db157ef617d763b3'
   ) THEN
-    RAISE EXCEPTION 'PREFLIGHT_TRIGGER: customer_documents_guard_editable_fields is missing, disabled, conditional, column-limited, not BEFORE UPDATE FOR EACH ROW, or its function no longer refuses edits to removed rows and forged attribution; the function relies on it.';
+    RAISE EXCEPTION 'PREFLIGHT_TRIGGER: customer_documents_guard_editable_fields is missing, disabled, conditional, column-limited, not BEFORE UPDATE FOR EACH ROW, or guard_customer_document_update no longer matches its pinned body; the function relies on it. Re-verify the live guard before changing the pin.';
   END IF;
 
   SELECT count(*) INTO v_count

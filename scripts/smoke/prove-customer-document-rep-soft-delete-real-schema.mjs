@@ -202,11 +202,41 @@ function holdLock(lockSql) {
     child.stdin.write(`BEGIN;\n${lockSql}\nSELECT 'LOCK_HELD';\n`);
   });
 }
-function releaseLock(child) {
+function finishLock(child, verb) {
   return new Promise((resolve) => {
     child.on('close', resolve);
-    child.stdin.end('ROLLBACK;\n');
+    child.stdin.end(`${verb};\n`);
   });
+}
+function releaseLock(child) {
+  return finishLock(child, 'ROLLBACK');
+}
+/** runAs, but without blocking the event loop, so another session can act meanwhile. */
+function runAsAsync(uid, sql) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', [...psqlArgs(), '-A', '-t'], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.stderr.on('data', (chunk) => { err += chunk; });
+    child.on('error', reject);
+    child.on('close', (status) => {
+      resolve({ ok: status === 0, last: out.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? '', error: err.trim() });
+    });
+    child.stdin.end(`BEGIN;\n${asUser(uid)}\n${sql}\nCOMMIT;\n`);
+  });
+}
+/** Resolve once the named session is waiting on a row lock. */
+async function waitForLockWait(appName) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const waiting = scalar(`SELECT count(*) FROM pg_stat_activity WHERE application_name = '${appName}' AND wait_event_type = 'Lock';`);
+    if (waiting === '1') return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`${appName} never waited on a lock`);
 }
 function docState(id) {
   return scalar(`SELECT coalesce(deleted_by::text, 'live') || '|' || updated_at::text FROM public.customer_documents WHERE id = '${id}';`);
@@ -378,7 +408,23 @@ async function main() {
     }
     assert.match(docState(DOC.roleCheck), /^live\|/, `removal ran past a held ${label} lock`);
   }
-  console.log('[prover] locks: removal waits on a held profile row and a held customer row');
+  // 5c. COMMITTED RACES: the change COMMITS while the removal is waiting on
+  // it. PostgreSQL re-checks the locked row, so the removal must be refused —
+  // not decided on the pre-change state.
+  for (const [label, change, refusal] of [
+    ['reassignment', `UPDATE public.customers SET assigned_sales_rep = '${REP2}' WHERE id = '${CUSTOMER_MINE}';`, /CUSTOMER_DOCUMENT_NOT_FOUND/],
+    ['deactivation', `SELECT set_config('request.jwt.claims', '{"sub":"${ADMIN}","role":"authenticated"}', true);\nSELECT set_config('request.jwt.claim.sub', '${ADMIN}', true);\nUPDATE public.profiles SET is_active = false WHERE id = '${REP}';`, /INSUFFICIENT_ROLE/],
+  ]) {
+    const held = await holdLock(change);
+    const removal = runAsAsync(REP, `SET LOCAL application_name = 'doc-race-${label}';\nSELECT public.soft_delete_customer_document('${DOC.roleCheck}'::uuid, 'prover-race-${label}')::text;`);
+    await waitForLockWait(`doc-race-${label}`);
+    await finishLock(held, 'COMMIT');
+    expectRefusal(await removal, refusal, `removal that waited on a committed ${label}`);
+    assert.match(docState(DOC.roleCheck), /^live\|/, `removal went through after a committed ${label}`);
+  }
+  psql(`UPDATE public.customers SET assigned_sales_rep = '${REP}' WHERE id = '${CUSTOMER_MINE}';`);
+  setActive(REP, true);
+  console.log('[prover] locks: removal waits on a held profile row and a held customer row, and is refused when the reassignment or deactivation commits');
 
   // 6. Admin path.
   const adminRemove = removeAs(ADMIN, DOC.other, 'prover-admin-key');
