@@ -2,8 +2,8 @@
 -- soft_delete_customer_document: let an active sales rep remove a document of
 -- a customer assigned to them (admins keep the same ability through the same
 -- path) without widening any read or write policy on public.customer_documents.
--- STATUS: NOT APPLIED — PARKED CANDIDATE. Adds ONE new function; no table,
--- policy, trigger or data change.
+-- STATUS: PARKED / NOT APPLIED — DO NOT APPLY without Mason's explicit in-chat approval.
+-- Adds ONE new function; no table, policy, trigger or data change.
 --
 -- APPLY ORDER: apply only after EVERY parked candidate stamped below
 -- 20260921180000 that still sorts above the live high-water has applied (or
