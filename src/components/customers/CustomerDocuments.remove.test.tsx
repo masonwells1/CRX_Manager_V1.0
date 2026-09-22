@@ -133,6 +133,13 @@ describe('CustomerDocuments Remove', () => {
     expect(logActivityMock).not.toHaveBeenCalled();
   });
 
+  it('accepts a confirmation whose ids differ only in letter case', async () => {
+    rpcMock.mockResolvedValueOnce({ data: { ...success.data, customer_id: 'CUSTOMER-1', document_id: 'DOC-1' }, error: null });
+    render(<CustomerDocuments customerId="customer-1" userId="rep-1" />);
+    await confirmRemove();
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('success', 'Document removed'));
+  });
+
   it.each([
     ['a different document', { document_id: 'doc-other' }],
     ['a different customer', { customer_id: 'customer-other' }],
