@@ -30,7 +30,9 @@ carries that file's `JOB_ACRES_NOT_FINITE` refusal.
 commission-cohort files applied live on 2026-09-21 — `20260914100100`, `20260914100200`,
 `20260914100300`, `20260914100400` — so the effective ordering high-water is now
 **`20260914100400_enforce_commission_payment_business_date`**; `20260914100450` (PR #761),
-`20260914100500`, `100600`, `100800` and `100900` are still parked above it, followed by the parked
+`100800` and `100900` are still parked above it (`20260914100500` and `100600` applied live later
+the same day, per a second read-only ledger query: 1010 rows / 1003 names, `max(version)`
+`20260922020038`, making `20260914100600` the high-water), followed by the parked
 `20260921180000_soft_delete_customer_document_rpc` (sales reps cannot yet remove customer
 documents; see KNOWN_ISSUES), which must apply after them. The schema registry has NOT been
 regenerated for those four applies; the sentence below about its 2026-09-20 rebuild still stands.

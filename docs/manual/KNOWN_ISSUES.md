@@ -22,8 +22,8 @@ documents on 2026-09-21, so nobody has hit it. Fix: `20260921180000_soft_delete_
 that calls it.
 
 **Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
-commission-cohort files `20260914100100`..`20260914100400` ARE applied, and that `20260914100500`,
-`100600`, `100800`, `100900` and `20260921180000` are not; entries below that still call the first four
+commission-cohort files `20260914100100`..`20260914100600` ARE applied (the last two later that day),
+and that `20260914100800`, `100900` and `20260921180000` are not; entries below that still call the first four
 candidates predate that apply). The 2026-09-20 pass had confirmed the
 six-generator year fix `20260908140000` IS applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its

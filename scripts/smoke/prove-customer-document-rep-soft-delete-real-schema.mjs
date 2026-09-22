@@ -47,12 +47,11 @@ const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260921180000_soft_delete_customer_document_rpc.sql');
 const SIG = 'public.soft_delete_customer_document(uuid,text)';
 
-// Written but not applied live on 2026-09-21; replaying them would build a
-// schema production does not have. None of them touches customer_documents
-// (asserted below).
+// Written but not applied live on 2026-09-21 (a read-only ledger check by
+// name found every other file before the candidate applied, including
+// 20260914100500 and 100600); replaying them would build a schema production
+// does not have. None of them touches customer_documents (asserted below).
 const PARKED = new Set([
-  '20260914100500_commission_dates_follow_chicago_business_day.sql',
-  '20260914100600_latest_commission_recipient_label.sql',
   '20260914100800_bind_transfer_invoice_intent.sql',
   '20260914100900_repair_commission_history_label_snapshots.sql',
   '20260914100450_customer_document_bytes_server_only.sql',

@@ -8,10 +8,11 @@
 -- APPLY ORDER: apply only after EVERY parked candidate stamped below
 -- 20260921180000 that still sorts above the live high-water has applied (or
 -- been deliberately restamped); applying this first would raise the ordering
--- high-water past them and strand them. On 2026-09-21 that was
+-- high-water past them and strand them. On 2026-09-21 (after the commission
+-- files 20260914100500 and 100600 applied live) that was
 -- 20260914100450_customer_document_bytes_server_only (PR #761, same table,
--- independent of this file) and the commission files 20260914100500, 100600,
--- 100800 and 100900. Re-read the live ledger by name before applying.
+-- independent of this file) and the commission files 20260914100800 and
+-- 100900. Re-read the live ledger by name before applying.
 --
 -- idempotency-body-check: exempt — the body below DOES enforce
 -- p_idempotency_key: it requires the key, calls public.check_idempotency_intent
