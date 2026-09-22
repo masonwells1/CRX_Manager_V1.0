@@ -18,15 +18,15 @@ row-level security policy"), because `customer_documents_rep_select` hides soft-
 UPDATE's new row is checked against SELECT policies. Admins are unaffected; live held 0 customer
 documents on 2026-09-21, so nobody has hit it. Fix: `20260921180000_soft_delete_customer_document_rpc`
 (new RPC, no policy change; migration-history row 931), applied only after the parked
-`20260914100450` (PR #761) and commission files and with Mason's approval, then the page change
-that calls it.
+`20260914100450` (PR #761), `20260914100800` and `20260914100900`, and with Mason's approval,
+then the page change that calls it.
 
-**Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
-commission-cohort files `20260914100100`..`20260914100600` ARE applied (the last two later that day),
-and that `20260914100800`, `100900` and `20260921180000` are not; entries below that still call the first four
-candidates predate that apply). The 2026-09-20 pass had confirmed the
-six-generator year fix `20260908140000` IS applied; boundary figures are
-recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
+**Last verified: 2026-09-22 against the live ledger.** A read-only ledger query confirmed by name
+that commission-cohort files `20260914100100`..`20260914100600` ARE applied — the first four on
+2026-09-21 UTC and `100500`/`100600` on 2026-09-22 UTC — and that `20260914100800`, `100900` and
+`20260921180000` are not. Any entry below that still calls those six candidates predates their
+apply. The 2026-09-20 pass had confirmed the six-generator year fix `20260908140000` IS applied.
+Boundary figures live in `docs/reference/migration-history.md`, not here. The F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
 `docs/reference/migration-history.md` (the block headed "THIS IS THE CURRENT BOUNDARY"); read it

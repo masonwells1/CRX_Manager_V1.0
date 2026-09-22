@@ -8,11 +8,21 @@
 -- APPLY ORDER: apply only after EVERY parked candidate stamped below
 -- 20260921180000 that still sorts above the live high-water has applied (or
 -- been deliberately restamped); applying this first would raise the ordering
--- high-water past them and strand them. On 2026-09-21 (after the commission
--- files 20260914100500 and 100600 applied live) that was
+-- high-water past them and strand them. On 2026-09-22 UTC (after the
+-- commission files 20260914100500 and 100600 applied live, at ledger versions
+-- 20260922015509 and 20260922020038) that was
 -- 20260914100450_customer_document_bytes_server_only (PR #761, same table,
 -- independent of this file) and the commission files 20260914100800 and
 -- 100900. Re-read the live ledger by name before applying.
+--
+-- WHAT THE PROOF DOES NOT COVER: the prover replays only what is live, so the
+-- candidate is never proven on top of those three prerequisites. Read by hand
+-- on 2026-09-22: 20260914100800 adds a BEFORE INSERT trigger on
+-- public.idempotency_keys scoped to NEW.operation = 'transfer_job_to_invoice',
+-- so it cannot affect this function's receipt INSERT; 20260914100900 rewrites
+-- commission-history labels only; 20260914100450 is not on disk in this
+-- checkout. Re-run the prover after each of them applies, which is when their
+-- files drop out of its skip list.
 --
 -- idempotency-body-check: exempt — the body below DOES enforce
 -- p_idempotency_key: it requires the key, calls public.check_idempotency_intent
@@ -23,7 +33,7 @@
 -- the hook's check_idempotency(/save_idempotency( pair does not fit a bound
 -- receipt (same shape as 20260911120000 adjust_inventory).
 --
--- caller-analysis: soft_delete_customer_document :: new function created here; the only caller is the browser (src/components/customers/CustomerDocuments.tsx handleDelete) signed in as authenticated; REVOKE from PUBLIC, anon and service_role removes the Supabase default grants on a brand-new function, nothing server-side calls it and service_role has no auth.uid() so it could only be refused
+-- caller-analysis: soft_delete_customer_document :: new function created here; no caller exists at this commit - the only planned caller is the browser (src/components/customers/CustomerDocuments.tsx handleDelete, which still does a direct UPDATE here and is changed in a separate follow-up branch) signed in as authenticated; REVOKE from PUBLIC, anon and service_role removes the Supabase default grants on a brand-new function, nothing server-side calls it and service_role has no auth.uid() so it could only be refused
 --
 -- DEFECT (found 2026-09-21, reproduced on a local copy of the live policies):
 -- the Documents tab's Remove action updated public.customer_documents
@@ -70,9 +80,14 @@
 -- that is not theirs, and a concurrent reassignment of the customer waits for
 -- this transaction; if the reassignment commits first, PostgreSQL re-checks
 -- the WHERE clause against the new row and the rep is refused.
--- A deadlock is possible only against a transaction that locks the same
--- customer and then a document of it in the opposite order (for example a
--- hard DELETE of the customer, whose foreign-key check reaches the document).
+-- The lock order here is profiles, then (customer_documents, customers) in one
+-- statement. A deadlock therefore needs a transaction that takes those rows in
+-- a conflicting order: the same customer and then a document of it (for
+-- example a hard DELETE of the customer, whose foreign-key check reaches the
+-- document), or customers before profiles. A 2026-09-22 sweep of the
+-- migrations found no such partner - assign_customers_sales_rep and
+-- log_customer_sales_rep_assignment take profiles then customers, like this
+-- function - but that is today's inventory, not a guarantee.
 -- PostgreSQL detects it and cancels one side (40P01); nothing commits for the
 -- cancelled side and the page keeps its key, so a retry is safe.
 -- IDEMPOTENCY: the request is fingerprinted (actor, document id);
@@ -123,7 +138,6 @@
 DO $preflight$
 DECLARE
   v_helper_sig text := 'public.check_idempotency_intent(text,text,uuid,text)';
-  v_role       text;
   v_count      integer;
 BEGIN
   IF to_regprocedure(v_helper_sig) IS NULL THEN

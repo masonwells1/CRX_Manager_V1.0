@@ -15,7 +15,7 @@ applied live on 2026-09-21, in order: `20260914100100_next_invoice_number_year_c
 still describe these four as candidates; their owning lane rewrites them. Still parked and
 above the high-water: `20260914100450_customer_document_bytes_server_only` (PR #761),
 `20260914100500`, `20260914100600`, `20260914100800`, `20260914100900`, then row 931
-`20260921180000`, which must apply after all of them. **Update, same day:** a later read-only
+`20260921180000`, which must apply after all of them. **Update, 2026-09-22 UTC:** a later read-only
 ledger query (1010 rows / 1003 names, `max(version)` `20260922020038`) found `20260914100500`
 (`20260922015509`) and `20260914100600` (`20260922020038`) applied live, so the effective high-water
 is now `20260914100600_latest_commission_recipient_label`; row 931 must still apply after

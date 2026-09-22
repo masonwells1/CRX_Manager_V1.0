@@ -25,14 +25,14 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-21 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1008 rows / 1001 distinct names, `max(version)` `20260921141901`).** Four
-commission-cohort files applied live on 2026-09-21 — `20260914100100`, `20260914100200`,
-`20260914100300`, `20260914100400` — so the effective ordering high-water is now
-**`20260914100400_enforce_commission_payment_business_date`**; `20260914100450` (PR #761),
-`100800` and `100900` are still parked above it (`20260914100500` and `100600` applied live later
-the same day, per a second read-only ledger query: 1010 rows / 1003 names, `max(version)`
-`20260922020038`, making `20260914100600` the high-water), followed by the parked
+**Last verified: 2026-09-22 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1010 rows / 1003 distinct names, `max(version)` `20260922020038`).** The
+effective ordering high-water is
+**`20260914100600_latest_commission_recipient_label`**. Six commission-cohort files applied live:
+`20260914100100`..`20260914100400` on 2026-09-21 UTC, then `20260914100500` (`20260922015509`)
+and `20260914100600` (`20260922020038`) on 2026-09-22 UTC — the evening of 2026-09-21 in Chicago,
+which is why an earlier pass of this file dated them 09-21. Still parked above the high-water:
+`20260914100450` (PR #761), `100800` and `100900`, followed by the parked
 `20260921180000_soft_delete_customer_document_rpc` (sales reps cannot yet remove customer
 documents; see KNOWN_ISSUES), which must apply after them. The schema registry has NOT been
 regenerated for those four applies; the sentence below about its 2026-09-20 rebuild still stands.

@@ -46,6 +46,7 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260921180000_soft_delete_customer_document_rpc.sql');
 const SIG = 'public.soft_delete_customer_document(uuid,text)';
+const SMOKE_CHAIN = path.join(ROOT, 'scripts', 'smoke', 'smoke-customer-document-rep-soft-delete.sql');
 
 // Written but not applied live on 2026-09-21 (a read-only ledger check by
 // name found every other file before the candidate applied, including
@@ -115,7 +116,55 @@ function ready() {
   }
   throw new Error('disposable PostgreSQL did not become ready');
 }
+/**
+ * Does this migration change the surface the skip decision depends on — the
+ * table's row policies, triggers, ownership, RLS enforcement or grants?
+ *
+ * Matches the TABLE rather than one spelling of the statement, because a
+ * name-matching guard in this repository has been defeated before by an
+ * alternate identifier spelling. selfTestSkipSoundness() below proves each
+ * spelling trips it: PR #761's file is not on disk in this checkout, so
+ * without that self-test this branch would ship unexercised.
+ */
+function touchesCustomerDocumentSurface(sql) {
+  const table = String.raw`(?:public\s*\.\s*)?"?customer_documents"?`;
+  return new RegExp(
+    [
+      String.raw`(?:POLICY|TRIGGER)[^;]*\bON\s+${table}`,
+      String.raw`(?:GRANT|REVOKE)[^;]*\bON\s+(?:TABLE\s+)?${table}`,
+      String.raw`ALTER\s+TABLE[^;]*\b${table}[^;]*\b(?:FORCE\s+ROW\s+LEVEL\s+SECURITY|OWNER\s+TO|ENABLE\s+ROW\s+LEVEL\s+SECURITY|DISABLE\s+ROW\s+LEVEL\s+SECURITY)`,
+      String.raw`guard_customer_document_update`,
+      String.raw`soft_delete_customer_document`,
+    ].join('|'),
+    'is',
+  ).test(sql);
+}
+function selfTestSkipSoundness() {
+  const mustTrip = [
+    'CREATE POLICY customer_documents_rep_select ON public.customer_documents FOR SELECT USING (true);',
+    'CREATE POLICY "doc quoted" ON customer_documents FOR SELECT USING (true);',
+    'CREATE TRIGGER t BEFORE UPDATE ON customer_documents FOR EACH ROW EXECUTE FUNCTION f();',
+    'GRANT UPDATE ON TABLE public.customer_documents TO authenticated;',
+    'REVOKE SELECT ON customer_documents FROM anon;',
+    'ALTER TABLE public.customer_documents FORCE ROW LEVEL SECURITY;',
+    'ALTER TABLE "customer_documents" OWNER TO supabase_admin;',
+    'ALTER TABLE public . customer_documents DISABLE ROW LEVEL SECURITY;',
+    'CREATE OR REPLACE FUNCTION public.guard_customer_document_update() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;',
+  ];
+  for (const sql of mustTrip) {
+    assert.ok(touchesCustomerDocumentSurface(sql), `skip-soundness check missed: ${sql}`);
+  }
+  const mustPass = [
+    "ALTER TABLE storage.objects ADD CONSTRAINT c CHECK (bucket_id <> 'x');",
+    'CREATE POLICY p ON public.customer_facts FOR SELECT USING (true);',
+    'GRANT SELECT ON TABLE public.customers TO authenticated;',
+  ];
+  for (const sql of mustPass) {
+    assert.ok(!touchesCustomerDocumentSurface(sql), `skip-soundness check is too broad: ${sql}`);
+  }
+}
 function selected() {
+  selfTestSkipSoundness();
   const r = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], { cwd: ROOT, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(r.stderr);
   const all = r.stdout.split(/\r?\n/).filter((x) => x.startsWith('supabase/migrations/')).map((x) => path.join(ROOT, x));
@@ -129,11 +178,14 @@ function selected() {
   for (const file of skipped) {
     if (OPTIONAL_PARKED.has(path.basename(file))) {
       // Skipping it is only sound while it leaves this table's row policies,
-      // triggers and grants alone.
-      const sql = readFileSync(file, 'utf8');
+      // triggers, ownership, forced-RLS setting and grants alone. Match the
+      // TABLE, not one spelling of the statement that touches it: an
+      // unqualified `ON customer_documents`, a quoted policy name, FORCE ROW
+      // LEVEL SECURITY (which would break the definer-bypasses-RLS premise
+      // outright) and OWNER TO all have to trip this.
       assert.ok(
-        !/(POLICY\s+\w+\s+ON\s+public\.customer_documents|TRIGGER[^;]*ON\s+public\.customer_documents|(GRANT|REVOKE)[^;]*ON\s+(TABLE\s+)?public\.customer_documents|guard_customer_document_update|soft_delete_customer_document)/i.test(sql),
-        `${path.basename(file)} now changes customer_documents policies, triggers or grants; replay it or re-think the skip`,
+        !touchesCustomerDocumentSurface(readFileSync(file, 'utf8')),
+        `${path.basename(file)} now changes customer_documents policies, triggers, ownership, RLS enforcement or grants; replay it or re-think the skip`,
       );
       continue;
     }
@@ -464,6 +516,40 @@ async function main() {
   const restored = apply('candidate.sql', true);
   assert.equal(restored.status, 0, `candidate failed to restore after the mutation:\n${restored.output}`);
   console.log('[prover] MUTATION: removing the assignment check lets an unassigned rep remove a document — step 5 detects it');
+
+  // 9. The REGISTERED chain: scripts/smoke/smoke-specs.json points at this
+  // prover, and run-smoke.mjs only loads work from that registry. Running the
+  // chain here is what makes the registration real rather than declared — a
+  // later edit to the guard trigger, the rep SELECT policy or the intent
+  // helper breaks it. SMOKE_PASS_ROLLBACK is the only passing outcome, and it
+  // guarantees the chain's own rows never persist.
+  stageSql(SMOKE_CHAIN, 'smoke-chain.sql');
+  const chain = docker([...psqlArgs(), '-f', '/tmp/smoke-chain.sql'], { allowFailure: true });
+  const chainOutput = `${chain.stdout}\n${chain.stderr}`;
+  assert.notEqual(chain.status, 0, `the registered chain must end by rolling back, not succeed:\n${chainOutput}`);
+  assert.match(chainOutput, /SMOKE_PASS_ROLLBACK/, `registered chain failed:\n${chainOutput}`);
+  assert.doesNotMatch(chainOutput, /SMOKE_FAIL|SMOKE_SETUP/, `registered chain reported a failure:\n${chainOutput}`);
+  assert.equal(
+    scalar("SELECT count(*) FROM public.customer_documents WHERE filename LIKE '[[]SMOKE]%';"),
+    '0',
+    'the registered chain left rows behind, so it did not roll back',
+  );
+  // A chain that cannot fail proves nothing, and this one is the entry point a
+  // later session will trust. Re-apply the mutant (assignment test removed) and
+  // require the chain to REPORT it, then restore.
+  const mutantForChain = apply('mutant.sql', true);
+  assert.equal(mutantForChain.status, 0, `mutant failed to apply for the chain self-check:\n${mutantForChain.output}`);
+  const mutantChain = docker([...psqlArgs(), '-f', '/tmp/smoke-chain.sql'], { allowFailure: true });
+  const mutantChainOutput = `${mutantChain.stdout}\n${mutantChain.stderr}`;
+  assert.doesNotMatch(
+    mutantChainOutput,
+    /SMOKE_PASS_ROLLBACK/,
+    `CHAIN MUTATION NOT DETECTED: the chain passed against a function with no assignment check:\n${mutantChainOutput}`,
+  );
+  assert.match(mutantChainOutput, /SMOKE_FAIL: a rep removed a document of a customer assigned to someone else/, mutantChainOutput);
+  const restoredForChain = apply('candidate.sql', true);
+  assert.equal(restoredForChain.status, 0, `candidate failed to restore after the chain self-check:\n${restoredForChain.output}`);
+  console.log('[prover] registered chain scripts/smoke/smoke-customer-document-rep-soft-delete.sql passed, rolled back, and FAILS against the mutant');
 
   console.log('CUSTOMER_DOCUMENT_REP_SOFT_DELETE_PROOF_PASS before=rls_refused fix=rep_removes replay=bound no_new_access=true admin=ok reapply=ok mutation=detected');
 }
