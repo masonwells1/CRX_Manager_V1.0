@@ -283,9 +283,18 @@ BEGIN
 
   -- Takes pg_advisory_xact_lock on the key for the rest of this transaction
   -- and replays only a receipt bound to THIS actor and THIS document.
-  v_replay := public.check_idempotency_intent(
-    p_idempotency_key, 'soft_delete_customer_document', v_actor, v_fingerprint
-  );
+  -- The helper's IDEMPOTENCY_INTENT_MISMATCH carries the committed receipt in
+  -- DETAIL. Here that receipt names an earlier document and customer the
+  -- caller may no longer be allowed to see (a key reused on another document
+  -- after a reassignment), so it is re-raised with the same message and
+  -- SQLSTATE but no DETAIL. The page keys per document and never hits this.
+  BEGIN
+    v_replay := public.check_idempotency_intent(
+      p_idempotency_key, 'soft_delete_customer_document', v_actor, v_fingerprint
+    );
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH' USING ERRCODE = '22023';
+  END;
   IF v_replay IS NOT NULL THEN
     IF jsonb_typeof(v_replay -> 'result') IS DISTINCT FROM 'object'
        OR v_replay -> 'result' ->> 'customer_id' IS NULL THEN

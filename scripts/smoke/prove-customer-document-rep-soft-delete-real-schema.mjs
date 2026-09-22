@@ -351,7 +351,11 @@ async function main() {
   assert.ok(replay.ok, `same-key replay failed:\n${replay.error}`);
   assert.deepEqual(replay.result, fixed.result, 'replay returned a different result');
   assert.equal(docState(DOC.fix), afterFix, 'replay touched the row again');
-  expectRefusal(removeAs(REP, DOC.second, 'prover-rep-key-1'), /IDEMPOTENCY_INTENT_MISMATCH/, 'same key, different document');
+  const mismatch = removeAs(REP, DOC.second, 'prover-rep-key-1');
+  expectRefusal(mismatch, /IDEMPOTENCY_INTENT_MISMATCH/, 'same key, different document');
+  // The refusal must not carry the earlier receipt (it names DOC.fix and its customer).
+  assert.ok(!mismatch.error.includes(DOC.fix) && !mismatch.error.includes(CUSTOMER_MINE) && !/DETAIL/.test(mismatch.error),
+    `intent-mismatch refusal leaks the earlier receipt:\n${mismatch.error}`);
   assert.match(docState(DOC.second), /^live\|/, 'intent mismatch removed the second document');
   expectRefusal(removeAs(REP2, DOC.fix, 'prover-rep-key-1'), /IDEMPOTENCY_ACTOR_MISMATCH/, 'another rep holding the key');
   // A replay is re-authorised: once the customer is reassigned, the rep's own
