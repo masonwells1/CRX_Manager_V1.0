@@ -410,10 +410,10 @@ in place rather than giving browsers a delete power. A download already in progr
 is removed still completes. The function checks a file's declared type and size only as early
 refusals; the bucket's own limits enforce them.
 
-**Still owed, in this order, each with Mason's explicit approval:** deploy the Edge Function; merge
-the PR (ships the page that calls it); apply the migration — promptly, because while it sits on
-`main` unapplied the pending-migration guard holds the waiting commission migrations
-(`20260914100500` onward) behind it. The migration applied first would break the Documents tab until
+**Still owed, in this order, each with Mason's explicit approval:** deploy the Edge Function (done:
+v1 live 2026-09-22 UTC, Mason-approved); merge the PR (ships the page that calls it); apply the
+migration — promptly, because while it sits on `main` unapplied the pending-migration guard holds the
+waiting commission migrations (`20260914100800` onward) behind it. The migration applied first would break the Documents tab until
 the other two land. The migration refuses to apply if the bucket already holds any file, because a
 link minted under the old rules in that window could not be revoked; a refusal means a person decides.
 It locks the Storage objects table before that check, so no upload can land between the check and the

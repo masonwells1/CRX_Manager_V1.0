@@ -13,8 +13,9 @@
 - **New migration `20260914100700_customer_document_bytes_server_only.sql` (history row 935):** drops
   all five browser Storage policies on the `customer-documents` bucket and adds
   `customer_documents_storage_path_shape_check`, so no document row can name a look-alike (`#`, `?`,
-  `%` variant) of a removed document's path. Stamped between the live high-water `20260914100400`
-  and the waiting `20260914100500` so it strands nothing; apply it promptly after merge. Its
+  `%` variant) of a removed document's path. Stamped between the live high-water `20260914100600`
+  and the waiting `20260914100800` (restamped from `20260914100450` after `100500`/`100600` applied) so
+  it strands nothing; apply it promptly after merge. Its
   preflight refuses a non-empty bucket, since a link minted under the old rules before the apply
   could not be revoked (proven locally: refused with a file present, applied once emptied). It locks
   `storage.objects` before that check, so no upload can slip in between the check and the drops, and
@@ -35,8 +36,9 @@
   fails at every step. The real `customerDocumentFiles.ts` helper also ran end to end against that
   stack. Deno unit tests cover the request and path rules; Vitest covers the helper.
 - **Not verified:** a browser click-through of the Documents tab (the page needs the full schema,
-  which the local stack does not have); that happens on live after deploy. The function is not
-  deployed and the migration is not applied. The order is deploy, then merge, then apply, each with
-  Mason's explicit approval.
+  which the local stack does not have); that happens on live after deploy. The function was
+  deployed live as v1 on 2026-09-22 UTC with Mason's approval (ACTIVE; signed-out calls refused);
+  the migration is not applied. The order is deploy, then merge, then apply, each with Mason's
+  explicit approval.
 - **Found and recorded separately, not fixed here:** a sales rep's soft delete of a customer document
   is refused by RLS on live (admins can remove documents); see `docs/manual/KNOWN_ISSUES.md`.
