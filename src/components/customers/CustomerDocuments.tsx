@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { AlertTriangle, Download, FileText, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { checkMutationResult, supabase } from '../../lib/db';
+import { assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
+import { isDefinitiveRpcRejection } from '../../lib/idempotency';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import Badge from '../ui/Badge';
@@ -94,6 +96,10 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<CustomerDocumentRow | null>(null);
+  const { getKeyFor: getRemoveKeyFor, resetKeyFor: resetRemoveKeyFor } = useIdempotencyKey(
+    'soft_delete_customer_document',
+    userId,
+  );
   const requestSeq = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -275,20 +281,26 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
   const handleDelete = async () => {
     if (!documentToDelete) return;
     setDeletingId(documentToDelete.id);
+    // One retained key per document: a retry after a lost response replays the
+    // server's receipt instead of failing on an already-removed row.
+    const idempotencyKey = getRemoveKeyFor(documentToDelete.id);
     try {
-      const deletedBy = userId;
-      const updateResult = await supabase
-        .from('customer_documents')
-        .update({ deleted_at: new Date().toISOString(), deleted_by: deletedBy })
-        .eq('id', documentToDelete.id)
-        .eq('customer_id', customerId)
-        .is('deleted_at', null)
-        .select();
-      checkMutationResult(updateResult, 'Remove customer document');
+      // An RPC, not a direct UPDATE: the rep SELECT policy hides soft-deleted
+      // rows, so PostgreSQL refuses a rep's UPDATE that produces one.
+      const { data, error } = await supabase.rpc('soft_delete_customer_document', {
+        p_document_id: documentToDelete.id,
+        p_idempotency_key: idempotencyKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ document_id?: unknown }>(data, 'soft_delete_customer_document');
+      if (result.document_id !== documentToDelete.id) {
+        throw new Error('The server confirmed a different document; refresh and try again.');
+      }
+      resetRemoveKeyFor(documentToDelete.id);
       await logActivity({
         event: 'document_removed',
         description: `Removed ${documentToDelete.document_type.replace(/_/g, ' ')} document: ${documentToDelete.filename}`,
-        performedBy: deletedBy,
+        performedBy: userId,
         entityType: 'customer_document',
         entityId: documentToDelete.id,
         customerId,
@@ -297,6 +309,15 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
       toast('success', 'Document removed');
       setDocumentToDelete(null);
     } catch (error: unknown) {
+      // A definitive refusal did no work, so the key is retired; an uncertain
+      // failure keeps it so the next click replays the original attempt.
+      if (isDefinitiveRpcRejection(error)) resetRemoveKeyFor(documentToDelete.id);
+      if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_DOCUMENT_NOT_FOUND)) {
+        toast('error', 'That document was already removed or is no longer available.');
+        setDocumentToDelete(null);
+        void loadDocuments();
+        return;
+      }
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'CustomerDocuments.delete', documentId: documentToDelete.id },
       });
