@@ -104,6 +104,42 @@ ok(!isMachineGenerated(""), "empty not machine");
   // The negation guard added after "going to bed don't stop" is untouched.
   ok(!isHoldPhrase(authoredByMason("going to bed, don't stop")), "negated stop still not a hold");
   ok(!isHoldPhrase(authoredByMason("build me the invoices page")), "normal build still not a hold");
+
+  // 6. #504b (2026-09-21): a peer's UNFINISHED markdown must not reach past the
+  //    peer's own closing tag and eat the halt Mason typed underneath it.
+  //    Each case below was verified RED against the pre-fix order (fences before
+  //    envelopes) and GREEN after it; reverting authoredByMason() to
+  //    stripFencedCode-first turns the first three red again.
+  const FENCE = "```";
+  ok(isHoldPhrase(authoredByMason(
+    '<cross-session-message from="terra">look at this snippet\n' +
+    `${FENCE}\nconst x = 1;\n</cross-session-message>\nstop, hold on everything`)),
+    "an unterminated fence inside a peer envelope does not swallow Mason's stop");
+  ok(isHoldPhrase(authoredByMason(
+    `<cross-session-message from="terra">\n${FENCE}\n</cross-session-message>\nstop now`)),
+    "a fence opened as the peer's last line does not swallow Mason's stop");
+  ok(isHoldPhrase(authoredByMason(
+    '<cross-session-message from="terra">see `const x = 1;</cross-session-message>\nstop now')),
+    "an unterminated inline-code span inside a peer envelope does not swallow Mason's stop");
+
+  // 7. Mason's halt typed BETWEEN two peer messages survives. This is the
+  //    regression that the first attempted #504b fix introduced (candidate-
+  //    boundary consensus): each closed envelope must be removed on its own, so
+  //    a later envelope's closing tag can never end an earlier one.
+  ok(isHoldPhrase(authoredByMason(
+    PEER_BLOCK + "\nstop now\n" +
+    '<cross-session-message from="luna">on it</cross-session-message>')),
+    "Mason's stop between two peer envelopes still latches");
+  ok(!hasAuthoredText(
+    PEER_BLOCK + "\n" + '<cross-session-message from="luna">on it</cross-session-message>'),
+    "two back-to-back peer envelopes leave no Mason-authored text");
+
+  // 8. The case the ORIGINAL fences-first order existed for is still covered:
+  //    Mason quoting a bare envelope OPEN tag inside a fence must not trip the
+  //    unterminated-envelope rule and erase the rest of his own message.
+  ok(isHoldPhrase(authoredByMason(
+    `here is the envelope they send:\n\n${FENCE}\n<cross-session-message from="x">\n${FENCE}\n\nstop using that`)),
+    "a fenced bare open tag does not swallow Mason's later stop");
 }
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────

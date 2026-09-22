@@ -97,9 +97,27 @@ export function isMachineGenerated(prompt) {
 // "stop" / "pause" / "hold on" / scope-only wording still fires exactly as
 // before, including when it shares a message with a stripped block.
 //
-// Order matters: fences first (a fence may contain a bare envelope tag that
-// would otherwise swallow the rest), then inline code (`stop-wrap.mjs`), then
-// envelopes, then blockquotes.
+// Order matters, and the order below was corrected on 2026-09-21 (#504b).
+//
+// The original order ran fences FIRST, so that a fence containing a bare
+// envelope OPEN tag could not trip the unterminated-envelope rule below and
+// swallow the rest of the prompt. That protected a prompt Mason wrote, and
+// broke one he received: an unterminated ``` fence INSIDE a peer envelope ran
+// past the peer's own closing tag and consumed everything after it — including
+// the "stop" Mason typed below the peer's message. A real halt then matched
+// nothing. Fail-OPEN on the halt path, which is the wrong direction.
+//
+// So CLOSED envelopes come out first, whole: a peer's unfinished markdown
+// cannot reach past the closing tag that ends that peer's own turn. Fences run
+// next, on what is left, which still shields a quoted open tag from the
+// unterminated-envelope rule — the case the original order existed for. Then
+// inline code (`stop-wrap.mjs`), then any UNCLOSED envelope, then blockquotes.
+//
+// Residual, accepted deliberately: a peer that writes a fake closing tag inside
+// its own message ends its envelope early, so peer words after the fake tag are
+// read as Mason's and can latch a hold he did not ask for. That is the
+// fail-SAFE direction (a spurious pause costs a round-trip; a missed "stop"
+// does not stop), and it is how this file already behaved before #504b.
 
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
@@ -124,11 +142,22 @@ function stripFencedCode(text) {
 const INLINE_CODE_RE = /`+[^`\n]*`+/g;
 const BLOCKQUOTE_LINE_RE = /^[ \t]{0,3}>.*$/gm;
 
-function stripEnvelopes(text) {
+// Closed blocks anywhere in the prompt: an open tag through its matching close.
+// Non-greedy, so two envelopes in one prompt are two separate removals and what
+// Mason typed BETWEEN them survives.
+function stripClosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
-    // Closed blocks anywhere in the prompt.
     out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+  }
+  return out;
+}
+
+// What is left over once every closed envelope is gone: a truncated envelope
+// with no close, and any orphaned closing tag.
+function stripUnclosedEnvelopes(text) {
+  let out = text;
+  for (const tag of NON_AUTHORED_TAG_NAMES) {
     // A truncated/unterminated envelope: everything from the open tag onward.
     out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
     // Any orphaned closing tag left behind.
@@ -140,9 +169,10 @@ function stripEnvelopes(text) {
 export function authoredByMason(prompt) {
   const text = String(prompt || "");
   if (!text) return "";
-  let out = stripFencedCode(text);
+  let out = stripClosedEnvelopes(text);
+  out = stripFencedCode(out);
   out = out.replace(INLINE_CODE_RE, " ");
-  out = stripEnvelopes(out);
+  out = stripUnclosedEnvelopes(out);
   out = out.replace(BLOCKQUOTE_LINE_RE, " ");
   return out;
 }
