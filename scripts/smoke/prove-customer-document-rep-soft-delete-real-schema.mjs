@@ -172,7 +172,18 @@ function touchesCustomerDocumentSurface(sql) {
  */
 function assertFixturePathsSurviveParkedShapeCheck(parkedSql, label) {
   const found = /storage_path\s*~\s*'(\^[^']+\$)'/.exec(parkedSql);
-  if (!found) return; // no path-shape constraint in this file: nothing to satisfy
+  if (!found) {
+    // FAIL CLOSED. Returning here when the file plainly HAS the constraint would
+    // make this whole guard vacuous the moment 20260914100700 respells its CHECK
+    // (`~*`, `E'...'`, a doubled quote, SIMILAR TO) or a later edit rewrites it -
+    // and the prover would pass right up until the prerequisite applies and the
+    // registered chain broke (CodeRabbit, PR #777).
+    assert.ok(
+      !/customer_documents_storage_path_shape_check/i.test(parkedSql),
+      `${label} declares customer_documents_storage_path_shape_check but this extractor could not read its regex; fix the extractor rather than skipping the check`,
+    );
+    return; // genuinely no path-shape constraint in this file
+  }
   const shape = new RegExp(found[1]);
 
   // Derived from the SAME map and the SAME formula seedFixtures() uses, so this
@@ -188,9 +199,29 @@ function assertFixturePathsSurviveParkedShapeCheck(parkedSql, label) {
   // The matcher must be able to REJECT, or the loop above proves nothing. These
   // are the two shapes this repository actually got wrong: a path with no
   // document uuid, and a safe name starting with '['.
-  for (const bad of [`${CUSTOMER_MINE}/mine.pdf`, `${CUSTOMER_MINE}/${DOC.before}-[SMOKE]-mine.pdf`]) {
-    assert.ok(!shape.test(bad), `path-shape check is too loose: it accepted "${bad}"`);
+  const bad = [`${CUSTOMER_MINE}/mine.pdf`, `${CUSTOMER_MINE}/${DOC.before}-[SMOKE]-mine.pdf`];
+  for (const p of bad) {
+    assert.ok(!shape.test(p), `path-shape check is too loose: it accepted "${p}"`);
   }
+  // The constraint is a PostgreSQL ARE; JavaScript's RegExp is not. A JS verdict
+  // is only evidence about the DATABASE's verdict if the two dialects agree, so
+  // ask PostgreSQL itself rather than banning the syntax that differs: POSIX
+  // classes ([[:alnum:]]) and ARE escapes (\m, \Y) would otherwise be read
+  // with different meanings and this guard would diverge silently.
+  const cases = [...samples.map((v) => [v, true]), ...bad.map((v) => [v, false])];
+  const pgVerdicts = scalar(
+    `SELECT string_agg(v.verdict, ',' ORDER BY v.n) FROM (SELECT * FROM unnest(array[${
+      cases.map((_, i) => i).join(',')
+    }], array[${
+      cases.map(([v]) => `$re$${v}$re$`).join(',')
+    }]) AS t(n, path), lateral (SELECT (t.path ~ $shape$${found[1]}$shape$)::text AS verdict) x) v(n, path, verdict);`,
+  ).split(',');
+  cases.forEach(([path, expected], i) => {
+    assert.equal(
+      pgVerdicts[i], String(expected),
+      `PostgreSQL and this JavaScript check disagree about "${path}" under ${label}'s regex: PostgreSQL says ${pgVerdicts[i]}, JS says ${expected}. The JS guard is not evidence about the database constraint.`,
+    );
+  });
   // The chain builds its paths in SQL, so hold its COMPOSITION here: customer,
   // '/', the document uuid, '-', then the safe name.
   const chainSql = readFileSync(SMOKE_CHAIN, 'utf8');

@@ -443,7 +443,7 @@ browser policies are gone, the shape constraint exists, and the Documents tab up
 app. Admins can no longer open a removed document either, and soft delete cannot be undone. The
 bytes stay in Storage, so recovery is possible only through an out-of-app service-role action.
 
-## OPEN 2026-09-21 — a sales rep cannot remove a customer document (admins can)
+## SUPERSEDED 2026-09-21 — a sales rep cannot remove a customer document (admins can)
 
 Found while proving the fix above; separate from it and unchanged by it. `customer_documents_rep_select`
 hides soft-deleted rows (`deleted_at IS NULL`). PostgreSQL applies an UPDATE's SELECT policy to the
