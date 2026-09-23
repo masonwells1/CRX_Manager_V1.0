@@ -82,9 +82,12 @@ describe('CustomerDocuments Remove', () => {
 
     await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('success', 'Document removed'));
     expect(rpcMock).toHaveBeenCalledTimes(1);
-    const [name, args] = rpcMock.mock.calls[0] as [string, { p_document_id: string; p_idempotency_key: string }];
+    const [name, args] = rpcMock.mock.calls[0] as [string, { p_document_id: string; p_customer_id: string; p_idempotency_key: string }];
     expect(name).toBe('soft_delete_customer_document');
     expect(args.p_document_id).toBe('doc-1');
+    // The server scopes on the customer, so the page must send this page's
+    // customer and not rely on the document alone.
+    expect(args.p_customer_id).toBe('customer-1');
     expect(args.p_idempotency_key).toMatch(/^soft_delete_customer_document:rep-1:/);
     expect(fromCalls.some((call) => call.recorded.some((r) => r.method === 'update'))).toBe(false);
     expect(logActivityMock).toHaveBeenCalledWith(expect.objectContaining({ event: 'document_removed', entityId: 'doc-1' }));
