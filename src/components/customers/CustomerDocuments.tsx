@@ -3,6 +3,7 @@ import { AlertTriangle, Download, FileText, RefreshCw, Trash2, Upload } from 'lu
 import { useAuth } from '../../contexts/AuthContext';
 import { checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
+import { downloadCustomerDocumentFile, uploadCustomerDocumentFile } from '../../lib/customerDocumentFiles';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import Badge from '../ui/Badge';
@@ -11,7 +12,7 @@ import Card, { CardHeader } from '../ui/Card';
 import ConfirmModal from '../ui/ConfirmModal';
 import Input from '../ui/Input';
 
-const DOCUMENT_BUCKET = 'customer-documents';
+// Mirrors the bucket limits and supabase/functions/customer-document-files/logic.ts; keep all three in step.
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'] as const;
 const DOCUMENT_TYPES = ['license', 'permit', 'contract', 'map', 'invoice_copy', 'other'] as const;
@@ -52,15 +53,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function sanitizeFilename(filename: string): string {
-  const sanitized = filename
-    .trim()
-    .replace(/[^a-zA-Z0-9._-]+/g, '_')
-    .replace(/^\.+/, '')
-    .slice(0, 180);
-  return sanitized || 'document';
 }
 
 function expirationStatus(expirationDate: string | null): 'expired' | 'soon' | null {
@@ -188,45 +180,38 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
     }
 
     setSaving(true);
-    const storagePath = `${customerId}/${crypto.randomUUID()}-${sanitizeFilename(selectedFile.name)}`;
     try {
-      const { error: uploadError } = await supabase.storage
-        .from(DOCUMENT_BUCKET)
-        .upload(storagePath, selectedFile, { contentType: selectedFile.type, upsert: false });
-      if (uploadError) throw uploadError;
+      const storagePath = await uploadCustomerDocumentFile(customerId, selectedFile);
 
-      try {
-        const insertResult = await supabase
-          .from('customer_documents')
-          .insert({
-            customer_id: customerId,
-            document_type: documentType,
-            storage_path: storagePath,
-            filename: selectedFile.name,
-            mime_type: selectedFile.type,
-            size_bytes: selectedFile.size,
-            uploaded_by: userId,
-            source: 'rep',
-            effective_date: effectiveDate || null,
-            expiration_date: expirationDate || null,
-            notes: notes.trim() || null,
-          })
-          .select()
-          .single();
-        checkMutationResult(insertResult, 'Save customer document');
-        await logActivity({
-          event: 'document_uploaded',
-          description: `Uploaded ${documentType.replace(/_/g, ' ')} document: ${selectedFile.name}`,
-          performedBy: userId,
-          entityType: 'customer_document',
-          entityId: insertResult.data?.id,
-          customerId,
-        });
-      } catch (insertError: unknown) {
-        await supabase.storage.from(DOCUMENT_BUCKET).remove([storagePath]);
-        throw insertError;
-      }
-
+      // If this save fails, the uploaded bytes stay behind with no document row.
+      // Nothing can read them (browsers have no Storage access and the Edge
+      // Function serves only saved, live documents), so they are left in place.
+      const insertResult = await supabase
+        .from('customer_documents')
+        .insert({
+          customer_id: customerId,
+          document_type: documentType,
+          storage_path: storagePath,
+          filename: selectedFile.name,
+          mime_type: selectedFile.type,
+          size_bytes: selectedFile.size,
+          uploaded_by: userId,
+          source: 'rep',
+          effective_date: effectiveDate || null,
+          expiration_date: expirationDate || null,
+          notes: notes.trim() || null,
+        })
+        .select()
+        .single();
+      checkMutationResult(insertResult, 'Save customer document');
+      await logActivity({
+        event: 'document_uploaded',
+        description: `Uploaded ${documentType.replace(/_/g, ' ')} document: ${selectedFile.name}`,
+        performedBy: userId,
+        entityType: 'customer_document',
+        entityId: insertResult.data?.id,
+        customerId,
+      });
       toast('success', 'Document uploaded');
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -240,6 +225,9 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
         extra: { context: 'CustomerDocuments.upload' },
       });
       toast('error', errorMessage(error, 'Failed to upload document'));
+      // A save can fail in the browser after the row committed; refresh so the
+      // list shows what the server holds before anyone uploads a duplicate.
+      void loadDocuments();
     } finally {
       setSaving(false);
     }
@@ -248,25 +236,14 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
   const handleDownload = async (document: CustomerDocumentRow) => {
     setDownloadingId(document.id);
     try {
-      const { data, error } = await supabase.storage
-        .from(DOCUMENT_BUCKET)
-        .createSignedUrl(document.storage_path, 60, { download: document.filename });
-      if (error) throw error;
-      if (!data?.signedUrl) throw new Error('Could not create a download link.');
-      // Anchor-click download instead of window.open: popup blockers (notably
-      // mobile Safari) silently swallow window.open after an awaited request.
-      const link = window.document.createElement('a');
-      link.href = data.signedUrl;
-      link.download = document.filename;
-      link.rel = 'noopener';
-      window.document.body.appendChild(link);
-      link.click();
-      link.remove();
+      await downloadCustomerDocumentFile(document.id, document.filename, document.mime_type);
     } catch (error: unknown) {
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
         extra: { context: 'CustomerDocuments.download', documentId: document.id },
       });
-      toast('error', errorMessage(error, 'Failed to prepare document download'));
+      toast('error', errorMessage(error, 'Failed to download document'));
+      // The document may have been removed elsewhere; drop stale rows from the list.
+      void loadDocuments();
     } finally {
       setDownloadingId(null);
     }
