@@ -287,8 +287,12 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
     try {
       // An RPC, not a direct UPDATE: the rep SELECT policy hides soft-deleted
       // rows, so PostgreSQL refuses a rep's UPDATE that produces one.
+      // The customer goes with the document: the server scopes on it, so a
+      // stale documentToDelete from a customer this page no longer shows is
+      // refused there rather than removed.
       const { data, error } = await supabase.rpc('soft_delete_customer_document', {
         p_document_id: documentToDelete.id,
+        p_customer_id: customerId,
         p_idempotency_key: idempotencyKey,
       });
       if (error) throw error;
