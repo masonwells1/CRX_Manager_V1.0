@@ -45,7 +45,7 @@ const NAME = `crx-customer-doc-delete-${process.pid}-${Date.now().toString(36)}`
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260921180000_soft_delete_customer_document_rpc.sql');
-const SIG = 'public.soft_delete_customer_document(uuid,text)';
+const SIG = 'public.soft_delete_customer_document(uuid,uuid,text)';
 const SMOKE_CHAIN = path.join(ROOT, 'scripts', 'smoke', 'smoke-customer-document-rep-soft-delete.sql');
 
 // Written but not applied live on 2026-09-21 (a read-only ledger check by
@@ -226,9 +226,20 @@ function runAs(uid, sql, role = 'authenticated') {
   const last = r.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? '';
   return { ok: r.status === 0, last, error: r.stderr.trim() };
 }
-function removeAs(uid, documentId, key, role = 'authenticated') {
+function removeAs(uid, documentId, key, role = 'authenticated', customerId = undefined) {
   const keySql = key === null ? 'NULL' : `'${key}'`;
-  const r = runAs(uid, `SELECT public.soft_delete_customer_document('${documentId}'::uuid, ${keySql})::text;`, role);
+  // Default to the document's own customer, the way the page knows it from its
+  // route. Resolved HERE as the owner, not inside the call: a rep cannot SELECT
+  // a soft-deleted row, so an inline sub-select would resolve to NULL on every
+  // replay and test the wrong thing.
+  // A document that does not exist has no customer to resolve; the page would
+  // still send the customer whose tab it is on, so fall back to that and let
+  // the function answer CUSTOMER_DOCUMENT_NOT_FOUND.
+  const owner = customerId === undefined
+    ? scalar(`SELECT customer_id FROM public.customer_documents WHERE id = '${documentId}'::uuid;`) || CUSTOMER_MINE
+    : customerId;
+  const customer = owner === null ? 'NULL' : `'${owner}'::uuid`;
+  const r = runAs(uid, `SELECT public.soft_delete_customer_document('${documentId}'::uuid, ${customer}, ${keySql})::text;`, role);
   return { ...r, result: r.ok ? JSON.parse(r.last) : null };
 }
 function expectRefusal(call, pattern, label) {
@@ -433,6 +444,26 @@ async function main() {
   setActive(INACTIVE_REP, false);
   expectRefusal(removeAs(INACTIVE_REP, DOC.other, 'prover-inactive-key'), /INSUFFICIENT_ROLE/, 'deactivated assigned rep');
   psql(`UPDATE public.customers SET assigned_sales_rep = '${REP2}' WHERE id = '${CUSTOMER_OTHER}';`);
+  // CUSTOMER SCOPE: the page's old direct UPDATE scoped on customer_id, and the
+  // function keeps that scope. A stale page holding a document of a customer it
+  // no longer shows must not remove it — for an ADMIN either, who has no
+  // assignment test to fall back on.
+  expectRefusal(
+    removeAs(REP, DOC.roleCheck, 'prover-wrong-customer', 'authenticated', CUSTOMER_OTHER),
+    /CUSTOMER_DOCUMENT_NOT_FOUND/,
+    'rep naming the wrong customer for a document they may otherwise remove',
+  );
+  expectRefusal(
+    removeAs(ADMIN, DOC.roleCheck, 'prover-admin-wrong-customer', 'authenticated', CUSTOMER_OTHER),
+    /CUSTOMER_DOCUMENT_NOT_FOUND/,
+    'admin naming the wrong customer (no assignment test applies to an admin)',
+  );
+  expectRefusal(
+    removeAs(REP, DOC.roleCheck, 'prover-null-customer', 'authenticated', null),
+    /CUSTOMER_DOCUMENT_NOT_FOUND/,
+    'null customer',
+  );
+  assert.match(docState(DOC.roleCheck), /^live\|/, 'a wrong-customer call changed the document');
   expectRefusal(removeAs(REP, DOC.roleCheck, null), /IDEMPOTENCY_KEY_REQUIRED/, 'missing key');
   expectRefusal(removeAs(REP, DOC.roleCheck, '   '), /IDEMPOTENCY_KEY_REQUIRED/, 'blank key');
   expectRefusal(removeAs(REP, DOC.roleCheck, 'k'.repeat(256)), /IDEMPOTENCY_KEY_REQUIRED/, '256-character key');
@@ -456,7 +487,7 @@ async function main() {
   ]) {
     const held = await holdLock(holder);
     try {
-      const blocked = runAs(REP, `SET LOCAL lock_timeout = '750ms';\nSELECT public.soft_delete_customer_document('${DOC.roleCheck}'::uuid, 'prover-lock-${label.split(' ')[0]}')::text;`);
+      const blocked = runAs(REP, `SET LOCAL lock_timeout = '750ms';\nSELECT public.soft_delete_customer_document('${DOC.roleCheck}'::uuid, '${CUSTOMER_MINE}'::uuid, 'prover-lock-${label.split(' ')[0]}')::text;`);
       expectRefusal(blocked, /canceling statement due to lock timeout/, `removal while the ${label} is locked`);
     } finally {
       await releaseLock(held);
@@ -471,7 +502,7 @@ async function main() {
     ['deactivation', `SELECT set_config('request.jwt.claims', '{"sub":"${ADMIN}","role":"authenticated"}', true);\nSELECT set_config('request.jwt.claim.sub', '${ADMIN}', true);\nUPDATE public.profiles SET is_active = false WHERE id = '${REP}';`, /INSUFFICIENT_ROLE/],
   ]) {
     const held = await holdLock(change);
-    const removal = runAsAsync(REP, `SET LOCAL application_name = 'doc-race-${label}';\nSELECT public.soft_delete_customer_document('${DOC.roleCheck}'::uuid, 'prover-race-${label}')::text;`);
+    const removal = runAsAsync(REP, `SET LOCAL application_name = 'doc-race-${label}';\nSELECT public.soft_delete_customer_document('${DOC.roleCheck}'::uuid, '${CUSTOMER_MINE}'::uuid, 'prover-race-${label}')::text;`);
     await waitForLockWait(`doc-race-${label}`);
     await finishLock(held, 'COMMIT');
     expectRefusal(await removal, refusal, `removal that waited on a committed ${label}`);
@@ -534,6 +565,24 @@ async function main() {
     '0',
     'the registered chain left rows behind, so it did not roll back',
   );
+  // 8b. MUTATION, second axis: drop the customer scope; the wrong-customer
+  // refusal in step 5 must then fail, so that assertion really tests it.
+  const customerGuard = /AND d\.customer_id = p_customer_id\n/;
+  stageSql(CANDIDATE, 'mutant-customer.sql', (sql) => {
+    assert.ok(customerGuard.test(sql), 'mutation anchor (customer scope) not found in the candidate');
+    return sql.replace(customerGuard, '');
+  });
+  const customerMutant = apply('mutant-customer.sql', true);
+  assert.equal(customerMutant.status, 0, `customer-scope mutant failed to apply:\n${customerMutant.output}`);
+  const crossed = removeAs(ADMIN, DOC.roleCheck, 'prover-customer-mutant', 'authenticated', CUSTOMER_OTHER);
+  assert.ok(
+    crossed.ok,
+    'MUTATION NOT DETECTED: without the customer scope the wrong-customer call was still refused, so step 5 does not test that scope',
+  );
+  const restoredCustomer = apply('candidate.sql', true);
+  assert.equal(restoredCustomer.status, 0, `candidate failed to restore after the customer-scope mutation:\n${restoredCustomer.output}`);
+  console.log('[prover] MUTATION: removing the customer scope lets a wrong-customer call through — step 5 detects it');
+
   // A chain that cannot fail proves nothing, and this one is the entry point a
   // later session will trust. Re-apply the mutant (assignment test removed) and
   // require the chain to REPORT it, then restore.

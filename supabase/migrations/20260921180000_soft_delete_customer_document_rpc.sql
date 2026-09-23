@@ -11,17 +11,24 @@
 -- high-water past them and strand them. On 2026-09-22 UTC (after the
 -- commission files 20260914100500 and 100600 applied live, at ledger versions
 -- 20260922015509 and 20260922020038) that was
--- 20260914100450_customer_document_bytes_server_only (PR #761, same table,
--- independent of this file) and the commission files 20260914100800 and
--- 100900. Re-read the live ledger by name before applying.
+-- the commission files 20260914100800 and 100900 (both still sort above the
+-- high-water). 20260914100450_customer_document_bytes_server_only (PR #761)
+-- is NOT in that set any more: it sorts BELOW 20260914100600, so the
+-- migration-ordering guard already refuses it and its lane has to restamp it
+-- above the high-water. This file therefore does not wait for it, and cannot
+-- strand it - it was stranded when 100500 applied. Re-read the live ledger by
+-- name before applying, and re-derive the high-water from the ledger itself:
+-- the snapshot in .claude/session-state/applied-migrations.json was captured
+-- 2026-09-05 and does not contain this cohort.
 --
 -- WHAT THE PROOF DOES NOT COVER: the prover replays only what is live, so the
 -- candidate is never proven on top of those three prerequisites. Read by hand
 -- on 2026-09-22: 20260914100800 adds a BEFORE INSERT trigger on
--- public.idempotency_keys scoped to NEW.operation = 'transfer_job_to_invoice',
--- so it cannot affect this function's receipt INSERT; 20260914100900 rewrites
--- commission-history labels only; 20260914100450 is not on disk in this
--- checkout. Re-run the prover after each of them applies, which is when their
+-- public.idempotency_keys with NO WHEN clause, so it does fire on this
+-- function's receipt INSERT, but its body returns NEW unless
+-- NEW.operation = 'transfer_job_to_invoice', so it cannot change this receipt;
+-- 20260914100900 rewrites commission-history labels only; 20260914100450 is
+-- not on disk in this checkout. Re-run the prover after each of them applies, which is when their
 -- files drop out of its skip list.
 --
 -- idempotency-body-check: exempt — the body below DOES enforce
@@ -57,10 +64,22 @@
 --     sales_rep profile (INSUFFICIENT_ROLE) — the same predicates as
 --     is_admin() / is_sales_rep();
 --   * a non-blank idempotency key (IDEMPOTENCY_KEY_REQUIRED);
---   * the document exists and is not already soft-deleted, and — for a rep —
---     its customer is currently assigned to the caller. Every one of those
---     failures is the same CUSTOMER_DOCUMENT_NOT_FOUND, so a rep cannot use
---     the error to probe for documents of customers they cannot see.
+--   * the document exists, is not already soft-deleted, BELONGS TO
+--     p_customer_id, and — for a rep — that customer is currently assigned to
+--     the caller. Every one of those failures is the same
+--     CUSTOMER_DOCUMENT_NOT_FOUND, so a rep cannot use the error to probe for
+--     documents of customers they cannot see.
+--   WHY p_customer_id IS REQUIRED: the page's old direct UPDATE scoped on
+--     .eq('customer_id', customerId), and this repository has a documented
+--     stale-closure bug class where a page holds a record from a customer it
+--     no longer shows. Without the customer in the request, an admin
+--     confirming Remove on stale state would permanently remove another
+--     customer's document with no error. The signature locks on first apply,
+--     so it is here from the start.
+--   SCOPE DECISION (Mason, 2026-09-22): a rep may remove ANY active document
+--     on a customer assigned to them, including one uploaded by the office or
+--     created by the system. Removal is permanent, so this was his call, not a
+--     technical default.
 --   * the row change is exactly deleted_at = now(), deleted_by = auth.uid().
 --     The existing guard_customer_document_update trigger still runs (the
 --     function does not bypass triggers) and still enforces identity
@@ -90,7 +109,15 @@
 -- function - but that is today's inventory, not a guarantee.
 -- PostgreSQL detects it and cancels one side (40P01); nothing commits for the
 -- cancelled side and the page keeps its key, so a retry is safe.
--- IDEMPOTENCY: the request is fingerprinted (actor, document id);
+-- Within that one statement the two row locks are still taken as rows are
+-- emitted, so which relation is locked first is plan-dependent; the analysis
+-- above does not depend on the order, only on holding both.
+-- NEW BLOCKING (not a deadlock): the customer row is held FOR SHARE until this
+-- transaction ends, and allocate_payment and save_customer take FOR UPDATE on
+-- the same row. A removal therefore queues behind an in-flight payment
+-- allocation or customer save for that customer, and vice versa. These are
+-- sub-second transactions and the page keeps its key.
+-- IDEMPOTENCY: the request is fingerprinted (actor, customer id, document id);
 -- check_idempotency_intent replays only a receipt bound to THIS actor and
 -- THIS document, refuses another actor (IDEMPOTENCY_ACTOR_MISMATCH) and a
 -- different document under the same key (IDEMPOTENCY_INTENT_MISMATCH). Keys
@@ -100,6 +127,12 @@
 -- otherwise it is the same CUSTOMER_DOCUMENT_NOT_FOUND. So a reassigned rep,
 -- or an admin since demoted to a rep, cannot read a receipt for a customer
 -- they can no longer see.
+-- RECEIPTS EXPIRE after 24 hours (idempotency_keys.expires_at default), and
+-- check_idempotency_intent deletes an expired one. A retry a day later is
+-- therefore treated as new, finds the document already removed, and reports
+-- CUSTOMER_DOCUMENT_NOT_FOUND for a removal that did commit. The page reads
+-- that as "already removed" and reloads, which is the truth; the same cliff
+-- exists on the live adjust_inventory receipt.
 --
 -- Atomicity: no BEGIN/COMMIT of its own. Apply live ONLY through
 -- scripts/apply-migration-file.mjs, which wraps the whole file in one
@@ -128,7 +161,7 @@
 -- drifted grant surviving CREATE OR REPLACE — is not revoked here and fails
 -- the apply, so a human looks at it.
 -- ROLLBACK: a NEW forward migration that DROPs
--- public.soft_delete_customer_document(uuid, text). The page would then fail
+-- public.soft_delete_customer_document(uuid, uuid, text). The page would then fail
 -- closed on Remove (function not found) for every role until it is reverted.
 -- PROOF: scripts/smoke/prove-customer-document-rep-soft-delete-real-schema.mjs
 -- (network-disabled throwaway Supabase PostgreSQL 17 image on the checked-in
@@ -206,6 +239,29 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PREFLIGHT_TABLE: public.customers must be owned by postgres with row security NOT forced; the assignment check reads and locks it as the owner.';
   END IF;
+  -- profiles (the role gate) and idempotency_keys (the receipt) are read and
+  -- written as the owner too. Forced row security or a different owner on
+  -- either one fails closed - every caller would get INSUFFICIENT_ROLE, or the
+  -- receipt INSERT would roll the removal back - so pin them here rather than
+  -- discovering it as "Remove stopped working for everyone".
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+     WHERE c.oid = 'public.profiles'::regclass
+       AND c.relowner = 'postgres'::regrole
+       AND NOT c.relforcerowsecurity
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_TABLE: public.profiles must be owned by postgres with row security NOT forced; the role gate reads and locks it as the owner.';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+     WHERE c.oid = 'public.idempotency_keys'::regclass
+       AND c.relowner = 'postgres'::regrole
+       AND NOT c.relforcerowsecurity
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_TABLE: public.idempotency_keys must be owned by postgres with row security NOT forced; the receipt INSERT runs as the owner.';
+  END IF;
 
   -- tgtype 19 = FOR EACH ROW (1) | BEFORE (2) | UPDATE (16).
   IF NOT EXISTS (
@@ -235,7 +291,7 @@ BEGIN
     FROM pg_proc
    WHERE pronamespace = 'public'::regnamespace
      AND proname = 'soft_delete_customer_document'
-     AND oid <> COALESCE(to_regprocedure('public.soft_delete_customer_document(uuid,text)'), 0);
+     AND oid <> COALESCE(to_regprocedure('public.soft_delete_customer_document(uuid,uuid,text)'), 0);
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'PREFLIGHT_OVERLOAD: % other overload(s) of soft_delete_customer_document exist. Reconcile before applying.', v_count;
   END IF;
@@ -244,6 +300,7 @@ $preflight$;
 
 CREATE OR REPLACE FUNCTION public.soft_delete_customer_document(
   p_document_id uuid,
+  p_customer_id uuid,
   p_idempotency_key text DEFAULT NULL::text
 )
 RETURNS jsonb
@@ -286,13 +343,16 @@ BEGIN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: soft_delete_customer_document requires a p_idempotency_key of at most 255 characters';
   END IF;
 
-  IF p_document_id IS NULL THEN
+  IF p_document_id IS NULL OR p_customer_id IS NULL THEN
     RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
   END IF;
 
-  -- The actor and the document are the whole request.
+  -- The actor, the document AND its customer are the whole request. The
+  -- customer is in the fingerprint as well as the WHERE clause, so the same
+  -- key cannot be replayed against a different customer.
   v_fingerprint := encode(extensions.digest(convert_to(jsonb_build_object(
     'actor_id', v_actor,
+    'customer_id', p_customer_id,
     'document_id', p_document_id
   )::text, 'UTF8'), 'sha256'), 'hex');
 
@@ -314,6 +374,11 @@ BEGIN
     IF jsonb_typeof(v_replay -> 'result') IS DISTINCT FROM 'object'
        OR v_replay -> 'result' ->> 'customer_id' IS NULL THEN
       RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    -- The fingerprint already binds the customer, so this can only fail if a
+    -- receipt was written by an older version of this function.
+    IF (v_replay -> 'result' ->> 'customer_id')::uuid IS DISTINCT FROM p_customer_id THEN
+      RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
     END IF;
     -- A replay returns only what the caller could do NOW: a rep whose customer
     -- has since been reassigned gets the same refusal as any other rep.
@@ -342,6 +407,7 @@ BEGIN
     FROM public.customer_documents d
     JOIN public.customers c ON c.id = d.customer_id
    WHERE d.id = p_document_id
+     AND d.customer_id = p_customer_id
      AND d.deleted_at IS NULL
      AND (v_is_admin OR c.assigned_sales_rep = v_actor)
      FOR UPDATE OF d
@@ -381,21 +447,21 @@ BEGIN
 END;
 $soft_delete$;
 
-ALTER FUNCTION public.soft_delete_customer_document(uuid, text) OWNER TO postgres;
+ALTER FUNCTION public.soft_delete_customer_document(uuid, uuid, text) OWNER TO postgres;
 -- Clear every non-owner grant first (Supabase default privileges, or any grant
 -- a CREATE OR REPLACE would keep), then grant exactly one. The postflight
 -- refuses any other grantee that still survives.
-REVOKE ALL ON FUNCTION public.soft_delete_customer_document(uuid, text) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.soft_delete_customer_document(uuid, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.soft_delete_customer_document(uuid, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.soft_delete_customer_document(uuid, uuid, text) TO authenticated;
 
-COMMENT ON FUNCTION public.soft_delete_customer_document(uuid, text) IS
+COMMENT ON FUNCTION public.soft_delete_customer_document(uuid, uuid, text) IS
   'Soft-deletes one active customer document. Active admins may remove any; active sales reps only documents of customers assigned to them. Requires p_idempotency_key, binds the receipt to the actor and document, and leaves every customer_documents policy unchanged.';
 
 DO $verify$
 DECLARE
-  v_sig        text := 'public.soft_delete_customer_document(uuid,text)';
+  v_sig        text := 'public.soft_delete_customer_document(uuid,uuid,text)';
   v_helper_sig text := 'public.check_idempotency_intent(text,text,uuid,text)';
-  v_args_pin   text := 'p_document_id uuid, p_idempotency_key text DEFAULT NULL::text';
+  v_args_pin   text := 'p_document_id uuid, p_customer_id uuid, p_idempotency_key text DEFAULT NULL::text';
   v_count      integer;
   v_src        text;
   v_role       text;

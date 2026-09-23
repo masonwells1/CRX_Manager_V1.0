@@ -18,8 +18,9 @@ row-level security policy"), because `customer_documents_rep_select` hides soft-
 UPDATE's new row is checked against SELECT policies. Admins are unaffected; live held 0 customer
 documents on 2026-09-21, so nobody has hit it. Fix: `20260921180000_soft_delete_customer_document_rpc`
 (new RPC, no policy change; migration-history row 931), applied only after the parked
-`20260914100450` (PR #761), `20260914100800` and `20260914100900`, and with Mason's approval,
-then the page change that calls it.
+`20260914100800` and `20260914100900`, and with Mason's approval, then the page change that calls
+it. `20260914100450` (PR #761) is not a prerequisite any more: it sorts below the live high-water
+and is stranded until its own lane restamps it.
 
 **Last verified: 2026-09-22 against the live ledger.** A read-only ledger query confirmed by name
 that commission-cohort files `20260914100100`..`20260914100600` ARE applied — the first four on

@@ -70,9 +70,9 @@ BEGIN
 
   -- GRANTS: only authenticated executes it. anon and service_role must not,
   -- and neither may reach the shared intent helper directly.
-  IF has_function_privilege('anon', 'public.soft_delete_customer_document(uuid,text)', 'EXECUTE')
-     OR has_function_privilege('service_role', 'public.soft_delete_customer_document(uuid,text)', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.soft_delete_customer_document(uuid,text)', 'EXECUTE') THEN
+  IF has_function_privilege('anon', 'public.soft_delete_customer_document(uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.soft_delete_customer_document(uuid,uuid,text)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.soft_delete_customer_document(uuid,uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: EXECUTE must be granted to authenticated only';
   END IF;
   IF has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE') THEN
@@ -84,7 +84,7 @@ BEGIN
   -- both; setting only the JSON claims leaves the actor NULL.
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
-  v_result := public.soft_delete_customer_document(v_doc, v_key);
+  v_result := public.soft_delete_customer_document(v_doc, v_customer, v_key);
   IF v_result->>'document_id' <> v_doc::text OR v_result->>'customer_id' <> v_customer::text THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the result confirmed a different document: %', v_result::text;
   END IF;
@@ -95,7 +95,7 @@ BEGIN
   END IF;
 
   -- REPLAY: the same key returns the same receipt and does not rewrite the row.
-  v_replay := public.soft_delete_customer_document(v_doc, v_key);
+  v_replay := public.soft_delete_customer_document(v_doc, v_customer, v_key);
   SELECT d.deleted_at INTO v_replayed_at FROM public.customer_documents d WHERE d.id = v_doc;
   IF v_replay->>'document_id' <> v_result->>'document_id' OR v_replayed_at <> v_deleted_at THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the replay did not return the committed receipt unchanged';
@@ -104,7 +104,7 @@ BEGIN
   -- NO NEW ACCESS: another rep's document, and an already-removed document,
   -- are the same uniform refusal under a fresh key.
   BEGIN
-    PERFORM public.soft_delete_customer_document(v_other_doc, v_key || ':cross');
+    PERFORM public.soft_delete_customer_document(v_other_doc, v_other_customer, v_key || ':cross');
     RAISE EXCEPTION 'SMOKE_FAIL: a rep removed a document of a customer assigned to someone else';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
@@ -118,7 +118,7 @@ BEGIN
   END IF;
 
   BEGIN
-    PERFORM public.soft_delete_customer_document(v_doc, v_key || ':again');
+    PERFORM public.soft_delete_customer_document(v_doc, v_customer, v_key || ':again');
     RAISE EXCEPTION 'SMOKE_FAIL: an already-removed document was removed twice';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
@@ -130,7 +130,7 @@ BEGIN
 
   -- THE KEY IS REQUIRED: no key, and a blank key, are refused before any write.
   BEGIN
-    PERFORM public.soft_delete_customer_document(v_other_doc, NULL);
+    PERFORM public.soft_delete_customer_document(v_other_doc, v_other_customer, NULL);
     RAISE EXCEPTION 'SMOKE_FAIL: a removal ran without an idempotency key';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
@@ -140,7 +140,7 @@ BEGIN
     END IF;
   END;
   BEGIN
-    PERFORM public.soft_delete_customer_document(v_other_doc, '   ');
+    PERFORM public.soft_delete_customer_document(v_other_doc, v_other_customer, '   ');
     RAISE EXCEPTION 'SMOKE_FAIL: a removal ran with a blank idempotency key';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
@@ -154,7 +154,7 @@ BEGIN
   PERFORM set_config('request.jwt.claims', '', true);
   PERFORM set_config('request.jwt.claim.sub', '', true);
   BEGIN
-    PERFORM public.soft_delete_customer_document(v_other_doc, v_key || ':anon');
+    PERFORM public.soft_delete_customer_document(v_other_doc, v_other_customer, v_key || ':anon');
     RAISE EXCEPTION 'SMOKE_FAIL: a removal ran with no authenticated actor';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;

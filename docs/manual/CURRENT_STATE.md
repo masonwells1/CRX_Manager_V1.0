@@ -31,8 +31,9 @@ effective ordering high-water is
 **`20260914100600_latest_commission_recipient_label`**. Six commission-cohort files applied live:
 `20260914100100`..`20260914100400` on 2026-09-21 UTC, then `20260914100500` (`20260922015509`)
 and `20260914100600` (`20260922020038`) on 2026-09-22 UTC — the evening of 2026-09-21 in Chicago,
-which is why an earlier pass of this file dated them 09-21. Still parked above the high-water:
-`20260914100450` (PR #761), `100800` and `100900`, followed by the parked
+which is why an earlier pass of this file dated them 09-21. Still parked above the high-water: `100800` and `100900`
+(`20260914100450`, PR #761, now sorts BELOW it and is stranded until its lane restamps it),
+followed by the parked
 `20260921180000_soft_delete_customer_document_rpc` (sales reps cannot yet remove customer
 documents; see KNOWN_ISSUES), which must apply after them. The schema registry has NOT been
 regenerated for those four applies; the sentence below about its 2026-09-20 rebuild still stands.

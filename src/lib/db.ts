@@ -342,6 +342,14 @@ export const RpcErrorCodes = {
   // so one key creates at most one service — callers must NOT rotate there, or a
   // lost response plus any edited field manufactures a duplicate service.
   IDEMPOTENCY_CROSS_OP_KEY_REUSE: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE',
+  // Raised by every intent-bound mutating RPC: a missing or unusable key, a key
+  // held by another actor, and a key reused for a different request. Pages
+  // normally classify these through src/lib/idempotency.ts
+  // (isDefinitiveRpcRejection / getIdempotencyBindingRejection) rather than by
+  // token, so these constants exist for the cases that need the name.
+  IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
+  IDEMPOTENCY_ACTOR_MISMATCH: 'IDEMPOTENCY_ACTOR_MISMATCH',
+  IDEMPOTENCY_INTENT_MISMATCH: 'IDEMPOTENCY_INTENT_MISMATCH',
   // CRM relationship-intelligence loop (2026-07-16/17)
   CONTACT_NOT_FOUND: 'CONTACT_NOT_FOUND',
   FACT_NOT_FOUND: 'FACT_NOT_FOUND',
