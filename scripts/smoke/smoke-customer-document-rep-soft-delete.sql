@@ -75,8 +75,13 @@ BEGIN
      OR NOT has_function_privilege('authenticated', 'public.soft_delete_customer_document(uuid,uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'SMOKE_FAIL: EXECUTE must be granted to authenticated only';
   END IF;
-  IF has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: authenticated must not execute check_idempotency_intent directly';
+  -- Every prohibited role, not just authenticated: a stray grant to anon or
+  -- service_role coexists with the authenticated denial, and the helper is
+  -- owner-only by contract.
+  IF has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: no client role may execute check_idempotency_intent directly';
   END IF;
 
   -- THE FIX: the assigned rep removes their own customer's document.
