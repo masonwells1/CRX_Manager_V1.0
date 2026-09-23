@@ -9,19 +9,21 @@ customer documents on 2026-09-21, so nobody has hit it.
 
 **Change (parked, not applied live).** New migration
 `20260921180000_soft_delete_customer_document_rpc.sql` adds one SECURITY DEFINER function,
-`soft_delete_customer_document(p_document_id uuid, p_idempotency_key text DEFAULT NULL)`. It
-allows active admins (any customer) and active sales reps (only customers assigned to them) to
-soft-delete one active document. It requires a key and binds the receipt to the actor and document
-through `check_idempotency_intent`. Every missing, already-removed or unassigned case returns the
-same `CUSTOMER_DOCUMENT_NOT_FOUND`, and the function is executable only by `authenticated`. No
+`soft_delete_customer_document(p_document_id uuid, p_customer_id uuid, p_idempotency_key text
+DEFAULT NULL)` (the customer argument was added in the 2026-09-22 review round and is REQUIRED;
+see `2026-09-22-customer-document-rep-soft-delete-specialist-reviews.md`). It allows active admins
+(any customer) and active sales reps (only customers assigned to them) to soft-delete one active
+document of the customer named in the call. It requires a key and binds the receipt to the actor,
+the customer and the document through `check_idempotency_intent`. Every missing, already-removed,
+wrong-customer or unassigned case returns the same `CUSTOMER_DOCUMENT_NOT_FOUND`, and the function is executable only by `authenticated`. No
 table policy, trigger or data changes. `guard_customer_document_update` still enforces immutability
 and `deleted_by = auth.uid()`. A policy change was rejected because it would let reps read removed
 documents.
 
 **Apply order.** The stamp sorts above every parked candidate still above the live high-water:
-`20260914100450` (PR #761, same table, independent) and the commission files `20260914100800` and
-`100900` (`100500` and `100600` applied live later on 2026-09-21). It applies only after those, or it
-would strand them. Applying it
+`20260914100700` (#764, the restamp of the old `20260914100450`, same table, independent) and the
+commission files `20260914100800` and `100900`. `100500` and `100600` applied live on 2026-09-22
+UTC. It applies only after those three, or it would strand them. Applying it
 needs Mason's explicit approval.
 
 **Frontend.** The page change that calls the RPC ships in a separate PR held until the function is
