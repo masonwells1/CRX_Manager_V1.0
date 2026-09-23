@@ -121,8 +121,18 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 
 Seven JWT-protected Edge Functions were active in production when verified on 2026-08-09:
 `create-user`, `setup-blend-tickets-storage`, `process-blend-ticket`, `process-document`,
-`send-email`, `reset-user-password`, and `epa-lookup`. The function-specific secrets below must be
+`send-email`, `reset-user-password`, and `epa-lookup`. An eighth, `customer-document-files`, was
+deployed as v1 on 2026-09-22 UTC; it must stay deployed before migration
+`20260914100700_customer_document_bytes_server_only.sql` is applied, and it needs only
+`ALLOWED_ORIGIN` plus the platform-provided Supabase keys. The function-specific secrets below must be
 present wherever the corresponding function uses them.
+
+That migration refuses to apply (`PREFLIGHT_OBJECTS`) if the `customer-documents` bucket holds any
+file, because a browser could have signed a link to it under the old policies. The bucket was empty
+with zero document rows on 2026-09-21, so apply the migration right after the merge that ships the
+function-based Documents tab, before anyone uploads. If it refuses anyway, stop: list each object
+and its `customer_documents` row, and let Mason decide per file. Never empty the bucket blindly to
+get past the check.
 
 | Secret | Purpose | How to set |
 |--------|---------|------------|
