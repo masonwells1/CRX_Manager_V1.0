@@ -450,8 +450,14 @@ hides soft-deleted rows (`deleted_at IS NULL`). PostgreSQL applies an UPDATE's S
 **new** row as well as the old one, so a rep's soft delete — which makes the row invisible to them —
 is refused with `new row violates row-level security policy for table "customer_documents"`, with or
 without `RETURNING`. Reproduced on a local copy of the live policies; admins are unaffected. No live
-document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
-`SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
+document exists, so no one has hit it yet.
+
+**This is the same issue as the 2026-09-22 entry above, which supersedes this one.** That change was
+written: the parked `20260921180000_soft_delete_customer_document_rpc` (a `SECURITY DEFINER`
+soft-delete RPC with an idempotency key — the design this entry anticipated). Both steps are
+required before Remove works for a rep: the migration applies, **and** the separate page change
+deploys. Read the entry above for the current state, the prerequisites and the outstanding gate; do
+not track this issue from here.
 
 ## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
 

@@ -567,8 +567,21 @@ async function main() {
   assert.notEqual(chain.status, 0, `the registered chain must end by rolling back, not succeed:\n${chainOutput}`);
   assert.match(chainOutput, /SMOKE_PASS_ROLLBACK/, `registered chain failed:\n${chainOutput}`);
   assert.doesNotMatch(chainOutput, /SMOKE_FAIL|SMOKE_SETUP/, `registered chain reported a failure:\n${chainOutput}`);
+  // starts_with(), not LIKE: in PostgreSQL LIKE only `%` and `_` are wildcards, so the
+  // bracket-class idiom '[[]SMOKE]%' is a LITERAL prefix `[[]SMOKE]` that the chain's
+  // `[SMOKE]-mine.pdf` rows can never match. That made this assertion unfailable.
+  // The self-check below proves the matcher recognizes the exact names the chain inserts,
+  // so a future rewrite cannot silently return to a pattern that matches nothing.
   assert.equal(
-    scalar("SELECT count(*) FROM public.customer_documents WHERE filename LIKE '[[]SMOKE]%';"),
+    scalar(
+      "SELECT (starts_with('[SMOKE]-mine.pdf', '[SMOKE]') AND starts_with('[SMOKE]-other.pdf', '[SMOKE]')" +
+      " AND NOT starts_with('invoice.pdf', '[SMOKE]'))::text;",
+    ),
+    'true',
+    'leftover-row matcher is broken: it does not match the filenames the chain inserts',
+  );
+  assert.equal(
+    scalar("SELECT count(*) FROM public.customer_documents WHERE starts_with(filename, '[SMOKE]');"),
     '0',
     'the registered chain left rows behind, so it did not roll back',
   );
