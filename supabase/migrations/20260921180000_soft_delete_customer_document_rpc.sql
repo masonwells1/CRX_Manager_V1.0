@@ -22,9 +22,17 @@
 -- candidate is never proven on top of those three prerequisites. Read by hand
 -- on 2026-09-22: 20260914100700 changes only storage.objects policies and a
 -- customer_documents storage_path CHECK - no row policy, trigger, grant,
--- owner or RLS change on the table, and nothing this function reads (the
+-- owner or RLS change on the table, and nothing this function READS (the
 -- prover's skip-soundness check asserts exactly that, and now runs against
--- the real file); 20260914100800 adds a BEFORE INSERT trigger on
+-- the real file). It is NOT inert for this function's UPDATE, though:
+-- PostgreSQL re-validates EVERY CHECK constraint against the new row, even for
+-- columns the UPDATE does not touch, so that storage_path CHECK does
+-- participate here. That is safe only because 100700 adds it already validated
+-- behind a preflight that counts zero non-conforming rows; a future CHECK added
+-- NOT VALID, or validated over violating rows, would raise 23514 out of this
+-- function - escaping the uniform CUSTOMER_DOCUMENT_NOT_FOUND contract and
+-- printing the offending storage_path, which begins with the customer's uuid
+-- (rls-security-reviewer L3, 2026-09-23); 20260914100800 adds a BEFORE INSERT trigger on
 -- public.idempotency_keys with NO WHEN clause, so it does fire on this
 -- function's receipt INSERT, but its body returns NEW unless
 -- NEW.operation = 'transfer_job_to_invoice', so it cannot change this receipt;
@@ -148,8 +156,12 @@
 -- customer_documents_guard_editable_fields present, enabled, BEFORE UPDATE
 -- FOR EACH ROW, unconditional and all-column, with guard_customer_document_update
 -- matching its pinned body md5; no other overload of soft_delete_customer_document.
--- NOT CHECKED (platform-wide, not specific to this function): roles that
--- inherit EXECUTE through membership in authenticated.
+-- NOT CHECKED (platform-wide, not specific to this function): roles OTHER than
+-- anon and service_role that inherit EXECUTE through membership in
+-- authenticated. has_function_privilege() IS membership-aware, so the postflight
+-- loops do catch anon or service_role inheriting it, and the exact-grantee
+-- POSTFLIGHT_ACL check catches direct grants to any role; the residual gap is
+-- only roles not named in those arrays (rls-security-reviewer L5, 2026-09-23).
 -- POSTFLIGHT: exactly one overload with the pinned argument list;
 -- postgres-owned SECURITY DEFINER plpgsql with search_path=public, pg_temp;
 -- AUTH_REQUIRED, INSUFFICIENT_ROLE and IDEMPOTENCY_KEY_REQUIRED all appear
@@ -317,6 +329,7 @@ DECLARE
   v_customer_id uuid;
   v_deleted_at timestamptz;
   v_result jsonb;
+  v_helper_detail text;
 BEGIN
   -- Who is calling. All of this runs BEFORE any receipt is looked at.
   IF v_actor IS NULL THEN
@@ -365,31 +378,58 @@ BEGIN
   -- after a reassignment), so it is re-raised with the same message and
   -- SQLSTATE but no DETAIL. The page keys per document and never hits this.
   --
-  -- The handler is narrowed to THAT refusal by message. Catching every 22023
-  -- would relabel any other 22023 the helper might later raise as an intent
-  -- mismatch, turning an internal fault into what reads like a client replay
-  -- error. Read from the live installed definition 2026-09-23: its only 22023
-  -- raises are the two IDEMPOTENCY_INTENT_MISMATCH branches, and
-  -- IDEMPOTENCY_ACTOR_MISMATCH and IDEMPOTENCY_CROSS_OP_KEY_REUSE are P0001,
-  -- so this changes no behaviour today (CodeRabbit, PR #776).
+  -- The scrub is STRUCTURAL: no path below re-raises the helper's exception, so
+  -- the DETAIL can never reach a client, and leak safety does NOT depend on the
+  -- helper's message text. That is deliberate. An earlier revision of this
+  -- round classified by message and called bare RAISE for the non-mismatch
+  -- case; a later re-emit of the helper that renamed or prefixed its 22023
+  -- message would then have leaked the receipt (rls-security-reviewer M1,
+  -- 2026-09-23). The message is now used ONLY to pick which token to answer
+  -- with, so a drifted message mislabels a fault and leaks nothing.
+  --
+  -- starts_with(), NOT LIKE: `_` is a LIKE single-character wildcard, so
+  -- 'IDEMPOTENCY_INTENT_MISMATCH%' also matches 'IDEMPOTENCYxINTENTyMISMATCH'
+  -- (measured on live 2026-09-23, both operators, same round).
+  --
+  -- Read from the live installed definition 2026-09-23: the helper's only 22023
+  -- raises are its two IDEMPOTENCY_INTENT_MISMATCH branches, and
+  -- IDEMPOTENCY_ACTOR_MISMATCH and IDEMPOTENCY_CROSS_OP_KEY_REUSE carry no
+  -- ERRCODE (P0001), so the FAULT branch is unreachable today. The prover
+  -- drives it anyway with a shadow helper, because a security branch no test
+  -- can reach is a branch whose first execution is its first test.
   BEGIN
     v_replay := public.check_idempotency_intent(
       p_idempotency_key, 'soft_delete_customer_document', v_actor, v_fingerprint
     );
   EXCEPTION WHEN SQLSTATE '22023' THEN
-    IF SQLERRM NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
-      RAISE;
+    -- Keep the diagnostic on the SERVER side of the boundary, where it is not
+    -- an oracle. Without this a real key collision leaves no record anywhere.
+    GET STACKED DIAGNOSTICS v_helper_detail = PG_EXCEPTION_DETAIL;
+    RAISE LOG 'soft_delete_customer_document: idempotency helper raised 22023 (%); detail: %',
+      SQLERRM, coalesce(v_helper_detail, '(none)');
+    IF starts_with(SQLERRM, 'IDEMPOTENCY_INTENT_MISMATCH') THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH: This idempotency key was already used for a different request'
+        USING ERRCODE = '22023';
     END IF;
-    RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH' USING ERRCODE = '22023';
+    -- Any OTHER 22023 is an internal fault, not a client replay problem. A
+    -- distinct token keeps the page from showing "we do not know whether your
+    -- removal happened" for a failure that provably happened before the UPDATE.
+    RAISE EXCEPTION 'IDEMPOTENCY_HELPER_FAULT: The idempotency check failed before anything was removed'
+      USING ERRCODE = '22023';
   END;
   IF v_replay IS NOT NULL THEN
     IF jsonb_typeof(v_replay -> 'result') IS DISTINCT FROM 'object'
-       OR v_replay -> 'result' ->> 'customer_id' IS NULL THEN
-      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+       OR v_replay -> 'result' ->> 'customer_id' IS NULL
+       OR v_replay -> 'result' ->> 'document_id' IS NULL THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID: The stored receipt for this request is unusable';
     END IF;
-    -- The fingerprint already binds the customer, so this can only fail if a
-    -- receipt was written by an older version of this function.
-    IF (v_replay -> 'result' ->> 'customer_id')::uuid IS DISTINCT FROM p_customer_id THEN
+    -- The fingerprint already binds BOTH ids, so these can only fail for a
+    -- receipt written by an older version of this function or inserted by hand
+    -- as postgres. Both are checked, not just the customer: a receipt naming
+    -- another document would otherwise return a success envelope claiming that
+    -- OTHER document was removed (migration-drift-reviewer L1, 2026-09-23).
+    IF (v_replay -> 'result' ->> 'customer_id')::uuid IS DISTINCT FROM p_customer_id
+       OR (v_replay -> 'result' ->> 'document_id')::uuid IS DISTINCT FROM p_document_id THEN
       RAISE EXCEPTION 'CUSTOMER_DOCUMENT_NOT_FOUND: No active document you can remove was found';
     END IF;
     -- A replay returns only what the caller could do NOW: a rep whose customer

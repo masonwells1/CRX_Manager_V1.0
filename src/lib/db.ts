@@ -350,6 +350,11 @@ export const RpcErrorCodes = {
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
   IDEMPOTENCY_ACTOR_MISMATCH: 'IDEMPOTENCY_ACTOR_MISMATCH',
   IDEMPOTENCY_INTENT_MISMATCH: 'IDEMPOTENCY_INTENT_MISMATCH',
+  // Raised by soft_delete_customer_document when the shared idempotency helper
+  // answers 22023 with anything other than an intent mismatch: an internal
+  // fault, raised BEFORE any mutation, so it must not be shown as an
+  // "we cannot tell whether it happened" replay outcome.
+  IDEMPOTENCY_HELPER_FAULT: 'IDEMPOTENCY_HELPER_FAULT',
   // CRM relationship-intelligence loop (2026-07-16/17)
   CONTACT_NOT_FOUND: 'CONTACT_NOT_FOUND',
   FACT_NOT_FOUND: 'FACT_NOT_FOUND',

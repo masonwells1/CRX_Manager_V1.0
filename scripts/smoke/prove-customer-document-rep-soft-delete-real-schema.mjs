@@ -499,7 +499,55 @@ async function main() {
   setActive(REP, false);
   expectRefusal(removeAs(REP, DOC.fix, 'prover-rep-key-1'), /INSUFFICIENT_ROLE/, 'deactivated rep replaying their own key');
   setActive(REP, true);
-  console.log('[prover] replay: same key replays; different document -> INTENT_MISMATCH; other rep -> ACTOR_MISMATCH');
+  // 4b. THE FAULT BRANCH. The installed helper's only 22023 raises are its two
+  // IDEMPOTENCY_INTENT_MISMATCH branches, so the function's non-mismatch 22023
+  // path is unreachable against the real helper — and a security branch that no
+  // test can reach is one whose first execution is its first test
+  // (rls-security-reviewer M2). Drive it with a SHADOW helper that raises a
+  // DIFFERENT 22023 carrying a receipt-shaped DETAIL, then restore the real one.
+  // Rename the real helper aside rather than capturing its body: a multi-line
+  // pg_get_functiondef() does not survive scalar(), and a rename cannot lose
+  // bytes the way a capture-and-re-emit can.
+  psql('ALTER FUNCTION public.check_idempotency_intent(text,text,uuid,text) RENAME TO check_idempotency_intent_prover_real;');
+  psql(`CREATE OR REPLACE FUNCTION public.check_idempotency_intent(p_key text, p_operation text, p_actor uuid, p_fingerprint text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $shadow$
+BEGIN
+  RAISE EXCEPTION 'RECEIPT_INTENT_MISMATCH: key % is bound to a different request', p_key
+    USING ERRCODE = '22023',
+          DETAIL = jsonb_build_object('document_id', '${DOC.fix}', 'customer_id', '${CUSTOMER_MINE}')::text;
+END
+$shadow$;`);
+  const fault = removeAs(REP, DOC.roleCheck, 'prover-fault-key-1');
+  // The distinct token, NOT the intent-mismatch token: a fault must not read as
+  // "we cannot tell whether your removal happened".
+  expectRefusal(fault, /IDEMPOTENCY_HELPER_FAULT/, 'a non-mismatch 22023 from the helper');
+  assert.doesNotMatch(fault.error, /IDEMPOTENCY_INTENT_MISMATCH/, 'a helper fault was mislabelled as an intent mismatch');
+  // And the scrub is structural: the shadow DETAIL names a document and customer
+  // and must not reach the caller even though the message is unrecognised.
+  assert.ok(
+    !fault.error.includes(DOC.fix) && !fault.error.includes(CUSTOMER_MINE) && !/DETAIL/.test(fault.error)
+      && !fault.error.includes('RECEIPT_INTENT_MISMATCH'),
+    `the fault branch leaked the helper's DETAIL or message:\n${fault.error}`,
+  );
+  assert.match(docState(DOC.roleCheck), /^live\|/, 'a helper fault removed the document anyway');
+  // Restore, then PROVE the restore: every assertion after this point is
+  // meaningless if the shadow is still installed.
+  psql('DROP FUNCTION public.check_idempotency_intent(text,text,uuid,text);');
+  psql('ALTER FUNCTION public.check_idempotency_intent_prover_real(text,text,uuid,text) RENAME TO check_idempotency_intent;');
+  assert.equal(
+    scalar(`SELECT (position('IDEMPOTENCY_INTENT_MISMATCH' in prosrc) > 0)::text FROM pg_proc
+            WHERE oid = to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)');`),
+    'true',
+    'the real idempotency helper was not restored after the shadow test',
+  );
+  assert.equal(
+    scalar("SELECT (to_regprocedure('public.check_idempotency_intent_prover_real(text,text,uuid,text)') IS NULL)::text;"),
+    'true',
+    'the renamed-aside helper was left behind after the shadow test',
+  );
+  // The real helper answers its own token again, so the shadow is truly gone.
+  expectRefusal(removeAs(REP, DOC.second, 'prover-rep-key-1'), /IDEMPOTENCY_INTENT_MISMATCH/, 'the real helper after the shadow test');
+  console.log('[prover] replay: same key replays; different document -> INTENT_MISMATCH; other rep -> ACTOR_MISMATCH; a non-mismatch 22023 -> HELPER_FAULT with no DETAIL');
 
   // 5. Nobody gains access.
   expectRefusal(removeAs(REP, DOC.other, 'prover-rep-key-2'), /CUSTOMER_DOCUMENT_NOT_FOUND/, 'unassigned customer');
