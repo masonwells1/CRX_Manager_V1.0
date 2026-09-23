@@ -7,7 +7,7 @@ push and migration-apply guards still demand it. It returned no BLOCKER and no H
 independently re-verified from live: the guard body md5 pin, the helper's owner-only ACL, the
 tables' ownership and un-forced RLS, `idempotency_keys`' single deny-all policy, that
 `IDEMPOTENCY_ACTOR_MISMATCH` is P0001 (so the round-5 `22023` handler cannot swallow it), and the
-"95 applied post-baseline migrations, 2 skipped" replay claim.
+"95 applied post-baseline migrations" replay claim (3 skipped: `20260914100700`, `100800`, `100900`).
 
 **Fixed.**
 - **(MED) The prover was registered nowhere,** so `run-smoke.mjs` would never re-run it and a later

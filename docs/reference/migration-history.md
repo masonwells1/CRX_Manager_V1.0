@@ -15,7 +15,9 @@ candidate must sort above `20260914100400`. **Addendum (read-only ledger read, 2
 `20260914100500` (`20260922015509`) and `20260914100600` (`20260922020038`) have since applied, so the
 effective high-water is now `20260914100600` and only `100800` and `100900` still wait; the parked
 customer-document file was restamped `20260914100700` (row 935) to sit between them on purpose. The parked
-soft-delete RPC candidate `20260921180000` (row 936) sorts above the whole cohort and must apply after rows 935, 928 and 921's successors. PR #754's field-app season
+soft-delete RPC candidate `20260921180000` (row 936) sorts above the whole cohort and must apply after
+row 935 (`20260914100700`), row 928 (`20260914100800`) and row 915 (`20260914100900`). (Row 921 is the
+superseded document-writer entry with no file — it is not a prerequisite and has no successor to follow.) PR #754's field-app season
 files are restamped to `20260914101000`..`20260914101300`, so once row 935 is on `main` they are held
 behind it and the waiting cohort. `.claude/schema-registry.json` and the applied-migration snapshot
 do not yet record these four applies; refresh them before the next apply, or the pending-migration

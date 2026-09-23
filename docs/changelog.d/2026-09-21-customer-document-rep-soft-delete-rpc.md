@@ -31,8 +31,9 @@ live. Merging it earlier would break Remove for admins too, and `rpcFixtureLiveD
 blocks that merge.
 
 **Proof.** `node scripts/smoke/prove-customer-document-rep-soft-delete-real-schema.mjs` builds the
-2026-07-27 baseline plus the 95 applied post-baseline migrations (the 2 parked commission files
-`100800` and `100900` skipped, and PR #761's file skipped once it is on disk) in a throwaway Supabase PostgreSQL 17 container. It then runs as `authenticated`:
+2026-07-27 baseline plus the 95 applied post-baseline migrations (the THREE parked files skipped:
+`20260914100700` - #764's restamp of PR #761's file, now on disk - plus the commission files
+`20260914100800` and `20260914100900`) in a throwaway Supabase PostgreSQL 17 container. It then runs as `authenticated`:
 - **Before:** the rep's direct UPDATE is refused by RLS and the admin's succeeds.
 - **After:** the assigned rep removes the document with `deleted_by` set to the rep, and the
   same-key replay returns the same result without rewriting the row.

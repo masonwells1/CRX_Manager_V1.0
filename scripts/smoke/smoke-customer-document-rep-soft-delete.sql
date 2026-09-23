@@ -67,8 +67,15 @@ BEGIN
   INSERT INTO public.customer_documents
     (id, customer_id, document_type, storage_path, filename, mime_type, size_bytes, uploaded_by, source)
   VALUES
-    (v_doc, v_customer, 'other', v_customer || '/[SMOKE]-mine.pdf', '[SMOKE]-mine.pdf', 'application/pdf', 100, v_rep, 'rep'),
-    (v_other_doc, v_other_customer, 'other', v_other_customer || '/[SMOKE]-other.pdf', '[SMOKE]-other.pdf', 'application/pdf', 100, v_other_rep, 'rep');
+    -- storage_path MUST be the shape the customer-document-files Edge Function
+    -- issues: <customer uuid>/<document uuid>-<safe name>. The parked
+    -- prerequisite 20260914100700 adds a CHECK requiring exactly that, and it
+    -- applies BEFORE the candidate — a made-up path here would insert fine
+    -- today and break this chain the day that migration lands. The safe name
+    -- cannot start with '[', so the [SMOKE] marker lives in filename (which has
+    -- no constraint) and that is what the prover's leftover-row check matches.
+    (v_doc, v_customer, 'other', v_customer || '/' || v_doc || '-SMOKE-mine.pdf', '[SMOKE]-mine.pdf', 'application/pdf', 100, v_rep, 'rep'),
+    (v_other_doc, v_other_customer, 'other', v_other_customer || '/' || v_other_doc || '-SMOKE-other.pdf', '[SMOKE]-other.pdf', 'application/pdf', 100, v_other_rep, 'rep');
 
   -- GRANTS: only authenticated executes it. anon and service_role must not,
   -- and neither may reach the shared intent helper directly.

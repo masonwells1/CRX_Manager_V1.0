@@ -82,6 +82,23 @@ const DOC = {
   mutation: '5d000000-0000-4000-8000-0000000000d7',
 };
 const MISSING_DOC = '5d000000-0000-4000-8000-0000000000ff';
+const MUTANT_DOC = '5d000000-0000-4000-8000-0000000000e1';
+
+/**
+ * The storage path the customer-document-files Edge Function issues:
+ * <customer uuid>/<document uuid>-<safe name>.
+ *
+ * Every fixture in this prover and in the registered chain must use this shape.
+ * The parked prerequisite 20260914100700 adds
+ * customer_documents_storage_path_shape_check, which REQUIRES it — so a fixture
+ * that invents a path inserts fine today and fails the moment that
+ * prerequisite applies, taking the registered chain down with it (CodeRabbit,
+ * PR #775). assertFixturePathsSurviveParkedShapeCheck() below holds this to the
+ * constraint's own regex, read out of that migration.
+ */
+function docStoragePath(customerId, documentId, safeName) {
+  return `${customerId}/${documentId}-${safeName}`;
+}
 
 function docker(args, options = {}) {
   const r = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
@@ -143,6 +160,47 @@ function touchesCustomerDocumentSurface(sql) {
     'is',
   ).test(sql);
 }
+/**
+ * Skipping a parked migration is unsound not only when it changes this table's
+ * access surface, but also when it CONSTRAINS a column these fixtures write.
+ *
+ * 20260914100700 adds customer_documents_storage_path_shape_check. Read its
+ * regex out of the migration itself — never a copy — and require every path
+ * this prover and the registered chain insert to satisfy it. Without this the
+ * fixtures pass here and the chain breaks the day that prerequisite applies,
+ * which is BEFORE this candidate is allowed to apply.
+ */
+function assertFixturePathsSurviveParkedShapeCheck(parkedSql, label) {
+  const found = /storage_path\s*~\s*'(\^[^']+\$)'/.exec(parkedSql);
+  if (!found) return; // no path-shape constraint in this file: nothing to satisfy
+  const shape = new RegExp(found[1]);
+
+  // Derived from the SAME map and the SAME formula seedFixtures() uses, so this
+  // covers every fixture rather than a hand-picked sample that can fall behind.
+  const samples = Object.entries(DOC).map(([fixtureLabel, id]) =>
+    docStoragePath(fixtureLabel === 'other' ? CUSTOMER_OTHER : CUSTOMER_MINE, id, `${fixtureLabel}.pdf`));
+  samples.push(docStoragePath(CUSTOMER_OTHER, MUTANT_DOC, 'mutant.pdf'));
+  // The chain's own shape, standing in for the uuids it generates at run time.
+  samples.push(docStoragePath(CUSTOMER_MINE, MISSING_DOC, 'SMOKE-mine.pdf'));
+  for (const p of samples) {
+    assert.ok(shape.test(p), `fixture storage_path "${p}" violates ${label}'s path-shape constraint`);
+  }
+  // The matcher must be able to REJECT, or the loop above proves nothing. These
+  // are the two shapes this repository actually got wrong: a path with no
+  // document uuid, and a safe name starting with '['.
+  for (const bad of [`${CUSTOMER_MINE}/mine.pdf`, `${CUSTOMER_MINE}/${DOC.before}-[SMOKE]-mine.pdf`]) {
+    assert.ok(!shape.test(bad), `path-shape check is too loose: it accepted "${bad}"`);
+  }
+  // The chain builds its paths in SQL, so hold its COMPOSITION here: customer,
+  // '/', the document uuid, '-', then the safe name.
+  const chainSql = readFileSync(SMOKE_CHAIN, 'utf8');
+  for (const composed of [/v_customer \|\| '\/' \|\| v_doc \|\| '-/, /v_other_customer \|\| '\/' \|\| v_other_doc \|\| '-/]) {
+    assert.ok(
+      composed.test(chainSql),
+      `${path.basename(SMOKE_CHAIN)} no longer composes storage_path as <customer>/<document uuid>-<safe name>, so it will violate ${label}`,
+    );
+  }
+}
 function selfTestSkipSoundness() {
   const mustTrip = [
     'CREATE POLICY customer_documents_rep_select ON public.customer_documents FOR SELECT USING (true);',
@@ -190,10 +248,12 @@ function selected() {
       // unqualified `ON customer_documents`, a quoted policy name, FORCE ROW
       // LEVEL SECURITY (which would break the definer-bypasses-RLS premise
       // outright) and OWNER TO all have to trip this.
+      const parkedSql = readFileSync(file, 'utf8');
       assert.ok(
-        !touchesCustomerDocumentSurface(readFileSync(file, 'utf8')),
+        !touchesCustomerDocumentSurface(parkedSql),
         `${path.basename(file)} now changes customer_documents policies, triggers, ownership, RLS enforcement or grants; replay it or re-think the skip`,
       );
+      assertFixturePathsSurviveParkedShapeCheck(parkedSql, path.basename(file));
       continue;
     }
     assert.ok(!/customer_documents|soft_delete_customer_document/i.test(readFileSync(file, 'utf8')), `${path.basename(file)} touches customer documents; skipping it would change the proof`);
@@ -354,7 +414,7 @@ function seed() {
   `);
   const docs = Object.entries(DOC).map(([label, id]) => {
     const customer = label === 'other' ? CUSTOMER_OTHER : CUSTOMER_MINE;
-    return `('${id}','${customer}','other','${customer}/${label}.pdf','${label}.pdf','application/pdf',100,'${ADMIN}','rep')`;
+    return `('${id}','${customer}','other','${docStoragePath(customer, id, `${label}.pdf`)}','${label}.pdf','application/pdf',100,'${ADMIN}','rep')`;
   });
   psql(`INSERT INTO public.customer_documents (id,customer_id,document_type,storage_path,filename,mime_type,size_bytes,uploaded_by,source) VALUES ${docs.join(',')};`);
 }
@@ -548,8 +608,8 @@ async function main() {
   assert.equal(mutant.status, 0, `mutant failed to apply:\n${mutant.output}`);
   const mutantCall = removeAs(REP, DOC.mutation, 'prover-mutant-key');
   assert.ok(mutantCall.ok, 'sanity: mutant still removes an assigned document');
-  psql(`INSERT INTO public.customer_documents (id,customer_id,document_type,storage_path,filename,mime_type,size_bytes,uploaded_by,source) VALUES ('5d000000-0000-4000-8000-0000000000e1','${CUSTOMER_OTHER}','other','${CUSTOMER_OTHER}/mutant.pdf','mutant.pdf','application/pdf',100,'${ADMIN}','rep');`);
-  const leaked = removeAs(REP, '5d000000-0000-4000-8000-0000000000e1', 'prover-mutant-key-2');
+  psql(`INSERT INTO public.customer_documents (id,customer_id,document_type,storage_path,filename,mime_type,size_bytes,uploaded_by,source) VALUES ('${MUTANT_DOC}','${CUSTOMER_OTHER}','other','${docStoragePath(CUSTOMER_OTHER, MUTANT_DOC, 'mutant.pdf')}','mutant.pdf','application/pdf',100,'${ADMIN}','rep');`);
+  const leaked = removeAs(REP, MUTANT_DOC, 'prover-mutant-key-2');
   assert.ok(leaked.ok, 'MUTATION NOT DETECTED: without the assignment check the unassigned rep was still refused, so step 5 does not test that check');
   const restored = apply('candidate.sql', true);
   assert.equal(restored.status, 0, `candidate failed to restore after the mutation:\n${restored.output}`);
