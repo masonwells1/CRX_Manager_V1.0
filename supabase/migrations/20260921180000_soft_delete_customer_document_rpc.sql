@@ -364,11 +364,22 @@ BEGIN
   -- caller may no longer be allowed to see (a key reused on another document
   -- after a reassignment), so it is re-raised with the same message and
   -- SQLSTATE but no DETAIL. The page keys per document and never hits this.
+  --
+  -- The handler is narrowed to THAT refusal by message. Catching every 22023
+  -- would relabel any other 22023 the helper might later raise as an intent
+  -- mismatch, turning an internal fault into what reads like a client replay
+  -- error. Read from the live installed definition 2026-09-23: its only 22023
+  -- raises are the two IDEMPOTENCY_INTENT_MISMATCH branches, and
+  -- IDEMPOTENCY_ACTOR_MISMATCH and IDEMPOTENCY_CROSS_OP_KEY_REUSE are P0001,
+  -- so this changes no behaviour today (CodeRabbit, PR #776).
   BEGIN
     v_replay := public.check_idempotency_intent(
       p_idempotency_key, 'soft_delete_customer_document', v_actor, v_fingerprint
     );
   EXCEPTION WHEN SQLSTATE '22023' THEN
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE;
+    END IF;
     RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH' USING ERRCODE = '22023';
   END;
   IF v_replay IS NOT NULL THEN

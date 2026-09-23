@@ -45,7 +45,7 @@ works for reps only after **both** steps land: this migration applies, **and** t
 change (branch `claude/customer-document-rep-remove-page-v3`) deploys. The migration alone is not
 enough — until the page deploys it keeps issuing the direct `UPDATE`, which the rep's RLS policy
 still refuses (see KNOWN_ISSUES). It applies after
-`20260914100700`, `100800` and `100900`, and its `gpt-5.6-sol` gate has not run — the Codex CLI hit
+`20260914100700`, `20260914100800` and `20260914100900`, and its `gpt-5.6-sol` gate has not run — the Codex CLI hit
 its usage limit, retry 2026-09-26. Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under

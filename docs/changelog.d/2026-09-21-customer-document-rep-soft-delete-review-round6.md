@@ -5,8 +5,8 @@ Codex `gpt-5.6-luna` xhigh review, round 6, of the parked
 higher.
 
 **Fixed (MED).** The prover could build a schema that differs from production.
-- A read-only ledger query found `20260914100500` and `20260914100600` applied live later on
-  2026-09-21.
+- A read-only ledger query found `20260914100500` and `20260914100600` applied live later, on
+  2026-09-22 UTC (ledger versions `20260922015509` and `20260922020038`).
 - The prover still skipped both as parked, so its schema lacked two live migrations.
 - They are now replayed, and the proof passes against that schema.
 - A by-name comparison of every local post-baseline file against the live ledger found only
