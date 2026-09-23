@@ -45,8 +45,10 @@ works for reps only after **both** steps land: this migration applies, **and** t
 change (branch `claude/customer-document-rep-remove-page-v3`) deploys. The migration alone is not
 enough — until the page deploys it keeps issuing the direct `UPDATE`, which the rep's RLS policy
 still refuses (see KNOWN_ISSUES). It applies after
-`20260914100700`, `20260914100800` and `20260914100900`, and its `gpt-5.6-sol` gate has not run — the Codex CLI hit
-its usage limit, retry 2026-09-26. Carried forward from the 2026-09-20
+`20260914100700`, `20260914100800` and `20260914100900`, and its `gpt-5.6-sol` gate has not run ON THE CURRENT HEAD — it returned CLEAN on the earlier
+heads `1789c72b3` and `8069cd45a`, but the signature changed after them and every commit since
+unbinds those proofs, so a fresh run is required. The Codex CLI hit its usage limit, retry
+2026-09-26. Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under

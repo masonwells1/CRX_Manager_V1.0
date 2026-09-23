@@ -100,7 +100,9 @@ customer-document rows when this was found, so nobody has hit it. The fix is the
 `20260921180000_soft_delete_customer_document_rpc` (new SECURITY DEFINER RPC, no policy change;
 migration-history row 936), which applies only after `20260914100700`, `20260914100800` and
 `20260914100900`, and with Mason's approval. The page change that calls it merges only after that
-apply. The `gpt-5.6-sol` gate has not run on the candidate: the Codex CLI hit its usage limit and
+apply. The `gpt-5.6-sol` gate returned CLEAN on two earlier heads of the candidate (`1789c72b3`,
+`8069cd45a`); those proofs are void because the signature changed after them, so the gate has not
+run on the current head: the Codex CLI hit its usage limit and
 reports a retry date of 2026-09-26. An independent Claude Opus round, `rls-security-reviewer` and
 `migration-drift-reviewer` all came back with no BLOCKER and no HIGH, which is supporting evidence,
 not that gate.
