@@ -63,4 +63,7 @@ with.
 
 Proof: the prover re-ran end to end to `CUSTOMER_DOCUMENT_REP_SOFT_DELETE_PROOF_PASS`, now
 including the shadow-helper fault case, the registered chain, and both mutation tests. The
-`gpt-5.6-sol` gate still has not run on any blob of this file.
+`gpt-5.6-sol` gate returned CLEAN on the earlier heads `1789c72b3` and `8069cd45a`; those proofs
+are void for the current head (the signature changed after them, and every commit unbinds a
+proof), so a fresh run is still required before merge or apply. It has not run since (Codex
+usage limit, retry 2026-09-26).
