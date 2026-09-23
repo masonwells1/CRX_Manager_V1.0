@@ -30,6 +30,8 @@ DECLARE
   v_deleted_at timestamptz;
   v_deleted_by uuid;
   v_replayed_at timestamptz;
+  v_ctid tid;
+  v_replayed_ctid tid;
   v_refusal text;
 BEGIN
   -- Two DIFFERENT active sales reps, each with an active customer of their own.
@@ -90,20 +92,32 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_rep, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
   v_result := public.soft_delete_customer_document(v_doc, v_customer, v_key);
-  IF v_result->>'document_id' <> v_doc::text OR v_result->>'customer_id' <> v_customer::text THEN
+  -- IS DISTINCT FROM, never <>: `NULL <> x` is NULL and IF NULL does not fire, so a function
+  -- that returned an empty or partial object would pass every <> check silently.
+  IF v_result->>'document_id' IS DISTINCT FROM v_doc::text
+     OR v_result->>'customer_id' IS DISTINCT FROM v_customer::text THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the result confirmed a different document: %', v_result::text;
   END IF;
-  SELECT d.deleted_at, d.deleted_by INTO v_deleted_at, v_deleted_by
+  SELECT d.deleted_at, d.deleted_by, d.ctid INTO v_deleted_at, v_deleted_by, v_ctid
     FROM public.customer_documents d WHERE d.id = v_doc;
-  IF v_deleted_at IS NULL OR v_deleted_by <> v_rep THEN
+  IF v_deleted_at IS NULL OR v_deleted_by IS DISTINCT FROM v_rep THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the row was not stamped deleted_by = the acting rep';
   END IF;
 
   -- REPLAY: the same key returns the same receipt and does not rewrite the row.
+  --
+  -- ctid, not deleted_at, is what proves "did not rewrite". now() is fixed for the whole
+  -- transaction, so a second UPDATE inside this chain would write the SAME deleted_at and a
+  -- timestamp comparison could not tell a replay from a rewrite. An UPDATE always writes a new
+  -- tuple version, so its ctid moves even within one transaction.
   v_replay := public.soft_delete_customer_document(v_doc, v_customer, v_key);
-  SELECT d.deleted_at INTO v_replayed_at FROM public.customer_documents d WHERE d.id = v_doc;
-  IF v_replay->>'document_id' <> v_result->>'document_id' OR v_replayed_at <> v_deleted_at THEN
+  SELECT d.deleted_at, d.ctid INTO v_replayed_at, v_replayed_ctid
+    FROM public.customer_documents d WHERE d.id = v_doc;
+  IF v_replay IS DISTINCT FROM v_result OR v_replayed_at IS DISTINCT FROM v_deleted_at THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the replay did not return the committed receipt unchanged';
+  END IF;
+  IF v_replayed_ctid IS DISTINCT FROM v_ctid THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the replay rewrote the row (ctid moved % -> %)', v_ctid, v_replayed_ctid;
   END IF;
 
   -- NO NEW ACCESS: another rep's document, and an already-removed document,

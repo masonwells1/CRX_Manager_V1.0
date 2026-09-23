@@ -40,8 +40,11 @@ UTC:** `20260914100500_commission_dates_follow_chicago_business_day` (`202609220
 effective ordering high-water is now `20260914100600`; `20260914100700` (the customer-document
 candidate), `20260914100800` and `20260914100900` are not applied.** Also parked, above the whole
 cohort: `20260921180000_soft_delete_customer_document_rpc` (migration-history row 936), which lets
-an active sales rep remove a document of a customer assigned to them; until it applies, Remove on
-the Documents tab fails for reps with an RLS refusal (see KNOWN_ISSUES). It applies after
+an active sales rep remove a document of a customer assigned to them. Remove on the Documents tab
+works for reps only after **both** steps land: this migration applies, **and** the separate page
+change (branch `claude/customer-document-rep-remove-page-v3`) deploys. The migration alone is not
+enough — until the page deploys it keeps issuing the direct `UPDATE`, which the rep's RLS policy
+still refuses (see KNOWN_ISSUES). It applies after
 `20260914100700`, `100800` and `100900`, and its `gpt-5.6-sol` gate has not run — the Codex CLI hit
 its usage limit, retry 2026-09-26. Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two

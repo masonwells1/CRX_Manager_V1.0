@@ -129,7 +129,9 @@ function ready() {
  * without that self-test this branch would ship unexercised.
  */
 function touchesCustomerDocumentSurface(sql) {
-  const table = String.raw`(?:public\s*\.\s*)?"?customer_documents"?`;
+  // The SCHEMA qualifier is quotable too: `ON "public"."customer_documents"` must trip this,
+  // and an unquoted-schema-only pattern silently misses it.
+  const table = String.raw`(?:"?public"?\s*\.\s*)?"?customer_documents"?`;
   return new RegExp(
     [
       String.raw`(?:POLICY|TRIGGER)[^;]*\bON\s+${table}`,
@@ -152,6 +154,9 @@ function selfTestSkipSoundness() {
     'ALTER TABLE "customer_documents" OWNER TO supabase_admin;',
     'ALTER TABLE public . customer_documents DISABLE ROW LEVEL SECURITY;',
     'CREATE OR REPLACE FUNCTION public.guard_customer_document_update() RETURNS trigger AS $$ BEGIN RETURN NEW; END $$ LANGUAGE plpgsql;',
+    'CREATE POLICY "x" ON "public"."customer_documents" FOR SELECT USING (true);',
+    'GRANT UPDATE ON TABLE "public"."customer_documents" TO authenticated;',
+    'ALTER TABLE "public" . "customer_documents" ENABLE ROW LEVEL SECURITY;',
   ];
   for (const sql of mustTrip) {
     assert.ok(touchesCustomerDocumentSurface(sql), `skip-soundness check missed: ${sql}`);
