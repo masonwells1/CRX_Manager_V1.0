@@ -38,7 +38,12 @@ registry has not been regenerated since those four applies. **Update, read-only 
 UTC:** `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`) and
 `20260914100600_latest_commission_recipient_label` (`20260922020038`) have since applied, so the
 effective ordering high-water is now `20260914100600`; `20260914100700` (the customer-document
-candidate), `20260914100800` and `20260914100900` are not applied.** Carried forward from the 2026-09-20
+candidate), `20260914100800` and `20260914100900` are not applied.** Also parked, above the whole
+cohort: `20260921180000_soft_delete_customer_document_rpc` (migration-history row 936), which lets
+an active sales rep remove a document of a customer assigned to them; until it applies, Remove on
+the Documents tab fails for reps with an RLS refusal (see KNOWN_ISSUES). It applies after
+`20260914100700`, `100800` and `100900`, and its `gpt-5.6-sol` gate has not run — the Codex CLI hit
+its usage limit, retry 2026-09-26. Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under

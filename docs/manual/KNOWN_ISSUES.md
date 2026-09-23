@@ -92,6 +92,19 @@ The final label-selection candidate replaces alphabetical historical-name select
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
 
+**A sales rep cannot remove a customer document (found 2026-09-21; fix PARKED, not applied).** The
+Documents tab's Remove made a direct UPDATE that PostgreSQL refuses for reps ("new row violates
+row-level security policy"), because `customer_documents_rep_select` hides soft-deleted rows and an
+UPDATE's new row is checked against SELECT policies. Admins are unaffected, and live held 0
+customer-document rows when this was found, so nobody has hit it. The fix is the parked
+`20260921180000_soft_delete_customer_document_rpc` (new SECURITY DEFINER RPC, no policy change;
+migration-history row 936), which applies only after `20260914100700`, `20260914100800` and
+`20260914100900`, and with Mason's approval. The page change that calls it merges only after that
+apply. The `gpt-5.6-sol` gate has not run on the candidate: the Codex CLI hit its usage limit and
+reports a retry date of 2026-09-26. An independent Claude Opus round, `rls-security-reviewer` and
+`migration-drift-reviewer` all came back with no BLOCKER and no HIGH, which is supporting evidence,
+not that gate.
+
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
 `20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations
 have since applied above it. It remains the installed `save_job` source body for the local row-916
