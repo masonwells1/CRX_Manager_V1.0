@@ -322,10 +322,13 @@ const unchangedAssertMd5 = md5(plpgsqlBody(unchangedDateGuardSql,
 const unchangedTriggerMd5 = md5(plpgsqlBody(unchangedDateGuardSql,
   'CREATE OR REPLACE FUNCTION public.guard_field_app_invoice_season_date('));
 assert.equal(unchangedDateGuardSql.includes('\r'), false, 'unchanged-date correction must use LF');
+// Mason's 2026-09-22 decision: the row trigger KEEPS the group-wide assertion. Narrowing it to the
+// written row was built, measured to strand a mixed-season group beyond recovery, reverted and
+// refuted -- see mixedSeasonGroupProbe, whose mutant reproduces that state.
 for (const [name, sql] of [['cross-season guard', crossSeasonGuardSql], ['unchanged-date correction', unchangedDateGuardSql]]) {
   const trigger = plpgsqlBody(sql, 'CREATE OR REPLACE FUNCTION public.guard_field_app_invoice_season_date(');
-  assert.equal(trigger.includes('_assert_field_app_invoice_date_in_filed_season'), false,
-    `${name}: the row trigger must validate only its own row, never the group-wide helper (PR #758 CodeRabbit)`);
+  assert.ok(trigger.includes('PERFORM public._assert_field_app_invoice_date_in_filed_season(OLD.id, NEW.invoice_date);'),
+    `${name}: the row trigger must keep the group-wide assertion; a per-row-only guard lets one edit strand a mixed-season group (refuted 2026-09-22)`);
 }
 assert.ok(plpgsqlBody(crossSeasonGuardSql, 'CREATE OR REPLACE FUNCTION public.preview_field_app_invoice_split(')
   .includes('PERFORM public._assert_field_app_invoice_date_in_filed_season(p_invoice_id, p_invoice_date);'),
@@ -1443,28 +1446,42 @@ $probe$;`;
   assert.doesNotMatch(said(out), /INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED/, 'no second preview guard may hide a missing assertion');
 }
 
-// CodeRabbit on PR #758: the ROW trigger must validate only the row being written, against its
-// OWN filed season (DECISION_LOG 2026-09-08/13: mixed historical groups are not unified). The
-// preview stays group-wide because its one date is written to every member. `triggerSourceSql`
-// is the migration whose trigger is installed; with `reinstateGroupTriggerCheck` the probe
-// reinstalls that trigger with the removed group-wide PERFORM put back -- byte-identical to the
-// pre-fix body, pinned by `expectedOldTriggerMd5` -- and must see the legitimate edit refused.
-function mixedSeasonGroupProbe(label, { triggerSourceSql, reinstateGroupTriggerCheck = false, expectedOldTriggerMd5 = null } = {}) {
+// WHY THE ROW TRIGGER KEEPS THE GROUP-WIDE ASSERTION (Mason's decision, 2026-09-22).
+//
+// CodeRabbit's Major on PR #758 asked for the opposite: have the trigger validate only the row
+// being written, so a single-invoice date edit inside a mixed-season group is allowed whenever the
+// new date stays inside THAT invoice's own filed season. That was built, and measured here in
+// PostgreSQL 17 -- it creates an unrecoverable state, so it was reverted and refuted.
+//
+// The production mixed group (DECISION_LOG 2026-09-04 accepted consequence) is ONE application,
+// ONE group, ONE shared date, with the pre-existing member filed in the EARLIER season and
+// therefore inconsistent with that shared date. It is usable: a group save at the unchanged date
+// changes no member's invoice_date, so no date check fires. Allow one member's date to move alone
+// and the group holds TWO dates for one physical application -- after which the field-app save
+// (which writes ONE date to every member) is refused for every possible date, the preview is
+// refused, and neither member's date can be moved back, because each convergence target lies
+// outside that member's own filed season. Void-and-reissue becomes the only exit.
+//
+// So this probe asserts BOTH directions:
+//   real guard -> the single-row edit is refused, and the group stays saveable at its own date;
+//   mutant     -> removing the group-wide PERFORM permits the edit and then bricks the group.
+// `expectedMutantTriggerMd5` pins the mutant to the exact rejected lap-9 body.
+function mixedSeasonGroupProbe(label, { triggerSourceSql, unchangedDateCorrectionInstalled = false,
+  dropGroupTriggerCheck = false, expectedMutantTriggerMd5 = null } = {}) {
   let mutant = '';
-  if (reinstateGroupTriggerCheck) {
+  if (dropGroupTriggerCheck) {
     const create = triggerSourceSql.match(/CREATE OR REPLACE FUNCTION public\.guard_field_app_invoice_season_date\(\)[\s\S]*?\$function\$;/)?.[0];
     assert.ok(create, 'mixed-group mutation must isolate the actual trigger declaration');
-    const tail = '\n    END IF;\n  END IF;\n  RETURN NEW;';
-    assert.equal(create.split(tail).length, 2, 'mixed-group mutation must find the trigger tail exactly once');
-    mutant = create.replace(tail,
-      '\n      PERFORM public._assert_field_app_invoice_date_in_filed_season(OLD.id, NEW.invoice_date);' + tail)
-      // 20260914101000's fix also reworded one in-body comment; put the original back so the
-      // mutant is the byte-identical pre-fix body, not merely an equivalent one.
-      .replace('    -- Validate only the row being written, against its OWN filed season. A group save\n'
-        + '    -- still checks every member, because it writes each member row through this trigger.\n',
-      '    -- Validate NEW directly: a soft-deleted OLD row is excluded by the group helper.\n');
+    const call = '\n      PERFORM public._assert_field_app_invoice_date_in_filed_season(OLD.id, NEW.invoice_date);';
+    assert.equal(create.split(call).length, 2, 'mixed-group mutation must find the group-wide call exactly once');
+    mutant = create.replace(call, '')
+      // The rejected lap-9 revision also reworded this in-body comment; reproduce it so the
+      // mutant is byte-identical to the design that was measured and refused.
+      .replace('    -- Validate NEW directly: a soft-deleted OLD row is excluded by the group helper.\n',
+        '    -- Validate only the row being written, against its OWN filed season. A group save\n'
+        + '    -- still checks every member, because it writes each member row through this trigger.\n');
     assert.equal(md5(plpgsqlBody(mutant, 'CREATE OR REPLACE FUNCTION public.guard_field_app_invoice_season_date(')),
-      expectedOldTriggerMd5, 'the mixed-group mutant must reproduce the exact pre-fix trigger body');
+      expectedMutantTriggerMd5, 'the mutant must reproduce the exact rejected per-row trigger body');
   }
   const locations = `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}))`;
   const sql = `BEGIN;
@@ -1472,7 +1489,7 @@ ${mutant}
 DO $probe$
 DECLARE
   v_a uuid; v_b uuid; v_field uuid; v_svc uuid; v_res jsonb; v_group uuid;
-  v_inv_a uuid; v_inv_b uuid;
+  v_inv_a uuid; v_inv_b uuid; v_preview jsonb;
 BEGIN
 ${AUTHENTICATE}
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] mixed ${label} A ' || substr(gen_random_uuid()::text, 1, 8)) RETURNING id INTO v_a;
@@ -1485,7 +1502,11 @@ ${AUTHENTICATE}
   INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season) VALUES
     (v_a, v_svc, ${RATE_CUR}, ${SEASON_NOW}), (v_a, v_svc, ${RATE_NEXT}, ${SEASON_NOW + 1}),
     (v_b, v_svc, ${RATE_CUR}, ${SEASON_NOW}), (v_b, v_svc, ${RATE_GROUP_B}, ${SEASON_NOW + 1});
-  v_res := ${SAVE_IMPL}(NULL, jsonb_build_object('invoice_date', '${DATE_IN_SEASON}'),
+
+  -- The production shape: one group, one shared date in the NEXT season, and member A re-filed
+  -- into the EARLIER season while KEEPING that shared date (so A is inconsistent with its own
+  -- date, exactly as adding a grower across October 1 leaves it).
+  v_res := ${SAVE_IMPL}(NULL, jsonb_build_object('invoice_date', '${DATE_NEXT_SEASON}'),
     ${locations}, '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
   SELECT id, invoice_group_id INTO v_inv_a, v_group FROM invoices
    WHERE customer_id = v_a AND invoice_type = 'field_application' AND deleted_at IS NULL;
@@ -1494,70 +1515,117 @@ ${AUTHENTICATE}
   IF v_group IS NULL OR v_inv_b IS NULL THEN
     RAISE EXCEPTION 'PROBE_SETUP ${label}: save did not create a two-member group (%)', v_res;
   END IF;
-  -- A genuinely historical mixed group: each member is internally consistent with its OWN
-  -- filed season (A in ${SEASON_NOW}, B in ${SEASON_NOW + 1}), which the guard never re-seasons.
   ALTER TABLE invoices DISABLE TRIGGER aa_guard_field_app_invoice_season_date;
-  UPDATE invoices SET season = ${SEASON_NOW + 1}, invoice_date = DATE '${DATE_NEXT_SEASON}' WHERE id = v_inv_b;
+  UPDATE invoices SET season = ${SEASON_NOW} WHERE id = v_inv_a;
   ALTER TABLE invoices ENABLE TRIGGER aa_guard_field_app_invoice_season_date;
-${reinstateGroupTriggerCheck ? `
-  BEGIN
-    UPDATE invoices SET invoice_date = DATE '${DATE_IN_SEASON}' - 1 WHERE id = v_inv_a;
-    RAISE EXCEPTION 'MIXED_GROUP_MUTANT_NOT_CAUGHT ${label}';
-  EXCEPTION WHEN check_violation THEN
-    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
-  END;
-  RAISE EXCEPTION 'MIXED_GROUP_PROBE_ROLLBACK ${label} mutant-refused-own-season-edit';` : `
-  -- 1. A direct single-row edit that stays inside A's OWN season is allowed, although B differs.
-  UPDATE invoices SET invoice_date = DATE '${DATE_IN_SEASON}' - 1 WHERE id = v_inv_a;
-  IF (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' - 1 THEN
-    RAISE EXCEPTION 'MIXED_GROUP_DIRECT_EDIT_BLOCKED ${label}';
+  IF (SELECT count(DISTINCT invoice_date) FROM invoices WHERE invoice_group_id = v_group AND deleted_at IS NULL) <> 1
+     OR (SELECT count(DISTINCT season) FROM invoices WHERE invoice_group_id = v_group AND deleted_at IS NULL) <> 2 THEN
+    RAISE EXCEPTION 'PROBE_SETUP ${label}: fixture must hold ONE shared date across TWO seasons';
   END IF;
-  -- 2. So is the same edit through the real public generic save_invoice entry.
+${dropGroupTriggerCheck ? `
+  -- MUTANT: the rejected per-row design. The single-row edit is permitted ...
   PERFORM public.save_invoice(jsonb_build_object('id', v_inv_a, 'invoice_type', 'field_application',
-    'invoice_date', (DATE '${DATE_IN_SEASON}' - 2)::text), '[]'::jsonb, NULL);
-  IF (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' - 2 THEN
-    RAISE EXCEPTION 'MIXED_GROUP_GENERIC_EDIT_BLOCKED ${label}';
+    'invoice_date', '${DATE_IN_SEASON}'), '[]'::jsonb, NULL);
+  IF (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' THEN
+    RAISE EXCEPTION 'MIXED_GROUP_MUTANT_DID_NOT_PERMIT_THE_EDIT ${label}';
   END IF;
-  -- 3. Moving A into B's season is still refused, and changes nothing.
+  IF (SELECT count(DISTINCT invoice_date) FROM invoices WHERE invoice_group_id = v_group AND deleted_at IS NULL) <> 2 THEN
+    RAISE EXCEPTION 'MIXED_GROUP_MUTANT_DID_NOT_SPLIT_THE_GROUP_DATE ${label}';
+  END IF;
+  -- ... and now NO date saves the group, and neither member can be moved back.
+  PERFORM refuses_field_app_save_${label}(v_inv_a, v_field, v_svc, DATE '${DATE_IN_SEASON}', 'A_DATE');
+  PERFORM refuses_field_app_save_${label}(v_inv_a, v_field, v_svc, DATE '${DATE_NEXT_SEASON}', 'B_DATE');
+  PERFORM refuses_field_app_save_${label}(v_inv_a, v_field, v_svc, DATE '${DATE_IN_SEASON}' - 5, 'THIRD_DATE');
   BEGIN
-    UPDATE invoices SET invoice_date = DATE '${DATE_NEXT_SEASON}' WHERE id = v_inv_a;
-    RAISE EXCEPTION 'MIXED_GROUP_CROSS_SEASON_GUARD_MISSING ${label}';
+    PERFORM public.save_invoice(jsonb_build_object('id', v_inv_a, 'invoice_type', 'field_application',
+      'invoice_date', '${DATE_NEXT_SEASON}'), '[]'::jsonb, NULL);
+    RAISE EXCEPTION 'MIXED_GROUP_MUTANT_A_CONVERGED ${label}';
   EXCEPTION WHEN check_violation THEN
     IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
   END;
-  IF (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' - 2 THEN
-    RAISE EXCEPTION 'MIXED_GROUP_REFUSAL_CHANGED_ROW ${label}';
+  BEGIN
+    PERFORM public.save_invoice(jsonb_build_object('id', v_inv_b, 'invoice_type', 'field_application',
+      'invoice_date', '${DATE_IN_SEASON}'), '[]'::jsonb, NULL);
+    RAISE EXCEPTION 'MIXED_GROUP_MUTANT_B_CONVERGED ${label}';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM ${PREVIEW}(${locations}, '[]'::jsonb, v_svc, v_inv_a, DATE '${DATE_IN_SEASON}');
+    RAISE EXCEPTION 'MIXED_GROUP_MUTANT_PREVIEW_SURVIVED ${label}';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  RAISE EXCEPTION 'MIXED_GROUP_PROBE_ROLLBACK ${label} mutant-permitted-the-edit-then-bricked-the-group';` : `
+  -- REAL GUARD. 1. Saving the group again at the date it already holds is NOT a date edit, so
+  --    the trigger's date checks never run and no member's date moves. True with or without
+  --    migration 101100, because the trigger only validates a row whose date actually changes.
+  v_res := ${SAVE_IMPL}(v_inv_a, jsonb_build_object('invoice_date', '${DATE_NEXT_SEASON}'),
+    ${locations}, '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
+  IF (SELECT count(DISTINCT invoice_date) FROM invoices WHERE invoice_group_id = v_group AND deleted_at IS NULL) <> 1
+     OR (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_NEXT_SEASON}' THEN
+    RAISE EXCEPTION 'MIXED_GROUP_SHARED_DATE_SAVE_CHANGED_A_DATE ${label}';
   END IF;
-  -- 4. Soft-delete and restore A at its unchanged in-season date is allowed.
+  -- 1b. The PREVIEW of that same unchanged date is the one place the two halves differ: the
+  --     wrapper asserts unconditionally, so before 101100 it refuses a date nothing is moving.
+${unchangedDateCorrectionInstalled ? `  --     With 101100 in, it succeeds.
+  v_preview := ${PREVIEW}(${locations}, '[]'::jsonb, v_svc, v_inv_a, DATE '${DATE_NEXT_SEASON}');
+  IF v_preview IS NULL THEN RAISE EXCEPTION 'MIXED_GROUP_SHARED_DATE_PREVIEW_BLOCKED ${label}'; END IF;` : `  --     Without it, the preview is refused -- the pre-existing source defect 101100 corrects
+  --     (PHASE 8-source-defect), recorded here on the mixed-season shape as well.
+  BEGIN
+    PERFORM ${PREVIEW}(${locations}, '[]'::jsonb, v_svc, v_inv_a, DATE '${DATE_NEXT_SEASON}');
+    RAISE EXCEPTION 'MIXED_GROUP_SHARED_DATE_PREVIEW_ALLOWED_BEFORE_101100 ${label}';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;`}
+  -- 2. A single-row edit that would split the group's shared date is REFUSED, through the public
+  --    generic entry and through a raw admin UPDATE, even though the new date fits A's OWN season.
+  BEGIN
+    PERFORM public.save_invoice(jsonb_build_object('id', v_inv_a, 'invoice_type', 'field_application',
+      'invoice_date', '${DATE_IN_SEASON}'), '[]'::jsonb, NULL);
+    RAISE EXCEPTION 'MIXED_GROUP_GENERIC_SPLIT_ALLOWED ${label}';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    UPDATE invoices SET invoice_date = DATE '${DATE_IN_SEASON}' WHERE id = v_inv_a;
+    RAISE EXCEPTION 'MIXED_GROUP_DIRECT_SPLIT_ALLOWED ${label}';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(DISTINCT invoice_date) FROM invoices WHERE invoice_group_id = v_group AND deleted_at IS NULL) <> 1
+     OR (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_NEXT_SEASON}' THEN
+    RAISE EXCEPTION 'MIXED_GROUP_REFUSAL_CHANGED_A_ROW ${label}';
+  END IF;
+  -- 3. Moving the WHOLE group across the boundary stays refused, as it was before.
+  PERFORM refuses_field_app_save_${label}(v_inv_a, v_field, v_svc, DATE '${DATE_IN_SEASON}', 'GROUP_MOVE');
+  ${unchangedDateCorrectionInstalled ? `-- 4. With the unchanged-date correction in, A restores at its own stored date.
   UPDATE invoices SET deleted_at = now() WHERE id = v_inv_a;
   UPDATE invoices SET deleted_at = NULL WHERE id = v_inv_a;
   IF (SELECT deleted_at FROM invoices WHERE id = v_inv_a) IS NOT NULL THEN
     RAISE EXCEPTION 'MIXED_GROUP_RESTORE_BLOCKED ${label}';
-  END IF;
-  -- 5. The PREVIEW stays group-wide: its date is written to every member, and B cannot take it.
-  BEGIN
-    PERFORM ${PREVIEW}(${locations}, '[]'::jsonb, v_svc, v_inv_a, DATE '${DATE_IN_SEASON}');
-    RAISE EXCEPTION 'MIXED_GROUP_PREVIEW_GUARD_MISSING ${label}';
-  EXCEPTION WHEN check_violation THEN
-    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
-  END;
-  -- 6. The field-app group SAVE of that date is still refused: B's own row trigger rejects it,
-  --    and the whole save rolls back, including A's row.
-  BEGIN
-    PERFORM ${SAVE_IMPL}(v_inv_a, jsonb_build_object('invoice_date', '${DATE_IN_SEASON}'),
-      ${locations}, '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
-    RAISE EXCEPTION 'MIXED_GROUP_SAVE_GUARD_MISSING ${label}';
-  EXCEPTION WHEN check_violation THEN
-    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
-  END;
-  IF (SELECT invoice_date FROM invoices WHERE id = v_inv_a) IS DISTINCT FROM DATE '${DATE_IN_SEASON}' - 2
-     OR (SELECT invoice_date FROM invoices WHERE id = v_inv_b) IS DISTINCT FROM DATE '${DATE_NEXT_SEASON}' THEN
-    RAISE EXCEPTION 'MIXED_GROUP_SAVE_ROLLBACK_FAILED ${label}';
-  END IF;
-  RAISE EXCEPTION 'MIXED_GROUP_PROBE_ROLLBACK ${label} own-season-edits-allowed';`}
+  END IF;` : ''}
+  RAISE EXCEPTION 'MIXED_GROUP_PROBE_ROLLBACK ${label} ${unchangedDateCorrectionInstalled
+    ? 'group-saves-and-previews-at-its-stored-date-and-single-row-split-refused'
+    : 'group-saves-at-its-stored-date-preview-still-blocked-and-single-row-split-refused'}';`}
 END
 $probe$;`;
-  const out = psql(sql, { allowFailure: true });
+  // A tiny helper so "every date is refused" is asserted, not asserted-once. Created inside the
+  // same rolled-back transaction as the probe.
+  const helper = `CREATE FUNCTION refuses_field_app_save_${label}(p_inv uuid, p_field uuid, p_svc uuid, p_date date, p_case text)
+RETURNS void LANGUAGE plpgsql AS $helper$
+BEGIN
+  BEGIN
+    PERFORM ${SAVE_IMPL}(p_inv, jsonb_build_object('invoice_date', p_date::text),
+      jsonb_build_array(jsonb_build_object('field_id', p_field, 'applied_acres', ${ACRES})),
+      '[]'::jsonb, '${ADMIN}'::uuid, p_svc, NULL);
+    RAISE EXCEPTION 'MIXED_GROUP_SAVE_NOT_REFUSED ${label} case=%', p_case;
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:%' THEN RAISE; END IF;
+  END;
+END
+$helper$;`;
+  const out = psql(sql.replace('BEGIN;\n', `BEGIN;\n${helper}\n`), { allowFailure: true });
   assert.equal(out.status, 3, `${label}: mixed-group probe must end in its rollback marker:\n${said(out).slice(-2500)}`);
   assert.match(said(out), new RegExp(`MIXED_GROUP_PROBE_ROLLBACK ${label} `), `${label}: mixed-group probe did not reach its marker:\n${said(out).slice(-2500)}`);
 }
@@ -2424,10 +2492,10 @@ RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN; END $$;`, { wrap: true 
   log('PHASE 8h: mutant caught -- neutralizing the private assertion makes the forbidden preview succeed');
   mixedSeasonGroupProbe('SEASON_GUARD_MIXED', { triggerSourceSql: crossSeasonGuardSql });
   mixedSeasonGroupProbe('SEASON_GUARD_MIXED_MUTANT', {
-    triggerSourceSql: crossSeasonGuardSql, reinstateGroupTriggerCheck: true,
-    expectedOldTriggerMd5: '5544c40616425704bd65431bdf7dd29e',
+    triggerSourceSql: crossSeasonGuardSql, dropGroupTriggerCheck: true,
+    expectedMutantTriggerMd5: 'd8c4bbd4517c5986807d7eca058260b6',
   });
-  log('PHASE 8h-mixed: under 20260914101000 alone a mixed-season group allows own-season direct/generic edits and restore, refuses cross-season edits, keeps group-wide preview/save refusal; the exact pre-fix group-wide trigger is caught refusing the legitimate edit');
+  log('PHASE 8h-mixed: under 20260914101000 alone a production-shaped mixed-season group still SAVES at its own shared date (its preview is refused, the pre-existing defect 20260914101100 corrects), and a single-row edit that would split that date is refused through both the public generic entry and a raw admin UPDATE; the rejected per-row mutant permits that edit and is then caught with the group unsaveable at every date and both convergence attempts refused');
 
   // The historical guard checks above remain historical controls. The complete
   // final migration sequence must also preserve unchanged source-created dates.
@@ -2446,12 +2514,14 @@ RETURNS void LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN; END $$;`, { wrap: true 
   unchangedDateDriftProbes();
   assert.match(said(apply('unchanged-date-guard.sql')), /POSTFLIGHT_UNCHANGED_DATE_OK/);
   sourceSeasonCreatorProbe();
-  mixedSeasonGroupProbe('UNCHANGED_DATE_MIXED', { triggerSourceSql: unchangedDateGuardSql });
-  mixedSeasonGroupProbe('UNCHANGED_DATE_MIXED_MUTANT', {
-    triggerSourceSql: unchangedDateGuardSql, reinstateGroupTriggerCheck: true,
-    expectedOldTriggerMd5: 'b820796a423cbe606d8e01a7926850a5',
+  mixedSeasonGroupProbe('UNCHANGED_DATE_MIXED', {
+    triggerSourceSql: unchangedDateGuardSql, unchangedDateCorrectionInstalled: true,
   });
-  log('PHASE 8i-mixed: after the correction a mixed-season group still allows own-season edits/restore and refuses cross-season edits and group-wide preview/save; the exact pre-fix trigger is caught');
+  mixedSeasonGroupProbe('UNCHANGED_DATE_MIXED_MUTANT', {
+    triggerSourceSql: unchangedDateGuardSql, unchangedDateCorrectionInstalled: true,
+    dropGroupTriggerCheck: true, expectedMutantTriggerMd5: '0005b29c0b10e26efed981ce6cdaf18d',
+  });
+  log('PHASE 8i-mixed: after the correction the same production-shaped group is still usable at its shared date and restorable at its own stored date, the single-row split is still refused, and the rejected per-row mutant still bricks the group');
   log('PHASE 8i: final correction and replay preserve job/blend unchanged dates while refusing new out-of-season date edits and season changes');
 
   // Run the registered full public business chain inside this disposable database.

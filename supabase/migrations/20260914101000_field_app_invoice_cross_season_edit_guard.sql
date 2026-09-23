@@ -181,7 +181,7 @@ BEGIN
        OR NOT (SELECT p.proowner = 'postgres'::regrole AND p.prosecdef AND p.provolatile = 'v'
                       AND NOT p.proisstrict AND p.prorettype = 'trigger'::regtype AND NOT p.proretset
                       AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
-                      AND md5(p.prosrc) = 'd8c4bbd4517c5986807d7eca058260b6'
+                      AND md5(p.prosrc) = '5544c40616425704bd65431bdf7dd29e'
                  FROM pg_proc p WHERE p.oid = v_guard_oid) THEN
       RAISE EXCEPTION 'PREFLIGHT_TRIGGER_FUNCTION_DRIFT: trigger function identity, body, owner, security, volatility, return shape, or search_path drifted';
     END IF;
@@ -220,13 +220,9 @@ ALTER FUNCTION public._preview_field_app_invoice_split_impl_20260908(jsonb, json
 REVOKE ALL ON FUNCTION public._preview_field_app_invoice_split_impl_20260908(jsonb, jsonb, uuid, uuid, date)
   FROM PUBLIC, anon, authenticated, service_role;
 
--- Private GROUP-WIDE assertion used only by the preview wrapper: a preview date is the one
--- date save_field_app_invoice writes to every member, so it must fit every live member's
--- filed season. It is SECURITY DEFINER because the caller may see only part of a split group
--- through RLS; the invariant must inspect every live member or fail closed. The table trigger
--- deliberately does NOT call it (CodeRabbit on PR #758): a single-invoice edit in a mixed
--- historical group must stay inside THAT invoice's own filed season only (DECISION_LOG
--- 2026-09-08/13: mixed historical groups are not unified).
+-- Shared private assertion used by both the preview wrapper and the table trigger. It is
+-- SECURITY DEFINER because an allowed direct table writer can see only part of a split group
+-- through RLS; the invariant must inspect every live member or fail closed.
 CREATE OR REPLACE FUNCTION public._assert_field_app_invoice_date_in_filed_season(
   p_invoice_id uuid,
   p_invoice_date date
@@ -295,8 +291,7 @@ BEGIN
         USING ERRCODE = 'check_violation';
     END IF;
 
-    -- Validate only the row being written, against its OWN filed season. A group save
-    -- still checks every member, because it writes each member row through this trigger.
+    -- Validate NEW directly: a soft-deleted OLD row is excluded by the group helper.
     IF NEW.invoice_date IS DISTINCT FROM OLD.invoice_date
        OR (OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL)
        OR NEW.invoice_type IS DISTINCT FROM OLD.invoice_type THEN
@@ -308,6 +303,7 @@ BEGIN
           make_date(NEW.season, 9, 30)
           USING ERRCODE = 'check_violation';
       END IF;
+      PERFORM public._assert_field_app_invoice_date_in_filed_season(OLD.id, NEW.invoice_date);
     END IF;
   END IF;
   RETURN NEW;
@@ -443,7 +439,7 @@ BEGIN
      OR NOT (SELECT p.proowner = 'postgres'::regrole AND p.prosecdef AND p.provolatile = 'v' AND NOT p.proisstrict
                     AND p.prorettype = 'trigger'::regtype AND NOT p.proretset
                     AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
-                    AND md5(p.prosrc) = 'd8c4bbd4517c5986807d7eca058260b6'
+                    AND md5(p.prosrc) = '5544c40616425704bd65431bdf7dd29e'
                FROM pg_proc p WHERE p.oid = v_guard_oid) THEN
     RAISE EXCEPTION 'POSTFLIGHT_TRIGGER_FUNCTION: invoice-date trigger function contract drifted';
   END IF;

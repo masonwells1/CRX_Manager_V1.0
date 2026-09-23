@@ -7,6 +7,55 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-22 — the field-app row trigger keeps its group-wide date check; CodeRabbit's per-invoice relaxation is refuted
+
+**Source:** Mason's decision in this session on 2026-09-22, after two independent adversarial
+Claude reviews of PR #762 and a measured PostgreSQL 17 reproduction. Presented as a business
+risk trade-off with a recommendation; he chose to keep the stricter guard.
+
+**Background.** CodeRabbit raised a Major on PR #758: `guard_field_app_invoice_season_date()`
+PERFORMs the group-wide `_assert_field_app_invoice_date_in_filed_season`, so a single-invoice date
+edit inside a mixed-season group is refused whenever another member's season differs, even when the
+new date stays inside that invoice's own filed season — stricter than the per-invoice rule recorded
+on 2026-09-08 and clarified on 2026-09-13. The relaxation was implemented (row trigger validates
+only the written row), reviewed clean by Luna, Sol and CodeRabbit, and then caught by an adversarial
+review before merge.
+
+**What was measured** (disposable PostgreSQL 17 container, production shape from the 2026-09-04
+accepted consequence: ONE application, ONE group, ONE shared date, member A filed in the EARLIER
+season and therefore inconsistent with that shared date):
+
+    A_unchanged_date_group_save         = OK        (the group is usable today)
+    single_row_edit_into_A_own_season   = OK        (newly permitted by the relaxation)
+    group_save_at_A_date                = REFUSED
+    group_save_at_B_date                = REFUSED
+    group_save_at_a_third_date          = REFUSED
+    converge_A_back_to_B_date           = REFUSED
+    converge_B_down_to_A_date           = REFUSED
+    preview_group                       = REFUSED
+
+One ordinary, unwarned admin edit leaves the group holding two dates for one physical application.
+The field-app save writes ONE date to every member, so every date then fails on one member or the
+other, and neither member's date can be moved back because each convergence target lies outside
+that member's own filed season. Void-and-reissue becomes the only exit. Before the relaxation that
+state was unreachable.
+
+**Decision.** The row trigger KEEPS the group-wide assertion in both `20260914101000` and
+`20260914101100`. The relaxation is reverted; both files return to their reviewed bytes and their
+original sha256 pins. CodeRabbit's Major is REFUTED with the evidence above rather than implemented.
+
+**Operative rule.** Do not narrow `guard_field_app_invoice_season_date()` to the written row. The
+group-wide check is deliberately stricter than the per-invoice date rule: it refuses some edits the
+rule would allow, always fail-closed and never with wrong money, in exchange for keeping a
+mixed-season group recoverable. The per-invoice rule of 2026-09-08/13 still governs what a date may
+be; it does not authorize splitting one group's shared application date. `prove-preview-field-app-season.mjs`
+(PHASE 8h-mixed / 8i-mixed) asserts both directions, and its mutant reproduces the stranded state,
+so a future attempt fails the proof instead of reaching review.
+
+**Unchanged by this entry:** the 2026-09-04 "invoice season follows the invoice date" decision, the
+2026-09-08/13 filed-season rule itself, and the APPLY-WINDOW RULE requiring `20260914101000` and
+`20260914101100` to apply in one window.
+
 ## 2026-09-20 — everyday code review moves to `gpt-5.6-luna` at xhigh; Sol becomes a once-at-the-end gate
 
 **Source:** Mason's decision in this session on 2026-09-20, driven by Codex token cost. He asked for
