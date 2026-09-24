@@ -199,6 +199,7 @@ Current functions, one line each:
 | Function | Purpose |
 |---|---|
 | `create-user` | Admin-only: provisions a new staff login (auth user + profile row) using the service-role key. |
+| `customer-document-files` | The only byte path for customer documents: issues single-path upload tokens, and streams downloads after re-checking the document row (removed documents, and any path not in the server-issued shape, are refused). Admins reach every customer, sales reps only their assigned ones. Deployed live as v1 on 2026-09-22 UTC with Mason's approval; the page that calls it ships with PR #635's successor. |
 | `epa-lookup` | Looks up an EPA pesticide registration number against the public EPA registry and normalizes/caches the result (added 2026-07 for label data quality). |
 | `process-blend-ticket` | OCR/text parsing of a photographed blend ticket into structured fields (date, customer, driver, acres, rate, etc.). |
 | `process-document` | Parses supported invoices, POs, customer lists, and quote lists into structured import data. Production v19 fails closed on supplier price-list/product-list requests before OCR, with JWT verification enabled. |

@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ghApiMergeRequest,
+  ghApiMutates,
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
@@ -27,12 +28,84 @@ eq(ghMergeRequest("gh pr merge --squash --auto 7"), { selector: "7", repo: "", a
 eq(ghMergeRequest("gh -R masonwells1/CRX_Manager_V1.0 pr merge 9"), { selector: "9", repo: "masonwells1/CRX_Manager_V1.0", auto: false, admin: false }, "global -R between gh and pr");
 eq(ghMergeRequest("gh pr merge --repo=o/r"), { selector: "", repo: "o/r", auto: false, admin: false }, "repo= form, selectorless (current branch)");
 ok(ghMergeRequest("gh pr merge") !== null, "selectorless merge still gated");
-eq(ghMergeRequest("gh pr merge 5 --disable-auto"), null, "--disable-auto stands down (cancels, does not land)");
+// `--disable-auto` gets no special treatment: it parses as an ordinary merge
+// request, so every gate runs (Mason, 2026-09-21, after Codex found repeated
+// flags, value positions and substitutions each stood the gate down).
+eq(ghMergeRequest("gh pr merge 5 --disable-auto"), { selector: "5", repo: "", auto: false, admin: false },
+  "--disable-auto is an ordinary merge request, not a cancellation that skips the gate");
+eq(ghMergeRequest("gh pr merge 123 --disable-auto=true --disable-auto=false --squash")?.selector, "123",
+  "repeated --disable-auto flags are an ordinary merge request too");
+// pflag bundles boolean shorts: `-db` is `-d` then `-b`, so the NEXT word is the
+// body VALUE — while `--admin` still reaches gh (Codex sol, 2026-09-20 round 3).
+eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.selector, "123",
+  "a bundled value-taking short swallows the next word, and the selector is still read");
+eq(ghMergeRequest("gh pr merge 123 -db --disable-auto --admin --squash")?.admin, true,
+  "...and the administrator flag is still seen");
+// Which shorts take a VALUE decides which PULL REQUEST the gate vets. Reading
+// `-r` (--rebase) as value-taking swallowed the selector, reading `-A`
+// (--author-email) as a boolean promoted its value to the selector, and a
+// bundled `-R` lost the repository — each aims the whole gate at a different PR
+// than gh merges (Codex sol, 2026-09-20 round 4; measured against gh's manual).
+eq(ghMergeRequest("gh pr merge -dr 789 --squash")?.selector, "789",
+  "-r is --rebase, a boolean: it must not swallow the PR selector");
+eq(ghMergeRequest("gh pr merge -A someone@example.com 789 --squash")?.selector, "789",
+  "-A is --author-email and takes a value: its value is not the PR selector");
+// The LONG form of -A was missing from the value list (Codex sol, 2026-09-21).
+eq(ghMergeRequest("gh pr merge --author-email --squash 123")?.selector, "123",
+  "--author-email takes a value: the word after it is its value, not a flag or the selector");
+eq(ghMergeRequest("gh pr merge --author-email someone@example.com 789 --squash")?.selector, "789",
+  "...and its value is not the PR selector");
+eq(ghMergeRequest("gh pr merge 123 --author-email --admin --squash")?.admin, false,
+  "a value position is data in the other direction too");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments -f body=x --TEMPLATE -iX=GET"),
+  "gh api long options are matched whatever their case");
+eq(ghMergeRequest("gh pr merge -dR other/repo 789 --squash")?.repo, "other/repo",
+  "a bundled -R still carries the repository");
+eq(ghMergeRequest("gh pr merge -dR other/repo 789 --squash")?.selector, "789",
+  "...and the selector after it is still read");
+eq(ghMergeRequest("gh pr merge -dRother/repo 789 --squash")?.repo, "other/repo",
+  "an attached bundled -R carries the repository");
+eq(ghMergeRequest("gh pr merge -R=other/repo 789 --squash")?.repo, "other/repo",
+  "-R=value carries the repository");
 eq(ghMergeRequest("gh pr view merge-notes"), null, "merge-notes is not the word merge");
 ok(ghMergeRequest("gh pr view merge") !== null, "exact-word over-match routes read through gate (fails safe)");
 eq(ghMergeRequest("git merge main"), null, "git merge is not a gh merge");
 eq(ghMergeRequest("echo gh pr merge docs"), { selector: "docs", repo: "", auto: false, admin: false }, "gh token anywhere still matches (fails safe)");
 eq(ghMergeRequest("npm run build"), null, "unrelated command ignored");
+
+// ── the gh binary is a SHAPE, not a list of extensions ───────────────────────
+// GH_BIN_RE spelled the binary `gh(?:\.exe)?` — a one-item extension list — so
+// every command below returned null at 336f92e4d and the merge gate
+// (green-pipeline, CHANGES_REQUESTED, risky-diff proof) never ran at all.
+// Verified by executing the pre-fix library, not by reading the pattern.
+for (const cmd of [
+  "gh.cmd pr merge 625 --squash",
+  "gh.ps1 pr merge 625 --squash",
+  "gh.bat pr merge 625 --squash",
+  "gh.COM pr merge 625 --squash",
+  "C:\\Tools\\gh.cmd pr merge 625 --squash",
+  "/usr/local/bin/gh.cmd pr merge 625 --squash",
+  '"C:/Program Files/GitHub CLI/gh.cmd" pr merge 625 --squash',
+  "npm test&&gh pr merge 625 --squash",          // separator, not whitespace
+  "echo ok;gh.cmd pr merge 625 --squash",
+]) {
+  ok(ghMergeRequest(cmd) !== null, `any gh binary spelling is still gated: ${cmd}`);
+}
+ok(
+  ghApiMergeRequest("gh.cmd api -X PUT repos/o/r/pulls/625/merge") !== null,
+  "the api merge path is gated through any binary extension too",
+);
+// The other direction. A guard that over-denies gets switched off, so the
+// boundary is pinned: `-` is not `.`, and `\b` does not match inside a word.
+for (const cmd of [
+  "gh-dash pr merge 1",
+  "ghq push",
+  "ghost pr merge 1",
+  "npm run ghpr",
+  "echo highlight pr merge",
+]) {
+  eq(ghMergeRequest(cmd), null, `a neighbouring command is not a gh merge: ${cmd}`);
+}
 
 // ── --admin (Mason's manual review override, 2026-09-01) ─────────────────────
 // "Include administrators" is OFF on main so Mason can hand-merge a stuck PR.
@@ -104,6 +177,41 @@ ok(ghApiMergeRequest("gh api graphql -f query='mutation { mergePullRequest(input
 ok(ghApiMergeRequest("gh -R o/r api graphql -f query='mutation { mergePullRequest(input: {}) }'")?.unsupportedGraphql, "GraphQL merge with global flags between gh and api still flagged — Codex round-5");
 eq(ghApiMergeRequest("gh -R o/r api -X PUT repos/o/r/pulls/7/merge"), { selector: "7", repo: "o/r", auto: false }, "REST merge with global flags between gh and api still parses");
 eq(ghApiMergeRequest("curl -X PUT api.github.com/repos/o/r/pulls/12/merge"), null, "curl is not a gh api call (denied by the hook's raw-REST rule instead)");
+
+// ── ghApiMutates (moved here from .codex/hooks/production-action-guard.mjs on
+// 2026-09-07, so the gh binary has exactly one definition) ───────────────────
+// The copy that lived in the Codex guard carried the one-item extension list
+// this file replaced with BIN_TAIL, AND a position-anchored `gh\s+api` that a
+// global flag walked straight past. Both directions are pinned.
+ok(ghApiMutates("gh api -X POST repos/o/r/issues/1/comments -f body=x"), "explicit POST mutates");
+ok(ghApiMutates("gh api -XPUT repos/o/r/contents/f.txt"), "attached -XPUT mutates");
+ok(ghApiMutates("gh api --method=DELETE repos/o/r/issues/1"), "--method=DELETE mutates");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments -f body=x"), "field-bearing call defaults to POST");
+ok(ghApiMutates("gh api repos/o/r/merges -Fbase=main -Fhead=feature"), "attached -F short value counts as a field");
+ok(ghApiMutates("gh api graphql -f query='mutation { addComment(input: {}) }'"), "GraphQL mutation mutates");
+ok(ghApiMutates("gh.cmd api -X POST repos/o/r/issues/1/comments"), ".cmd is the same binary");
+ok(ghApiMutates("gh.ps1 api graphql -f query='mutation { x }'"), ".ps1 is the same binary");
+ok(ghApiMutates("C:\\Tools\\gh.bat api -X PATCH repos/o/r/issues/1"), "a full Windows path with any extension is the same binary");
+ok(ghApiMutates("gh -R o/r api -X POST repos/o/r/issues/1/comments"), "a global flag between gh and api no longer hides the call");
+ok(!ghApiMutates("gh api repos/o/r/pulls/12"), "a plain read does not mutate");
+ok(!ghApiMutates("gh api -X GET repos/o/r/pulls/12"), "explicit GET does not mutate");
+ok(!ghApiMutates("gh pr view 12"), "pr view is not an api call");
+// Pre-existing and unchanged by the move: a `-f`-bearing GraphQL call is an
+// HTTP POST whatever the document says, so a GraphQL READ is treated as
+// mutating. That over-blocks in the fail-closed direction; it is pinned here so
+// a later change to that behaviour is a deliberate one.
+ok(ghApiMutates("gh api graphql -f query='query { repository { id } }'"), "a field-bearing GraphQL read is still an HTTP POST (fail-closed)");
+ok(!ghApiMutates("gh api graphql"), "graphql with no fields and no method is not classified as mutating");
+// A long option's detached value is its value, never a flag (Codex sol,
+// 2026-09-21): gh reads `-iX=GET` below as the template and POSTs the field.
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments -f body=test --template -iX=GET"), "a --template value shaped like -X GET does not hide a field POST");
+ok(ghApiMutates("gh api -X POST repos/o/r/issues/1/comments --jq -XGET"), "a --jq value shaped like -XGET does not override an explicit POST");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments --header -XGET -f body=x"), "a --header value is skipped too");
+ok(ghApiMutates("gh api repos/o/r/issues/1/comments --raw-field -XGET"), "a detached --raw-field still counts as a field, and its value is not a flag");
+ok(!ghApiMutates("gh api repos/o/r/issues/1 --template -XPOST"), "and the other way: a --template value shaped like -XPOST is not a POST");
+eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/9/merge --template -XGET"), { selector: "9", repo: "o/r", auto: false }, "a --template value does not hide a REST merge from the merge gate");
+ok(!ghApiMutates("ghost api -X POST repos/o/r/issues/1"), "a neighbouring binary is not gh");
+ok(!ghApiMutates("npm run build"), "unrelated command ignored");
 
 // ── mcpMergeRequest ──────────────────────────────────────────────────────────
 eq(mcpMergeRequest({ owner: "o", repo: "r", pull_number: 8 }), { selector: "8", repo: "o/r", auto: false }, "GitHub MCP spelling");
@@ -261,6 +369,41 @@ ok(
   "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
 );
 
+// ── round 7: the hard gates share one time budget (CodeRabbit, 2026-09-10) ──
+// gateRequest() cannot be driven in-process (it needs a real gh), so the wiring
+// is pinned here and the behaviour is proven on the Codex side, which injects gh
+// and a clock. Every gh call a hard gate makes must spend the shared budget, and
+// the advisory lookup must NOT: it fails open by design, and a slow GitHub there
+// must not become a denial.
+const gateRequestSource = guardSource.slice(
+  guardSource.indexOf("function gateRequest("),
+  guardSource.indexOf("const advisoryQueue = [];"),
+);
+ok(gateRequestSource.length > 0, "gateRequest() is present to inspect");
+eq(
+  (gateRequestSource.match(/\bhardGateGh\(/g) || []).length,
+  3,
+  "gateRequest()'s three gh calls — PR resolve, changed files, full diff — all spend the shared budget",
+);
+eq(
+  (gateRequestSource.match(/(?<![A-Za-z])gh\(/g) || []).length,
+  0,
+  "no hard gate calls gh() directly, around the budget",
+);
+ok(
+  /function\s+listWorktreesFromProjectDir\(\)\s*\{\s*if \(!hardGateBudget\.admit\(\)\) deny\(/.test(guardSource),
+  "the proof scan's git call spends the shared budget too",
+);
+const advisorySource = guardSource.slice(
+  guardSource.indexOf("function codexAdvisory("),
+  guardSource.indexOf("function gateRequest("),
+);
+eq(
+  (advisorySource.match(/\bhardGateGh\(/g) || []).length,
+  0,
+  "the fail-open advisory stays OFF the hard-gate budget",
+);
+
 // ── the objection check must never be exempt for --auto (Codex High, PR #559) ─
 // Every other gate in this gateRequest() exempts auto-merge, because GitHub holds
 // a queued auto-merge until its own requirements are met. The requirement that
@@ -279,5 +422,34 @@ ok(
   "the CHANGES_REQUESTED denial is NOT gated on request.auto - --auto must never merge over an objection",
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
+
+// ── the two 2026-09-08 Codex sol findings, pinned at their call sites ─────────
+// Both are wiring, not parsing: the shared helpers are exercised behaviourally in
+// codex-push-lib.test.mjs, and the end-to-end path here needs a real `gh`. Name
+// the SUBJECT of each call, not just the function — `ghHiddenByShellComposition`
+// applied to a single segment inside the loop would type-check, read as the fix,
+// and miss every case, because a spliced merge verb is not a merge to the parser
+// that produced that segment either.
+ok(
+  /if\s*\(\s*ghHiddenByShellComposition\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
+  "the gh composition refusal runs on the WHOLE command, before the segment loop",
+);
+// A single `&` runs both sides — POSIX in the background, cmd sequentially — so
+// it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved
+// only PR 1 and the second merge ran ungated.
+//
+// It must go through the SHARED, quote-aware segmenter rather than a regex: a
+// regex splits inside `--body 'note&more'`, which hands the loop a merge whose
+// `--admin` has been carried off into a segment containing no `gh` at all
+// (Codex sol, 2026-09-08, SEC-001). Asserting the call site, not the helper,
+// for the same reason the assertion above does.
+ok(
+  /for\s*\(\s*const\s+segment\s+of\s+splitCommandSegments\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
+  "the segment loop uses the shared quote-aware segmenter on the whole command",
+);
+ok(
+  !/toolInput\.command\.split\(/.test(guardSource),
+  "no raw regex split of the command survives in this guard",
+);
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);
