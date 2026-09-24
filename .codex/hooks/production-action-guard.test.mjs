@@ -83,6 +83,14 @@ function evaluatePush(repo, nowMs = Date.now(), command = "git push origin HEAD:
   });
 }
 
+// Every spawnSync below launches a guard and waits for its verdict. The hook
+// runtime's own 15s limit and the guard's internal 5s git/gh caps bound what
+// happens INSIDE the guard, not this outer call — so a wedged guard would hang
+// the suite until the CI job timeout, where the failure reads as "CI is slow"
+// rather than "a guard hung" (CodeRabbit, 2026-09-09). Generous enough that a
+// merely slow machine never trips it; finite so a hang fails fast and loudly.
+const GUARD_SPAWN_TIMEOUT_MS = 60_000;
+
 function runClaudePushGuard(command, projectDir, payloadCwd = "") {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
@@ -90,6 +98,7 @@ function runClaudePushGuard(command, projectDir, payloadCwd = "") {
     cwd: projectRoot,
     env,
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
     input: JSON.stringify({ tool_name: "Bash", cwd: payloadCwd || undefined, tool_input: { command } }),
   });
 }
@@ -1254,6 +1263,18 @@ try {
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects every push in a command chain");
   claudeGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin feature/test`, projectRoot);
   assert.equal(claudeGuard.stdout, "", "Claude guard still allows an ordinary feature-branch push");
+  // A trailing Windows backslash makes the POSIX and PowerShell readings split
+  // the push differently; the destination then vanished and the proof gate
+  // stood down (Codex sol, 2026-09-21). Both guards refuse the disagreement.
+  const splitDisagreement =
+    `git -C "${risky.repo}" push --repo C:\\x\\ https://github.com/masonwells1/CRX_Manager_V1.0.git HEAD:main`;
+  claudeGuard = runClaudePushGuard(splitDisagreement, projectRoot);
+  assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard refuses a push whose shell readings disagree");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: splitDisagreement },
+    repoDir: risky.repo,
+  }).blocked, true, "Codex guard refuses a push whose shell readings disagree");
   claudeGuard = runClaudePushGuard(`git.exe -C "${risky.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard gates git.exe pushes");
   claudeGuard = runClaudePushGuard(`cd "${risky.repo}" && git push origin HEAD:main`, projectRoot);
@@ -1384,6 +1405,96 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+
+  // Codex sol, 2026-09-08, SEC-001 and SEC-002. These run against THIS fixture
+  // on purpose: the PR above is APPROVED, CLEAN, green and carries a valid Sol
+  // proof, so the line directly above is ALLOWED. That is the only state in
+  // which these matter -- against a PR that is not merge-ready, every one of
+  // them "passes" for a reason that has nothing to do with the defect, which is
+  // exactly how the first probe of these findings looked safe.
+  //
+  // A quoted separator is NOT a separator. `--body 'note&more'` is one argument
+  // to every shell; splitting there hands the loop `gh pr merge 123 --body 'note`
+  // -- a merge with no `--admin` -- and carries the override into a segment with
+  // no `gh` in it. Measured blocked:false at 223bdf0d5 for all five spellings.
+  for (const command of [
+    "gh pr merge 123 --body 'note&more' --admin --squash",
+    'gh pr merge 123 --body "note&more" --admin --squash',
+    "gh pr merge 123 --subject 'a&b' --admin",
+    "gh pr merge 123 --body 'a;b' --admin",
+    "gh pr merge 123 --body 'a|b' --admin",
+  ]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => mainPrJson,
+    });
+    assert.equal(verdict.blocked, true, `a quoted separator must not carry --admin out of the inspected segment: ${command}`);
+    assert.match(verdict.reason, /--admin/, `and it must be the --admin refusal that fires: ${command}`);
+  }
+
+  // The composition helper compared only WHETHER each reading is a merge, so a
+  // merge that is a merge both ways slipped through with `admin` differing.
+  // The backtick spelling was compensated by the computed-text rule; the caret
+  // spelling was not, and measured blocked:false at 223bdf0d5.
+  for (const command of ["gh pr merge 123 --ad`min --squash", "gh pr merge 123 --ad^min --squash"]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => mainPrJson,
+    });
+    assert.equal(verdict.blocked, true, `an escaped --admin must be refused: ${command}`);
+  }
+
+  // Codex sol, 2026-09-08, SEC-003 — raised on the fix directly above. The
+  // quote-aware segmenter knew ONE escape character, the POSIX backslash.
+  // PowerShell escapes with a backtick and cmd.exe with a caret, so
+  // `--body x^&y` is one literal ampersand inside one argument while the
+  // segmenter cut the command in two and left `--admin` in a segment holding no
+  // `gh`. Measured against THIS merge-ready fixture at 3e099b510: the caret
+  // spelling returned blocked:false — a live administrator-merge bypass. The
+  // backtick spelling was denied there, but by the command-substitution rule,
+  // which is a compensator, not a fix.
+  for (const command of [
+    "gh pr merge 123 --body x`&y --admin --squash",
+    "gh pr merge 123 --body x^&y --admin --squash",
+    "gh pr merge 123 --body x\\&y --admin --squash",
+  ]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => mainPrJson,
+    });
+    assert.equal(verdict.blocked, true, `an escaped & must not carry --admin out of the inspected segment: ${command}`);
+  }
+  // An UNescaped & must still separate, or the round-two fix is undone: the
+  // --admin lives in the second segment here and must still be found.
+  const unescapedChain = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr view 1 & gh pr merge 2 --admin --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  });
+  assert.equal(unescapedChain.blocked, true, "a bare & still separates after the escape set widened");
+  assert.match(unescapedChain.reason, /--admin/, "and the second segment's --admin is what fires");
+
+  // Both directions: an ordinary quoted body with no separator in it must still
+  // reach the normal gate and be allowed, or this fix is an over-block.
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --body 'ships the thing'" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  }).blocked, false, "an ordinary quoted body does not become a refusal");
+
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT repos/crop/crx/pulls/123/merge -f merge_method=squash" },
@@ -1480,6 +1591,357 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
   }).blocked, true, "CHANGES_REQUESTED still denies - never merge over an unresolved objection");
+
+  // ── the gh binary is a SHAPE, not a one-item extension list (2026-09-07) ────
+  // This file carried its own copies of the gh parsers, each spelling the binary
+  // `gh(?:\.exe)?`. Measured through evaluateProductionAction at 358bfdbfa:
+  // `gh pr merge 625 --squash` and `gh.exe …` returned blocked:true, while
+  // `gh.cmd …`, `gh.ps1 …`, `gh.bat …`, `gh.com …`, `C:\Tools\gh.cmd …` and the
+  // quoted-path form ALL returned blocked:false — the merge gate (green
+  // pipeline, CHANGES_REQUESTED, risky-diff proof) never ran for them. `.cmd` is
+  // what Windows resolves `gh` to when the CLI ships a shim, and PATHEXT is
+  // user-configurable, so those are ordinary spellings of the same program.
+  //
+  // The copies are gone; the parsers now come from codex-push-lib.mjs, whose
+  // BIN_TAIL models an extension as a RULE (a dot-segment with no separator, no
+  // further dot, no quote) instead of naming members. Every assertion below
+  // fails against the pre-import guard and passes after.
+  //
+  // The PR here is CHANGES_REQUESTED, so reaching the gate at all is a denial:
+  // blocked:true proves the gate RAN, and cannot be satisfied by a bypass.
+  const objectedPrJson = JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" });
+  for (const command of [
+    "gh.cmd pr merge 123 --squash",
+    "gh.ps1 pr merge 123 --squash",
+    "gh.bat pr merge 123 --squash",
+    "gh.com pr merge 123 --squash",
+    "gh.CMD pr merge 123 --squash",
+    "GH.CMD PR MERGE 123",
+    "C:\\Tools\\gh.cmd pr merge 123 --squash",
+    "./gh.cmd pr merge 123 --squash",
+    '"C:\\Program Files\\GitHub CLI\\gh.cmd" pr merge 123 --squash',
+    "npm test&&gh.cmd pr merge 123 --squash",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    }).blocked, true, `any gh binary extension still reaches the merge gate: ${command}`);
+  }
+  // `--admin` is refused before the PR is even resolved, so the spelling must
+  // not be what decides whether that refusal happens (no runGh stub supplied).
+  const cmdAdmin = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh.cmd pr merge 123 --squash --admin" },
+    repoDir: risky.repo,
+    nowMs: now,
+  });
+  assert.equal(cmdAdmin.blocked, true, "--admin is refused whatever the binary spelling");
+  assert.match(String(cmdAdmin.reason || ""), /--admin/, "the .cmd --admin denial still names the flag");
+  // The gh api routes carried the same list, plus a POSITION-anchored `gh\s+api`
+  // that a global flag between the binary and the subcommand walked past. The
+  // shared parsers find `api` by word scan.
+  for (const command of [
+    "gh.cmd api -X PUT repos/crop/crx/contents/file.txt -f branch=main",
+    "gh.ps1 api -X POST repos/crop/crx/issues/1/comments -f body=x",
+    "gh.bat api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'",
+    "gh -R crop/crx api -X POST repos/crop/crx/issues/1/comments -f body=x",
+    // A long option's detached value is never a flag (Codex sol, 2026-09-21).
+    "gh api repos/crop/crx/issues/1/comments -f body=test --template -iX=GET",
+    "gh api -X POST repos/crop/crx/actions/workflows/ci.yml/dispatches --jq -XGET -f ref=main",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    }).blocked, true, `mutating gh api is gated whatever the spelling or flag order: ${command}`);
+  }
+  // ── and the benign boundary, because a guard that over-denies gets switched
+  // off. `-` is not `.`, so the extension tail never opens on a hyphenated
+  // neighbour; `\b` never matches inside a longer word. A throwing runGh makes
+  // an accidental trip into the merge gate fail loudly instead of passing.
+  for (const command of [
+    "gh-dash pr merge 1",
+    "ghq push",
+    "ghost pr merge 1",
+    "npm run ghpr",
+    "echo highlight pr merge",
+    "node scripts/ghost.mjs pr merge",
+    "gh pr view 123",
+    "gh.cmd pr view 123",
+    "gh pr list",
+    "npm run build",
+    "git log --oneline",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error(`benign command entered the merge gate: ${command}`); },
+    }).blocked, false, `benign gh-adjacent command is unaffected: ${command}`);
+  }
+  // `--disable-auto` gets no stand-down (Mason, 2026-09-21). Codex found three
+  // spellings that turned the shortcut into a bypass — a value position, a
+  // substitution, and repeated flags where gh keeps the last value — so every
+  // command carrying it now reaches the merge gate, as it always did here.
+  for (const command of [
+    "gh pr merge 123 --disable-auto",
+    "gh pr merge 123 --author-email --disable-auto --squash",
+    "gh pr merge 123 --disable-auto=true --disable-auto=false --squash",
+    "gh pr merge 123 --disable-auto=1 --disable-auto=0 --squash",
+    "gh pr merge 123 --disable-a\"\"uto --disable-auto=false --squash",
+  ]) {
+    let reachedGate = false;
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { reachedGate = true; throw new Error("gh unavailable in this test"); },
+    });
+    assert.equal(verdict.blocked, true, `--disable-auto does not stand the gate down: ${command}`);
+    assert.equal(reachedGate, true, `...the command reaches the gate and tries to resolve the PR: ${command}`);
+  }
+  // Backtracking is MEASURED, not assumed: a hook that can be stalled is a hook
+  // that can be timed out, and silence from a killed PreToolUse hook means ALLOW.
+  for (const pathological of [
+    `${"gh.".repeat(6000)}gh pr merge 1`,
+    `${"gh".repeat(10000)} pr merge 1`,
+    `gh${".gh".repeat(6000)} pr merge 1`,
+  ]) {
+    const started = process.hrtime.bigint();
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: pathological },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `gh binary matching stays linear on adversarial input (${elapsedMs.toFixed(1)}ms)`);
+  }
+
+  // ── the SUBCOMMAND and OPTION words are shapes too (CodeRabbit, PR #630) ────
+  // The block above modelled the gh BINARY by shape. The words after it kept
+  // being compared as TYPED, and a shell removes quote and escape syntax from
+  // every word, not just the first. Measured through evaluateProductionAction
+  // before the fix — `blocked: false` on all of these, i.e. the merge gate and
+  // the mutating-API denial never ran, while the shell handed gh the ordinary
+  // command:
+  //
+  //   gh pr me""rge 123 --squash          gh api --met""hod=POST …
+  //   gh p""r merge 123 --squash          gh api "--method"=POST …
+  //   gh a""pi -X POST …                  gh api --meth\od=POST …
+  //                                       gh api -"X" POST …
+  //
+  // Two distinct defects, both fixed in codex-push-lib.mjs: splitShellArgs
+  // treated a quote as a WORD BOUNDARY (so `"--method"=POST`, one word to every
+  // shell, arrived as two tokens), and the words it produced were never resolved
+  // to the argv the program receives. The PR fixture is CHANGES_REQUESTED, so
+  // reaching the gate at all is a denial — blocked:true proves the gate RAN and
+  // cannot be satisfied by a bypass.
+  for (const command of [
+    "gh pr me\"\"rge 123 --squash",
+    "gh pr me''rge 123 --squash",
+    "gh p\"\"r merge 123 --squash",
+    "gh \"pr\" \"merge\" 123 --squash",
+    "gh pr me\\rge 123 --squash",
+    "gh.cmd pr me\"\"rge 123 --squash",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    }).blocked, true, `a quote/escape splice in the merge subcommand still reaches the gate: ${command}`);
+  }
+  for (const command of [
+    "gh api --met\"\"hod=POST repos/crop/crx/issues/1/comments",
+    "gh api --met''hod=POST repos/crop/crx/issues/1/comments",
+    "gh api \"--method\"=POST repos/crop/crx/issues/1/comments",
+    "gh api --meth\\od=POST repos/crop/crx/issues/1/comments",
+    "gh api -\"X\" POST repos/crop/crx/issues/1/comments",
+    "gh api -X PO\"\"ST repos/crop/crx/issues/1/comments",
+    "gh a\"\"pi -X POST repos/crop/crx/issues/1/comments",
+    "gh api repos/crop/crx/issues/1/comments -\"f\" body=x",
+    "gh api repos/crop/crx/issues/1/comments --fi\"\"eld body=x",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error(`a mutating gh api call reached a lookup instead of a denial: ${command}`); },
+    }).blocked, true, `a quote/escape splice in a gh api option still reaches the gate: ${command}`);
+  }
+  // The OTHER direction, and the reason this is a shell-aware reading rather
+  // than "delete every quote and backslash": `--method='P"OST'` really does pass
+  // `P"OST` to gh. Erasing the quote would read it as POST and deny a call that
+  // is not one. A throwing runGh makes an accidental trip into a gate fail loudly.
+  for (const command of [
+    "gh api --method='P\"OST' repos/crop/crx/issues/1",
+    "gh api -X 'P\"OST' repos/crop/crx/issues/1",
+    "gh api repos/crop/crx/issues/1 --jq .title",
+    "gh api -X GET repos/crop/crx/issues/1",
+  ]) {
+    assert.equal(evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error(`a read-only gh api call entered a gate: ${command}`); },
+    }).blocked, false, `a quote that SURVIVES to gh is not read as syntax: ${command}`);
+  }
+  // The same splice against the PUSH route. codex-push-guard.mjs has refused
+  // these since Codex's nineteenth 2026-07-30 review; this guard never imported
+  // the check, so `git push origin HEAD:m""ain` returned blocked:false here and
+  // the main-push gate did not run. Checked on the WHOLE command and BEFORE
+  // isGitPush, because `git p""ush` is not a push to isGitPush at all.
+  for (const command of [
+    "git push origin HEAD:m\"\"ain",
+    "git push origin HEAD:m''ain",
+    "git push origin HEAD:ma\\in",
+    "git p\"\"ush origin HEAD:main",
+    "git push origin \"HEAD:m\"ain",
+  ]) {
+    const spliced = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+    });
+    assert.equal(spliced.blocked, true, `a push hidden by shell composition is refused: ${command}`);
+    assert.match(
+      String(spliced.reason || ""),
+      /shell quoting or command substitution/,
+      `and it is refused by the composition check, not incidentally: ${command}`,
+    );
+  }
+  // Controls for that pair: ordinary pushes still route to the normal gates
+  // rather than to the composition refusal.
+  for (const command of ["git push origin HEAD:feature/x", "git push origin \"HEAD:main\""]) {
+    assert.doesNotMatch(
+      String(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command },
+        repoDir: risky.repo,
+        nowMs: now,
+      }).reason || ""),
+      /shell quoting or command substitution/,
+      `an ordinarily-quoted push is not called a hidden one: ${command}`,
+    );
+  }
+  // Backtracking on the new word walk, for the same reason the block above
+  // measures it: a stalled PreToolUse hook is a timed-out hook, and silence
+  // means ALLOW. Unterminated quotes are the shape that can force a re-scan.
+  for (const pathological of [
+    `gh api ${'"'.repeat(20000)} -X POST repos/o/r/issues/1/comments`,
+    `gh api ${"'".repeat(20000)} -X POST repos/o/r/issues/1/comments`,
+    `gh pr merge 1 ${"\\\"".repeat(10000)}`,
+    `gh api ${'a""'.repeat(6000)} -X POST repos/o/r/issues/1/comments`,
+  ]) {
+    const started = process.hrtime.bigint();
+    evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: pathological },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `shell word splitting stays linear on adversarial quoting (${elapsedMs.toFixed(1)}ms)`);
+  }
+
+  // ── Codex sol, 2026-09-08: second round on the same change ─────────────────
+  // A backtick or caret escape is consumed before gh sees the word, so these are
+  // ordinary administrator merges and DELETEs that no parser recognised. The
+  // guard refuses rather than analyses, exactly as the push side does.
+  for (const command of [
+    "gh pr me`rge 123 --admin --squash",
+    "g`h pr merge 123 --admin --squash",
+    "gh pr me^rge 123 --admin --squash",
+    "gh api --met`hod=DELETE repos/o/r/issues/comments/1",
+    "gh api --met^hod=DELETE repos/o/r/issues/comments/1",
+  ]) {
+    const hidden = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => { throw new Error("a hidden gh command must never reach a lookup"); },
+    });
+    assert.equal(hidden.blocked, true, `a gh command hidden by a backtick or caret is refused: ${command}`);
+    assert.match(
+      String(hidden.reason || ""),
+      /backtick or cmd\.exe caret/,
+      `and by the composition check, not incidentally: ${command}`,
+    );
+  }
+  // Both directions. The last of these is the case CodeRabbit raised on PR #630:
+  // `--method='P"OST'` really does pass P"OST, so it must NOT be read as a POST.
+  for (const command of [
+    "gh pr view 123",
+    "gh api repos/o/r/pulls/1 --jq .title",
+    "gh api --method='P\"OST' repos/o/r",
+    "git push origin HEAD:feature/x",
+  ]) {
+    assert.doesNotMatch(
+      String(evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command },
+        repoDir: risky.repo,
+        nowMs: now,
+        runGh: () => objectedPrJson,
+      }).reason || ""),
+      /backtick or cmd\.exe caret/,
+      `an unrewritten command is not called a hidden one: ${command}`,
+    );
+  }
+  // A single `&` separates commands: POSIX backgrounds the left side, cmd runs
+  // it first, and BOTH execute. One rolling HTTP method was carried across the
+  // unsplit text, so a later GET erased an earlier POST, and only the first of
+  // two pushes was gated.
+  // The second segment carries the offence in each case, so only segmentation
+  // can produce the denial: a rolling method that never split read the trailing
+  // GET, and a merge parser that never split resolved only the first PR.
+  for (const command of [
+    "gh api -X POST repos/o/r/issues/1/comments & gh api -X GET user",
+    "gh pr view 1 & gh pr merge 2 --admin --squash",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command },
+        repoDir: risky.repo,
+        nowMs: now,
+        runGh: () => objectedPrJson,
+      }).blocked,
+      true,
+      `both sides of a single-& chain are inspected: ${command}`,
+    );
+  }
+  // My own regression, found by Codex: an ordinary push to a local Windows
+  // repository is not a hidden push. The composition helper's whole-command
+  // unwrap deleted the quotes holding one destination word together.
+  for (const command of [
+    "git push C:\\scratch\\repo.git HEAD:feature",
+    "git push \"C:\\scratch repo\\repo.git\" HEAD:feature",
+    "git push \"C:/scratch repo/repo.git\" HEAD:feature",
+  ]) {
+    const ordinary = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: () => objectedPrJson,
+    });
+    assert.equal(ordinary.blocked, false, `an ordinary local-repository push still runs: ${command}`);
+  }
 
   // ── a slow advisory lookup must not be able to starve a HARD denial ────────
   // Codex round 6 (PR #563). The Codex GitHub App lookup is advisory and
@@ -1606,6 +2068,163 @@ try {
   });
   assert.equal(chainedControlVerdict.blocked, false, "CONTROL: two clean merges are allowed");
   assert.equal(chainedControlAttempts, 2, "CONTROL: the advisory runs once per merge AFTER both cleared their hard gates — deferred, not dropped");
+
+  // ── round 6: ONE request, gated once, however many readings name it ────────
+  // splitCommandSegments returns a UNION of readings, so any command carrying a
+  // quote or an escape resolves to the same merge TWICE. Each reading used to
+  // cost its own `gh pr view` and its own advisory lookup. This hook is bounded
+  // and a hook killed mid-call emits nothing — and a hook that emits nothing
+  // ALLOWS — so duplicated lookups spend the budget that protects the hard
+  // gates (CodeRabbit, 2026-09-09, Major).
+  let dedupeAdvisoryAttempts = 0;
+  let dedupePrViews = 0;
+  const dedupeGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) {
+      dedupeAdvisoryAttempts += 1;
+      throw new Error("advisory unavailable"); // fail-open
+    }
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    if (Array.isArray(args) && args.includes("view")) dedupePrViews += 1;
+    return mainPrJson;
+  };
+  const dedupeVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    // Two readings: the quote-aware one, and the naive one that splits on the
+    // `&` inside the body. Both resolve to selector 123, admin false.
+    toolInput: { command: "gh pr merge 123 --body 'note&more' --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: dedupeGh,
+  });
+  assert.equal(dedupeVerdict.blocked, false, "a clean quoted-body merge is allowed");
+  assert.equal(dedupeAdvisoryAttempts, 1, "the advisory runs ONCE for one merge request, not once per reading of it");
+  assert.equal(dedupePrViews, 1, "the PR is resolved ONCE for one merge request, not once per reading of it");
+
+  // The de-duplication must key on the COMPLETE parse. These two readings differ
+  // ONLY in `admin`, so keying on selector+repository — as the review proposed —
+  // would collapse them and could keep the admin:false reading, erasing the
+  // offence. Deny, and deny FOR the flag.
+  const dedupeAdminVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --body 'note&more' --admin --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: dedupeGh,
+  });
+  assert.equal(dedupeAdminVerdict.blocked, true, "de-duplication must not drop the --admin reading of a quoted-body merge");
+  assert.match(String(dedupeAdminVerdict.reason), /--admin/, "the denial names the administrator override, not some unrelated gate");
+
+  // ── round 7: DISTINCT merges share one time budget ─────────────────────────
+  // CodeRabbit, 2026-09-10 (Major), on the round-6 de-duplication: it removed
+  // duplicate readings but left DISTINCT requests unbounded, so a command naming
+  // several merges ran each one's gh/git calls in series with nothing bounding
+  // the total. A hook killed at its timeout emits nothing, and a hook that emits
+  // nothing ALLOWS — so enough slow-but-successful calls turned every denial
+  // still to come into an allow. A virtual clock stands in for the slow GitHub:
+  // a real sleep would make this suite as slow as the attack it models.
+  const threeMerges = "gh pr merge 123 --squash && gh pr merge 456 --squash && gh pr merge 789 --squash";
+  const budgetRun = (msPerGhCall) => {
+    let virtualNow = 1_000_000;
+    const resolved = [];
+    const slowGh = (args) => {
+      if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable"); // fail-open
+      if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+      if (Array.isArray(args)) resolved.push(args.find((arg) => /^\d+$/.test(String(arg))));
+      virtualNow += msPerGhCall; // a SUCCESSFUL call that took this long
+      return mainPrJson;
+    };
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: threeMerges },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: slowGh,
+      clock: () => virtualNow,
+      hardGateDeadlineMs: virtualNow + 12_500, // the real hook's: 15s less its 2.5s reserve
+    });
+    return { verdict, resolved: resolved.filter(Boolean) };
+  };
+
+  const slow = budgetRun(4_000);
+  assert.equal(slow.verdict.blocked, true, "merges whose calls would outrun the hook are DENIED, not left for the hook to be killed mid-call");
+  assert.match(String(slow.verdict.reason), /time limit/, "the denial is the budget's — not a fail-open notice or an unrelated gate");
+  assert.equal(slow.resolved.includes("789"), false, "the budget refuses BEFORE a call that could not finish, so the last merge is never started");
+
+  // CONTROL: the same three merges on a responsive GitHub are allowed, and each
+  // is resolved. The budget bounds the series; it does not forbid a chain.
+  const fast = budgetRun(10);
+  assert.equal(fast.verdict.blocked, false, "CONTROL: three clean merges on a fast GitHub are allowed");
+  assert.deepEqual([...new Set(fast.resolved)].sort(), ["123", "456", "789"], "CONTROL: every merge in the chain is resolved and gated");
+
+  // The budget admits a call on the assumption it lasts at most ONE 5-second
+  // timeout. defaultRunGh tries `gh` then the absolute gh.exe on Windows; if a
+  // timed-out `gh` fell through to the second candidate, one admitted call could
+  // last ten seconds and a chain could outrun the hook (Codex sol, 2026-09-14).
+  const guardSource = (await import("node:fs")).readFileSync(
+    new URL("./production-action-guard.mjs", import.meta.url),
+    "utf8",
+  );
+  const runGhStart = guardSource.indexOf("function defaultRunGh(");
+  const runGhSource = guardSource.slice(runGhStart, guardSource.indexOf("\n}\n", runGhStart));
+  assert.ok(runGhStart >= 0, "defaultRunGh is present");
+  assert.match(
+    runGhSource,
+    /catch \(error\) \{[\s\S]*?if \(error\?\.code !== "ENOENT"\) throw error;[\s\S]*?lastError = error;/,
+    "defaultRunGh moves to the next executable ONLY when the previous one is missing (ENOENT)",
+  );
+
+  // PowerShell keeps `\` as an ordinary character and still honours the space OR
+  // quote after it (Codex sol, 2026-09-14, rounds 2 and 4).
+  const BS = String.fromCharCode(92);
+  // A GREEN, mergeable PR: the POSIX reading clears every hard gate, so only the
+  // PowerShell reading's --admin can deny it.
+  const greenGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable");
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  for (const [command, pattern, label] of [
+    [`gh api -H X-Test:value${BS} -X DELETE repos/o/r/branches/main/protection`, /./, "an escaped-space `-X DELETE`"],
+    [`gh pr merge 123 --body x${BS} --admin --squash`, /--admin/, "an escaped-space `--admin`"],
+    [`gh api --template ${BS}"x" -X DELETE repos/o/r/git/refs/heads/feature`, /./, "a backslash-quote `-X DELETE`"],
+    [`gh pr merge 123 --body ${BS}"foo" --admin --squash`, /--admin/, "a backslash-quote `--admin`"],
+  ]) {
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: greenGh,
+    });
+    assert.equal(verdict.blocked, true, `${label} is denied under PowerShell's reading`);
+    assert.match(String(verdict.reason), pattern, `${label} denial names the offence`);
+  }
+
+  // A backtick hiding the SECOND merge of a chain (Codex sol, 2026-09-14): the
+  // first merge is green and identical under both readings, so only a
+  // per-command comparison sees the spliced administrator merge.
+  const backtickChar = String.fromCharCode(96);
+  const splicedSecondMergeVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash; gh pr me${backtickChar}rge 456 --admin --squash` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: greenGh,
+  });
+  assert.equal(splicedSecondMergeVerdict.blocked, true, "a backtick-spliced second merge in a chain is denied");
+  assert.match(String(splicedSecondMergeVerdict.reason), /backtick/, "the chained denial names the shell escape");
+  const unrelatedBacktickVerdict = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `Write-Host a${backtickChar}tb; gh pr merge 123 --squash` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: greenGh,
+  });
+  assert.doesNotMatch(
+    String(unrelatedBacktickVerdict.reason ?? ""),
+    /backtick/,
+    "CONTROL: a backtick that changes no gh operation is not refused as composition",
+  );
 
   // ── round 9: the GitHub-connector merge tool must get the advisory too ─────
   // Codex HIGH on the exact-SHA proof of dc965401f — a regression round 8
@@ -1899,6 +2518,7 @@ try {
   const rawProtectedEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawProtectedPatch }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(rawProtectedEntrypoint.error, undefined, "raw-string protected patch entrypoint starts without a process error");
   assert.equal(rawProtectedEntrypoint.status, 0, "raw-string protected patch entrypoint exits cleanly after denial");
@@ -1913,6 +2533,7 @@ try {
       tool_input: "*** Begin Patch\n*** Update File: production-action-guard.mjs\n@@\n-old\n+weaken()\n*** End Patch",
     }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(eventCwdProtectedEntrypoint.error, undefined, "event-cwd raw patch entrypoint starts without a process error");
   assert.equal(eventCwdProtectedEntrypoint.status, 0, "event-cwd raw patch entrypoint exits cleanly after denial");
@@ -1923,6 +2544,7 @@ try {
   const rawDocumentationEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: rawDocumentationPatch }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(rawDocumentationEntrypoint.error, undefined, "raw-string documentation patch entrypoint starts without a process error");
   assert.equal(rawDocumentationEntrypoint.status, 0, "raw-string documentation patch entrypoint exits cleanly");
@@ -1934,7 +2556,7 @@ try {
   for (const [patch, reason] of [[moveToGuardPatch, /production\/review harness is a security boundary/], [moveToProofPatch, /review proof files/]]) {
     assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: patch }).blocked, true, "raw Move to protected destination is denied");
     assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch } }).blocked, true, "structured Move to protected destination is denied");
-    const movedEntrypoint = spawnSync(process.execPath, [guardPath], { input: JSON.stringify({ tool_name: "apply_patch", tool_input: patch }), encoding: "utf8" });
+    const movedEntrypoint = spawnSync(process.execPath, [guardPath], { input: JSON.stringify({ tool_name: "apply_patch", tool_input: patch }), encoding: "utf8", timeout: GUARD_SPAWN_TIMEOUT_MS });
     assert.equal(movedEntrypoint.error, undefined, "Move to entrypoint starts without a process error");
     assert.equal(movedEntrypoint.status, 0, "Move to entrypoint exits after denial");
     assert.equal(movedEntrypoint.stderr, "", "Move to entrypoint emits no stderr");
@@ -1947,6 +2569,7 @@ try {
   const ordinaryMoveEntrypoint = spawnSync(process.execPath, [guardPath], {
     input: JSON.stringify({ tool_name: "apply_patch", tool_input: moveToDocumentationPatch }),
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
   });
   assert.equal(ordinaryMoveEntrypoint.error, undefined, "ordinary move entrypoint starts without a process error");
   assert.equal(ordinaryMoveEntrypoint.status, 0, "ordinary move entrypoint exits cleanly");
@@ -2037,6 +2660,7 @@ try {
   const deniedProcess = spawnSync(process.execPath, [guardPath], {
     cwd: risky.repo,
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
     input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git push origin HEAD:main" } }),
   });
   assert.equal(deniedProcess.status, 0);
@@ -2048,6 +2672,7 @@ try {
   const allowedProcess = spawnSync(process.execPath, [guardPath], {
     cwd: risky.repo,
     encoding: "utf8",
+    timeout: GUARD_SPAWN_TIMEOUT_MS,
     input: JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "git push origin HEAD:main" } }),
   });
   assert.equal(allowedProcess.status, 0);

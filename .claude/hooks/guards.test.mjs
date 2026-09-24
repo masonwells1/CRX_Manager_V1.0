@@ -329,6 +329,90 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   git("config", "--unset", "remote.pushDefault");
   git("config", "--unset", "remote.archive.mirror");
 
+  // Codex sol (2026-09-20, PR #630): a Windows destination ending in a backslash
+  // hid the option after it from the guard, because the POSIX word splitter binds
+  // `\ ` into the preceding word. PowerShell passes git two arguments there, so
+  // the predicates now read both ways. These drive the GUARD end to end — the
+  // library assertions alone would not prove the hard gate refuses.
+  for (const tail of [
+    "--mirror",
+    "--delete main",
+    "--receive-pack attacker HEAD:feature",
+    "--force-with-lease",
+  ]) {
+    const command = `git -C ${mirrorRepo} ${pushVerb} C:\\critical-bare-repo\\ ${tail}`;
+    const res = runHook("codex-push-guard.mjs", { cwd: mirrorRepo, tool_name: "Bash", tool_input: { command } });
+    const decision = res.stdout.trim()
+      ? JSON.parse(res.stdout)?.hookSpecificOutput?.permissionDecision ?? ""
+      : "";
+    eq(decision, "deny", `trailing-backslash destination does not hide \`${tail}\``);
+  }
+
+  // Codex sol (2026-09-20, PR #630, HIGH-01): a cancellation flag must not hide a
+// composed command. The parser used to return null for `--disable-auto`, so the
+// guard's substitution refusal never ran and the NESTED administrator merge —
+// which bash executes first — reached GitHub with the gate silent. Measured
+// then: base denied, candidate allowed. Driven through the hook process here,
+  // because the parser assertions alone did not catch it.
+  const mergeVerb = "pr me" + "rge"; // keep the literal out of this file's own text
+  const bypass = `gh ${mergeVerb} 1 --disable-a""uto --body "$(gh ${mergeVerb} 2 --admin --squash)"`;
+  const res = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command: bypass } });
+  const parsed = res.stdout.trim() ? JSON.parse(res.stdout)?.hookSpecificOutput ?? {} : {};
+  eq(parsed.permissionDecision, "deny", "a quoted cancellation does not hide a nested admin merge");
+  ok(/command substitution/.test(parsed.permissionDecisionReason ?? ""), "refused as a composed command");
+
+  // `--disable-auto` no longer stands the gate down (Mason, 2026-09-21): every
+  // spelling of that shortcut became a bypass. A plain one now reaches the gate,
+  // which is shown with gh made unreachable — the gate must try to resolve the
+  // PR, fail, and refuse, rather than stay silent.
+  const runHookWithoutGh = (command) => spawnSync(process.execPath, [path.join(__dirname, "pr-merge-guard.mjs")], {
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+    encoding: "utf8",
+    env: { ...process.env, PATH: "", Path: "" },
+  });
+  for (const command of [
+    `gh ${mergeVerb} 5 --disable-auto`,
+    `gh ${mergeVerb} 5 -d --disable-auto`,
+    `gh ${mergeVerb} 123 --disable-auto=true --disable-auto=false --squash`,
+  ]) {
+    const gated = runHookWithoutGh(command);
+    const gatedDecision = gated.stdout.trim() ? JSON.parse(gated.stdout)?.hookSpecificOutput?.permissionDecision : "";
+    eq(gatedDecision, "deny", `--disable-auto reaches the merge gate instead of standing it down: ${command}`);
+  }
+
+  // Codex sol (2026-09-20, round 3): pflag BUNDLES boolean shorts, so `-db` is
+  // `-d` then `-b` and gh takes the next word as the body VALUE — the
+  // cancellation flag never reaches gh, and `--admin` is live. Reading only
+  // standalone shorts made the guard stand down on an ADMINISTRATOR merge
+  // (measured: base blocked, candidate allowed).
+  for (const command of [
+    `gh ${mergeVerb} 123 -db --disable-auto --admin --squash`,
+    `gh ${mergeVerb} 123 -d -b --disable-auto --admin --squash`,
+    `gh ${mergeVerb} 123 --disable-auto --admin`,
+  ]) {
+    const res2 = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command } });
+    const parsed2 = res2.stdout.trim() ? JSON.parse(res2.stdout)?.hookSpecificOutput ?? {} : {};
+    eq(parsed2.permissionDecision, "deny", `a cancellation never excuses --admin: ${command}`);
+  }
+
+  // Codex sol (2026-09-20, round 4): which shorts take a VALUE decides which
+  // pull request the gate vets. `-r` is --rebase (boolean) and `-A` is
+  // --author-email (a value), so reading them the other way round aimed every
+  // downstream check — objections, green checks, risky diff, exact-SHA proof —
+  // at a DIFFERENT PR than gh merges. A bundled `-R` lost the repository the
+  // same way. The discriminating evidence is the parser-level selector/repo
+  // assertions in pr-merge-guard.test.mjs, measured against gh's own manual;
+  // these confirm the whole guard process still refuses the spellings.
+  for (const command of [
+    `gh ${mergeVerb} -dr 789 --squash`,
+    `gh ${mergeVerb} -dR other/repo 789 --squash`,
+    `gh ${mergeVerb} -A someone@example.com 789 --squash`,
+  ]) {
+    const res3 = runHook("pr-merge-guard.mjs", { tool_name: "Bash", tool_input: { command } });
+    const parsed3 = res3.stdout.trim() ? JSON.parse(res3.stdout)?.hookSpecificOutput ?? {} : {};
+    eq(parsed3.permissionDecision, "deny", `a bundled short never lands an unvetted merge: ${command}`);
+  }
+
   // A configured remote name may legally contain `/`, and git resolves
   // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
   // raw URL — which means "no remote.<name>.* applies" — so a mirrored
