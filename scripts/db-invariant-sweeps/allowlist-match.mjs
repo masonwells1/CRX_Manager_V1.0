@@ -91,10 +91,66 @@ WHERE p.prokind IN ('f', 'p') AND n.nspname IN ('public', 'auth')
 ORDER BY function_key`;
 }
 
+/**
+ * Does this SQL still terminate a statement, ignoring comments and quoted spans?
+ *
+ * `buildSweepQuery` drops a trailing semicolon and inlines the rest into `FROM (...)`, which only
+ * holds for a SINGLE SELECT. A `CREATE OR REPLACE FUNCTION pg_temp…;` prelude, or a comment after
+ * the final semicolon (which the trailing-strip regex cannot reach), would otherwise be pasted in
+ * and produce invalid SQL at sweep time instead of a clear refusal here.
+ *
+ * The scan must be comment- and literal-aware: 27 of the 29 shipped predicates contain a semicolon
+ * inside explanatory `--` prose, and a bare `includes(';')` would reject almost all of them. Only a
+ * semicolon in executable position counts. (CodeRabbit on PR #789.)
+ */
+export function hasStatementBreak(sql) {
+  const text = String(sql ?? '');
+  let i = 0;
+  while (i < text.length) {
+    const two = text.slice(i, i + 2);
+    if (two === '--') {
+      const end = text.indexOf('\n', i);
+      i = end === -1 ? text.length : end + 1;
+    } else if (two === '/*') {
+      let depth = 1;
+      i += 2;
+      while (i < text.length && depth > 0) {
+        if (text.slice(i, i + 2) === '/*') { depth += 1; i += 2; } else if (text.slice(i, i + 2) === '*/') { depth -= 1; i += 2; } else i += 1;
+      }
+    } else if (text[i] === "'" || text[i] === '"') {
+      const quote = text[i];
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === quote && text[i + 1] === quote) { i += 2; continue; }
+        if (text[i] === quote) { i += 1; break; }
+        i += 1;
+      }
+    } else {
+      const tag = /^\$[A-Za-z_]*\$/.exec(text.slice(i))?.[0];
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
+        i = close === -1 ? text.length : close + tag.length;
+      } else if (text[i] === ';') {
+        return true;
+      } else i += 1;
+    }
+  }
+  return false;
+}
+
 /** Predicate and all its required contracts are read in ONE PostgreSQL statement/snapshot. */
 export function buildSweepQuery(predicate, entries) {
   const keys = entries.flatMap((entry) => Object.keys(entry.reviewed_contracts ?? {}));
   const sql = predicate.sql.replace(/;\s*$/, '');
+  // Refuse anything that is not one SELECT, rather than inlining it into FROM (...) and failing as
+  // a syntax error against the live database, where the cause is far less obvious.
+  if (hasStatementBreak(sql)) {
+    throw new TypeError(
+      `Predicate ${predicate.name} is not a single SELECT: it still terminates a statement after the `
+      + 'trailing semicolon is removed (a multi-statement prelude, or text after the final `;`). '
+      + 'buildSweepQuery inlines the predicate into FROM (...), which only holds for one SELECT.',
+    );
+  }
   const contracts = keys.length === 0 ? "'[]'::json" :
     `(SELECT COALESCE(json_agg(c), '[]'::json) FROM (${functionContractSql(keys)}) AS c)`;
   return `SELECT json_build_object(

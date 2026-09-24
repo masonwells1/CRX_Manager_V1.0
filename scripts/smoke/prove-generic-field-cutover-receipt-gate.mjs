@@ -27,7 +27,7 @@
 //
 // Run: node scripts/smoke/prove-generic-field-cutover-receipt-gate.mjs
 // Ends in RECEIPT_GATE_NARROWING_PROOF_PASS.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,11 +109,26 @@ docker(['run', '--detach', '--name', CONTAINER, '--network', 'none',
   '--env', 'POSTGRES_PASSWORD=disposable-only', IMAGE]);
 
 try {
-  // Readiness: the init log line, then pg_isready, then a real SELECT that returns a row.
+  // Readiness: the POST-INIT marker, then pg_isready, then a real SELECT that returns a row.
+  //
+  // Not "database system is ready to accept connections": this image logs that TWICE. Measured on
+  // postgres:17-alpine — the entrypoint's throwaway initdb server logs it, then `shutting down`,
+  // then `PostgreSQL init process complete; ready for start up.`, and only then does the real
+  // server log it again. Waiting on the first occurrence can therefore race a server that is about
+  // to stop. `prove-actor-allowlist.mjs` waits on the same post-init marker.
+  //
+  // Both streams are read. `docker logs` sends container stderr to the CLI's stderr, and postgres
+  // writes there; on this image the marker also appears on stdout, so an stdout-only read happens
+  // to work, but nothing guarantees that and a single missed stream would stall the whole prover.
+  // (CodeRabbit on PR #789.)
+  const containerLogs = () => {
+    const r = spawnSync('docker', ['logs', CONTAINER], { encoding: 'utf8' });
+    return `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
+  };
   let ready = false;
   for (let i = 0; i < 180; i += 1) {
     try {
-      if (docker(['logs', CONTAINER]).includes('database system is ready to accept connections')) {
+      if (containerLogs().includes('PostgreSQL init process complete; ready for start up.')) {
         docker(['exec', CONTAINER, 'pg_isready', '-h', '127.0.0.1']);
         if (psql('SELECT 1;').trim() === '1') { ready = true; break; }
       }

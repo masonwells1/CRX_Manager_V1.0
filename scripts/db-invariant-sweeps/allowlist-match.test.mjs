@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { buildSweepQuery, functionContractSql, subtractAllowlist } from './allowlist-match.mjs';
+import { buildSweepQuery, functionContractSql, subtractAllowlist, hasStatementBreak } from './allowlist-match.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const allowlist = JSON.parse(readFileSync(new URL('./allowlist.json', import.meta.url), 'utf8'));
@@ -70,6 +70,43 @@ try {
   check(query.includes('pg_get_functiondef') && query.includes('has_function_privilege') && query.includes('pg_get_userbyid') && query.includes('aclexplode'), 'definition, owner, direct and effective ACL all participate');
   const wrapped = buildSweepQuery({ name: 'actor-forgery', sql: 'SELECT 1 AS violation_key;' }, [delivery]);
   check(wrapped.includes("'function_contracts'") && wrapped.includes("'rows'") && wrapped.startsWith('SELECT json_build_object('), 'one statement contains detector and required catalog metadata');
+
+  // buildSweepQuery inlines the predicate into FROM (...), which only holds for a SINGLE SELECT.
+  // Anything that still terminates a statement must be refused HERE, not pasted in to fail as a
+  // syntax error against the live database. The scan has to ignore comments and quoted spans: 27 of
+  // the 29 shipped predicates contain a semicolon inside explanatory `--` prose, so a bare
+  // includes(';') would reject almost all of them. (CodeRabbit on PR #789.)
+  check(hasStatementBreak('SELECT 1; SELECT 2') === true, 'a second statement is a statement break');
+  check(hasStatementBreak('SELECT 1 AS a') === false, 'a lone SELECT is not');
+  check(hasStatementBreak('-- policy on quote_versions; and more\nSELECT 1') === false,
+    'a semicolon inside a line comment is prose, not a statement break');
+  check(hasStatementBreak('/* a; b */ SELECT 1') === false, 'a semicolon inside a block comment is prose');
+  check(hasStatementBreak("SELECT 'a; b' AS lit") === false, 'a semicolon inside a literal is data');
+  check(hasStatementBreak('SELECT $q$a; b$q$ AS lit') === false, 'a semicolon inside a dollar-quote is data');
+  check(hasStatementBreak('SELECT "od;d" AS x') === false, 'a semicolon inside a quoted identifier is a name');
+  assert.throws(
+    () => buildSweepQuery({ name: 'actor-forgery', sql: 'CREATE OR REPLACE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS $$SELECT 1$$; SELECT 1 AS violation_key;' }, [delivery]),
+    /not a single SELECT/,
+  ); assertions += 1;
+  assert.throws(
+    // The trailing-strip regex cannot reach a `;` followed by a comment, so this would be inlined.
+    () => buildSweepQuery({ name: 'actor-forgery', sql: 'SELECT 1 AS violation_key;\n-- trailing note\n' }, [delivery]),
+    /not a single SELECT/,
+  ); assertions += 1;
+  // Every predicate actually shipped must still build, or this guard is too strict to live with.
+  {
+    const predicateDir = path.join(root, 'scripts/db-invariant-sweeps/predicates');
+    const shipped = readdirSync(predicateDir).filter((f) => f.endsWith('.sql')).sort();
+    check(shipped.length >= 29, 'the predicate directory was found');
+    for (const file of shipped) {
+      const sql = readFileSync(path.join(predicateDir, file), 'utf8');
+      assert.doesNotThrow(
+        () => buildSweepQuery({ name: file.replace(/\.sql$/, ''), sql }, []),
+        `shipped predicate ${file} must still wrap`,
+      );
+      assertions += 1;
+    }
+  }
 
   const capture = path.join(scratch, 'captured.json');
   // Force captured/print modes without reading, printing, or using any connection secret.
