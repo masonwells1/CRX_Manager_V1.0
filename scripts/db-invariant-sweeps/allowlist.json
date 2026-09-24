@@ -619,12 +619,13 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "get_profitability_report(p_group_by text, p_start_date date, p_end_date date)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector (customer/product/month), not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector (customer/product/month), not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible. Role-gate helpers reached by the reviewed implementation are pinned too (added 2026-09-23 from the same 2026-09-12 catalog read; an unpinned helper change would otherwise leave this exception matched).",
       "dated": "2026-09-12",
       "suspect_param": "p_group_by",
       "reviewed_contracts": {
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
-        "public.get_profitability_report(p_group_by text, p_start_date date, p_end_date date)": "0ca11ab7bcec750d8c5f9b9ae05c3734"
+        "public.get_profitability_report(p_group_by text, p_start_date date, p_end_date date)": "0ca11ab7bcec750d8c5f9b9ae05c3734",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f"
       }
     },
     {
@@ -641,12 +642,14 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector, not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY; grouping only uses CASE p_group_by. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Matched p_group_by is text report grouping selector, not actor identity. STABLE read-only report checks active admin/sales_rep using profiles.id = auth.uid() before RETURN QUERY; grouping only uses CASE p_group_by. No DML or actor attribution. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible. Role-gate helpers reached by the reviewed implementation are pinned too (added 2026-09-23 from the same 2026-09-12 catalog read; an unpinned helper change would otherwise leave this exception matched).",
       "dated": "2026-09-12",
       "suspect_param": "p_group_by",
       "reviewed_contracts": {
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
-        "public.get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)": "b3328c2390d410f0fb05d6116d962567"
+        "public.get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)": "b3328c2390d410f0fb05d6116d962567",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
+        "public.is_sales_rep()": "b8de9969af7ef55d133e7b20758ff1a0"
       }
     },
     {
@@ -692,13 +695,14 @@
     {
       "predicate": "actor-forgery",
       "violation_key": "save_quote(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with auth.uid() authority and mismatch/active-role gates. Owner-only delegated implementation independently strictly checks supplied actor (including NULL) before writes. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible.",
+      "justification": "Live pg_get_functiondef semantic review 2026-09-12, independently traced by RLS/migration reviewers for mutators and inspected by coordinator for the two read-only grouping reports. Wrapper first invokes _begin_below_cost_money_write with auth.uid() authority and mismatch/active-role gates. Owner-only delegated implementation independently strictly checks supplied actor (including NULL) before writes. This is scanner noise, not an accepted actor-forgery hole. Exception matches only the reviewed suspect parameter and exact function/dependency definition, owner, and effective EXECUTE contracts; missing or changed contracts leave the finding visible. Role-gate helpers reached by the reviewed implementation are pinned too (added 2026-09-23 from the same 2026-09-12 catalog read; an unpinned helper change would otherwise leave this exception matched).",
       "dated": "2026-09-12",
       "suspect_param": "p_performed_by",
       "reviewed_contracts": {
         "auth.uid()": "d0f4a847e4284ab3265335fd66ce2a12",
         "public._begin_below_cost_money_write(p_operation text, p_performed_by uuid, p_payload jsonb)": "725d82eaa5827ec986655b979a4f944b",
         "public._save_quote_below_cost_impl_20260810(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)": "4c554f49c0f528a4666b750fda4c0fe5",
+        "public.is_admin()": "8c4f9cb1ee80faa22ed435f970e2fd9f",
         "public.save_quote(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text)": "003e286aa2652d8e5b234a5deeffd7f8"
       }
     },

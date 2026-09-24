@@ -17,10 +17,15 @@ not applied**; nothing here touches the live database.
   recorded in `docs/manual/DECISION_LOG.md` (2026-09-22). The group-wide check is deliberately
   stricter than the per-invoice date rule: fail-closed, never wrong money, group stays recoverable.
 - **New regression guard.** `prove-preview-field-app-season.mjs` PHASE 8h-mixed / 8i-mixed now build
-  the production-shaped mixed group and assert both directions: the group stays previewable and
-  saveable at its own shared date, a single-row edit that would split that date is refused through
-  the public generic entry AND a raw admin UPDATE with the row unchanged, whole-group moves across
-  the boundary stay refused, and A still restores at its stored date once the correction is in. The
+  the production-shaped mixed group and assert both directions. The group still **saves** at its own
+  shared date in both phases, because the trigger only validates a row whose date actually changes,
+  so re-saving the stored date is not a date edit. Its **preview** is the one thing that differs:
+  under `20260914101000` alone the preview of that unchanged stored date is refused — the
+  pre-existing defect `20260914101100` corrects, which is why the apply-window rule keeps the two
+  files in ONE window — and it succeeds once `101100` is installed. In both phases a single-row edit
+  that would split that date is refused through the public generic entry AND a raw admin UPDATE with
+  the row unchanged, whole-group moves across the boundary stay refused, and A still restores at its
+  stored date once the correction is in. The
   mutant installs the **exact rejected per-row body** (md5-pinned `d8c4bbd4…` / `0005b29c…`),
   observes the edit being permitted, then proves the group unsaveable at three dates with both
   convergence attempts and the preview refused. A static check fails if either trigger body drops
@@ -44,6 +49,6 @@ not applied**; nothing here touches the live database.
 **Proof:** `prove-preview-field-app-season.mjs` → `PREVIEW_SEASON_PROOF_PASS` with both new phases
 and both mutants caught. `run-smoke.mjs --spec save_field_app_invoice` refuses the live path;
 `--spec post_invoice_group` now selects `unpost_invoice_group`. typecheck 0, lint 0, vitest
-5,440 passed / 123 skipped, build 0, test:correction-guards 0, test:agent-workflows 0,
+5,444 passed / 123 skipped, build 0, test:correction-guards 0, test:agent-workflows 0,
 check:docs PASS. Both migration sha256 pins re-verified from the committed blobs against ledger
 rows 931 and 934.

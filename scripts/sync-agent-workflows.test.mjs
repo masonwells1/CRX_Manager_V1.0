@@ -53,6 +53,11 @@ const ADJUDICATION_CONTRACT = [
     require: /\bfunction_contracts\b|\bauthorization-dependency\b/,
     forbid: [
       /(?:function_contracts|authorization-dependency)[^.\n]{0,60}\b(?:optional|not required|best[- ]effort|if present|if available)\b/i,
+      // An ADDED contradiction leaves the required token in place, so `require` still matches:
+      // "Do not capture function_contracts" has to be forbidden in its own right. The window is
+      // tight and needs a capture verb, so the real prose's "Do not compare violation keys alone:
+      // … authorization-dependency contracts" does not trip it (CodeRabbit on #774).
+      /\b(?:do not|do NOT|don't|never|skip|omit|stop)\b[^.\n]{0,30}\b(?:captur\w*|collect\w*|includ\w*|read\w*|record\w*|emit\w*|request\w*)\b[^.\n]{0,30}\b(?:function_contracts|authorization-dependency)\b/i,
     ],
   },
   {
@@ -63,6 +68,9 @@ const ADJUDICATION_CONTRACT = [
     require: /\b(?:do not|do NOT|don't|never)\b[^.\n]{0,60}?\b(?:compare|subtract|allowlist|match)\b[^.\n]{0,60}?violation[ _]`?keys?`?[^.\n]{0,20}?\balone\b/i,
     forbid: [
       /compare (?:returned )?`violation_key`s (?:against|to)/,
+      // Same additive hole on the other rule: "You may allowlist by violation key alone" keeps the
+      // prohibition above intact, so permissive phrasing must be forbidden explicitly.
+      /\b(?:may|can|it is fine|is fine|is ok|is okay|acceptable|allowed|suffices|sufficient|enough)\b[^.\n]{0,60}?\b(?:allowlist\w*|subtract\w*|match\w*|compar\w*|exempt\w*)\b[^.\n]{0,60}?violation[ _]`?keys?`?[^.\n]{0,20}?\balone\b/i,
     ],
   },
 ];
@@ -93,6 +101,11 @@ const SEMANTIC_REVERSALS = [
   ["drops dependency contracts", (s) => s.replace(/function_contracts/g, "rows").replace(/authorization-dependency/g, "reviewed")],
   ["makes dependency contracts optional", (s) => s.replace(/(function_contracts|authorization-dependency)/g, "$1 optional")],
   ["permits key-only allowlisting", (s) => s.replace(/\b(?:Do not|Do NOT)\b(\s+(?:compare|subtract))/g, "Always$1")],
+  // The six above all REMOVE or REVERSE the instruction. These two ADD a contradicting sentence and
+  // leave the original wording in place, so every `require` still matches — the case the forbid
+  // patterns had to grow for (CodeRabbit on #774).
+  ["adds a contradicting dependency-contract instruction", (s) => `${s}\n\nDo not capture function_contracts for this gate.\n`],
+  ["adds a contradicting key-only permission", (s) => `${s}\n\nYou may allowlist by violation key alone.\n`],
 ];
 
 for (const command of RELEASE_COMMANDS) {

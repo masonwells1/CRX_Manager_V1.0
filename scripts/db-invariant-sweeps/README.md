@@ -128,9 +128,12 @@ Two modes, auto-selected:
   adjudication cannot prove every invariant class is clean and is NOT valid evidence for the
   migration, ship, or review gates — an unselected predicate could be holding an unallowlisted
   violation. Iterate with it, then re-run unfiltered for gate evidence.
-  Missing/duplicate/unknown packets are errors. Do **not** compare keys alone:
-  the same parameter/contract matcher runs in MCP adjudication and linked-psql execution. Captured
-  JSON is not proof of freshness: actual read-only execution must still occur in the current session.
+  Missing/duplicate/unknown packets are errors, and so is a packet that omits either `rows` or
+  `function_contracts` — one statement emits both, so an absent key means the wrong or an older
+  query, not an empty catalog. Do **not** compare keys alone: the same parameter/contract matcher
+  runs in MCP adjudication and linked-psql execution, and every exception is bound to the predicate
+  it was reviewed under as well as to its key. Captured JSON is not proof of freshness: actual
+  read-only execution must still occur in the current session.
 
   ```
   node scripts/db-invariant-sweeps/run-sweeps.mjs

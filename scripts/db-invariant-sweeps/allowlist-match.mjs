@@ -13,8 +13,19 @@ function contractIndex(rows) {
   return index;
 }
 
-/** Missing, malformed, duplicate, or changed contracts never authorize an exception. */
-export function subtractAllowlist(rows, entries, functionContracts = []) {
+/**
+ * Missing, malformed, duplicate, or changed contracts never authorize an exception.
+ *
+ * `predicateName` is required and every entry must name it. Callers already filter the allowlist
+ * by predicate, but matching on `violation_key` alone meant a caller that passed the WHOLE
+ * allowlist could let one predicate's reviewed exception clear another predicate's row that
+ * happened to share the key. The binding lives here so the guarantee cannot be lost at a call
+ * site (CodeRabbit on #774).
+ */
+export function subtractAllowlist(predicateName, rows, entries, functionContracts = []) {
+  if (typeof predicateName !== 'string' || predicateName.length === 0) {
+    throw new TypeError('Subtraction requires the predicate whose rows are being adjudicated.');
+  }
   if (!Array.isArray(rows) || !Array.isArray(entries)) {
     throw new TypeError('Sweep rows and allowlist entries must be arrays.');
   }
@@ -24,6 +35,7 @@ export function subtractAllowlist(rows, entries, functionContracts = []) {
       throw new TypeError('Predicate output is missing a string violation_key.');
     }
     return !entries.some((entry) => {
+      if (entry.predicate !== predicateName) return false;
       if (entry.violation_key !== row.violation_key) return false;
       const bound = ACTOR_PREDICATES.has(entry.predicate) ||
         Object.hasOwn(row, 'suspect_param') ||

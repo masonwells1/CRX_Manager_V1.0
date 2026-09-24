@@ -128,7 +128,8 @@ function runViaPsql(predicate, entries) {
   }
   try {
     const packet = JSON.parse(res.stdout.trim());
-    if (packet.predicate !== predicate.name || !Array.isArray(packet.rows)) {
+    if (packet.predicate !== predicate.name || !Array.isArray(packet.rows) ||
+        !Array.isArray(packet.function_contracts)) {
       throw new TypeError('Invalid sweep_result packet.');
     }
     return { ...packet, error: null };
@@ -225,7 +226,13 @@ if (args.includes('--adjudicate')) {
         throw new TypeError('Capture contains an unknown or duplicate predicate.');
       }
       names.add(packet.predicate);
-      const remaining = subtractAllowlist(packet.rows, allowlistFor(allowlist, packet.predicate), packet.function_contracts);
+      // The capture contract emits BOTH keys in one statement. An omitted function_contracts is a
+      // packet from the wrong or an older query, and with no rows it would otherwise adjudicate
+      // PASS on metadata that was never read (CodeRabbit on #774).
+      if (!Array.isArray(packet.rows) || !Array.isArray(packet.function_contracts)) {
+        throw new TypeError('Each packet must carry both rows and function_contracts arrays, exactly as buildSweepQuery emits them.');
+      }
+      const remaining = subtractAllowlist(packet.predicate, packet.rows, allowlistFor(allowlist, packet.predicate), packet.function_contracts);
       return { predicate: packet.predicate, status: remaining.length === 0 ? 'PASS' : 'FAIL',
         total_rows: packet.rows.length, allowlisted: packet.rows.length - remaining.length, violations: remaining };
     });
@@ -326,7 +333,7 @@ for (const p of selectedPredicates) {
   }
   let remaining;
   try {
-    remaining = subtractAllowlist(rows, entries, function_contracts);
+    remaining = subtractAllowlist(p.name, rows, entries, function_contracts);
   } catch (contractError) {
     console.error(`Invalid predicate contract for ${p.name}: ${contractError.message}`);
     process.exit(2);
