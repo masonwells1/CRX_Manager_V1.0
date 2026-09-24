@@ -1,0 +1,6 @@
+## 2026-09-13 - Merge gates deny, instead of running out of time, when one command chains many merges
+
+- **What changed:** both merge gates (the Claude `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs`) now share one time budget for their GitHub and git look-ups. Before starting each look-up they check whether it could still finish before the hook's time limit; if not, the merge is denied with a plain message ("run one `gh pr merge <number>` per command and retry").
+- **Why:** a safety hook that is cut off at its time limit says nothing, and saying nothing lets the command run. A command chaining several different merges could spend the whole limit on the first few and let the last one through unchecked. CodeRabbit raised this on PR #630 (review of 2026-09-10); the earlier de-duplication fix only removed repeated readings of the SAME merge.
+- **Unchanged:** the advisory Codex-review look-up still fails open on its own deadline; single merges on a normal-speed GitHub are unaffected.
+- **Proof:** new unit tests for the budget helper, a Codex-side test that three chained merges on a slow GitHub are denied before the third is looked up (and allowed when GitHub is fast), and source checks that every Claude-side hard look-up goes through the budget.
