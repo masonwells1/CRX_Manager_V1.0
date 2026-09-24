@@ -140,6 +140,29 @@ ok(!isMachineGenerated(""), "empty not machine");
   ok(isHoldPhrase(authoredByMason(
     `here is the envelope they send:\n\n${FENCE}\n<cross-session-message from="x">\n${FENCE}\n\nstop using that`)),
     "a fenced bare open tag does not swallow Mason's later stop");
+
+  // 9. #504b follow-up (2026-09-24): a fence left dangling AFTER closed
+  //    envelopes are removed must not swallow Mason's stop. Both cases lost the
+  //    stop before stripFencedCode() gave unclosed fences' lines back; case (a)
+  //    was also a regression against the fences-first order.
+  //    (a) Mason's fenced open tag pairs with a real peer's close tag, leaving
+  //        his fence's opener dangling.
+  ok(isHoldPhrase(authoredByMason(
+    `${FENCE}\n<cross-session-message from="x">\n${FENCE}\n` +
+    '<cross-session-message from="terra">ok</cross-session-message>\nstop now')),
+    "a fenced open tag followed by a real peer message does not swallow Mason's stop");
+  //    (b) A peer writes a fake closing tag inside a fence, leaving the rest
+  //        of its fence dangling after its envelope is cut short.
+  ok(isHoldPhrase(authoredByMason(
+    `<cross-session-message from="terra">${FENCE}\n</cross-session-message>\n${FENCE}\n` +
+    "more peer</cross-session-message>\nstop now")),
+    "a peer's fake close tag plus a fence does not swallow Mason's stop");
+  //    An unterminated fence Mason pastes is read as his (fail-safe), while a
+  //    CLOSED fence is still stripped exactly as before.
+  ok(isHoldPhrase(authoredByMason(`look at this\n${FENCE}\nstop now`)),
+    "an unterminated fence gives its lines back rather than dropping them");
+  ok(!isHoldPhrase(authoredByMason(`${FENCE}\nstop now\n${FENCE}\nthoughts?`)),
+    "a closed fence containing stop still does not latch");
 }
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────

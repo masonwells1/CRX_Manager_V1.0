@@ -38,6 +38,24 @@ peer words after the fake tag read as Mason's and can latch a hold he did not as
 That is the fail-safe direction — a spurious pause costs a round-trip, a missed `stop`
 does not stop — and it is how this file already behaved before #504b.
 
+### Follow-up in the same PR (2026-09-24): unclosed fences give their lines back
+
+A pre-merge review of the first commit found two prompts that still lost Mason's `stop`,
+both caused by a fence left dangling after closed envelopes are removed:
+
+- Mason's fence quoting a bare open tag, then a real peer message, then `stop`: the quoted
+  open tag paired with the peer's closing tag, leaving Mason's fence opener dangling. This
+  one was a regression — the fences-first order on `main` handled it.
+- A peer's fake closing tag inside a fence, then `stop`: the envelope ended early and the
+  rest of the peer's fence dangled. `main` lost this one too, so the residual above was not
+  purely fail-safe.
+
+`stripFencedCode()` now removes only fences that close; an unterminated fence keeps its
+lines. At worst code or peer text is read as Mason's (a spurious hold, fail-safe); a
+dangling fence can no longer hide his `stop`. Four more assertions cover both prompts,
+an unterminated fence alone, and a closed fence that must still be stripped; the suite is
+244/244 green, and both prompts were measured losing `stop` on the first commit.
+
 ### Not verified
 
 No live end-to-end latch was exercised: running `hold-latch-prompt.mjs` for real would

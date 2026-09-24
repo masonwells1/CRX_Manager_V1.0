@@ -117,25 +117,42 @@ export function isMachineGenerated(prompt) {
 // its own message ends its envelope early, so peer words after the fake tag are
 // read as Mason's and can latch a hold he did not ask for. That is the
 // fail-SAFE direction (a spurious pause costs a round-trip; a missed "stop"
-// does not stop), and it is how this file already behaved before #504b.
+// does not stop), and it is how this file already behaved before #504b. It
+// stays fail-safe even when the peer follows its fake tag with an unterminated
+// fence, because stripFencedCode() gives an unclosed fence's lines back instead
+// of dropping the rest of the prompt.
 
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
 const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
 
-// ``` / ~~~ fenced blocks, line-based so an unterminated fence drops to the end.
+// ``` / ~~~ fenced blocks, line-based. Only a fence that CLOSES is removed.
+//
+// An unterminated fence keeps its lines (2026-09-24, #504b follow-up). It used
+// to drop everything to the end of the prompt, and a dangling fence can be left
+// over after stripClosedEnvelopes() by text Mason did not write — a peer's fake
+// closing tag followed by a fence, or a quoted open tag in Mason's own fence
+// pairing with a real peer's close. Either way it swallowed the "stop" Mason
+// typed below: fail-OPEN on the halt path. Keeping the lines is fail-SAFE —
+// at worst code or peer text is read as Mason's and latches a spurious hold.
 function stripFencedCode(text) {
   const kept = [];
   let openFence = null;
+  let pending = [];
   for (const line of text.split("\n")) {
     const m = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line);
     if (openFence === null) {
-      if (m) { openFence = m[1][0]; continue; }
+      if (m) { openFence = m[1][0]; pending = [line]; continue; }
       kept.push(line);
     } else if (m && m[1][0] === openFence) {
       openFence = null; // closing line is dropped with the block
+      pending = [];
+    } else {
+      pending.push(line);
     }
   }
+  // Never closed: give the lines back rather than dropping them.
+  if (openFence !== null) kept.push(...pending);
   return kept.join("\n");
 }
 
