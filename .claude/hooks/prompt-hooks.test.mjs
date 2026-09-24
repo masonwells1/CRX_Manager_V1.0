@@ -449,6 +449,10 @@ rmSync(hbProj, { recursive: true, force: true });
     ["a message naming the hook file",
       "take a look at .claude/hooks/stop-wrap.mjs — that is the one, right?", false],
     ["Mason's pause beside a peer block", "pause here.\n" + PEER_BLOCK, true],
+    // 2026-09-24: a stop only ONE strip order keeps must still latch end to
+    // end — the hook's "not Mason's turn" gate runs after the latch.
+    ["Mason's stop after an inline-quoted open tag, before a peer block",
+      "the `<cross-session-message>` tag is odd. stop now\n" + PEER_BLOCK, true],
   ];
   for (const [label, prompt, shouldLatch] of XS) {
     const dir = mkdtempSync(path.join(tmpdir(), "crx-xsession-"));
@@ -466,6 +470,14 @@ rmSync(hbProj, { recursive: true, force: true });
   ok(existsSync(holdOf(keepDir)), "setup: Mason's stop latched the hold");
   runPrompt(keepDir, PEER_BLOCK);
   ok(existsSync(holdOf(keepDir)), "a peer message does NOT clear Mason's hold");
+  // 2026-09-24 review: a peer that merely QUOTES its own closing tag leaves
+  // text in one strip order only; that must not count as Mason speaking.
+  const PO = '<cross-session-message from="terra">';
+  const PC = "</cross-session-message>";
+  runPrompt(keepDir, PO + "the `" + PC + "` tag ends my turn, all good" + PC);
+  ok(existsSync(holdOf(keepDir)), "a peer quoting its close tag inline does NOT clear Mason's hold");
+  runPrompt(keepDir, PO + "envelope looks like:\n```\n" + PC + "\n```\nall good" + PC);
+  ok(existsSync(holdOf(keepDir)), "a peer quoting its close tag in a fence does NOT clear Mason's hold");
   runPrompt(keepDir, "ok go ahead and continue");
   ok(!existsSync(holdOf(keepDir)), "Mason's own next message still clears it");
   rmSync(keepDir, { recursive: true, force: true });
@@ -477,6 +489,14 @@ rmSync(hbProj, { recursive: true, force: true });
 ok(/authoredByMason\(payload\?\.prompt\)/.test(
   readFileSync(path.join(__dirname, "hold-latch-prompt.mjs"), "utf8")),
   "hold-latch-prompt matches on authoredByMason(prompt), not the raw prompt");
+// ...and gates CLEARING on hasAuthoredText (both strip orders agree), placed
+// after the latch so a halt only one order keeps is never dropped by the gate.
+{
+  const hookSrc = readFileSync(path.join(__dirname, "hold-latch-prompt.mjs"), "utf8");
+  const gateAt = hookSrc.indexOf("if (!hasAuthoredText(payload?.prompt)) emit();");
+  ok(gateAt > hookSrc.indexOf("if (isHoldPhrase(prompt))") && gateAt < hookSrc.indexOf("if (wasHeld())"),
+    "hold-latch-prompt gates clearing on hasAuthoredText, after the latch and before the clear");
+}
 
 // ── and they still FIRE on the same phrasing typed by Mason ──────────────
 const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-reminder.mjs")], {

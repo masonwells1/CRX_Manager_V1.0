@@ -231,8 +231,18 @@ export function authoredByMason(prompt) {
 // True when the prompt still carries words Mason typed after stripping. A prompt
 // that is ENTIRELY not-his (a bare peer message) is not his turn to speak: it
 // must neither latch a hold nor clear one.
+//
+// This is the INTERSECTION of the two orders, deliberately not the union that
+// authoredByMason() returns (2026-09-24 review). Deciding "Mason spoke" is what
+// lets a prompt CLEAR a hold, so it must be conservative in the other
+// direction: a peer that merely quotes its own closing tag leaves text in one
+// order only, and under the union that peer-only message released a hold Mason
+// latched. Requiring BOTH orders to keep text means a sibling session can
+// never clear his hold by how it formats its own message.
 export function hasAuthoredText(prompt) {
-  return authoredByMason(prompt).trim() !== "";
+  const text = String(prompt || "");
+  if (!text) return false;
+  return stripEnvelopesFirst(text).trim() !== "" && stripCodeFirst(text).trim() !== "";
 }
 
 export const PUSH_POLICY =
