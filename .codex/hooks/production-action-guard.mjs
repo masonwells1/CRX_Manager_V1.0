@@ -1676,7 +1676,6 @@ export function evaluateProductionAction({
         "parser never sees. Run the merge as its own plain command, with the PR number and flags spelled out."
       );
     }
-    // `--disable-auto` is gated like any merge; see ghMergeRequest for why.
     if (ghRequest?.unsupportedGraphql) {
       return denied("CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied because the guard cannot safely resolve and verify their PR head/checks. Use `gh pr merge <number>` instead.");
     }
@@ -1691,6 +1690,7 @@ export function evaluateProductionAction({
       );
     }
     if (ghRequest) {
+      // `--disable-auto` is gated like any merge; see ghMergeRequest for why.
       // Every text-based denial above has already run for THIS segment; only the
       // network-bound gate is skipped, and only for a parse already gated.
       const requestKey = mergeRequestKey(ghRequest);

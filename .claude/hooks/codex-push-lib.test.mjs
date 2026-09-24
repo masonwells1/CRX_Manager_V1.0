@@ -1764,6 +1764,62 @@ assert.equal(
   CRX_URL,
   "a bundled short form hiding -o still consumes its value",
 );
+
+// --- `-o` inside a bundle: ATTACHED value vs. detached (Opus review of PR #630,
+// 2026-09-23; the same hole was live on origin/main). Asking whether the cluster
+// merely CONTAINS an `o` skipped the next word for `-ou`, which is git's
+// push-option `u` and consumes nothing — so the CRX URL was never read as the
+// destination, all three app-repo classifiers said "not the app repo", and the
+// push gate skipped the risky-diff and exact-SHA proof on a push to production.
+assert.equal(
+  pushDestinationToken(`git push -ou ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "-ou attaches its value, so the next word is the destination, not a consumed value",
+);
+assert.equal(
+  pushDestinationToken(`git push -oci.skip ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "a longer attached push-option value consumes nothing either",
+);
+assert.equal(
+  pushDestinationToken(`git push -o=ci.skip ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "the `=` form is attached too",
+);
+assert.equal(
+  pushDestinationToken(`git push -uo=ci.skip ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "...including when it is bundled behind a boolean",
+);
+// The detached spellings must keep consuming their value — the over-refusal
+// direction is just as wrong, because it would read `ci.skip` as the destination.
+assert.equal(
+  pushDestinationToken(`git push -no ci.skip ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "-no is -n plus a bare -o, whose value is the next word",
+);
+assert.equal(
+  pushDestinationToken("git push -o ci.skip origin main"),
+  "origin",
+  "the standalone -o still consumes its value",
+);
+// `-f=o` is not a bundle (git rejects it), and walking past the `=` would read
+// its trailing `o` as a real option and swallow the destination.
+assert.equal(
+  pushDestinationToken(`git push -f=o ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "a non-alphanumeric ends the cluster; the URL is still the destination",
+);
+assert.equal(pushNamesRefspec(`git push -ou ${CRX_URL} HEAD:main`), true,
+  "the refspec count sees the same shape: URL plus HEAD:main is two positionals");
+assert.equal(pushNamesRefspec("git push -no ci.skip origin main"), true,
+  "a detached bundled value is still consumed when counting positionals");
+assert.deepEqual(unknownPushOptions(`git push -ou ${CRX_URL} HEAD:main`), [],
+  "the letters AFTER -o are its value, not unknown short options");
+assert.deepEqual(unknownPushOptions("git push -oci.skip origin main"), [],
+  "an arbitrary attached push-option value is not a pile of unknown shorts");
+assert.deepEqual(unknownPushOptions("git push -Zo ci.skip origin main"), ["-Z"],
+  "an unknown short BEFORE -o is still reported");
 // And the backstop: the option list is no longer trusted to be complete, so
 // anything unrecognised makes the walk — and therefore the destination — void.
 assert.deepEqual(unknownPushOptions("git push --some-future-option x origin main"), ["--some-future-option"]);
@@ -2794,7 +2850,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // `--disable-auto`, in every spelling, is an ordinary merge request that the
   // gate vets (Mason, 2026-09-21 — the stand-down it used to get became a bypass).
   for (const command of ["gh pr merge 123 --disable-auto", 'gh pr merge 123 --disable-a""uto']) {
-    assert.deepEqual(ghMergeRequest(command), { selector: "123", repo: "", auto: false, admin: false },
+    // `disableAuto` is recorded for the DENIAL WORDING only — `auto` stays false,
+    // which is what keeps the green-pipeline and other checks running.
+    assert.deepEqual(ghMergeRequest(command), { selector: "123", repo: "", auto: false, admin: false, disableAuto: true },
       `--disable-auto parses as an ordinary merge request: ${command}`);
   }
   assert.equal(ghApiMergeRequest('gh api --met""hod=PUT repos/o/r/pulls/123/merge')?.selector, "123",

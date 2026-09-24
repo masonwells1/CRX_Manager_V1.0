@@ -989,6 +989,46 @@ const PUSH_OPTS_KNOWN = new Set([
 // takes a value.
 const PUSH_SHORT_OPTS_KNOWN = new Set(["v", "q", "d", "n", "f", "u", "o", "4", "6"]);
 
+// Value-taking short options of `git push`. Only `-o` (`--push-option`) takes one.
+const PUSH_VALUE_SHORTS = "o";
+
+// Git's parse-options BUNDLES boolean shorts, and a value-taking short may sit
+// anywhere in the bundle: everything after that letter is its VALUE, not more
+// flags. `-ou` is therefore push-option `u` — one self-contained word — while
+// `-uo` is `-u` plus a bare `-o` whose value is the NEXT word.
+//
+// Asking `bare.includes("o")` instead read BOTH as "consumes the next word", so
+// `git push -ou <CRX Manager URL> HEAD:main` had its destination read as the
+// REFSPEC (`HEAD:main`). All three app-repo classifiers then said "not the app
+// repo" and the push gate skipped the risky-diff and exact-SHA Codex proof while
+// git pushed to production main (measured, independent Opus review of PR #630,
+// 2026-09-23; the same hole was live on origin/main, not a regression from #630).
+//
+// Modelled by SHAPE, exactly like `ghMergeShortCluster` and `ghApiShortCluster`
+// below, so this is the same walk rather than a fourth hand-rolled one. Returns
+// where the value-taking letter sat, its value, and whether that value was
+// ATTACHED — an attached value consumes nothing further.
+function pushShortCluster(word) {
+  if (!/^-[A-Za-z0-9]/.test(word) || word.startsWith("--")) return null;
+  for (let index = 1; index < word.length; index += 1) {
+    const letter = word[index];
+    // A non-alphanumeric ends the cluster. `-f=o` is not a bundle — git rejects
+    // it outright — and walking past the `=` would read its `o` as a real option
+    // and swallow the following word, which is the dangerous direction.
+    if (!/[A-Za-z0-9]/.test(letter)) return null;
+    if (!PUSH_VALUE_SHORTS.includes(letter)) continue;
+    // The rest of the word is this option's value; empty means the NEXT word is.
+    return { letter, index, value: word.slice(index + 1).replace(/^=/, ""), attached: index + 1 < word.length };
+  }
+  return null;
+}
+
+// Does this short-option word reach into the following argv word for its value?
+function pushShortClusterTakesNextWord(word) {
+  const cluster = pushShortCluster(word);
+  return Boolean(cluster) && !cluster.attached;
+}
+
 // `--receive-pack=<prog>` / `--exec=<prog>` name the program that RECEIVES the
 // push on the far side. Every other check here answers "where is this push
 // addressed?" — and this one option makes that question the wrong one, because
@@ -1076,10 +1116,13 @@ export function unknownPushOptions(cmd) {
         else if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(base)) i += 1;
         continue;
       }
-      for (const ch of bare.slice(1)) {
+      // Only the letters BEFORE a value-taking one are flags; everything after it
+      // is `-o`'s value, which may be any text at all (`-oci.skip`).
+      const cluster = pushShortCluster(token);
+      for (const ch of cluster ? token.slice(1, cluster.index) : bare.slice(1)) {
         if (!PUSH_SHORT_OPTS_KNOWN.has(ch)) unknown.push(`-${ch}`);
       }
-      if (eq === -1 && bare.includes("o")) i += 1;
+      if (cluster && !cluster.attached) i += 1;
     }
     }
   }
@@ -1113,8 +1156,9 @@ export function pushDestinationToken(cmd) {
     }
     if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
     // A bundled short form (`-uo ci.skip`) hides the value-taking `-o` inside a
-    // longer token, so the bundle consumes the next argv token too.
-    else if (eq === -1 && !bare.startsWith("--") && bare.includes("o")) i += 1;
+    // longer token, so the bundle consumes the next argv token too — but only
+    // when that value is DETACHED. See `pushShortCluster`.
+    else if (pushShortClusterTakesNextWord(token)) i += 1;
   }
   return repoOpt;
 }
@@ -1153,7 +1197,7 @@ export function pushNamesRefspec(cmd) {
     const bare = eq === -1 ? token : token.slice(0, eq);
     if (bare === "--repo") { if (eq === -1) i += 1; continue; }
     if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
-    else if (eq === -1 && !bare.startsWith("--") && bare.includes("o")) i += 1;
+    else if (pushShortClusterTakesNextWord(token)) i += 1;
   }
   return positionals >= 2;
 }
@@ -2495,6 +2539,10 @@ export function ghMergeRequest(command) {
   let repo = "";
   let auto = false;
   let admin = false;
+  // Read for the DENIAL WORDING only — never to relax a gate. A cancellation
+  // that is refused must not be told to "use `gh pr merge --auto`", which is the
+  // opposite of what it asked for.
+  let disableAuto = false;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (isValue[index]) continue;
@@ -2538,6 +2586,17 @@ export function ghMergeRequest(command) {
       admin = !(value === "0" || value === "f" || value === "false");
       continue;
     }
+    // `--disable-auto` CANCELS a queued auto-merge and lands nothing. It changes
+    // no gate — the stand-down Mason removed on 2026-09-21 is NOT coming back,
+    // and every spelling below is read the same way a merge is. It is recorded
+    // only so a denial can describe what the caller actually asked for. gh keeps
+    // the LAST value, so a later `=false` really does mean "merge for real".
+    if (lower === "--disable-auto") { disableAuto = true; continue; }
+    if (lower.startsWith("--disable-auto=")) {
+      const value = lower.slice("--disable-auto=".length);
+      disableAuto = !(value === "0" || value === "f" || value === "false");
+      continue;
+    }
     if (longValueFlags.has(lower)) {
       // The value word itself is skipped by the isValue pass above, so this only
       // has to read it — advancing the index here as well would step past the
@@ -2557,7 +2616,7 @@ export function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
-  return { selector, repo, auto, admin };
+  return { selector, repo, auto, admin, disableAuto };
 }
 
 // gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`

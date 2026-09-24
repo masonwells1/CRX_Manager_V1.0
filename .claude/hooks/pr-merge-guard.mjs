@@ -419,7 +419,16 @@ function gateRequest(request) {
     deny(
       "PR MERGE GATE: this pull request is not merge-ready with a fully green GitHub pipeline " +
       "(mergeStateStatus must be CLEAN and every reported check completed successfully). " +
-      "Wait for the required Vercel check, or use `gh pr merge --auto` to let GitHub merge when green."
+      // `--disable-auto` CANCELS a queued auto-merge and lands nothing, so telling
+      // it to "use `gh pr merge --auto`" asks for the opposite of the intent. The
+      // gate itself is unchanged: a cancellation is checked like any other merge
+      // (Mason removed that stand-down on 2026-09-21 because each of its spellings
+      // became a bypass). Only the remedy sentence differs.
+      (request.disableAuto
+        ? "This command carries `--disable-auto`, which cancels a queued auto-merge rather than landing " +
+          "anything — it is still gated like any other merge, so it waits for the same green pipeline. " +
+          "Wait for the required Vercel check, or ask Mason to cancel the queued auto-merge on the PR page."
+        : "Wait for the required Vercel check, or use `gh pr merge --auto` to let GitHub merge when green.")
     );
   }
 
