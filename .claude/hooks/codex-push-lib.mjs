@@ -1850,7 +1850,7 @@ function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
 // Validate Claude's existing Codex-review proof shape.
 export function proofValid(data, headSha, nowMs, expectedBaseSha) {
   return reviewProofValid(data, headSha, nowMs, "codex_ran", expectedBaseSha)
-    && data.model === "gpt-5.6-sol"
+    && data.model === "gpt-6-sol"
     && data.reasoning_effort === "high";
 }
 

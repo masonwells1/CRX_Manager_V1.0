@@ -7,7 +7,36 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
-## 2026-09-20 — everyday code review moves to `gpt-5.6-luna` at xhigh; Sol becomes a once-at-the-end gate
+## 2026-09-23 — retire the `gpt-5.6` class: `gpt-6-luna` builds and reviews, `gpt-6-sol` is the money gate
+
+**Source:** Mason's decision on 2026-09-23, when the GPT-6 Codex class shipped: "use GPT-6 Luna for
+all reviews and GPT-6 Sol for money and finance final gate reviews — make sure not routing to the old
+models," then "we don't need Terra as builder" and "make Luna the builder as well."
+
+**Operative rule.** The GPT-6 class ships two tiers only — `gpt-6-terra` and `gpt-6-spark` do not
+exist — so the old frontier/workhorse/light split collapses onto **Luna for volume (building, every
+iterating review round, bug hunting) and Sol for money** (the once-at-the-end gate that mints the
+proof). The 2026-09-20 tier decision below is unchanged in shape; only the model names moved.
+
+**This moved guard code**, unlike the 2026-09-20 decision. The proof identity is an exact string, so
+`REQUIRED_CODEX_MODEL`, `proofValid`, `CODEX_REVIEW_MODEL`, the `.codex/` mirror and every fixture
+changed together. **Pre-existing `gpt-5.6-sol` proofs are void** — work holding one needs a fresh Sol
+pass. Free to do then: Codex credits were exhausted until 2026-09-26, so nothing could move anyway.
+
+**Do not re-derive the model names from an error message.** On `codex-cli` 0.153.4 every `gpt-6-*`
+name was refused as "not supported when using Codex with a ChatGPT account" — **the same message a
+made-up name returns**, so it proves nothing about spelling or plan access. Upgrading to 0.156.1 was
+the fix. The discriminating probe, which works even while out of credits: a valid model reaches the
+usage-limit error; an invalid one stops at "not supported". Always include a known-bogus control.
+
+**Accepted residual:** Luna now builds and reviews, so an iterating round on Codex-built code is
+self-review. Accepted for ordinary reversible work; the Sol money gate stays independent. Mason
+declined the optional "Luna-built code reviews on Sol" rule — reopen if defects start slipping.
+
+**Not yet proven:** no end-to-end GPT-6 review has run (credits reset 2026-09-26). Run one Luna round
+and one Sol gate before trusting this on money work. See `docs/changelog.d/2026-09-23-gpt6-model-routing.md`.
+
+## 2026-09-20 — everyday code review moves to Luna at xhigh; Sol becomes a once-at-the-end gate
 
 **Source:** Mason's decision in this session on 2026-09-20, driven by Codex token cost. He asked for
 Luna at xhigh as the standing reviewer, with Sol reserved for genuinely complex work, and for money

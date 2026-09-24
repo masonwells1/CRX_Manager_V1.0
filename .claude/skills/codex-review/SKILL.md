@@ -1,6 +1,6 @@
 ---
 name: codex-review
-description: Run an independent Codex code review DIRECTLY via the headless `codex` CLI — no copy-paste. Iterating rounds run on `gpt-5.6-luna` at xhigh (the default since 2026-09-20); `gpt-5.6-sol` at high is reserved for the once-at-the-end ship gate. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting findings back into this session automatically. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
+description: Run an independent Codex code review DIRECTLY via the headless `codex` CLI — no copy-paste. Iterating rounds run on `gpt-6-luna` at xhigh (the default since 2026-09-20); `gpt-6-sol` at high is reserved for the once-at-the-end ship gate. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting findings back into this session automatically. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
 ---
 
 # Codex Review (direct CLI — no paste loop)
@@ -10,18 +10,23 @@ separate ephemeral reviewer, get structured findings back into this session, and
 replacing the manual prompt-doc + copy-paste handoff in `codex-cross-review`. The reviewer is
 always pinned explicitly and isolated from the builder session.
 
-### Which tier reviews (Mason's standing decision, 2026-09-20)
+### Which tier reviews (Mason's standing decision, 2026-09-20; re-pinned to GPT-6 on 2026-09-23)
 
-**Luna** (`gpt-5.6-luna`) at `xhigh` is the DEFAULT reviewer for every iterating round, on every
-kind of work. **Sol** (`gpt-5.6-sol`) at `high` is NOT the everyday reviewer any more — it is the
-once-at-the-end ship gate, and it runs after Luna comes back clean, not alongside it. **Terra**
-is the builder.
+**Luna** (`gpt-6-luna`) at `xhigh` is the DEFAULT reviewer for every iterating round, on every
+kind of work. **Sol** (`gpt-6-sol`) at `high` is NOT the everyday reviewer any more — it is the
+once-at-the-end ship gate, and it runs after Luna comes back clean, not alongside it. **Luna is
+also the builder** (`scripts/codex-build.mjs`): the GPT-6 class ships only Luna and Sol, so the
+old three-tier split collapsed and Terra was retired (Mason, 2026-09-23).
+
+Because Luna both builds and reviews, a Luna round on Codex-built code is the model checking its
+own work. That is accepted for ordinary reversible changes — the Sol gate below is still fully
+independent, and it is the one that guards money.
 
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
-| Every iterating review round | `gpt-5.6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — risky money / inventory / auth / RLS / migration / permission / Edge Function diff, once Luna is clean | `gpt-5.6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
-| Genuinely complex work where Luna is plainly out of its depth | `gpt-5.6-sol` / `high` early | Step 3A form with the Sol pin | No |
+| Every iterating review round | `gpt-6-luna` / `xhigh` | Step 3A (advisory) | **No** |
+| Final gate — risky money / inventory / auth / RLS / migration / permission / Edge Function diff, once Luna is clean | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Genuinely complex work where Luna is plainly out of its depth | `gpt-6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
 one-line reason to Mason when it does, in chat and in any run ledger. Do not reach for it by
@@ -47,7 +52,7 @@ reflex — Luna-first is the point.
 > (`migration-apply-lib.mjs` `REQUIRED_CODEX_MODEL`, `codex-push-lib.mjs` `proofValid`). **Never
 > route an iterating Luna round through Step 3B.** Luna reviews advisory-only, via Step 3A.
 >
-> The guards still hard-require `gpt-5.6-sol` at `high`. That is deliberate and was left
+> The guards still hard-require `gpt-6-sol` at `high`. That is deliberate and was left
 > untouched on purpose: it is what enforces "Luna until clean, then exactly one Sol" in code
 > rather than in an agent's memory. Do not "fix" the guards to accept Luna.
 
@@ -314,7 +319,7 @@ echo "changed files in payload: $NFILES"
 # full transcript: the transcript echoes the whole prompt back, and the prompt itself contains the
 # tail canary and example `LUNA_REVIEW:` lines — so a transcript grep passes on the echo alone.
 timeout 1800 "$CODEX" exec --skip-git-repo-check --ephemeral --ignore-user-config --sandbox read-only \
-  -C "$WORK" -m gpt-5.6-luna -c 'model_reasoning_effort="xhigh"' -o "$WORK/luna-final.txt" \
+  -C "$WORK" -m gpt-6-luna -c 'model_reasoning_effort="xhigh"' -o "$WORK/luna-final.txt" \
   < "$WORK/PROMPT.md" 2>&1 | tee "$WORK/luna-review.txt" | tail -80
 CODEX_RC=${PIPESTATUS[0]}                # capture NOW — the next command overwrites PIPESTATUS
 echo "codex exit: $CODEX_RC"             # 124 = timed out; any non-zero = NO review
@@ -380,8 +385,8 @@ carrying one accepted nit, which pressures an operator into either looping forev
 gate. List each deferral explicitly when you report SHIP-WITH-FOLLOWUPS, then proceed to Step 3B.
 
 **Escape hatch.** For genuinely complex work where Luna is plainly out of its depth, swap
-`-m gpt-5.6-luna -c 'model_reasoning_effort="xhigh"'` for
-`-m gpt-5.6-sol -c 'model_reasoning_effort="high"'` in the command above and tell Mason the
+`-m gpt-6-luna -c 'model_reasoning_effort="xhigh"'` for
+`-m gpt-6-sol -c 'model_reasoning_effort="high"'` in the command above and tell Mason the
 one-line reason. This is still the advisory path — it mints no proof.
 
 ## Step 3B: Ship gate — exactly one Sol proof
@@ -461,7 +466,7 @@ cd "$(git rev-parse --show-toplevel)"
 mkdir -p .claude/session-state
 # $SCOPE is the flag chosen in Step 1 (unquoted so "--base main" splits into two args).
 "$CODEX" review $SCOPE \
-  -c 'model="gpt-5.6-sol"' \
+  -c 'model="gpt-6-sol"' \
   -c 'model_reasoning_effort="high"' \
   --title "CRX review ($SCOPE): $(git rev-parse --abbrev-ref HEAD)" \
   -c approval_policy=never \
@@ -490,12 +495,12 @@ The failure classes `AGENTS.md` keeps Codex pointed at:
 - (5) Lifecycle violations in the workflow documents routed by `AGENTS.md` (especially quote/order/delivery/invoice/return state machines).
 
 Notes:
-- Every review pins its model and effort explicitly — `gpt-5.6-luna`/`xhigh` for an advisory
-  Step 3A round, `gpt-5.6-sol`/`high` for a Step 3B gate proof. Never inherit the model or
+- Every review pins its model and effort explicitly — `gpt-6-luna`/`xhigh` for an advisory
+  Step 3A round, `gpt-6-sol`/`high` for a Step 3B gate proof. Never inherit the model or
   effort from user configuration: the CLI's configured default is a model this CLI version
   cannot run, and an unpinned call fails on the model rather than on anything real. The Step 3B
-  gate proof is `gpt-5.6-sol`/`high` only — Luna, Terra, Spark and Claude cannot substitute for
-  it, and the guards enforce that. Record the model and effort on every security/money proof.
+  gate proof is `gpt-6-sol`/`high` only — Luna and Claude cannot substitute for it, and the
+  guards enforce that. Record the model and effort on every security/money proof.
 - A trailing `rmcp … DELETE returned HTTP 404` line is harmless MCP-session cleanup — ignore it.
 - This fires the synced `.codex/hooks.json` hooks (SessionStart/Stop) — expected, they're trusted.
 
@@ -573,7 +578,7 @@ To delegate a *task* (not a diff review) to Codex — e.g. "have Codex independe
 reproduce this bug" or a research spike — use `exec` instead of `review`:
 
 ```bash
-"$CODEX" exec --model gpt-5.6-luna -c 'model_reasoning_effort="xhigh"' --sandbox read-only -C "$(git rev-parse --show-toplevel)" "your task here" 2>&1 | tail -60
+"$CODEX" exec --model gpt-6-luna -c 'model_reasoning_effort="xhigh"' --sandbox read-only -C "$(git rev-parse --show-toplevel)" "your task here" 2>&1 | tail -60
 ```
 
 Use `--sandbox read-only` for investigation; only escalate to `workspace-write` if Codex

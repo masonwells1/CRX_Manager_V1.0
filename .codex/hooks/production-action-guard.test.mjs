@@ -1168,7 +1168,7 @@ try {
   const valid = {
     codex_ran: true,
     verdict: "clean",
-    model: "gpt-5.6-sol",
+    model: "gpt-6-sol",
     reasoning_effort: "high",
     head_sha: risky.sha,
     base_sha: risky.base,
@@ -1292,7 +1292,7 @@ try {
   writeProof(risky.repo, {
     codex_ran: true,
     verdict: "clean",
-    model: "gpt-5.6-sol",
+    model: "gpt-6-sol",
     reasoning_effort: "high",
     head_sha: risky.sha,
     timestamp: new Date(now).toISOString(),

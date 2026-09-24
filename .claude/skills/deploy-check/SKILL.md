@@ -160,7 +160,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    it HAS approved, require the native receipt's head SHA, that authenticated approval's `commit_id`, and the
    final `headRefOid` to match; recheck every reported check and auto-merge OFF.
    Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
-   `gpt-5.6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
+   `gpt-6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
    diffs — both run, neither replaces the other.
 5. Merge. **The merge is the deploy.**
 

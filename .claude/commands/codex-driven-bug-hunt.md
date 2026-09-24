@@ -45,7 +45,7 @@ On top of it, **this loop deliberately launches the hunter with no database conn
 > **The fix-glance is an advisory Luna pass, not a ship gate — the name is historical.** It mints
 > no proof. A green row authorizes a commit to the *debug branch* only. Any fix touching money,
 > inventory, auth, RLS, migrations, permissions or an Edge Function still needs the exact-SHA
-> `gpt-5.6-sol` proof from `/codex-review` Step 3B before it can be pushed, and the push guard will
+> `gpt-6-sol` proof from `/codex-review` Step 3B before it can be pushed, and the push guard will
 > refuse it without one. Never read a Luna `VERDICT: SHIP` as that proof.
 
 > **All shell snippets below run in Claude Code's Bash tool (POSIX sh / git-bash), not PowerShell.** The loop session must run them via the Bash tool.
@@ -71,7 +71,7 @@ mkdir -p .claude/session-state
 Then read `docs/audits/codex-driven-bug-hunt/{LEDGER.json,PHASE-PLAN.md}` (create them if absent). Pick the next undrained subsystem slice; decide this cycle's 1–3 keys. **Release `$LOCK` when the loop stops.**
 
 ### Step 1 — CODEX HUNTS (the driver step)
-Write the hunt prompt for this slice to a file, then run Codex read-only as the hunter (the wrapper pins the read-only spark hunter model `gpt-5.3-codex-spark` — with `--ignore-user-config` an unpinned run would fall to the CLI's built-in default):
+Write the hunt prompt for this slice to a file, then run Codex read-only as the hunter (the wrapper pins the cheap read-only hunter model `gpt-6-luna` — with `--ignore-user-config` an unpinned run would fall to the CLI's built-in default):
 ```bash
 mkdir -p .claude/session-state
 cat > .claude/session-state/codex-hunt-prompt.txt <<'EOF'
@@ -119,8 +119,8 @@ git diff --quiet -- docs/app-workflow-map.html || git add docs/app-workflow-map.
 git status --porcelain                       # the staged set MUST equal what the commit will contain
 { echo "Review this staged diff for the CRX codex-driven hunt. It must fully fix: <finding>. Judge correctness + money / idempotency / actor / lifecycle bugs + whether it introduces a NEW bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/codex-fix-glance-prompt.txt
 # Adversarial review gate — use the gate wrapper (pins the model explicitly, --ignore-user-config,
-# read-only), NOT the spark hunter wrapper. Defaults to gpt-5.6-luna at xhigh since 2026-09-20;
-# add `--sol --reason "<why>"` for a gpt-5.6-sol/high pass on genuinely complex work; the wrapper
+# read-only), NOT the spark hunter wrapper. Defaults to gpt-6-luna at xhigh since 2026-09-20;
+# add `--sol --reason "<why>"` for a gpt-6-sol/high pass on genuinely complex work; the wrapper
 # REFUSES --sol without a reason, so escalated spend is never silent. stdout = verdict, stderr = trace.
 node scripts/overnight-codex-gate.mjs .claude/session-state/codex-fix-glance-prompt.txt --timeout 600 \
   > .claude/session-state/codex-fix-glance-latest.txt 2> .claude/session-state/codex-fix-glance-trace.txt
