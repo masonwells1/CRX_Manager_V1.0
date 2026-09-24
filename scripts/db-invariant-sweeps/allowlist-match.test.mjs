@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { buildSweepQuery, functionContractSql, subtractAllowlist, hasStatementBreak } from './allowlist-match.mjs';
+import { buildSweepQuery, functionContractSql, subtractAllowlist, hasStatementBreak, stripLeadingComments } from './allowlist-match.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const allowlist = JSON.parse(readFileSync(new URL('./allowlist.json', import.meta.url), 'utf8'));
@@ -93,6 +93,22 @@ try {
     () => buildSweepQuery({ name: 'actor-forgery', sql: 'SELECT 1 AS violation_key;\n-- trailing note\n' }, [delivery]),
     /not a single SELECT/,
   ); assertions += 1;
+  // A single statement is not enough: it must be a SELECT. VALUES (1) has no statement break yet
+  // yields rows with no violation_key. (CodeRabbit on PR #790.)
+  assert.throws(
+    () => buildSweepQuery({ name: 'actor-forgery', sql: 'VALUES (1)' }, [delivery]),
+    /must be a SELECT/,
+  ); assertions += 1;
+  assert.throws(
+    () => buildSweepQuery({ name: 'actor-forgery', sql: 'TABLE pg_proc' }, [delivery]),
+    /must be a SELECT/,
+  ); assertions += 1;
+  assert.doesNotThrow(
+    () => buildSweepQuery({ name: 'actor-forgery', sql: '-- leading note\n/* and a block */\nWITH x AS (SELECT 1 AS violation_key) SELECT * FROM x' }, [delivery]),
+    'a WITH prelude behind comments is accepted',
+  ); assertions += 1;
+  check(stripLeadingComments('-- a\n/* b */ SELECT 1').startsWith('SELECT'), 'leading comments are skipped when reading the first keyword');
+
   // Every predicate actually shipped must still build, or this guard is too strict to live with.
   {
     const predicateDir = path.join(root, 'scripts/db-invariant-sweeps/predicates');

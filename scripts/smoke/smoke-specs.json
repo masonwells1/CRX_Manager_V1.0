@@ -881,8 +881,7 @@
       "chain": "smoke-unpost-invoice-group.sql",
       "description": "Field-app remediation Wave 2a FIX 4 (REQUIRES 20260629170000): ALL-OR-NOTHING split-group unpost. Proves through the REAL unpost_invoice_group: HAPPY (a posted 2-member split group unposts in ONE call — both members posted->unposted, posted_by/at cleared, one invoice_unposted audit row per member, one invoice_group_unposted activity row); ALL-OR-NOTHING (a posted group where one member is PAID/money-applied -> the whole call RAISES the money-guard error and NOTHING changes — both still posted, 0 unpost audit rows; no half-unpost reachable); ROLE GATE (an applicator caller -> 'admin or sales role required'); ACTOR GATE (forged p_performed_by -> ACTOR_MISMATCH, no mutation); GRANTS (anon has NO EXECUTE, authenticated does). Self-contained fixtures.",
       "covers": [
-        "unpost_invoice_group",
-        "post_invoice_group"
+        "unpost_invoice_group"
       ],
       "area": [
         "billing"

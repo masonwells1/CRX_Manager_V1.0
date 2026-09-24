@@ -138,6 +138,29 @@ export function hasStatementBreak(sql) {
   return false;
 }
 
+/** Drop leading `--` and block comments so the first real keyword can be read. */
+export function stripLeadingComments(sql) {
+  let text = String(sql ?? '');
+  for (;;) {
+    const trimmed = text.replace(/^\s+/, '');
+    if (trimmed.startsWith('--')) {
+      const end = trimmed.indexOf('\n');
+      text = end === -1 ? '' : trimmed.slice(end + 1);
+      continue;
+    }
+    if (trimmed.startsWith('/*')) {
+      let depth = 1;
+      let i = 2;
+      while (i < trimmed.length && depth > 0) {
+        if (trimmed.slice(i, i + 2) === '/*') { depth += 1; i += 2; } else if (trimmed.slice(i, i + 2) === '*/') { depth -= 1; i += 2; } else i += 1;
+      }
+      text = trimmed.slice(i);
+      continue;
+    }
+    return trimmed;
+  }
+}
+
 /** Predicate and all its required contracts are read in ONE PostgreSQL statement/snapshot. */
 export function buildSweepQuery(predicate, entries) {
   const keys = entries.flatMap((entry) => Object.keys(entry.reviewed_contracts ?? {}));
@@ -149,6 +172,18 @@ export function buildSweepQuery(predicate, entries) {
       `Predicate ${predicate.name} is not a single SELECT: it still terminates a statement after the `
       + 'trailing semicolon is removed (a multi-statement prelude, or text after the final `;`). '
       + 'buildSweepQuery inlines the predicate into FROM (...), which only holds for one SELECT.',
+    );
+  }
+  // A single statement is not enough: the runner and README require a SELECT. `VALUES (1)` has no
+  // statement break yet yields rows with no violation_key, which would surface downstream as a
+  // confusing allowlist failure rather than a bad-predicate error here. All 29 shipped predicates
+  // open with SELECT (7) or a WITH prelude (22). (CodeRabbit on PR #790.)
+  const firstKeyword = /^\s*(?:\(\s*)?([a-z]+)/i.exec(stripLeadingComments(sql))?.[1]?.toUpperCase();
+  if (firstKeyword !== 'SELECT' && firstKeyword !== 'WITH') {
+    throw new TypeError(
+      `Predicate ${predicate.name} must be a SELECT (optionally with a WITH prelude); it starts with `
+      + `${firstKeyword ?? 'nothing recognisable'}. buildSweepQuery inlines it into FROM (...) and the `
+      + 'runner expects violation_key rows.',
     );
   }
   const contracts = keys.length === 0 ? "'[]'::json" :

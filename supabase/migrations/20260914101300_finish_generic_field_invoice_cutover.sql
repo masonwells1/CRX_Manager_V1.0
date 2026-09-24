@@ -3,10 +3,15 @@
 -- key exclusively. If V1 holders remain, refuse installation rather than wait;
 -- arrivals during installation fail fast rather than wait on old code.
 -- A fresh READ COMMITTED catalog/safety scan refuses ANY other open database
--- transaction, prepared transaction, or still-valid save_invoice receipt. This is
--- conservative: generic legacy receipts have no trustworthy actor/payload binding.
+-- transaction or prepared transaction, and any still-valid save_invoice receipt that
+-- could replay a FIELD-APPLICATION save: one resolving to a live field_application
+-- invoice, or one whose invoice_id resolves to no live invoice at all (unidentifiable,
+-- so treated as if it were a field save). A receipt resolving to a live invoice of
+-- another type does NOT block -- this cutover does not change those paths, and blocking
+-- on them demanded a 24-hour freeze on ALL invoice saving. See the SCOPE note at the
+-- gate itself. Do NOT wait out unrelated receipts.
 -- Refusal leaves phase 1 and legitimate committed retries unchanged. Wait for natural
--- receipt expiry; NEVER delete/backfill receipts or override the gate to force apply.
+-- expiry of the blocking receipts; NEVER delete/backfill receipts or override the gate.
 -- Once safe, refuse NEW generic field invoices before key-only lookup/delegation.
 -- Dedicated field-app/job/blend creators and existing generic edits are unchanged.
 -- Two phases must be separately committed. Quiet traffic is recommended to reduce
