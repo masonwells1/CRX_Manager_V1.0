@@ -114,10 +114,26 @@ function hasPsql() {
   return probe.status === 0;
 }
 
+/**
+ * Wrap a predicate, or exit 2 as an invalid-input error.
+ *
+ * buildSweepQuery refuses a predicate that is not a single SELECT. That is a bad-predicate error,
+ * the same class as an unreadable allowlist, so it must exit 2 with the reason rather than escape as
+ * an uncaught TypeError and a stack trace. (CodeRabbit on PR #791.)
+ */
+function buildOrExit(predicate, entries) {
+  try {
+    return buildSweepQuery(predicate, entries);
+  } catch (error) {
+    console.error(`Invalid predicate ${predicate.name}: ${error.message}`);
+    process.exit(2);
+  }
+}
+
 /** Execute a predicate via psql, returning {rows: [...], error: string|null}. */
 function runViaPsql(predicate, entries) {
   // One snapshot: a changed function/dependency cannot be compared to a separately cached catalog.
-  const wrapped = buildSweepQuery(predicate, entries);
+  const wrapped = buildOrExit(predicate, entries);
   const res = spawnSync(
     'psql',
     [process.env.SUPABASE_DB_URL, '-tAX', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-c', wrapped],
@@ -310,7 +326,7 @@ if (!psql) {
     const firstHeader = p.header.split('\n').find((l) => l.trim());
     if (firstHeader) console.log(`│ ${firstHeader}`);
     console.log(`└${'─'.repeat(60)}`);
-    console.log(buildSweepQuery(p, entries));
+    console.log(buildOrExit(p, entries));
     if (entries.length) {
       console.log(`-- candidate exception keys for ${p.name} (NOT key-only authorization):`);
       for (const e of entries) console.log(`--   ${e.violation_key}${e.suspect_param ? ` [suspect_param=${e.suspect_param}; reviewed contracts required]` : ''}`);

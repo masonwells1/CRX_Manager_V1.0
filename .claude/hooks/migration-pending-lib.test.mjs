@@ -23,6 +23,7 @@ import {
   appliedIndex,
   stampIdentifies,
   namesOnlyStamps,
+  matchStampEvidence,
   hasAheadOfPendingMarker,
   checkPendingMigrations,
 } from "./migration-pending-lib.mjs";
@@ -144,6 +145,55 @@ ok(orderingStamp("undated_hotfix.sql") === null, "a name with no leading date ha
     "a numeric-suffix candidate sharing an applied stamp is still reported");
   ok(JSON.stringify(numericCollision).includes("20260905210000_67890"),
     "the numeric-suffix pending migration is named in the verdict");
+}
+
+// ONE APPLIED ROW SETTLES AT MOST ONE FILE (CodeRabbit on PR #791).
+// A renumbered row carries BOTH stamps with the SAME slug, so each of two tracked files looks
+// applied from that single row. Settling both drops a genuinely unapplied file from the pending set.
+{
+  const rowsOf = (names) => appliedIndex(names).rows;
+
+  const compound = rowsOf(['20260905200000_20260905100000_shared']);
+  const twoFiles = [
+    { stem: '20260905100000_shared', slug: 'shared', stamp: '20260905100000' },
+    { stem: '20260905200000_shared', slug: 'shared', stamp: '20260905200000' },
+  ];
+  const matched = matchStampEvidence(compound, twoFiles);
+  ok(matched.size === 1, 'one compound-stamp row settles exactly ONE of the two files, not both');
+
+  // A bare-stamp row shared by two tracked files has the same shape.
+  const bare = rowsOf(['20260905100000']);
+  const sameStamp = [
+    { stem: '20260905100000_a', slug: 'a', stamp: '20260905100000' },
+    { stem: '20260905100000_b', slug: 'b', stamp: '20260905100000' },
+  ];
+  ok(matchStampEvidence(bare, sameStamp).size === 1, 'one bare-stamp row settles exactly ONE file');
+
+  // Two rows for two files still settle both — the fix must not over-abstain.
+  const twoRows = rowsOf(['20260905100000_shared', '20260905200000_shared']);
+  ok(matchStampEvidence(twoRows, twoFiles).size === 2, 'two rows settle two files');
+  ok(matchStampEvidence([], twoFiles).size === 0, 'no rows settle nothing');
+
+  // End to end: the unapplied twin must still be REPORTED.
+  const verdict = checkPendingMigrations({
+    name: '20260905300000_new_candidate',
+    sql: 'SELECT 1;\n',
+    appliedNames: [
+      '20260819232000_draw_down_cutover_barrier',
+      '20260905200000_20260905100000_shared',
+    ],
+    trackedFiles: [
+      'supabase/migrations/20260819232000_draw_down_cutover_barrier.sql',
+      'supabase/migrations/20260905100000_shared.sql',
+      'supabase/migrations/20260905200000_shared.sql',
+      'supabase/migrations/20260905300000_new_candidate.sql',
+    ],
+    baselineHighWater: BASELINE,
+  });
+  ok(verdict.ok === false,
+    'one row cannot settle both same-slug files; the leftover is still reported');
+  ok(/20260905100000_shared|20260905200000_shared/.test(JSON.stringify(verdict)),
+    'the unsettled same-slug migration is named in the verdict');
 }
 
 // The end-to-end consequence: a candidate sharing an applied row's stamp must

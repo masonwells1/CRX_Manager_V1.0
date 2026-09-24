@@ -175,9 +175,13 @@ export function appliedIndex(appliedNames) {
   // it contradicts nothing and must keep vouching for its file exactly as before.
   // (CodeRabbit on PR #787.)
   const stampSlugs = new Map();
+  // One row per applied entry, so attribution can be ONE-TO-ONE: a single ledger row must not be
+  // able to settle two different migration files. (CodeRabbit on PR #791.)
+  const rows = [];
   for (const raw of Array.isArray(appliedNames) ? appliedNames : []) {
     const stem = migrationStem(raw);
     if (!stem) continue;
+    const rowStamps = new Set();
     const slug = migrationSlug(stem);
     // A row identifies nothing ONLY when its name is stamps and nothing else:
     // migrationSlug strips a stamp only when it is followed by `_`, so a bare
@@ -194,13 +198,15 @@ export function appliedIndex(appliedNames) {
       stamps.add(m[0]);
       if (!stampSlugs.has(m[0])) stampSlugs.set(m[0], new Set());
       stampSlugs.get(m[0]).add(identifying);
+      rowStamps.add(m[0]);
     }
+    rows.push({ stamps: rowStamps, slug, identifying });
     if (slug) {
       slugs.add(slug);
       slugCounts.set(slug, (slugCounts.get(slug) ?? 0) + 1);
     }
   }
-  return { stamps, slugs, slugCounts, stampSlugs };
+  return { stamps, slugs, slugCounts, stampSlugs, rows };
 }
 
 /**
@@ -220,6 +226,62 @@ export function stampIdentifies(stampSlugs, stamp, slug) {
   const seen = stampSlugs instanceof Map ? stampSlugs.get(stamp) : null;
   if (!seen) return false;
   return seen.has(slug) || seen.has("");
+}
+
+/**
+ * Assign applied rows to tracked files ONE-TO-ONE on the exact-stamp evidence.
+ *
+ * `stampIdentifies` answers "could this row be this file?", which is not the same as "did this file
+ * run". One row can carry SEVERAL stamps: a renumbered row recorded as
+ * `20260905200000_20260905100000_shared` carries both, with the same slug, so
+ * `20260905100000_shared.sql` AND `20260905200000_shared.sql` each look applied — from ONE row. A
+ * bare-stamp row has the same shape when two tracked files share its stamp. Settling both would
+ * drop a genuinely unapplied file from the pending set, which is the stranding this whole module
+ * exists to prevent. (CodeRabbit on PR #791.)
+ *
+ * So the evidence is treated as a bipartite matching: an edge means the row could name the file, and
+ * each row may be spent once. A file is settled by stamp only if the matching can give it a row of
+ * its own. Files left unmatched fall through to slug attribution, which already reaches
+ * pending/ambiguous on the remaining evidence rather than guessing.
+ *
+ * Maximum matching via augmenting paths — the sets here are small (a few hundred rows, and only
+ * files whose stamp appears at all become candidates).
+ *
+ * @param {{stamps: Set<string>, slug: string, identifying: string}[]} rows applied-row records
+ * @param {{stem: string, slug: string, stamp: string}[]} files tracked files carrying a stamp
+ * @returns {Map<string, number>} file stem → index of the row that settles it
+ */
+export function matchStampEvidence(rows, files) {
+  const candidates = new Map();
+  for (const file of files) {
+    const edges = [];
+    rows.forEach((row, index) => {
+      if (!row.stamps.has(file.stamp)) return;
+      if (row.identifying === file.slug || row.identifying === "") edges.push(index);
+    });
+    if (edges.length) candidates.set(file.stem, edges);
+  }
+
+  const rowToFile = new Map();
+  const augment = (stem, seen) => {
+    for (const index of candidates.get(stem) ?? []) {
+      if (seen.has(index)) continue;
+      seen.add(index);
+      const holder = rowToFile.get(index);
+      if (holder === undefined || augment(holder, seen)) {
+        rowToFile.set(index, stem);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Deterministic order so the same inputs always produce the same attribution.
+  for (const stem of [...candidates.keys()].sort()) augment(stem, new Set());
+
+  const fileToRow = new Map();
+  for (const [index, stem] of rowToFile) fileToRow.set(stem, index);
+  return fileToRow;
 }
 
 /**
@@ -273,7 +335,7 @@ export function checkPendingMigrations({
     };
   }
 
-  const { stamps, slugCounts, stampSlugs } = appliedIndex(appliedNames);
+  const { stamps, slugCounts, stampSlugs, rows } = appliedIndex(appliedNames);
   if (stamps.size === 0) {
     return {
       ok: true,
@@ -305,6 +367,19 @@ export function checkPendingMigrations({
   //   spare >= unmatched  → all applied
   //   spare == 0          → all definitively PENDING
   //   otherwise           → genuinely ambiguous, and only then
+  // Settle the exact-stamp evidence ONE-TO-ONE first, so a single applied row cannot vouch for two
+  // files. Only files the matching actually gave a row are treated as applied under their own stamp.
+  const stampedFiles = [];
+  for (const raw of trackedFiles) {
+    const stem = migrationStem(raw);
+    if (!stem) continue;
+    const stamp = fileStamp(stem);
+    if (stamp && stampIdentifies(stampSlugs, stamp, migrationSlug(stem))) {
+      stampedFiles.push({ stem, slug: migrationSlug(stem), stamp });
+    }
+  }
+  const settledByStamp = matchStampEvidence(rows, stampedFiles);
+
   const unmatchedBySlug = new Map();
   const spentBySlug = new Map();
   for (const raw of trackedFiles) {
@@ -325,8 +400,12 @@ export function checkPendingMigrations({
     // guard, the stranding it exists to prevent. On a collision we fall through
     // to slug attribution below, which reaches pending/ambiguous on the evidence
     // instead of guessing. (CodeRabbit on PR #787.)
-    if (stamp && stampIdentifies(stampSlugs, stamp, slug)) {
-      spentBySlug.set(slug, (spentBySlug.get(slug) ?? 0) + 1);
+    // Settled only when the one-to-one matching gave this file a row of its own. The row it spends
+    // is charged against ITS OWN slug, not the file's: a bare-stamp row contributes nothing to
+    // slugCounts, so charging the file's slug would invent a budget that never existed.
+    if (settledByStamp.has(stem)) {
+      const rowSlug = rows[settledByStamp.get(stem)].slug;
+      spentBySlug.set(rowSlug, (spentBySlug.get(rowSlug) ?? 0) + 1);
       continue;
     }
     if (!unmatchedBySlug.has(slug)) unmatchedBySlug.set(slug, []);

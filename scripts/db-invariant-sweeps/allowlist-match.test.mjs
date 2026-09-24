@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,28 @@ try {
     'a WITH prelude behind comments is accepted',
   ); assertions += 1;
   check(stripLeadingComments('-- a\n/* b */ SELECT 1').startsWith('SELECT'), 'leading comments are skipped when reading the first keyword');
+
+  // The RUNNER must report a refused predicate as an invalid-input error (exit 2), not crash with an
+  // uncaught TypeError. Run from a COPY of this directory so the repo's predicates/ stays untouched —
+  // a stray file there would break the fingerprint and sweep gates. (CodeRabbit on PR #791.)
+  {
+    const fakeDir = path.join(scratch, 'sweeps');
+    const fakePredicates = path.join(fakeDir, 'predicates');
+    mkdirSync(fakePredicates, { recursive: true });
+    for (const f of ['run-sweeps.mjs', 'allowlist-match.mjs', 'allowlist.json']) {
+      copyFileSync(path.join(root, 'scripts/db-invariant-sweeps', f), path.join(fakeDir, f));
+    }
+    writeFileSync(path.join(fakePredicates, 'bad-shape.sql'), 'VALUES (1)\n');
+    const bad = spawnSync(
+      process.execPath,
+      [path.join(fakeDir, 'run-sweeps.mjs'), '--only', 'bad-shape'],
+      // No connection secret is read, printed or needed: the refusal happens before any psql call.
+      { cwd: root, env: { ...process.env, SUPABASE_DB_URL: '', DB_SWEEPS_REQUIRE_LIVE: '' }, encoding: 'utf8' },
+    );
+    check(bad.status === 2, `a refused predicate exits 2, got ${bad.status}`);
+    check(/Invalid predicate bad-shape/.test(`${bad.stderr}${bad.stdout}`), 'the refusal names the predicate');
+    check(!/TypeError/.test(`${bad.stderr}`), 'the refusal is a reported error, not an uncaught throw');
+  }
 
   // Every predicate actually shipped must still build, or this guard is too strict to live with.
   {

@@ -37,9 +37,15 @@ not applied**; nothing here touches the live database.
 - **Coverage mislabel found while checking that fix.** `post_invoice_group` was declared in the
   `adversarial_money_inventory_closeout` spec, whose chain never calls it (0 occurrences), so once
   the field-app chain became container-only, `--spec post_invoice_group` returned a pass from a chain
-  that does not exercise it. The false entry is removed and `post_invoice_group` is declared on the
-  `unpost_invoice_group` spec, whose chain really does call it (14 occurrences). Verified: that spec
-  is now what `--spec post_invoice_group` selects.
+  that does not exercise it. The false entry is removed.
+  **CORRECTED 2026-09-24 (CodeRabbit on PR #790) — the replacement claim in this bullet was also
+  wrong.** It said `post_invoice_group` is declared on the `unpost_invoice_group` spec, "whose chain
+  really does call it (14 occurrences)". Re-measured with exact matches instead of substrings: all 14
+  of those occurrences are `unpost_invoice_group`; that chain calls `post_invoice` (6 occurrences) and
+  **never** `post_invoice_group`. So one false coverage claim was swapped for another. The
+  `unpost_invoice_group` spec now claims only `unpost_invoice_group`, and real coverage sits where it
+  always did: `smoke-field-app-split-penny-exact.sql` genuinely calls `post_invoice_group` twice and
+  the `save_field_app_invoice` spec declares it.
 - **Doc correction.** A spec description claimed `run-smoke.mjs` "only EXECUTES a container_prover on
   the container-only skip path". It never executes one — it prints the prover name and checks the
   file exists at startup. Corrected, because that sentence is what a reader would rely on to conclude
@@ -48,7 +54,9 @@ not applied**; nothing here touches the live database.
 
 **Proof:** `prove-preview-field-app-season.mjs` → `PREVIEW_SEASON_PROOF_PASS` with both new phases
 and both mutants caught. `run-smoke.mjs --spec save_field_app_invoice` refuses the live path;
-`--spec post_invoice_group` now selects `unpost_invoice_group`. typecheck 0, lint 0, vitest
+`--spec post_invoice_group` selected `unpost_invoice_group` (that selection was the consequence of
+the mislabel corrected above on 2026-09-24; `--spec post_invoice_group` now selects
+`save_field_app_invoice`, the chain that really calls it). typecheck 0, lint 0, vitest
 5,444 passed / 123 skipped, build 0, test:correction-guards 0, test:agent-workflows 0,
 check:docs PASS. Both migration sha256 pins re-verified from the committed blobs against ledger
 rows 931 and 934.
