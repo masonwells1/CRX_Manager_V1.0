@@ -45,7 +45,9 @@ works for reps only after **both** steps land: this migration applies, **and** t
 change (branch `claude/customer-document-rep-remove-page-v3`) deploys. The migration alone is not
 enough — until the page deploys it keeps issuing the direct `UPDATE`, which the rep's RLS policy
 still refuses (see KNOWN_ISSUES). It applies after
-`20260914100700`, `20260914100800` and `20260914100900`, and its `gpt-5.6-sol` gate has not run ON THE CURRENT HEAD — it returned CLEAN on the earlier
+`20260914100700`, `20260914100800` and `20260914100900`, **and only with Mason's explicit approval
+in the applying session** — the predecessor order and the gate are not the only apply conditions
+(`KNOWN_ISSUES.md` records the same requirement). Its `gpt-5.6-sol` gate has not run ON THE CURRENT HEAD — it returned CLEAN on the earlier
 heads `1789c72b3` and `8069cd45a`, but the signature changed after them and every commit since
 unbinds those proofs, so a fresh run is required. The Codex CLI hit its usage limit, retry
 2026-09-26. Carried forward from the 2026-09-20
