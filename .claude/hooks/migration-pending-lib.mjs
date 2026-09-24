@@ -254,11 +254,19 @@ export function stampIdentifies(stampSlugs, stamp, slug) {
 export function matchStampEvidence(rows, files) {
   const candidates = new Map();
   for (const file of files) {
-    const edges = [];
+    // A row that NAMES this file is stronger evidence than a bare-stamp row, and the
+    // order here decides which row the file spends. Take the bare row first and the
+    // same-name row stays unspent, still counted in slugCounts, free to vouch through
+    // the slug fallback for a DIFFERENT file it is not evidence for — the stranding
+    // this guard exists to prevent. So exact-slug edges are always offered first.
+    const exact = [];
+    const bare = [];
     rows.forEach((row, index) => {
       if (!row.stamps.has(file.stamp)) return;
-      if (row.identifying === file.slug || row.identifying === "") edges.push(index);
+      if (row.identifying === file.slug) exact.push(index);
+      else if (row.identifying === "") bare.push(index);
     });
+    const edges = [...exact, ...bare];
     if (edges.length) candidates.set(file.stem, edges);
   }
 

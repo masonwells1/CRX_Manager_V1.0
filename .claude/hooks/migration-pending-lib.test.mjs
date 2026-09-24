@@ -196,6 +196,39 @@ ok(orderingStamp("undated_hotfix.sql") === null, "a name with no leading date ha
     'the unsettled same-slug migration is named in the verdict');
 }
 
+// A SAME-NAME ROW MUST BE SPENT BEFORE A BARE-STAMP ROW (CodeRabbit on PR #792).
+// Two rows carry the earlier file's stamp: a bare one, and a renumbered one that also NAMES it.
+// If the file spends the bare row, the same-name row stays unspent — still counted in slugCounts —
+// and the slug fallback then vouches for the LATER file, which it is no evidence for at all.
+{
+  const rows = appliedIndex(['20260905100000', '20260910000000_20260905100000_shared']).rows;
+  const earlier = [{ stem: '20260905100000_shared', slug: 'shared', stamp: '20260905100000' }];
+  // Row 1 is the one that names it; row 0 is the bare stamp.
+  ok(matchStampEvidence(rows, earlier).get('20260905100000_shared') === 1,
+    'a file spends the row that NAMES it, not the bare-stamp row that merely shares its number');
+
+  // End to end, with a LATER candidate so the unevidenced file is genuinely in the way.
+  const verdict = checkPendingMigrations({
+    name: '20260906000000_next',
+    sql: 'SELECT 1;\n',
+    appliedNames: ['20260905100000', '20260910000000_20260905100000_shared'],
+    trackedFiles: [
+      'supabase/migrations/20260905100000_shared.sql',
+      'supabase/migrations/20260905200000_shared.sql',
+    ],
+    baselineHighWater: '20260901000000',
+  });
+  ok(verdict.ok === false,
+    'a bare row must not free the same-name row to vouch for a file it is no evidence for');
+  ok((verdict.pending ?? []).includes('20260905200000_shared'),
+    'the unevidenced later migration is named as pending');
+
+  // The fix must not over-abstain: when the bare row is the ONLY evidence, it still settles.
+  const bareOnly = matchStampEvidence(appliedIndex(['20260905100000']).rows, earlier);
+  ok(bareOnly.get('20260905100000_shared') === 0,
+    'with no same-name row, the bare-stamp row still settles the file');
+}
+
 // The end-to-end consequence: a candidate sharing an applied row's stamp must
 // still be REPORTED, not silently treated as applied.
 {
