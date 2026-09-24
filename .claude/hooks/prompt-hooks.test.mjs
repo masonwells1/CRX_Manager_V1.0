@@ -163,6 +163,31 @@ ok(!isMachineGenerated(""), "empty not machine");
     "an unterminated fence gives its lines back rather than dropping them");
   ok(!isHoldPhrase(authoredByMason(`${FENCE}\nstop now\n${FENCE}\nthoughts?`)),
     "a closed fence containing stop still does not latch");
+  ok(!isHoldPhrase(authoredByMason(`${FENCE}\na\n~~~\nstop x\n~~~`)),
+    "a closed inner fence inside an unclosed outer one is still stripped");
+
+  // 10. #504b review (2026-09-24): an envelope tag Mason QUOTES in code must not
+  //     pair with a real peer's closing tag and cut out the stop he typed
+  //     between them. Envelopes-first alone lost every one of these (main kept
+  //     them); authoredByMason() now keeps what either strip order keeps.
+  const PEER_OK = '<cross-session-message from="terra">ok</cross-session-message>';
+  ok(isHoldPhrase(authoredByMason(
+    "the `<cross-session-message>` tag is odd. stop now\n" + PEER_OK)),
+    "an inline-quoted open tag, then stop, then a peer message still latches");
+  ok(isHoldPhrase(authoredByMason(
+    `${FENCE}\n<cross-session-message from="x">\n${FENCE}\nstop now\n` + PEER_OK)),
+    "a fenced open tag, then stop, then a peer message still latches");
+  ok(isHoldPhrase(authoredByMason(
+    `${FENCE}\n<cross-session-message>\n${FENCE}\nstop now\n${FENCE}\n</cross-session-message>\n${FENCE}`)),
+    "stop between a fenced open tag and a fenced close tag still latches");
+  ok(isHoldPhrase(authoredByMason(
+    "`<task-notification id=1>` stop now <task-notification id=2>x</task-notification>")),
+    "an inline-quoted machine tag, then stop, then a machine block still latches");
+  //     The union must not let peer-only prompts latch or clear a hold.
+  ok(!hasAuthoredText(`<cross-session-message from="terra">look\n${FENCE}\nconst x = 1;\n</cross-session-message>`),
+    "a peer message with an unfinished fence leaves no Mason-authored text");
+  ok(!hasAuthoredText('<cross-session-message from="terra">see `<cross-session-message>` ok</cross-session-message>'),
+    "a peer message quoting its own tag inline leaves no Mason-authored text");
 }
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────

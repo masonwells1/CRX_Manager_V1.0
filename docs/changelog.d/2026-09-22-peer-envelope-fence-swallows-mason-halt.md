@@ -52,9 +52,10 @@ both caused by a fence left dangling after closed envelopes are removed:
 
 `stripFencedCode()` now removes only fences that close; an unterminated fence keeps its
 lines. At worst code or peer text is read as Mason's (a spurious hold, fail-safe); a
-dangling fence can no longer hide his `stop`. Four more assertions cover both prompts,
-an unterminated fence alone, and a closed fence that must still be stripped; the suite is
-244/244 green, and both prompts were measured losing `stop` on the first commit.
+dangling fence can no longer hide his `stop`. A second review round then found the
+envelopes-first order itself loses a `stop` typed between a quoted envelope tag and a real
+peer message, so `authoredByMason()` now runs both strip orders and keeps what either
+keeps. Details, proof, and residuals: `2026-09-24-pr768-unclosed-fence-followup.md`.
 
 ### Not verified
 

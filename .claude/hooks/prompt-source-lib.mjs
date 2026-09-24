@@ -113,6 +113,12 @@ export function isMachineGenerated(prompt) {
 // unterminated-envelope rule — the case the original order existed for. Then
 // inline code (`stop-wrap.mjs`), then any UNCLOSED envelope, then blockquotes.
 //
+// That order alone has its own hole (2026-09-24 review): an open tag Mason
+// quotes in code pairs with a real peer's closing tag further down, and his
+// "stop" between them is cut out. The original code-first order handles that
+// shape. authoredByMason() therefore runs BOTH orders and keeps what either
+// keeps — see the note above it.
+//
 // Residual, accepted deliberately: a peer that writes a fake closing tag inside
 // its own message ends its envelope early, so peer words after the fake tag are
 // read as Mason's and can latch a hold he did not ask for. That is the
@@ -151,8 +157,12 @@ function stripFencedCode(text) {
       pending.push(line);
     }
   }
-  // Never closed: give the lines back rather than dropping them.
-  if (openFence !== null) kept.push(...pending);
+  // Never closed: give the lines back rather than dropping them. The opener
+  // line comes back as-is; the rest is re-scanned so a CLOSED inner fence of
+  // the other marker (``` inside ~~~ or vice versa) is still removed.
+  if (openFence !== null) {
+    kept.push(pending[0], stripFencedCode(pending.slice(1).join("\n")));
+  }
   return kept.join("\n");
 }
 
@@ -183,15 +193,39 @@ function stripUnclosedEnvelopes(text) {
   return out;
 }
 
-export function authoredByMason(prompt) {
-  const text = String(prompt || "");
-  if (!text) return "";
+// Envelopes first: a peer's unfinished markdown cannot reach past the closing
+// tag that ends the peer's own turn.
+function stripEnvelopesFirst(text) {
   let out = stripClosedEnvelopes(text);
   out = stripFencedCode(out);
   out = out.replace(INLINE_CODE_RE, " ");
   out = stripUnclosedEnvelopes(out);
-  out = out.replace(BLOCKQUOTE_LINE_RE, " ");
-  return out;
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// Code first (the pre-#504b order): an envelope tag Mason QUOTES in a fence or
+// inline code is gone before it can pair with a real peer's closing tag and
+// cut out what he typed between them.
+function stripCodeFirst(text) {
+  let out = stripFencedCode(text);
+  out = out.replace(INLINE_CODE_RE, " ");
+  out = stripUnclosedEnvelopes(stripClosedEnvelopes(out));
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// Each order loses Mason's words in a shape the other handles (2026-09-24,
+// #504b review): envelopes-first loses a "stop" between a quoted open tag and
+// a real peer message; code-first loses one below a peer's unfinished fence.
+// So both run, and anything EITHER order keeps counts as his. That is the
+// fail-safe union — at worst text one order would strip is read as Mason's and
+// latches a spurious hold; a halt either order preserves always latches.
+export function authoredByMason(prompt) {
+  const text = String(prompt || "");
+  if (!text) return "";
+  const envelopesFirst = stripEnvelopesFirst(text);
+  const codeFirst = stripCodeFirst(text);
+  if (envelopesFirst.trim() === codeFirst.trim()) return envelopesFirst;
+  return `${envelopesFirst}\n${codeFirst}`;
 }
 
 // True when the prompt still carries words Mason typed after stripping. A prompt
