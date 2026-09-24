@@ -147,6 +147,20 @@ export function hasAheadOfPendingMarker(sql) {
  * @param {string[]} appliedNames effective names from the applied-migration
  *   snapshot — the same array checkMigrationOrdering() consumes.
  */
+/**
+ * Is this slug nothing but 14-digit stamps — i.e. does the row carry no name?
+ *
+ * `migrationSlug` strips a leading stamp only when it is followed by `_`, so a
+ * bare `20260812130145` row and a renumbered `<version>_<stamp>` row both leave a
+ * stamps-only slug. Those genuinely name no migration. A non-stamp suffix does,
+ * even when it is all digits: `_12345` distinguishes its row from `_67890`, and
+ * collapsing both to "unidentified" would let them vouch for each other.
+ */
+export function namesOnlyStamps(slug) {
+  const s = String(slug ?? "");
+  return s === "" || /^\d{14}(?:_\d{14})*_?$/.test(s);
+}
+
 export function appliedIndex(appliedNames) {
   const stamps = new Set();
   const slugs = new Set();
@@ -165,10 +179,14 @@ export function appliedIndex(appliedNames) {
     const stem = migrationStem(raw);
     if (!stem) continue;
     const slug = migrationSlug(stem);
-    // A slug with no letters is just the row's own digits: it identifies nothing
-    // that could contradict a candidate. migrationSlug only strips a stamp that
-    // is followed by `_`, so a bare-stamp row's slug IS that stamp.
-    const identifying = /[a-z]/.test(slug) ? slug : "";
+    // A row identifies nothing ONLY when its name is stamps and nothing else:
+    // migrationSlug strips a stamp only when it is followed by `_`, so a bare
+    // `20260812130145` row and a `<version>_<stamp>` row both leave a
+    // stamps-only slug. Any other suffix — including a purely numeric one like
+    // `_12345` — IS a name and must stay identifying, or `20260905210000_12345`
+    // and `20260905210000_67890` would vouch for each other and the stamp
+    // collision this guards against would reappear. (CodeRabbit on PR #788.)
+    const identifying = namesOnlyStamps(slug) ? "" : slug;
     // Every 14-digit run in the name counts, not just the leading one: a
     // renumbered row carries the version AND the original stamp, and either may
     // be the one that matches a file on disk.

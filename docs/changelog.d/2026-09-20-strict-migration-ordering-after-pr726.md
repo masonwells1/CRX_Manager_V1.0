@@ -52,7 +52,9 @@ and do not begin the cutover phases until the correction is in.
 > Codex GitHub App raised the same issue as a P2 on the delivery PR, and both merge gates
 > deny over an unresolved App finding, so deferring it was no longer an option. The
 > correction is now `20260911130000_preserve_unchanged_source_invoice_dates.sql` and runs
-> THIRD of four, between the season guard and phase 1. The apply sequence above is
+> SECOND of four, between the season guard and phase 1 (ordinal corrected 2026-09-24 from
+> "THIRD", which contradicted the position named in this same sentence; row 934 of the ledger is
+> authoritative and says SECOND). The apply sequence above is
 > superseded twice: `20260908140000` is no longer part of it (APPLIED LIVE 2026-09-20,
 > ledger version `20260920051333`), and the correction moved ahead of both phases. The
 > current sequence is `20260908190000` → `20260911130000` → `20260912165758` →

@@ -27,9 +27,12 @@ never bypass it, disable jobs, kill backends or discard valid retry receipts.
 
 Remaining review dispositions (not permission to skip exact-head re-review):
 
-- LOW bounded retry: retain three explicit pre-mutation retries (150/300ms), the same
-  request/key and safe manual retry after refusal. Longer automatic retries are not
-  required; uncertain transport failures are never automatically replayed.
+- LOW bounded retry: retain a maximum of three requests — two explicit pre-mutation retries
+  after 150/300ms — on the same request/key, and safe manual retry after refusal. Longer
+  automatic retries are not required; uncertain transport failures are never automatically
+  replayed. (Wording corrected 2026-09-24: this read "three explicit pre-mutation retries",
+  which a reader auditing the bound could take as four requests. The bound is unchanged and
+  matches the 2026-09-13 entries' "maximum three requests".)
 - LOW future actor-predicate column shape: hypothetical, not a present predicate
   bypass. Current unknown predicates/contracts fail closed. A future predicate needs
   its own explicit reviewed contract semantics; no speculative lexer expansion here.

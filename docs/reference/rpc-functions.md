@@ -12,8 +12,15 @@ Phase 1, `20260914101200_refuse_generic_field_invoice_creation.sql`, installs th
 advisory cutover barrier but deliberately continues to allow generic
 `field_application` creation and committed receipt retries. The bypass is NOT closed
 after phase 1. Phase 2, `20260914101300_finish_generic_field_invoice_cutover.sql`,
-must commit in a separate transaction and refuses installation while any unexpired
-generic `save_invoice` receipt remains. Only after phase 2 commits does the public
+must commit in a separate transaction and refuses installation while an unexpired
+`save_invoice` receipt could still replay a `field_application` save. It resolves each
+receipt through `result->>'invoice_id'`: a receipt that resolves to a live
+`field_application` invoice blocks, and so does one whose `invoice_id` is absent,
+malformed or no longer resolvable, because an unidentifiable receipt could be a field
+save. A receipt that resolves to a live invoice of another type does NOT block — the
+cutover does not change those paths, and blocking on them required a 24-hour freeze on
+all invoice saving (receipts live 24h), which left phase 2 effectively unappliable.
+Do not wait for unrelated receipts to expire before applying phase 2. Only after phase 2 commits does the public
 RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
 remain the supported creation paths. Other generic field edits, other types and
 below-cost/idempotency delegation remain unchanged, with two exceptions that apply to

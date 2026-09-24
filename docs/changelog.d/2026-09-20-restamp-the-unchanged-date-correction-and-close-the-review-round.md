@@ -29,8 +29,11 @@ Dependency checked in the file itself — its preflight requires only
 nothing from either cutover phase.
 
 **Apply order is now `20260908190000` → `20260911130000` → `20260912165758` → `20260913040359`,
-which is NOT row order.** Row 934 applies third. The ledger says so explicitly, in both the
-ordering paragraph and the row itself, because row numbers are insertion order.
+which is NOT row order.** Row 934 applies **second** — as the sequence above shows, and as row 934
+itself says. The ledger says so explicitly, in both the ordering paragraph and the row itself,
+because row numbers are insertion order. (Ordinal corrected 2026-09-24: this said "third", which
+contradicted both the sequence printed one line above it and row 934's own "applies SECOND of the
+four". The apply order itself never changed.)
 
 This reverses the "not done here on purpose" decision recorded earlier the same day in
 `2026-09-20-strict-migration-ordering-after-pr726.md`. That entry deferred the restamp to Mason as

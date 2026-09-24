@@ -22,6 +22,7 @@ import {
   orderingStamp,
   appliedIndex,
   stampIdentifies,
+  namesOnlyStamps,
   hasAheadOfPendingMarker,
   checkPendingMigrations,
 } from "./migration-pending-lib.mjs";
@@ -105,6 +106,44 @@ ok(orderingStamp("undated_hotfix.sql") === null, "a name with no leading date ha
     "an unknown stamp identifies nothing");
   ok(!stampIdentifies(null, "20260905210000", "other_migration"),
     "a missing index identifies nothing rather than throwing");
+}
+
+// A purely NUMERIC suffix is still a name. Classifying it as "no name" would let
+// 20260905210000_12345 and 20260905210000_67890 vouch for each other and bring
+// the collision straight back. (CodeRabbit on PR #788.)
+{
+  ok(namesOnlyStamps("") === true, "an empty slug names nothing");
+  ok(namesOnlyStamps("20260812130145") === true, "a bare stamp names nothing");
+  ok(namesOnlyStamps("20260728182141_20260728123224") === true, "stamps only, still no name");
+  ok(namesOnlyStamps("20260812130145_") === true, "a trailing separator is not a name");
+  ok(namesOnlyStamps("12345") === false, "a short numeric suffix IS a name");
+  ok(namesOnlyStamps("secdef_pricing") === false, "a descriptive slug is a name");
+  ok(namesOnlyStamps("fix_20260812130145") === false, "a stamp after a word is part of a name");
+
+  const { stampSlugs } = appliedIndex(["20260905210000_12345"]);
+  ok(stampIdentifies(stampSlugs, "20260905210000", "12345"),
+    "the numeric-suffix row identifies its own file");
+  ok(!stampIdentifies(stampSlugs, "20260905210000", "67890"),
+    "a numeric suffix does NOT vouch for a different numeric suffix on the same stamp");
+
+  const numericCollision = checkPendingMigrations({
+    name: "20260905220000_new_candidate",
+    sql: "SELECT 1;\n",
+    appliedNames: [
+      "20260819232000_draw_down_cutover_barrier",
+      "20260905210000_12345",
+    ],
+    trackedFiles: [
+      "supabase/migrations/20260819232000_draw_down_cutover_barrier.sql",
+      "supabase/migrations/20260905210000_67890.sql",
+      "supabase/migrations/20260905220000_new_candidate.sql",
+    ],
+    baselineHighWater: BASELINE,
+  });
+  ok(numericCollision.ok === false,
+    "a numeric-suffix candidate sharing an applied stamp is still reported");
+  ok(JSON.stringify(numericCollision).includes("20260905210000_67890"),
+    "the numeric-suffix pending migration is named in the verdict");
 }
 
 // The end-to-end consequence: a candidate sharing an applied row's stamp must

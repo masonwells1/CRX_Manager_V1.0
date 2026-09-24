@@ -96,7 +96,9 @@ It changes production apply order, so it is his call, and it is deliberately not
 
 > **SUPERSEDED 2026-09-20 — the restamp was done in the following commit.** The Codex GitHub App
 > re-raised it as a P2 on delivery PR #742, and both merge gates deny over an unresolved App
-> finding, so it stopped being deferrable. The correction is now `20260911130000` and runs third of
-> four. See `2026-09-20-restamp-the-unchanged-date-correction-and-close-the-review-round.md`.
+> finding, so it stopped being deferrable. The correction is now `20260911130000` and runs second of
+> four, between the season guard and phase 1 (ordinal corrected 2026-09-24 from "third"; row 934 of
+> the ledger is authoritative and says SECOND). See
+> `2026-09-20-restamp-the-unchanged-date-correction-and-close-the-review-round.md`.
 
 Repository merge does not apply any migration or authorize a live SQL or data change.

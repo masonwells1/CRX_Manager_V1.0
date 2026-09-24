@@ -142,12 +142,20 @@ ${deliverySafe}`);
   // auth.uid() digest instead of the absent dependency it claims to prove (CodeRabbit #774).
   psql(`CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS ${AUTH_UID_BODY};`);
   check(sweep(entries).remaining.length === 0, 'restoring the reviewed identity source restores exact matching');
-  psql('DROP FUNCTION public.wrapped_actor(uuid); DROP FUNCTION public.owner_only_actor(uuid);');
+  // Drop ONLY the pinned delegate. Dropping the wrapper too would remove the PRIMARY
+  // violation-key pin as well, and the matcher would fail closed on that instead — so the check
+  // would still pass even if a regression ignored absent DEPENDENCY pins entirely, which is the
+  // one thing this case exists to prove. PL/pgSQL records no dependency on a called function, so
+  // the delegate drops on its own and the wrapper survives. Same false-green class as the
+  // auth.uid() restore three lines above. (CodeRabbit on PR #788.)
+  psql('DROP FUNCTION public.owner_only_actor(uuid);');
   const missing = catalog(Object.keys(entries[1].reviewed_contracts));
-  // Both wrapper identities are gone, so the reviewed identity source is all the catalog can return.
-  check(missing.length === 1 && missing[0].function_key === 'auth.uid()' &&
-    missing[0].contract_md5 === entries[1].reviewed_contracts['auth.uid()'],
-    'only the restored identity contract remains, at its reviewed digest');
+  // The wrapper and the identity source must BOTH still be present at their reviewed digests, so
+  // the only thing absent is the dependency.
+  check(missing.length === 2
+    && missing.every((row) => row.function_key !== delegateKey
+      && row.contract_md5 === entries[1].reviewed_contracts[row.function_key]),
+    'only the pinned delegate is absent; wrapper and identity remain at their reviewed digests');
   check(subtractAllowlist(predicate.name, [{ violation_key: wrapperKey, suspect_param: 'p_performed_by' }], [entries[1]], missing).length === 1, 'missing exact dependency fails closed');
   console.log(`ACTOR_ALLOWLIST_DISPOSABLE_PROOF_PASS ${checks} checks; actual public/helper actor forgery observed and rejected by standing matcher`);
 } finally {
