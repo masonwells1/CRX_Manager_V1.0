@@ -21,6 +21,7 @@ import {
   fileStamp,
   orderingStamp,
   appliedIndex,
+  stampIdentifies,
   hasAheadOfPendingMarker,
   checkPendingMigrations,
 } from "./migration-pending-lib.mjs";
@@ -77,6 +78,57 @@ ok(orderingStamp("undated_hotfix.sql") === null, "a name with no leading date ha
   const { stamps, slugs } = appliedIndex(["20260728182141_20260728123224_secdef_pricing"]);
   ok(stamps.has("20260728182141") && stamps.has("20260728123224"), "appliedIndex captures both stamps");
   ok(slugs.has("secdef_pricing"), "appliedIndex captures the slug");
+}
+
+// ---------------------------------------------------------------------------
+// STAMP COLLISION — a 14-digit stamp is not a unique key (CodeRabbit on PR #787)
+// ---------------------------------------------------------------------------
+// Stamps here are hand-written and get reassigned during restamping, so an
+// applied row and an unapplied local candidate can carry the SAME stamp while
+// being different migrations. Accepting that as "applied" drops a genuinely
+// pending migration from the set.
+{
+  const { stampSlugs } = appliedIndex([
+    "20260905210000_other_migration",
+    "20260728182141_20260728123224_secdef_pricing",
+    "20260812130145",
+  ]);
+  ok(stampIdentifies(stampSlugs, "20260905210000", "other_migration"),
+    "a stamp identifies the row whose slug agrees");
+  ok(!stampIdentifies(stampSlugs, "20260905210000", "shared_recorder"),
+    "the SAME stamp does NOT identify a different migration");
+  ok(stampIdentifies(stampSlugs, "20260728123224", "secdef_pricing"),
+    "a renumbered row's trailing stamp still identifies its file by slug");
+  ok(stampIdentifies(stampSlugs, "20260812130145", "fix_thing"),
+    "a slugless row still vouches for its file — nothing contradicts it");
+  ok(!stampIdentifies(stampSlugs, "20260101000000", "anything"),
+    "an unknown stamp identifies nothing");
+  ok(!stampIdentifies(null, "20260905210000", "other_migration"),
+    "a missing index identifies nothing rather than throwing");
+}
+
+// The end-to-end consequence: a candidate sharing an applied row's stamp must
+// still be REPORTED, not silently treated as applied.
+{
+  const collision = checkPendingMigrations({
+    name: "20260905220000_new_candidate",
+    sql: "SELECT 1;\n",
+    appliedNames: [
+      "20260819232000_draw_down_cutover_barrier",
+      // Different migration, same stamp as the pending candidate below.
+      "20260905210000_other_migration",
+    ],
+    trackedFiles: [
+      "supabase/migrations/20260819232000_draw_down_cutover_barrier.sql",
+      "supabase/migrations/20260905210000_shared_recorder.sql",
+      "supabase/migrations/20260905220000_new_candidate.sql",
+    ],
+    baselineHighWater: BASELINE,
+  });
+  ok(collision.ok === false,
+    "an unapplied candidate sharing an applied row's stamp is still reported, not dropped");
+  ok(JSON.stringify(collision).includes("20260905210000_shared_recorder"),
+    "the stamp-colliding pending migration is named in the verdict");
 }
 
 // ---------------------------------------------------------------------------

@@ -151,20 +151,57 @@ export function appliedIndex(appliedNames) {
   const stamps = new Set();
   const slugs = new Set();
   const slugCounts = new Map();
+  // Which slugs each stamp was seen with. A 14-digit stamp is NOT a unique key:
+  // stamps here are hand-written and have been reassigned during restamping, so
+  // an applied row and an unapplied local candidate can carry the SAME stamp
+  // while being different migrations. Keeping the slugs per stamp is what lets
+  // the caller tell "this row is my file" from "this row merely shares my
+  // number". A row that names NO migration beyond its digits — the snapshot can
+  // carry a bare `20260812130145` with no descriptive name — maps to "", because
+  // it contradicts nothing and must keep vouching for its file exactly as before.
+  // (CodeRabbit on PR #787.)
+  const stampSlugs = new Map();
   for (const raw of Array.isArray(appliedNames) ? appliedNames : []) {
     const stem = migrationStem(raw);
     if (!stem) continue;
+    const slug = migrationSlug(stem);
+    // A slug with no letters is just the row's own digits: it identifies nothing
+    // that could contradict a candidate. migrationSlug only strips a stamp that
+    // is followed by `_`, so a bare-stamp row's slug IS that stamp.
+    const identifying = /[a-z]/.test(slug) ? slug : "";
     // Every 14-digit run in the name counts, not just the leading one: a
     // renumbered row carries the version AND the original stamp, and either may
     // be the one that matches a file on disk.
-    for (const m of stem.matchAll(/\d{14}/g)) stamps.add(m[0]);
-    const slug = migrationSlug(stem);
+    for (const m of stem.matchAll(/\d{14}/g)) {
+      stamps.add(m[0]);
+      if (!stampSlugs.has(m[0])) stampSlugs.set(m[0], new Set());
+      stampSlugs.get(m[0]).add(identifying);
+    }
     if (slug) {
       slugs.add(slug);
       slugCounts.set(slug, (slugCounts.get(slug) ?? 0) + 1);
     }
   }
-  return { stamps, slugs, slugCounts };
+  return { stamps, slugs, slugCounts, stampSlugs };
+}
+
+/**
+ * Does an applied row carrying `stamp` actually identify a file with `slug`?
+ *
+ * An exact-stamp hit is only conclusive evidence that THIS file ran if some row
+ * bearing that stamp is plausibly this migration. It is, when the row's slug
+ * agrees, or when the row names nothing beyond its digits (a bare
+ * `20260812130145` row identifies its file only by number, so there is nothing to
+ * contradict and the historical permissive behaviour is kept). When every row
+ * carrying the stamp
+ * names a DIFFERENT migration, the stamp collided: the candidate has not been
+ * shown to have run, and it must fall through to slug attribution rather than be
+ * silently dropped from the pending set.
+ */
+export function stampIdentifies(stampSlugs, stamp, slug) {
+  const seen = stampSlugs instanceof Map ? stampSlugs.get(stamp) : null;
+  if (!seen) return false;
+  return seen.has(slug) || seen.has("");
 }
 
 /**
@@ -218,7 +255,7 @@ export function checkPendingMigrations({
     };
   }
 
-  const { stamps, slugCounts } = appliedIndex(appliedNames);
+  const { stamps, slugCounts, stampSlugs } = appliedIndex(appliedNames);
   if (stamps.size === 0) {
     return {
       ok: true,
@@ -261,7 +298,16 @@ export function checkPendingMigrations({
     // ran can never reach the unorderable branch and abstain the whole check.
     // It also SPENDS one ledger row for its slug, which is what lets a twin be
     // called pending rather than ambiguous.
-    if (stamp && stamps.has(stamp)) {
+    //
+    // The stamp must actually IDENTIFY this migration, not merely equal a number
+    // some other applied row happens to carry. Stamps are hand-written and get
+    // reassigned during restamping, so a candidate can share an applied row's
+    // stamp while being a different file; accepting that as "applied" would drop
+    // a genuinely pending migration from the set and reintroduce, inside this
+    // guard, the stranding it exists to prevent. On a collision we fall through
+    // to slug attribution below, which reaches pending/ambiguous on the evidence
+    // instead of guessing. (CodeRabbit on PR #787.)
+    if (stamp && stampIdentifies(stampSlugs, stamp, slug)) {
       spentBySlug.set(slug, (spentBySlug.get(slug) ?? 0) + 1);
       continue;
     }
