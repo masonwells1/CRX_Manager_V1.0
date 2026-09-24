@@ -8,7 +8,7 @@ the current boundary is the **September 20** one recorded at the top of
 `docs/reference/migration-history.md`: effective ordering high-water
 **`20260911120000_bind_adjust_inventory_receipt_to_intent`**, applied live 2026-09-20 under ledger
 version `20260920052149` (1004 ledger rows), with bare names resolved by the canonical ordering
-rules. **Number a new candidate above `20260911120000`**, not above the now-superseded
+rules. **Number a new candidate from the boundary block at the top of `docs/reference/migration-history.md`, which is authoritative and moves as the cohort applies** — as of its 2026-09-22 addendum the effective high-water is `20260914100600`, not the `20260911120000` an earlier revision of this paragraph hard-coded here, and not the superseded
 `20260908130000` (applied 2026-09-15, ledger version `20260915033227`, 1002 rows) that an earlier
 revision of this paragraph named. Two migrations applied that morning: `20260908140000` under
 `20260920051333`, then `20260911120000` under `20260920052149`. **Do not reapply `20260908140000`.**

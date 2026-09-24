@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-09-12
+Last verified: 2026-09-22
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
