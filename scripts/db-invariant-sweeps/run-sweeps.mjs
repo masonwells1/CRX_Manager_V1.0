@@ -218,7 +218,7 @@ if (args.includes('--adjudicate')) {
     if (!capturePath || capturePath.startsWith('--')) throw new TypeError('--adjudicate requires a captured JSON file.');
     const packets = JSON.parse(readFileSync(capturePath, 'utf8'));
     if (!Array.isArray(packets) || packets.length !== selectedPredicates.length) {
-      throw new TypeError('Capture must contain exactly one sweep_result packet for each selected predicate (use --only for a subset).');
+      throw new TypeError('Capture must contain exactly one sweep_result packet for each selected predicate (--only subsets are diagnostic-only, never gate evidence).');
     }
     const names = new Set();
     const summary = packets.map((packet) => {
@@ -237,7 +237,12 @@ if (args.includes('--adjudicate')) {
         total_rows: packet.rows.length, allowlisted: packet.rows.length - remaining.length, violations: remaining };
     });
     const ok = summary.every((item) => item.status === 'PASS');
-    console.log(JSON.stringify({ ok, execution: 'captured-results-only', summary }, null, 2));
+    // README: an --only run "is NOT valid evidence for the migration, ship, or review gates".
+    // Without this flag a filtered pass and a full pass print the same object, so a reader (or a
+    // gate quoting the output) cannot tell them apart. Report predicate-set completeness in the
+    // artifact itself rather than relying on whoever ran it to remember. (CodeRabbit on PR #786.)
+    const complete = selectedPredicates.length === predicates.length;
+    console.log(JSON.stringify({ ok, complete, execution: 'captured-results-only', summary }, null, 2));
     process.exitCode = ok ? 0 : 1;
   } catch (error) {
     console.error(`Invalid captured sweep results: ${error.message}`);
@@ -284,7 +289,9 @@ if (!psql) {
       ' (project rhyzpcqhnizqbxphqdkr). Each returns one sweep_result packet with',
       ' rows AND reviewed dependency contracts from the same database snapshot.',
       ' Capture the returned packets as a LOCAL/private JSON array; run this',
-      ' runner with --adjudicate <captured.json> (and --only for a subset).',
+      ' runner with --adjudicate <captured.json> over the FULL predicate set',
+      ' (--only is diagnostic-only and is never gate evidence; the output',
+      ' reports "complete": false when the set was filtered).',
       ' A key-only comparison is NOT sufficient: actor exceptions require the',
       ' exact suspect_param and every unchanged reviewed definition/owner/ACL.',
       ' Missing or changed contracts leave the flag visible. Investigate via',

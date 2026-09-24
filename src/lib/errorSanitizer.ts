@@ -122,6 +122,28 @@ export function sanitizeError(error: unknown): string {
     return 'This return must be approved before it can be received';
   }
 
+  // Filed-season refusals reach the GENERIC editor too: a job- or blend-built field invoice stays
+  // on InvoiceDetail (the per-acre redirect needs BOTH job_id and blend_ticket_id null), and that
+  // page reports save errors through sanitizeError. FieldApplicationInvoice maps these tokens in
+  // its own fieldAppError, which is why only the generic editor showed the raw token prefix.
+  // Keep the server's season and allowed-date-range text after the colon and strip only the
+  // token -- that text is the operator's answer, and it carries no schema identifiers.
+  // (CodeRabbit on PR #786.)
+  const seasonDateDetail = message.match(/^INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:\s*(\S.*)$/s)?.[1];
+  if (seasonDateDetail) {
+    return 'No invoice was changed. This date conflicts with the filed season of this invoice or '
+      + `another invoice in its split group: ${seasonDateDetail.trim()}`;
+  }
+  if (/^INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED(?::|$)/.test(message)) {
+    return 'No invoice was changed. This date conflicts with the filed season of this invoice or '
+      + 'another invoice in its split group. Keep the original transaction date; every group '
+      + 'member must keep its filed season';
+  }
+  // The server text here names the invoice by id rather than by number, so it is not appended.
+  if (/^INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED(?::|$)/.test(message)) {
+    return 'No invoice was changed. The filed season of a field-application invoice cannot be changed';
+  }
+
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {
     if (pattern.test(message)) {
       return replacement;

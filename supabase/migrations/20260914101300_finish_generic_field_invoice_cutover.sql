@@ -90,17 +90,48 @@ BEGIN
   END IF;
 
   -- Stabilize the receipt scan against any writer outside the public entry.
-  -- No invoice table lock: dedicated/source creators are not this cutover's target.
+  -- No invoice table lock: dedicated/source creators are not this cutover's target, and the
+  -- quiet gate above has already established that no other backend holds an open transaction,
+  -- so the invoices rows this scan resolves cannot change underneath it.
   -- A NULL expires_at is NOT covered by "wait for natural expiry" below. Ordinary
   -- save_invoice receipts take the column default, but idempotency_keys.expires_at is
   -- nullable, so a legacy or hand-inserted NULL-expiry row is possible and never expires.
   -- This gate deliberately treats it as still-valid and refuses, which is fail-closed and
   -- correct: it is a rollout signal requiring OPERATOR ADJUDICATION of that specific row,
   -- not a wait. Do not delete, backfill, re-date or otherwise bypass the gate to clear it.
+  --
+  -- SCOPE (CodeRabbit on PR #786): only the field-application branch of save_invoice changes
+  -- here, so only a receipt that could replay a field-application save can be affected. The
+  -- earlier form blocked on EVERY unexpired save_invoice receipt, including chemical-sale and
+  -- miscellaneous-charge saves whose behaviour this cutover does not touch. Receipts live 24h
+  -- (idempotency_keys.expires_at DEFAULT now() + interval '24 hours'), and the generic editor
+  -- saves those types continuously on a working system, so that form required a 24-hour freeze
+  -- on ALL invoice saving and in practice left phase 2 unappliable -- the same stranding hazard
+  -- row 934 of docs/reference/migration-history.md records. This is NOT the quiet-window scan
+  -- that row 933 forbids narrowing: that gate proves in-flight old-body REQUESTS have drained
+  -- and still counts every backend type. This gate is about COMMITTED retries, and it keeps the
+  -- property it exists to protect. Fail-closed is preserved where it can still matter: of the
+  -- receipts that pass the expiry test above (NULL expiry included), one whose invoice_id is
+  -- absent, malformed or no longer resolvable (i.id IS NULL) still BLOCKS, because an
+  -- unidentifiable receipt could be a field save. ONLY a receipt that resolves to a live invoice
+  -- of another type is allowed past -- including one with a NULL expiry, which by definition
+  -- cannot replay a field-application save and so is not this gate's business.
+  -- Every save_invoice receipt writer records jsonb_build_object('invoice_id', ...)
+  -- (16 call sites through 20260904180000), so the cast target is the real key; the regex guard
+  -- keeps a non-UUID value from raising instead of blocking.
   LOCK TABLE public.idempotency_keys IN SHARE ROW EXCLUSIVE MODE;
   IF v_body = '82c68c993dcff32eabd7b70c70f11527' AND EXISTS (
-    SELECT 1 FROM public.idempotency_keys WHERE operation = 'save_invoice'
-      AND (expires_at IS NULL OR expires_at >= transaction_timestamp())
+    SELECT 1
+      FROM public.idempotency_keys AS k
+      LEFT JOIN public.invoices AS i
+        ON i.id = CASE
+             WHEN k.result->>'invoice_id' ~*
+                  '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+               THEN (k.result->>'invoice_id')::uuid
+           END
+     WHERE k.operation = 'save_invoice'
+       AND (k.expires_at IS NULL OR k.expires_at >= transaction_timestamp())
+       AND (i.id IS NULL OR i.invoice_type = 'field_application')
   ) THEN
     RAISE EXCEPTION 'GENERIC_FIELD_CUTOVER_ACTIVE_RECEIPTS: committed retries remain valid; wait for natural expiry';
   END IF;
