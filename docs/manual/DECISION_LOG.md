@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-09-04
+Last verified: 2026-09-25
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -33,8 +33,21 @@ usage-limit error; an invalid one stops at "not supported". Always include a kno
 self-review. Accepted for ordinary reversible work; the Sol money gate stays independent. Mason
 declined the optional "Luna-built code reviews on Sol" rule — reopen if defects start slipping.
 
+**A gate-identity change cannot satisfy its own new requirement.** The guard gating this merge is
+`main`'s copy (hooks load from the session's project dir), so while the PR is open `main` still
+demands `gpt-5.6-sol` and a branch-minted `gpt-6-sol` proof is correctly rejected. Fails closed, but
+**no agent can merge this PR** — Mason merges it by hand, the same escape used when an agent merge
+gate is structurally stranded. Do NOT widen a validator to accept both models to get around it; if a
+human merge is ever unavailable, the alternative is a two-step accept-both → narrow migration.
+
 **Not yet proven:** no end-to-end GPT-6 review has run (credits reset 2026-09-26). Run one Luna round
-and one Sol gate before trusting this on money work. See `docs/changelog.d/2026-09-23-gpt6-model-routing.md`.
+and one Sol gate before trusting this on money work. Note `xhigh` was never validated as an accepted
+effort for `gpt-6-luna` — only the model name was. See `docs/changelog.d/2026-09-23-gpt6-model-routing.md`.
+
+**Adversarial review (Fable 5.1, 2026-09-25)** confirmed the gate code is sound — all enforcement
+points agree, the Codex mirror imports the shared validator rather than duplicating it, and tests are
+load-bearing — and caught the merge chicken-and-egg above, an over-authorized unattended merge job
+(since made review-only), and several overclaims now corrected in the changelog.
 
 ## 2026-09-20 — everyday code review moves to Luna at xhigh; Sol becomes a once-at-the-end gate
 

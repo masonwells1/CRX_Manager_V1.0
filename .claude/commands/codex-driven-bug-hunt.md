@@ -119,7 +119,7 @@ git diff --quiet -- docs/app-workflow-map.html || git add docs/app-workflow-map.
 git status --porcelain                       # the staged set MUST equal what the commit will contain
 { echo "Review this staged diff for the CRX codex-driven hunt. It must fully fix: <finding>. Judge correctness + money / idempotency / actor / lifecycle bugs + whether it introduces a NEW bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/codex-fix-glance-prompt.txt
 # Adversarial review gate — use the gate wrapper (pins the model explicitly, --ignore-user-config,
-# read-only), NOT the spark hunter wrapper. Defaults to gpt-6-luna at xhigh since 2026-09-20;
+# read-only), NOT the read-only hunter wrapper. Defaults to gpt-6-luna at xhigh since 2026-09-20;
 # add `--sol --reason "<why>"` for a gpt-6-sol/high pass on genuinely complex work; the wrapper
 # REFUSES --sol without a reason, so escalated spend is never silent. stdout = verdict, stderr = trace.
 node scripts/overnight-codex-gate.mjs .claude/session-state/codex-fix-glance-prompt.txt --timeout 600 \

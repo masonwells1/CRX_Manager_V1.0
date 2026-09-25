@@ -152,8 +152,8 @@ use the same Codex scope and the same Luna/xhigh settings.
 The **hard gate** is unchanged: a separate ephemeral `gpt-6-sol` high-effort session for a risky
 change in the full `AGENTS.md` set (money, inventory, auth, RLS, migration, permission, Edge
 Functions, other business-critical). Step 4 evidence verification reduces false positives; it is
-NOT a substitute for that Sol gate, and neither is a clean Luna round. Terra may build; Luna may
-take low-risk work.
+NOT a substitute for that Sol gate, and neither is a clean Luna round. Luna builds and takes
+low-risk work; Terra was retired with the `gpt-5.6` class (Mason, 2026-09-23).
 
 **Sol runs LAST, once per candidate SHA — not once per gauntlet.** The proof binds to the HEAD it
 reviewed. If a Step 5 re-review round changes the diff after Sol has passed, that proof is void and

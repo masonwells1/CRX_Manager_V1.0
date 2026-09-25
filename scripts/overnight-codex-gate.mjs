@@ -25,8 +25,9 @@
  *   `codex` shim on PATH. Runs an ephemeral, user-config-isolated
  *   `codex exec` review under the read-only sandbox. The model and effort are
  *   always pinned explicitly here and never inherited from workstation
- *   configuration — the configured default is a model this CLI cannot run, so an
- *   unpinned call fails on the model rather than on anything real.
+ *   configuration — an unpinned call would silently take whatever
+ *   ~/.codex/config.toml happens to say, making the reviewing tier a property of
+ *   the workstation instead of this wrapper.
  *   spawnSync writes the prompt to stdin and closes it, so codex never blocks
  *   waiting on input. Prints Codex's output to stdout; exits with its code.
  *

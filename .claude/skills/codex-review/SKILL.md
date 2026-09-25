@@ -497,8 +497,10 @@ The failure classes `AGENTS.md` keeps Codex pointed at:
 Notes:
 - Every review pins its model and effort explicitly — `gpt-6-luna`/`xhigh` for an advisory
   Step 3A round, `gpt-6-sol`/`high` for a Step 3B gate proof. Never inherit the model or
-  effort from user configuration: the CLI's configured default is a model this CLI version
-  cannot run, and an unpinned call fails on the model rather than on anything real. The Step 3B
+  effort from user configuration: an unpinned call silently inherits whatever `~/.codex/config.toml`
+  happens to say, so the tier that reviewed becomes a property of the workstation rather than of
+  this contract — and the proof records the pinned constant, so an inherited model would not even
+  be visible in it. Pin it, always, on every path. The Step 3B
   gate proof is `gpt-6-sol`/`high` only — Luna and Claude cannot substitute for it, and the
   guards enforce that. Record the model and effort on every security/money proof.
 - A trailing `rmcp … DELETE returned HTTP 404` line is harmless MCP-session cleanup — ignore it.
