@@ -1012,9 +1012,11 @@ function pushShortCluster(word) {
   if (!/^-[A-Za-z0-9]/.test(word) || word.startsWith("--")) return null;
   for (let index = 1; index < word.length; index += 1) {
     const letter = word[index];
-    // A non-alphanumeric ends the cluster. `-f=o` is not a bundle — git rejects
-    // it outright — and walking past the `=` would read its `o` as a real option
-    // and swallow the following word, which is the dangerous direction.
+    // A non-alphanumeric ends the cluster. A boolean short carrying `=` is not a
+    // bundle: git refuses it with ``error: unknown switch `='`` (measured on
+    // `push --dry-run -q=o <repo> HEAD:main`, 2026-09-24 — the same parse path
+    // `-f=o` takes). Walking past the `=` would read the trailing `o` as a real
+    // option and swallow the following word, which is the dangerous direction.
     if (!/[A-Za-z0-9]/.test(letter)) return null;
     if (!PUSH_VALUE_SHORTS.includes(letter)) continue;
     // The rest of the word is this option's value; empty means the NEXT word is.

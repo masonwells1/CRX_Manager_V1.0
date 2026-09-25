@@ -29,8 +29,8 @@ One shape-based walker, `pushShortCluster`, modelled on the `ghMergeShortCluster
 `ghApiShortCluster` pair that already sit in the same file — not a fourth hand-rolled
 walk. It reports where the value-taking letter sat, its value, and whether that value
 was ATTACHED; only a detached value reaches into the next word. A non-alphanumeric ends
-the cluster, so `-f=o` (which git rejects outright) cannot be walked past into a
-trailing `o` that would swallow the destination. All three call sites now share it, and
+the cluster, so a boolean short carrying `=` (which git refuses — measured below) cannot
+be walked past into a trailing `o` that would swallow the destination. All three call sites now share it, and
 `unknownPushOptions` scans only the letters BEFORE the value-taking one, since
 everything after it is `-o`'s value rather than more flags.
 
@@ -43,6 +43,7 @@ The premise was measured rather than reasoned from the manual:
 | `push --dry-run -ou <bare repo> HEAD:main` | reached the receiving end at `<bare repo>`: `fatal: the receiving end does not support push options` | `u` **attached** as the push-option; the next word was the REPOSITORY |
 | `push --dry-run -uo <bare repo> HEAD:main` | `ssh: Could not resolve hostname head` | `<bare repo>` was eaten as `-o`'s **detached** value, and `HEAD:main` became the repository |
 | `push --dry-run -o=ci.skip <bare repo> HEAD:main` | reached the receiving end at `<bare repo>` | the `=` form attaches too |
+| `push --dry-run -q=o <bare repo> HEAD:main` | ``error: unknown switch `='`` | a BOOLEAN short carrying `=` is not a bundle — git refuses the whole command, so ending the cluster at a non-alphanumeric matches git |
 
 ### Proof 2 — the real hook process, base vs candidate
 
@@ -85,7 +86,12 @@ app repo, are still allowed.
 ### Not verified
 
 Nothing was pushed to any real remote: proof 1 ran `--dry-run` against a throwaway local
-bare repository, and proof 2 drives the guard's decision rather than git's transport. The
-`-f=o` shape (a non-alphanumeric ending the cluster) was not measured against git —
-the force-push guard denies any `-f` spelling before it can run, which is itself the
-stronger gate on that form.
+bare repository, and proof 2 drives the guard's decision rather than git's transport.
+
+The "boolean short carrying `=`" row of proof 1 was measured on `-q=o`, not on the `-f=o`
+spelling the code comment used to name: the force-push guard denies any `-f` spelling before
+git can run, which is itself the stronger gate on that form. `-q` and `-f` are both boolean
+shorts and take the same parse-options path, so the measurement covers the shape — but it is
+a generalization from one spelling, not a direct measurement of `-f=o`. Raised by CodeRabbit
+on PR #784 against the original wording, which asserted the rejection as measured fact while
+this section said it was unmeasured; the claim is now grounded and the inconsistency is gone.
