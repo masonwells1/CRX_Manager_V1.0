@@ -7,4 +7,4 @@ Read `.claude/commands/codex-gauntlet.md` from the active repository root comple
 
 Adapt Claude-specific tool names to Codex tools when running from Codex.
 
-Remain read-only when the selected mode is review-only. Do not push, deploy, apply live migrations, delete data, or commit unrelated staged files without Mason's explicit approval in the current conversation.
+Remain read-only when the selected mode is review-only. The gauntlet never pushes or deploys; landing a reviewed change follows `.claude/commands/ship.md`, and the hard gates in `AGENTS.md` always apply. Never commit unrelated staged files.

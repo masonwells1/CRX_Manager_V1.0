@@ -7,6 +7,30 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-25 — GPT-6 roles: Luna reviews, Sol gates, Astra reviews plans; guidance has one priority order
+
+**Source:** Mason's answers in this session on 2026-09-25, after a review of the agent guidance for
+OpenAI's GPT-6 models (Sol and Luna launched 2026-09-22; Astra earlier in September). He chose the
+recommended roles and approved the guidance and hook-text fixes ("Phases 1 + 2").
+
+**Decision.** The 2026-09-20 tier split carries forward to GPT-6: `gpt-6-luna` at `xhigh` iterates,
+`gpt-6-sol` at `high` is the once-at-the-end gate for risky diffs, `gpt-6-astra` reviews plans and
+architecture (advisory, never a gate), and `gpt-6-sol` at `medium` becomes the default builder
+(there is no GPT-6 Terra). Exact IDs and efforts live in `docs/reference/codex-model-tuning.md`, not
+in `AGENTS.md`, so a future model change edits one reference document.
+
+**Not yet in effect.** Until the protected switch in that document lands, the proof gates and every
+runnable command keep `gpt-5.6-sol` / `gpt-5.6-luna`. Agents use the pinned IDs and never substitute
+a GPT-6 ID the gates reject. The switch must run where the Codex CLI exists, keeps the "cheap tier
+cannot satisfy the gate" asymmetry (negative tests reject `gpt-6-luna` and `gpt-5.6-sol`), and does
+not accept old and new IDs together unless `gpt-5.6-sol` stops being served first.
+
+**What this forbids/implies.** `AGENTS.md` now sets the order to follow when sources disagree (hard
+gates, then Mason's current message, then `AGENTS.md`, then the selected workflow, then routed
+references, then history). It also holds the one stop rule that workflow round caps defer to. Hook
+reminders point at `AGENTS.md` for the hard-gate list rather than restating a shorter one. Claude
+agents and workflows pin model aliases (`opus`), not dated IDs.
+
 ## 2026-09-20 — everyday code review moves to `gpt-5.6-luna` at xhigh; Sol becomes a once-at-the-end gate
 
 **Source:** Mason's decision in this session on 2026-09-20, driven by Codex token cost. He asked for

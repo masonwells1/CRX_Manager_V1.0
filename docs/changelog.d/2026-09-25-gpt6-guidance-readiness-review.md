@@ -1,0 +1,74 @@
+## 2026-09-25 — agent guidance review for GPT-6 (Astra, Sol, Luna) and Claude best practices
+
+Mason asked for a review of `AGENTS.md`, `CLAUDE.md`, and the other guidance documents, and for
+`AGENTS.md` to be set up for OpenAI's new GPT-6 models. He approved "Phases 1 + 2" and the model
+roles "Luna reviews, Sol gate, Astra plans" in the session. Recorded in `docs/manual/DECISION_LOG.md`
+(2026-09-25).
+
+**Why.** GPT-6 Sol and GPT-6 Luna launched on 2026-09-22 (GPT-6 Astra earlier in September).
+OpenAI's GPT-6 guidance says the models follow contextual instruction files more literally and may
+stall or follow the wrong rule when those files disagree. A four-reviewer audit found that the text
+hooks inject on nearly every prompt disagreed with `AGENTS.md`: it listed three hard gates instead
+of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointed at Windows-only
+`C:\CRX_Manager\...` paths. The five reviewer agents were also pinned to the retired
+`claude-opus-5`.
+
+**Changed (guidance):**
+
+- `AGENTS.md` — adds an instruction-priority order, one stop rule (workflow round caps defer to it),
+  done-by-task-type, a "search, never read whole" rule for the large logs and schema registry, a
+  routing row for Codex model choice, and CodeRabbit on the protected path. The review-tier bullets
+  now name the Luna and Sol roles and defer exact model IDs to one document. Still 84 lines and
+  under the 12,000-byte budget; every validator-pinned sentence is kept.
+- New `docs/reference/codex-model-tuning.md` — the Codex model and effort for each job, with the
+  model pinned today next to its GPT-6 target, GPT-6 prompting guidance, and the step-by-step
+  (pending) switch of the proof gates to `gpt-6-sol`.
+- `docs/reference/claude-model-tuning.md` — current Claude model IDs; use the `opus`/`fable`/
+  `sonnet`/`haiku` aliases instead of dated IDs.
+- `CLAUDE.md` — Codex tuning route, cloud-session limits, and "search the schema registry".
+- Contradictions fixed: gauntlet command, skill, and workflow are review-only and defer landing to
+  `ship.md`; `ship.md` gains the Codex plan branch, the stop-rule pointer, and the Trivial-path
+  exception to "never skip the review fan-out"; `OWNER_PLAYBOOK.md` no longer says `/ship` stops
+  before every production push, lists every hard gate, mentions CodeRabbit, and explains which AI
+  does what; `coding-guidelines.md` and `SAFE_DEVELOPMENT_RULES.md` say to search the decision and
+  known-issues logs rather than read them; `AGENT_ONBOARDING.md` drops a stale hook count and the
+  "smaller or cheaper model" framing; `AGENT_COLLABORATION.md` points to both tuning documents.
+
+**Changed (agent surface):**
+
+- `.claude/agents/*.md`, `.claude/workflows/{money-inventory-hunt,gauntlet-sections-loop}.js`,
+  `.claude/commands/claude-review.md`, and `scripts/run-claude-review.mjs` (plus its test): the
+  model pin moves from `claude-opus-5` to the `opus` alias.
+- `.claude/hooks/prompt-source-lib.mjs` — `PUSH_POLICY` now points at the canonical gate list in
+  `AGENTS.md`, names every gate category, and describes the PR → checks → CodeRabbit → exact-head
+  merge path. `prompt-hooks.test.mjs` pins every gate category and CodeRabbit.
+- Gauntlet, pair-review, and handoff reminders use repository-relative paths; the gauntlet reminder
+  defaults to per-change mode instead of asking; the ship reminder says Codex does not wait for plan
+  approval; the dangerous-phrase warning no longer says `/ship` "auto-pushes to main"; the
+  session-start text no longer tells Claude to re-read `AGENTS.md` and `CLAUDE.md`, which the
+  `@` import already loads.
+- `.claude/settings.json` — the Vercel deny list now names the tools the Vercel connector actually
+  exposes: out-of-band `create_deployment`, `request_promote`, `request_rollback`, the two
+  protection-bypass tools, `buy_single_domain`, `buy_domains`, `buy_credits_endpoint`, and
+  `create_or_transfer_domain`. Under `defaultMode: dontAsk` these were already refused as unlisted
+  tools. Listing them in `deny` makes that explicit and keeps it if the mode ever changes. No
+  workflow uses them, because production deploys only through a PR merge, and a Vercel rollback
+  stays one click in the Vercel dashboard. The old tool names are kept; they match nothing but are
+  harmless. Nothing was added to `allow` or `ask`.
+- `scripts/check-agent-guidance.mjs` — tracks the new Claude tuning sentence and checks the Codex
+  tuning document and its `AGENTS.md` route.
+
+**Not changed, on purpose.** The proof gates still hard-require `gpt-5.6-sol` at `high`, and every
+runnable Codex command still pins the GPT-5.6 IDs. Moving them to GPT-6 is a protected change to a
+gate Mason decided on. It needs the Codex CLI to smoke-test the new IDs and to mint its own Sol
+proof, and this cloud session has no Codex CLI. The checklist is in
+`docs/reference/codex-model-tuning.md`.
+
+**Proof observed (cloud session):** `npm run test:agent-workflows` passed; all 53 `*.test.mjs`
+files under `.claude/hooks/`, `.codex/hooks/`, and `scripts/` passed; `scripts/check-agent-guidance.mjs`
+passed; `node scripts/sync-agent-workflows.mjs --write` regenerated the 37 Codex adapters.
+
+**Not verified here:** no Codex (Luna) review ran, because the Codex CLI is not installed in the
+cloud container, and `npm run agent-health` fails only on that and on unset git hooks. It was not
+confirmed that the Claude Code `opus` alias resolves identically in `claude -p` on Mason's machine,
+though `--model` accepts aliases by design.

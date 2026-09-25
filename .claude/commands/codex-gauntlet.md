@@ -30,7 +30,7 @@ Default to **per-change** when there are current branch or working-tree changes.
 
 ## Hard Safety Gates
 
-- Do not push.
+- Do not push. The gauntlet only reviews; landing a reviewed change follows `.claude/commands/ship.md`.
 - Do not deploy.
 - Do not apply live migrations.
 - Do not delete data.

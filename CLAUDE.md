@@ -8,8 +8,9 @@
 
 - Follow the task-routing table in `AGENTS.md`; do not load every workflow or reference file at session start.
 - For the architecture, difficult-debugging, tracing, structural-audit, and PR-impact tasks named in `AGENTS.md`, invoke the `graphify` skill before broad `Read`/`Glob`/`Grep` exploration. Graphify narrows source reads; it never replaces source or live verification. Documentation is outside its code-only corpus, so use focused document inspection for documentation tasks.
-- Use `.claude/schema-registry.json` for schema-aware work and refresh it after approved schema changes.
-- Read `docs/reference/claude-model-tuning.md` only when choosing Claude models or effort, delegating work, or writing reviewer prompts.
+- Use `.claude/schema-registry.json` for schema-aware work (search it by table or column; it is too large to read whole) and refresh it after approved schema changes.
+- Read `docs/reference/claude-model-tuning.md` only when choosing Claude models or effort, delegating work, or writing reviewer prompts. For Codex model choice, read `docs/reference/codex-model-tuning.md`.
+- Cloud sessions (claude.ai/code) may lack `node_modules`, `gh`, the Codex CLI, Graphify, and the Supabase MCP. State early which gates cannot run there, finish what can be verified, and deliver as a draft PR whose missing gates run on Mason's machine; never report an unrun gate as passed.
 - The synthesis layer is `docs/manual/`: onboarding, architecture, settled decisions, known issues, current state, and Mason’s plain-English owner playbook.
 
 ## Claude Workflows

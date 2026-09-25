@@ -22,8 +22,9 @@ function run(source) {
 }
 
 const startup = run("startup");
-assert.match(startup, /read AGENTS\.md/);
-assert.match(startup, /load only the workflow and reference documents/);
+assert.match(startup, /do not re-read AGENTS\.md or CLAUDE\.md/);
+assert.doesNotMatch(startup, /Silently read AGENTS\.md/);
+assert.match(startup, /Load only the workflow and reference documents/);
 assert.match(startup, /Mason cannot read code or safely review a diff/);
 assert.match(startup, /Before multi-file work.*get his approval after a short plan/);
 assert.match(startup, /continue routine implementation without repeated pauses/);

@@ -27,7 +27,7 @@ If on `main`, create one: `git checkout -b ship/<short-slug>`. Tell Mason the br
 **For substantial work, plan before coding** — this is where Mason (a non-coder) has the most power, because he can read English even though he can't read code:
 1. Read the live schema / existing code for the area (don't trust memory).
 2. Write a short plain-English plan: what you'll build, the assumptions you're making, and the 2–4 files you'll touch.
-3. Show it to Mason and let him confirm or correct **before** you write code. A wrong understanding caught here costs one message; caught after coding costs a whole rebuild. (Skip the confirmation only for genuinely mechanical multi-file changes.)
+3. Show it to Mason and let him confirm or correct **before** you write code. A wrong understanding caught here costs one message; caught after coding costs a whole rebuild. (Skip the confirmation only for genuinely mechanical multi-file changes.) This confirmation is Claude's checkpoint; Codex posts the short plan and proceeds without waiting (`AGENTS.md` › Operating Contract).
 
 ## Step 1 — Implement the job to completion
 
@@ -84,7 +84,7 @@ For every **confirmed** BLOCKER or HIGH finding (the workflows already adversari
 2. Re-run Step 2 (verify) and re-dispatch the reviewers whose scope you touched (Step 3).
 3. Repeat until: reviewers return **clean** (or BLOCKER/HIGH all fixed) AND build + tests are green.
 
-MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. **Hard loop cap: max 3 fix→re-review rounds.** If the SAME finding survives two rounds in a row, or you reach round 3 with anything still open, STOP and hand it to Mason with both positions — do not keep thrashing or burn rounds on a finding you can't resolve.
+MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. **When to stop looping:** follow the stop rule in `AGENTS.md` › Operating Contract. Keep going while each round closes findings; if the SAME BLOCKER/HIGH survives two consecutive rounds, STOP and hand it to Mason with both positions — do not keep thrashing or burn rounds on a finding you can't resolve.
 
 ## Step 5 — If a migration is involved: prepare the live-apply gate
 
@@ -117,7 +117,7 @@ If worthy, run a **separate Codex review directly via the headless CLI** — inv
 diff). It runs non-interactively, captures findings, and returns a verdict
 (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
 
-**Two tiers, in this order (Mason's standing decision, 2026-09-20).** Iterate on `gpt-5.6-luna` at
+**Two tiers, in this order (Mason's standing decision, 2026-09-20; current model pins and the pending GPT-6 switch: `docs/reference/codex-model-tuning.md`).** Iterate on `gpt-5.6-luna` at
 xhigh — `/codex-review` Step 3A — fixing and re-running until **no BLOCKER or HIGH remains**
 (deliberately deferred MED/LOW do not block the Sol pass). That is the
 whole review for ordinary reversible work. Only then, and only if the diff is risky (money,
@@ -197,7 +197,7 @@ For gated actions, after Mason explicitly approves, perform only the approved ac
 - NEVER push work that has not passed the FULL green pipeline. Pushes of regular reversible code after a fully green pipeline are covered by Mason's standing 2026-06-16 authorization — report every push explicitly, never silently. Force-pushes always require Mason's explicit approval.
 - NEVER apply a migration without Mason's explicit approval in the current conversation, the two reviewers clean, and the proof file written (the guard enforces this; don't try to route around it). Interactive sessions only ever apply with the in-chat yes; a pre-authorized armed hands-free run follows the 2026-07-13 proof gate instead (see the autonomy boundary and the last Hard Rule).
 - NEVER report the gate "clean" while any confirmed BLOCKER/HIGH is open, even if lint/build/test pass.
-- NEVER skip the review fan-out to "save time" — it is the entire point of `/ship`.
+- NEVER skip the review fan-out to "save time" — it is the entire point of `/ship`. The only exception is the **Trivial** path defined in Step 0.5.
 - NEVER `--no-verify`, `@ts-ignore`, or `any` (except `reportPdf.ts` columnStyles).
 - Auto-deploying an Edge Function and deleting data are never covered by any standing authorization — those always wait for Mason's explicit yes. A live migration apply waits for his in-chat yes in interactive sessions; only a pre-authorized hands-free run (autopilot armed) may apply via the proof gate, and destructive migrations stop even then.
 - If a required safety gate is unavailable (e.g. a reviewer can't run), STOP and hand off — do not self-certify. (Mason's prod-gate-discipline rule.)

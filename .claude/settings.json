@@ -201,7 +201,16 @@
       "mcp__Vercel__buy_addon",
       "mcp__Vercel__buy_credits",
       "mcp__Vercel__buy_domain",
-      "mcp__Vercel__buy_pro"
+      "mcp__Vercel__buy_pro",
+      "mcp__Vercel__create_deployment",
+      "mcp__Vercel__request_promote",
+      "mcp__Vercel__request_rollback",
+      "mcp__Vercel__update_project_protection_bypass",
+      "mcp__Vercel__patch_url_protection_bypass",
+      "mcp__Vercel__buy_single_domain",
+      "mcp__Vercel__buy_domains",
+      "mcp__Vercel__buy_credits_endpoint",
+      "mcp__Vercel__create_or_transfer_domain"
     ]
   },
   "hooks": {
