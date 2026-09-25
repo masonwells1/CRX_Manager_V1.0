@@ -104,6 +104,90 @@ ok(!isMachineGenerated(""), "empty not machine");
   // The negation guard added after "going to bed don't stop" is untouched.
   ok(!isHoldPhrase(authoredByMason("going to bed, don't stop")), "negated stop still not a hold");
   ok(!isHoldPhrase(authoredByMason("build me the invoices page")), "normal build still not a hold");
+
+  // 6. #504b (2026-09-21): a peer's UNFINISHED markdown must not reach past the
+  //    peer's own closing tag and eat the halt Mason typed underneath it.
+  //    Each case below was verified RED against the pre-fix order (fences before
+  //    envelopes) and GREEN after it; reverting authoredByMason() to
+  //    stripFencedCode-first turns the first three red again.
+  const FENCE = "```";
+  ok(isHoldPhrase(authoredByMason(
+    '<cross-session-message from="terra">look at this snippet\n' +
+    `${FENCE}\nconst x = 1;\n</cross-session-message>\nstop, hold on everything`)),
+    "an unterminated fence inside a peer envelope does not swallow Mason's stop");
+  ok(isHoldPhrase(authoredByMason(
+    `<cross-session-message from="terra">\n${FENCE}\n</cross-session-message>\nstop now`)),
+    "a fence opened as the peer's last line does not swallow Mason's stop");
+  ok(isHoldPhrase(authoredByMason(
+    '<cross-session-message from="terra">see `const x = 1;</cross-session-message>\nstop now')),
+    "an unterminated inline-code span inside a peer envelope does not swallow Mason's stop");
+
+  // 7. Mason's halt typed BETWEEN two peer messages survives. This is the
+  //    regression that the first attempted #504b fix introduced (candidate-
+  //    boundary consensus): each closed envelope must be removed on its own, so
+  //    a later envelope's closing tag can never end an earlier one.
+  ok(isHoldPhrase(authoredByMason(
+    PEER_BLOCK + "\nstop now\n" +
+    '<cross-session-message from="luna">on it</cross-session-message>')),
+    "Mason's stop between two peer envelopes still latches");
+  ok(!hasAuthoredText(
+    PEER_BLOCK + "\n" + '<cross-session-message from="luna">on it</cross-session-message>'),
+    "two back-to-back peer envelopes leave no Mason-authored text");
+
+  // 8. The case the ORIGINAL fences-first order existed for is still covered:
+  //    Mason quoting a bare envelope OPEN tag inside a fence must not trip the
+  //    unterminated-envelope rule and erase the rest of his own message.
+  ok(isHoldPhrase(authoredByMason(
+    `here is the envelope they send:\n\n${FENCE}\n<cross-session-message from="x">\n${FENCE}\n\nstop using that`)),
+    "a fenced bare open tag does not swallow Mason's later stop");
+
+  // 9. #504b follow-up (2026-09-24): a fence left dangling AFTER closed
+  //    envelopes are removed must not swallow Mason's stop. Both cases lost the
+  //    stop before stripFencedCode() gave unclosed fences' lines back; case (a)
+  //    was also a regression against the fences-first order.
+  //    (a) Mason's fenced open tag pairs with a real peer's close tag, leaving
+  //        his fence's opener dangling.
+  ok(isHoldPhrase(authoredByMason(
+    `${FENCE}\n<cross-session-message from="x">\n${FENCE}\n` +
+    '<cross-session-message from="terra">ok</cross-session-message>\nstop now')),
+    "a fenced open tag followed by a real peer message does not swallow Mason's stop");
+  //    (b) A peer writes a fake closing tag inside a fence, leaving the rest
+  //        of its fence dangling after its envelope is cut short.
+  ok(isHoldPhrase(authoredByMason(
+    `<cross-session-message from="terra">${FENCE}\n</cross-session-message>\n${FENCE}\n` +
+    "more peer</cross-session-message>\nstop now")),
+    "a peer's fake close tag plus a fence does not swallow Mason's stop");
+  //    An unterminated fence Mason pastes is read as his (fail-safe), while a
+  //    CLOSED fence is still stripped exactly as before.
+  ok(isHoldPhrase(authoredByMason(`look at this\n${FENCE}\nstop now`)),
+    "an unterminated fence gives its lines back rather than dropping them");
+  ok(!isHoldPhrase(authoredByMason(`${FENCE}\nstop now\n${FENCE}\nthoughts?`)),
+    "a closed fence containing stop still does not latch");
+  ok(!isHoldPhrase(authoredByMason(`${FENCE}\na\n~~~\nstop x\n~~~`)),
+    "a closed inner fence inside an unclosed outer one is still stripped");
+
+  // 10. #504b review (2026-09-24): an envelope tag Mason QUOTES in code must not
+  //     pair with a real peer's closing tag and cut out the stop he typed
+  //     between them. Envelopes-first alone lost every one of these (main kept
+  //     them); authoredByMason() now keeps what either strip order keeps.
+  const PEER_OK = '<cross-session-message from="terra">ok</cross-session-message>';
+  ok(isHoldPhrase(authoredByMason(
+    "the `<cross-session-message>` tag is odd. stop now\n" + PEER_OK)),
+    "an inline-quoted open tag, then stop, then a peer message still latches");
+  ok(isHoldPhrase(authoredByMason(
+    `${FENCE}\n<cross-session-message from="x">\n${FENCE}\nstop now\n` + PEER_OK)),
+    "a fenced open tag, then stop, then a peer message still latches");
+  ok(isHoldPhrase(authoredByMason(
+    `${FENCE}\n<cross-session-message>\n${FENCE}\nstop now\n${FENCE}\n</cross-session-message>\n${FENCE}`)),
+    "stop between a fenced open tag and a fenced close tag still latches");
+  ok(isHoldPhrase(authoredByMason(
+    "`<task-notification id=1>` stop now <task-notification id=2>x</task-notification>")),
+    "an inline-quoted machine tag, then stop, then a machine block still latches");
+  //     The union must not let peer-only prompts latch or clear a hold.
+  ok(!hasAuthoredText(`<cross-session-message from="terra">look\n${FENCE}\nconst x = 1;\n</cross-session-message>`),
+    "a peer message with an unfinished fence leaves no Mason-authored text");
+  ok(!hasAuthoredText('<cross-session-message from="terra">see `<cross-session-message>` ok</cross-session-message>'),
+    "a peer message quoting its own tag inline leaves no Mason-authored text");
 }
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────
@@ -372,6 +456,10 @@ rmSync(hbProj, { recursive: true, force: true });
     ["a message naming the hook file",
       "take a look at .claude/hooks/stop-wrap.mjs — that is the one, right?", false],
     ["Mason's pause beside a peer block", "pause here.\n" + PEER_BLOCK, true],
+    // 2026-09-24: a stop only ONE strip order keeps must still latch end to
+    // end — the hook's "not Mason's turn" gate runs after the latch.
+    ["Mason's stop after an inline-quoted open tag, before a peer block",
+      "the `<cross-session-message>` tag is odd. stop now\n" + PEER_BLOCK, true],
   ];
   for (const [label, prompt, shouldLatch] of XS) {
     const dir = mkdtempSync(path.join(tmpdir(), "crx-xsession-"));
@@ -389,6 +477,14 @@ rmSync(hbProj, { recursive: true, force: true });
   ok(existsSync(holdOf(keepDir)), "setup: Mason's stop latched the hold");
   runPrompt(keepDir, PEER_BLOCK);
   ok(existsSync(holdOf(keepDir)), "a peer message does NOT clear Mason's hold");
+  // 2026-09-24 review: a peer that merely QUOTES its own closing tag leaves
+  // text in one strip order only; that must not count as Mason speaking.
+  const PO = '<cross-session-message from="terra">';
+  const PC = "</cross-session-message>";
+  runPrompt(keepDir, PO + "the `" + PC + "` tag ends my turn, all good" + PC);
+  ok(existsSync(holdOf(keepDir)), "a peer quoting its close tag inline does NOT clear Mason's hold");
+  runPrompt(keepDir, PO + "envelope looks like:\n```\n" + PC + "\n```\nall good" + PC);
+  ok(existsSync(holdOf(keepDir)), "a peer quoting its close tag in a fence does NOT clear Mason's hold");
   runPrompt(keepDir, "ok go ahead and continue");
   ok(!existsSync(holdOf(keepDir)), "Mason's own next message still clears it");
   rmSync(keepDir, { recursive: true, force: true });
@@ -400,6 +496,14 @@ rmSync(hbProj, { recursive: true, force: true });
 ok(/authoredByMason\(payload\?\.prompt\)/.test(
   readFileSync(path.join(__dirname, "hold-latch-prompt.mjs"), "utf8")),
   "hold-latch-prompt matches on authoredByMason(prompt), not the raw prompt");
+// ...and gates CLEARING on hasAuthoredText (both strip orders agree), placed
+// after the latch so a halt only one order keeps is never dropped by the gate.
+{
+  const hookSrc = readFileSync(path.join(__dirname, "hold-latch-prompt.mjs"), "utf8");
+  const gateAt = hookSrc.indexOf("if (!hasAuthoredText(payload?.prompt)) emit();");
+  ok(gateAt > hookSrc.indexOf("if (isHoldPhrase(prompt))") && gateAt < hookSrc.indexOf("if (wasHeld())"),
+    "hold-latch-prompt gates clearing on hasAuthoredText, after the latch and before the clear");
+}
 
 // ── and they still FIRE on the same phrasing typed by Mason ──────────────
 const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-reminder.mjs")], {
