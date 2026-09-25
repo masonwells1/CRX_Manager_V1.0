@@ -96,7 +96,7 @@ Inspect the diff. If it touches migrations, RPCs, RLS, money, inventory, invoice
 npm run db-sweeps
 ```
 
-`npm run db-sweeps` prints each predicate's SQL — run every block READ-ONLY via Supabase MCP `execute_sql` and compare `violation_key`s to `allowlist.json`. **A printed sweep is not a passed sweep:** in an autonomous/scheduled run the exit code is 0 even when it only printed instructions, so an exit-code check would misread it as passed — an autonomous/scheduled gauntlet MUST run `npm run db-sweeps -- --strict` (or set `DB_SWEEPS_REQUIRE_LIVE=1`) so the run fails unless the sweeps actually executed against live.
+`npm run db-sweeps` prints each predicate's SQL — run every block READ-ONLY via Supabase MCP `execute_sql` in this session. Capture each actual `sweep_result` packet (`predicate`, `rows`, `function_contracts`) as a private local JSON array, then run `node scripts/db-invariant-sweeps/run-sweeps.mjs --adjudicate <capture.json>`. Do not compare violation keys alone: the same parameter and function/dependency contract matcher runs for MCP adjudication and linked execution. Missing, duplicate, unknown or drifting packets fail. **A printed sweep is not a passed sweep:** an autonomous/scheduled gauntlet MUST use fresh MCP execution plus successful complete adjudication, or linked `npm run db-sweeps -- --strict` (or `DB_SWEEPS_REQUIRE_LIVE=1`). Captured JSON alone is not proof of freshness, and the print-only exit code must never be treated as a live pass.
 
 For each touched RPC with a smoke spec, run:
 

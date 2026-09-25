@@ -30,6 +30,94 @@ import {
 
 const targetRoot = mkdtempSync(path.join(os.tmpdir(), "crx-sync-write-"));
 
+// Release instructions must use the executable parameter/contract matcher,
+// not bless actor-forgery exemptions by their violation keys alone.
+//
+// These assert SEMANTICS, not token presence. A bare `includes("--adjudicate")`
+// passes on "do NOT run --adjudicate" and on "--adjudicate is optional", so it
+// would not catch the reversal it exists to prevent. Each rule therefore pairs a
+// `require` pattern (the instruction must actually be given) with `forbid`
+// patterns (it must not be negated or downgraded to optional). The patterns are
+// deliberately focused rather than exact-prose, so ordinary rewording survives.
+const ADJUDICATION_CONTRACT = [
+  {
+    rule: "must invoke the adjudicating sweep command",
+    require: /run-sweeps\.mjs\s+--adjudicate\b/,
+    forbid: [
+      /(?:do not|do NOT|don't|never|skip|without)\b[^.\n]{0,80}run-sweeps\.mjs\s+--adjudicate/i,
+      /--adjudicate\b[^.\n]{0,40}\b(?:is\s+)?(?:optional|not required)\b/i,
+    ],
+  },
+  {
+    rule: "must capture the function/authorization dependency contracts",
+    require: /\bfunction_contracts\b|\bauthorization-dependency\b/,
+    forbid: [
+      /(?:function_contracts|authorization-dependency)[^.\n]{0,60}\b(?:optional|not required|best[- ]effort|if present|if available)\b/i,
+      // An ADDED contradiction leaves the required token in place, so `require` still matches:
+      // "Do not capture function_contracts" has to be forbidden in its own right. The window is
+      // tight and needs a capture verb, so the real prose's "Do not compare violation keys alone:
+      // … authorization-dependency contracts" does not trip it (CodeRabbit on #774).
+      /\b(?:do not|do NOT|don't|never|skip|omit|stop)\b[^.\n]{0,30}\b(?:captur\w*|collect\w*|includ\w*|read\w*|record\w*|emit\w*|request\w*)\b[^.\n]{0,30}\b(?:function_contracts|authorization-dependency)\b/i,
+    ],
+  },
+  {
+    rule: "must refuse key-only allowlisting",
+    // A positive prohibition, not merely the absence of a bad phrasing: flipping
+    // "Do not compare violation keys alone" into "Compare violation keys alone"
+    // deletes the negation and so fails `require`.
+    require: /\b(?:do not|do NOT|don't|never)\b[^.\n]{0,60}?\b(?:compare|subtract|allowlist|match)\b[^.\n]{0,60}?violation[ _]`?keys?`?[^.\n]{0,20}?\balone\b/i,
+    forbid: [
+      /compare (?:returned )?`violation_key`s (?:against|to)/,
+      // Same additive hole on the other rule: "You may allowlist by violation key alone" keeps the
+      // prohibition above intact, so permissive phrasing must be forbidden explicitly.
+      /\b(?:may|can|it is fine|is fine|is ok|is okay|acceptable|allowed|suffices|sufficient|enough)\b[^.\n]{0,60}?\b(?:allowlist\w*|subtract\w*|match\w*|compar\w*|exempt\w*)\b[^.\n]{0,60}?violation[ _]`?keys?`?[^.\n]{0,20}?\balone\b/i,
+    ],
+  },
+];
+
+function assertAdjudicationContract(source, label) {
+  for (const { rule, require: required, forbid } of ADJUDICATION_CONTRACT) {
+    assert.match(source, required, `${label} ${rule}`);
+    for (const pattern of forbid) {
+      assert.doesNotMatch(source, pattern, `${label} ${rule} (reversed by ${pattern})`);
+    }
+  }
+}
+
+const RELEASE_COMMANDS = ["ship", "codex-gauntlet", "preflight"];
+for (const command of RELEASE_COMMANDS) {
+  const source = readFileSync(new URL(`../.claude/commands/${command}.md`, import.meta.url), "utf8");
+  assertAdjudicationContract(source, command);
+}
+
+// Prove the helper actually rejects the reversals, rather than passing whatever
+// the current prose happens to say. Each mutation is applied to every real
+// command source; if a mutation is a no-op on some source the guard would look
+// green for the wrong reason, so an unchanged source is itself a failure.
+const SEMANTIC_REVERSALS = [
+  ["drops adjudication", (s) => s.replace(/run-sweeps\.mjs\s+--adjudicate/g, "run-sweeps.mjs")],
+  ["negates adjudication", (s) => s.replace(/(node scripts\/db-invariant-sweeps\/)run-sweeps\.mjs\s+--adjudicate/g, "do not run $1run-sweeps.mjs --adjudicate")],
+  ["makes adjudication optional", (s) => s.replace(/(run-sweeps\.mjs\s+--adjudicate)/g, "$1 is optional")],
+  ["drops dependency contracts", (s) => s.replace(/function_contracts/g, "rows").replace(/authorization-dependency/g, "reviewed")],
+  ["makes dependency contracts optional", (s) => s.replace(/(function_contracts|authorization-dependency)/g, "$1 optional")],
+  ["permits key-only allowlisting", (s) => s.replace(/\b(?:Do not|Do NOT)\b(\s+(?:compare|subtract))/g, "Always$1")],
+  // The six above all REMOVE or REVERSE the instruction. These two ADD a contradicting sentence and
+  // leave the original wording in place, so every `require` still matches — the case the forbid
+  // patterns had to grow for (CodeRabbit on #774).
+  ["adds a contradicting dependency-contract instruction", (s) => `${s}\n\nDo not capture function_contracts for this gate.\n`],
+  ["adds a contradicting key-only permission", (s) => `${s}\n\nYou may allowlist by violation key alone.\n`],
+];
+
+for (const command of RELEASE_COMMANDS) {
+  const source = readFileSync(new URL(`../.claude/commands/${command}.md`, import.meta.url), "utf8");
+  for (const [name, mutate] of SEMANTIC_REVERSALS) {
+    const mutated = mutate(source);
+    assert.notEqual(mutated, source, `mutation "${name}" did not change ${command}.md — the guard would pass vacuously`);
+    assert.throws(() => assertAdjudicationContract(mutated, command),
+      assert.AssertionError, `${command}.md mutated to "${name}" must be rejected`);
+  }
+}
+
 try {
   // The two entries writeExpected() subtracts from its count (README + manifest)
   // are irrelevant here; any Map of relative-path -> content exercises the loop.

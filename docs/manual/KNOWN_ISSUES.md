@@ -1,5 +1,100 @@
 # Known Issues — Consolidated
 
+**Last verified: 2026-09-14 against the live ledger — the verification recorded in the
+2026-09-14 header further down this file, which this branch's merge of `origin/main` brought
+in. The scoped filed-season/generic-save contract claims in the rest of THIS paragraph carry
+their own earlier 2026-09-13 verification and were not re-read on 2026-09-14. Other historical
+issues retain their own dated verification and are not re-certified.**
+The current ledger capture is maintained only in `docs/reference/migration-history.md`.
+Live generic save still has original body md5 `9a34478d405a1a3b8233cabcdfb39691`, and live
+preview remains `83f6600412ced085d0876a3c7339ff12`; the filed-season helpers are absent.
+The later local creation guard below is not live. The September 8 ledger header and older
+disk/PR statuses further down are historical, not current apply or delivery guidance.
+
+## 2026-09-12 follow-up — filed-season date-edit guard is not deployed
+
+PR #599 merged September 11 with invoice-date season stamping and preview parity. Its
+original migrations are already live and must not be reapplied. The later filed-season edit
+guard is not part of that merge: September 12 read-only live inspection confirms its helpers
+and invoice trigger are absent. A separate current-main candidate adds preview refusal and
+table-level protection against changing the filed season or crossing its date boundary.
+Fresh review also found and closed a restoration bypass in that candidate; the disposable
+proof observes restore-plus-date and restore-only rejection, valid corrected restoration,
+and targeted removal of the new check reproducing the bypass. This is local proof, not deployment.
+
+Fresh whole-branch review of local corrected commit `d93106e8e` then found a HIGH creation
+bypass through generic `save_invoice`, which the UPDATE-only trigger misses. Root reproduced
+it through the public authenticated RPC. Compatibility review rejected a universal INSERT
+guard because legitimate job/blend creators carry source season with today's invoice date.
+The earlier one-phase refusal in `20260914101200_refuse_generic_field_invoice_creation.sql`
+then failed the added COMMITTED-retry transition regression (Sol/high `f6cb05b369`, 18:15Z).
+It remains NOT APPLIED and is now repurposed as phase 1: preserve original generic creation,
+below-cost and key-only receipt semantics while installing a fail-fast shared barrier,
+transitional READ COMMITTED requirement and fresh V1 catalog fence. New phase 2,
+`20260914101300_finish_generic_field_invoice_cutover.sql`, requires phase 1 separately
+committed, no old open/prepared work and no still-valid generic receipt before installing
+NEW-field refusal. Refusal leaves existing legitimate retries working until natural expiry.
+Do not manufacture actor/payload bindings for legacy generic receipts or delete/backfill them.
+Both phases pin the original OID/defaults/owner/search path/ACL and leave source creators alone.
+Corrected full disposable transition/concurrency/mutation proof passed with
+`PREVIEW_SEASON_PROOF_PASS` and both registered business-chain `SMOKE_PASS_ROLLBACK`
+markers. Published corrected head `7a0ed406b1` subsequently passed exact-head Sol/high
+CLEAN and full GitHub implementation/SQL/Windows checks. Both original Codex cutover
+threads have published-head runtime/proof dispositions and are resolved. Current-head
+Codex P2 `3998769135` also requests an explicit LF rule for phase two; the metadata-only
+local correction is verified, but its next current-main exact-head proof/publication
+and actual CodeRabbit review remain pending. The edit guard and both cutover phases
+remain unapplied. September 13 read-only checks reconfirm original live function pins,
+absent guard helpers/trigger and no valid generic receipts or active mixed-season/date
+mismatch cases now. This is not a future apply guarantee. Neither the earlier
+`d93106e8e` nor `f6cb05b369` BLOCKERS is clearance for any later candidate.
+
+The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
+apply remain separate gates. The session closeout and still-open audit follow-ups are recorded
+in `docs/handoffs/2026-09-12-pr-comment-session-closeout.md`; historical audit counts do not
+constitute a current defect list or clearance of the remaining P2 inventory.
+
+**SCOPE OF THE TWO CUTOVER PHASES — read this before quoting them.** Phases 1 and 2 close
+`public.save_invoice(jsonb,jsonb,text)` and nothing else. Both pin, fence and replace that one
+function by name and OID. "Generic field-invoice creation is refused" is therefore true of
+`save_invoice` and **NOT true of the database as a whole**: the order-pipeline RPCs remain an open
+creation path, tracked as CRX-LIFE-001 immediately below. Neither the migration filename
+`20260914101200_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
+`finish_generic_field_invoice_cutover` should be read as a claim about any other entry point.
+
+## OPEN 2026-09-20 — CRX-LIFE-001: a sales rep can create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
+
+**Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
+`main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of
+the season-guard candidate on 2026-09-20 and is recorded here because that PR's cutover phases make
+a scoped claim that could otherwise be misread as covering it (see the scope note above).
+
+`create_invoice_from_order(uuid, uuid, text, text)` and `create_split_invoices_from_order(...)` both
+accept a caller-supplied `p_invoice_type text DEFAULT 'chemical_sale'` and insert it into `invoices`
+**unchanged**, with no allow-list and no rejection of `field_application`:
+
+- `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql:108` and `:122`
+- `supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql:157` and `:426`
+- `supabase/migrations/20260719044912_trust_only_post_revoke_split_provenance.sql:382`
+
+Both retain `GRANT EXECUTE` to `authenticated`, and their internal role checks admit **admins and
+sales reps** — ordinary application actors, not database owners. So an authenticated sales rep can
+pass `p_invoice_type => 'field_application'` and produce an order-backed field-application invoice
+with no field, grower-share, job, blend-ticket or season workflow behind it. That breaks the
+documented invariant that field-application invoices never pass through the order pipeline, and can
+corrupt AR, commissions, field reporting and the field-app lifecycle assumptions.
+
+`20260620210000_field_app_invoice_type_lock_trigger` does **not** cover this. It fires only on
+`UPDATE` across the `field_application` boundary, never on `INSERT`.
+
+**Exposure is not yet measured.** No live read has been taken of how many `field_application`
+invoices carry an `order_id`, so the blast radius is unknown; that read needs Mason's approval at
+the time. **Fix shape:** a new migration refusing `field_application` in both order RPCs, plus an
+INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
+reviewed change with its own container proof — not as an add-on to the season guards. Awaiting
+Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped season closure first
+with this gap documented rather than hold the September 30 season deadline for it.
+
 **Superseded 2026-09-06 header, kept for provenance — every boundary claim in this paragraph is
 superseded by the 2026-09-08 header that follows it.** That read confirmed the unprefixed-ledger-name
 trap: `20260904185900_refuse_null_job_field_acres` (PR #606, merged `719faac73`) applied live on
@@ -809,15 +904,19 @@ substitution cannot pass by matching the real year), and makes each tested refus
 `20260908130000` and below every other unapplied migration. That is the parked
 `20260914100100`..`20260914100900` cohort on `main`. It is also, on unmerged branches, #664's
 `20260911120000_bind_adjust_inventory_receipt_to_intent` and the field-app season files
-(`20260908190000`, `20260912165758`, `20260913040359`, `20260913152700`). The pending-migration guard
+(`20260914101000`, `20260914101100`, `20260914101200`, `20260914101300`). The pending-migration guard
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
 **That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
 #664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
-The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; of the
-field-app season files only `20260908190000` now sorts BELOW it and must be restamped, while
-`20260912165758`, `20260913040359` and `20260913152700` already sort above it. Read the boundary
-block in `docs/reference/migration-history.md` before ordering anything.**
+The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply. Of the
+field-app season files `20260908190000` sorted BELOW it and had to be restamped; **that was done on
+2026-09-20 — it became `20260911125000`** (and `20260913152700` became `20260911130000` the same day
+for a separate ordering defect). **On 2026-09-21 all four moved again, as one block, to
+`20260914101000`, `20260914101100`, `20260914101200`, `20260914101300`** — ascending stamp order is
+still their apply order — because Mason decided the `20260914100100`..`20260914100900` commission
+cohort goes live FIRST. **None of the four may be applied before all eight of that cohort.** Read the boundary block in
+`docs/reference/migration-history.md` before ordering anything.**
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,

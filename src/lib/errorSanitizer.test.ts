@@ -2,6 +2,57 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeError } from './errorSanitizer';
 
 describe('sanitizeError', () => {
+  it.each(['IN_PROGRESS', 'ISOLATION', 'STALE_CALL'])('explains exhausted %s cutover refusals without raw database tokens', (token) => {
+    expect(sanitizeError({ code: '40001', message: `GENERIC_FIELD_CUTOVER_${token}: diagnostic detail` }))
+      .toBe('No invoice was changed. An invoice update is finishing; wait a moment, then try Save again');
+    expect(sanitizeError(`GENERIC_FIELD_CUTOVER_${token}_UNKNOWN`))
+      .toBe(`GENERIC_FIELD_CUTOVER_${token}_UNKNOWN`);
+  });
+
+  // The two strings below are the real RAISE text from
+  // supabase/migrations/20260914101000_field_app_invoice_cross_season_edit_guard.sql (lines 265,
+  // 288) with the format placeholders filled, so this proves the production message is handled
+  // rather than a string invented for the test. Before this mapping existed, the generic invoice
+  // editor fell through to `return message` and showed the raw token. (CodeRabbit on PR #786.)
+  it('explains a filed-season date refusal and keeps the allowed range', () => {
+    const detail = 'this invoice is filed in season 2026, so its transaction date must stay '
+      + 'between 2025-10-01 and 2026-09-30';
+    const shown = sanitizeError(`INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: ${detail}`);
+    expect(shown).not.toContain('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED');
+    expect(shown).toContain('filed season');
+    // The date range is the operator's actual answer, so it must survive sanitizing.
+    expect(shown).toContain('2025-10-01');
+    expect(shown).toContain('2026-09-30');
+  });
+
+  it('explains a bare filed-season date refusal with no detail after the token', () => {
+    const shown = sanitizeError('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED');
+    expect(shown).not.toContain('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED');
+    expect(shown).toContain('Keep the original transaction date');
+  });
+
+  it('explains an immutable filed season without echoing the invoice id', () => {
+    const id = '3f0c1d2e-4a5b-6c7d-8e9f-0a1b2c3d4e5f';
+    const shown = sanitizeError(
+      `INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED: field-application invoice ${id} is permanently filed in season 2026`
+    );
+    expect(shown).not.toContain('INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED');
+    expect(shown).not.toContain(id);
+    expect(shown).toBe('No invoice was changed. The filed season of a field-application invoice cannot be changed');
+  });
+
+  it('does not swallow a longer token that merely starts the same way', () => {
+    expect(sanitizeError('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED_SOMETHING_ELSE'))
+      .toBe('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED_SOMETHING_ELSE');
+    expect(sanitizeError('INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED_SOMETHING_ELSE'))
+      .toBe('INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED_SOMETHING_ELSE');
+  });
+
+  it('directs generic field creation to its supported creators', () => {
+    expect(sanitizeError('FIELD_APPLICATION_VIA_SAVE_INVOICE_NOT_ALLOWED: use dedicated creators'))
+      .toBe('Create this field invoice from its job, blend ticket, or the Field Application screen');
+  });
+
   it('maps return-credit and customer-scope tokens to operator guidance', () => {
     expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
     expect(sanitizeError('RETURN_CREDIT_UNIT_MISMATCH')).toContain('original sale');

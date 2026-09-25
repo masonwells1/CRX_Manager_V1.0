@@ -276,7 +276,6 @@
       "covers": [
         "save_invoice",
         "post_invoice",
-        "post_invoice_group",
         "save_purchase_order",
         "purchase_order_import_intents"
       ],
@@ -476,7 +475,7 @@
     "save_job": {
       "chain": "smoke-save-job-parity.sql",
       "container_prover": "prove-save-job-chem-unit-invariant.mjs",
-      "description": "Field-app parity #1 (migration 20260624120000): the extended save_job round-trips scheduling dates (call/proposed/schedule/expires + time_proposed), consultant, three memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, and chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); remaining_acres GENERATED = total - applied; field shares not totalling 100 raise SHARE_NOT_100; idempotent replay returns the same job_id with no second job; a forged p_performed_by raises ACTOR_MISMATCH. Steps 3b and 7 additionally cover migration 20260820120000 (chemical-unit invariant + derived money totals), which was APPLIED LIVE 2026-08-25 as ledger version 20260825142708. Those steps are FAIL-CLOSED, not gated: a save_job body without CHEM_UNIT_MISMATCH is a hard failure, because after the apply its absence is a regression rather than a pre-apply state. They assert the derived totals and that a pint-quantity-priced-per-gallon line and a per-cwt rate are both refused leaving no row behind. PREREQUISITE: this chain now requires BOTH 20260624120000 and 20260820120000; run it against a restored or staging database only after 20260820120000 is applied there, or it will fail by design. Chem A's quantity was corrected from 240 to 30 on 2026-08-23 -- it had been 240 pints recorded as 240 gallons, an 8x over-bill living in the parity fixture itself. NOTE: this spec is NOT container_only (the SQL chain above runs normally), and run-smoke.mjs only EXECUTES a container_prover on the container-only skip path -- it merely checks that the file exists. So prove-save-job-chem-unit-invariant.mjs is a MANUAL proof: --all and --area will not run it. Run it by hand after any change to migration 20260820120000 or its fixtures: node scripts/smoke/prove-save-job-chem-unit-invariant.mjs",
+      "description": "Field-app parity #1 (migration 20260624120000): the extended save_job round-trips scheduling dates (call/proposed/schedule/expires + time_proposed), consultant, three memo fields, per-field agronomy (planted_acres/crop/strip/pests), per-field customer shares, and chemical extras (diluent_rate/rei_hours/phi_days/warehouse/vendor); remaining_acres GENERATED = total - applied; field shares not totalling 100 raise SHARE_NOT_100; idempotent replay returns the same job_id with no second job; a forged p_performed_by raises ACTOR_MISMATCH. Steps 3b and 7 additionally cover migration 20260820120000 (chemical-unit invariant + derived money totals), which was APPLIED LIVE 2026-08-25 as ledger version 20260825142708. Those steps are FAIL-CLOSED, not gated: a save_job body without CHEM_UNIT_MISMATCH is a hard failure, because after the apply its absence is a regression rather than a pre-apply state. They assert the derived totals and that a pint-quantity-priced-per-gallon line and a per-cwt rate are both refused leaving no row behind. PREREQUISITE: this chain now requires BOTH 20260624120000 and 20260820120000; run it against a restored or staging database only after 20260820120000 is applied there, or it will fail by design. Chem A's quantity was corrected from 240 to 30 on 2026-08-23 -- it had been 240 pints recorded as 240 gallons, an 8x over-bill living in the parity fixture itself. NOTE: this spec is NOT container_only (the SQL chain above runs normally), and run-smoke.mjs NEVER executes a container_prover -- on the container-only skip path it only prints the prover name, and at startup it merely checks that the file exists. So prove-save-job-chem-unit-invariant.mjs is a MANUAL proof: --all and --area will not run it. Run it by hand after any change to migration 20260820120000 or its fixtures: node scripts/smoke/prove-save-job-chem-unit-invariant.mjs",
       "covers": [
         "save_job"
       ],
@@ -788,6 +787,8 @@
     },
     "save_field_app_invoice": {
       "chain": "smoke-field-app-split-penny-exact.sql",
+      "container_only": true,
+      "container_prover": "prove-preview-field-app-season.mjs",
       "description": "Field-app parity and save/post serialization: a multi-customer field auto-splits into ONE invoice PER billing customer sharing an invoice_group_id; the split is PENNY-EXACT on an INDIVISIBLE total (price 1501c, rate 0.01, 1/3-2/3 split -> A=500c + B=1001c = 1501c odd); invoice_shares and acres tie exactly; an idempotent retry creates no duplicate; save/group-post serialize on the immutable group ID before ordered row locking; and a save after real group posting is rejected before invoice lines can change.",
       "covers": [
         "save_field_app_invoice",
@@ -800,7 +801,9 @@
     },
     "save_invoice": {
       "chain": "smoke-save-invoice-field-app.sql",
-      "description": "save_invoice field-application aware (#3 edit-path, REQUIRES 20260619160000): editing a field_application invoice PRESERVES the is_application_fee machine-fee line + re-balances the per-grower invoice_shares to the new total; a chemical_sale invoice's shares are NOT touched (field-only guard). Pre-apply the chain FAILS (live save_invoice drops the fee flag + never touches shares).",
+      "container_only": true,
+      "container_prover": "prove-preview-field-app-season.mjs",
+      "description": "save_invoice field-application aware (#3 edit-path, REQUIRES 20260619160000): editing a field_application invoice PRESERVES the is_application_fee machine-fee line + re-balances per-grower invoice_shares; chemical-sale shares are unchanged. The companion CONTAINER-ONLY prove-preview-field-app-season.mjs executes this registered chain against the current-live-pinned public entry/routing/writer before and after the pending creation guard. Its additional cutover proof COMMITs a real generic field invoice, preserves exact retry through phase 1 and refused phase 2, tests active/NULL/exact-boundary receipts, bundled and released-savepoint refusal, busy/shared/exclusive/open/prepared transactions, the SAME persistent SQL PREPARE session across both separately committed phases, stale-V1 null-key refusal, receipt-gate removal, simulated fixture expiry and final original/changed/alternate-actor field refusal. No production DB URL is read by the companion prover; do not run these committed/concurrent cases against live. Historical original edit-chain preapply failed before 20260619160000, not against today's live writer.",
       "covers": [
         "save_invoice"
       ],

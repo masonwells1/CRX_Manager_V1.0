@@ -5,7 +5,61 @@
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 >
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
->
+
+**Local generic-creation follow-up, September 12–13 (NOT APPLIED; no live-count change):**
+Both phases retain the existing `save_invoice(jsonb,jsonb,text)` public RPC contract.
+Phase 1, `20260914101200_refuse_generic_field_invoice_creation.sql`, installs the
+advisory cutover barrier but deliberately continues to allow generic
+`field_application` creation and committed receipt retries. The bypass is NOT closed
+after phase 1. Phase 2, `20260914101300_finish_generic_field_invoice_cutover.sql`,
+must commit in a separate transaction and refuses installation while an unexpired
+`save_invoice` receipt could still replay a `field_application` save. It resolves each
+receipt through `result->>'invoice_id'`: a receipt that resolves to a live
+`field_application` invoice blocks, and so does one whose `invoice_id` is absent,
+malformed or no longer resolvable, because an unidentifiable receipt could be a field
+save. A receipt that resolves to a live invoice of another type does NOT block — the
+cutover does not change those paths, and blocking on them required a 24-hour freeze on
+all invoice saving (receipts live 24h), which left phase 2 effectively unappliable.
+Do not wait for unrelated receipts to expire before applying phase 2. Only after phase 2 commits does the public
+RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
+remain the supported creation paths. Other generic field edits, other types and
+below-cost/idempotency delegation remain unchanged, with two exceptions that apply to
+every writer, generic or not: a date or `invoice_type` change on an invoice that is, or
+becomes, a field-application invoice must pass the filed-season date validation (an
+unchanged stored date is not an edit), and a change to the filed `season` itself is
+refused. A universal INSERT draft was rejected.
+
+Phase 2 also REQUIRES total database transaction quiescence: no other open
+transaction (`pg_stat_activity.xact_start IS NOT NULL`) and no prepared transaction,
+including background workers, autovacuum, and scheduled jobs. This is a hard
+apply-time prerequisite, not merely recommended quiet customer traffic. A refused
+phase 2 rolls back completely, leaving phase 1 and legitimate receipt retries in
+place. In a later separately authorized rollout, wait for natural receipt expiry
+and a genuinely quiet window, rerun the live preconditions, then retry through the
+full governed review/apply gate. Never delete receipts, terminate background work,
+disable jobs, or force the apply to get past a refusal.
+
+The phase-one wrapper has three explicit `40001` refusals that roll back without
+changing an invoice. `InvoiceDetail` retries only the RPC request, retaining its
+original idempotency key and frozen invoice/items/approval reason:
+`GENERIC_FIELD_CUTOVER_IN_PROGRESS` waits briefly before a fresh request;
+`GENERIC_FIELD_CUTOVER_ISOLATION` starts a new request/transaction rather than
+reusing the failed transaction (explicit SQL callers must choose READ COMMITTED);
+`GENERIC_FIELD_CUTOVER_STALE_CALL` starts a fresh request so the committed catalog
+is observed. There are at most three requests. An exhausted refusal returns to
+the normal error handler with the key retained for a later identical retry.
+Other SQL errors and uncertain transport failures are never automatically retried.
+`runCriticalAction` remains reporting/loading-state handling, not mutation replay.
+
+**Unchanged source dates, September 13 (LOCAL; NOT APPLIED):**
+`20260914101100_preserve_unchanged_source_invoice_dates.sql` follows the existing
+guard and preserves each invoice member's own unchanged stored date, including
+prior-season job/blend invoices created with today's date. Preview still prices
+each member from its own filed season. Unchanged-date restoration does not
+re-season the invoice. Date/type changes, including during restoration, still
+validate the pending NEW row; every filed-season change remains refused. No
+public signature, type, grant, or pricing implementation changes.
+
 > **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
 >
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.

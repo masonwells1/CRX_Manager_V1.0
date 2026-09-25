@@ -1,5 +1,79 @@
 # CRX Manager — Current State
 
+**Last verified: 2026-09-14 for the scoped invoice/job RPC contracts below; this is not a
+re-certification of every historical entry on this page.**
+**The migration ordering boundary is NEWER than that verification and has moved twice since.**
+**Number a new candidate from the boundary block at the top of `docs/reference/migration-history.md`, which is authoritative and moves as the cohort applies** — as of its 2026-09-22 addendum the effective high-water is `20260914100600`. Superseded values, kept only so an older note is recognisable: `20260911120000_bind_adjust_inventory_receipt_to_intent` (applied live 2026-09-20 under ledger version `20260920052149`, 1004 ledger rows, and named as "current" by an earlier revision of this paragraph), and before it
+`20260908130000` (applied 2026-09-15, ledger version `20260915033227`, 1002 rows). Two migrations
+applied on the morning of 2026-09-20: `20260908140000` under `20260920051333`, then
+`20260911120000` under `20260920052149`. **Do not reapply `20260908140000`.**
+
+**All four of this branch's guard migrations now sort above that boundary**, and their ascending
+stamp order is also their apply order: `20260914101000` → `20260914101100` → `20260914101200` →
+`20260914101300`. Two were restamped on 2026-09-20 —
+`20260908190000_field_app_invoice_cross_season_edit_guard` → `20260911125000`, because it sorted
+below the new high-water, and `20260913152700_preserve_unchanged_source_invoice_dates` →
+`20260911130000`, because at its old stamp it sorted after both cutover phases while its own header
+required it to run right after the season guard. **On 2026-09-21 all four moved again, as one
+block and in the same internal order, to `20260914101000`..`20260914101300`**: Mason decided that
+the eight parked `20260914100100`..`20260914100900` commission migrations go live FIRST, and at
+the old stamps all four sorted below that cohort. **Reverse hazard: none of the four may be applied
+live before all eight commission migrations are**, or the whole cohort is stranded; the pending-set
+guard reads only `origin/main`, so it cannot catch this while this PR is unmerged. Reasons are
+recorded in rows 931-934 of `docs/reference/migration-history.md`. This branch also
+carries main's registry rebuild (PR #722, `--from-introspection`, `generated_at 2026-09-17`,
+`migrations_high_water 20260915033227`), which supersedes the September 12 regeneration this
+section previously described; it records already-applied identities, not any of the four pending
+guard migrations as applied, and it has NOT been refreshed since the September 20 apply.
+
+Live `save_invoice(jsonb,jsonb,text)` remains the original wrapper at body md5
+`9a34478d405a1a3b8233cabcdfb39691`; `preview_field_app_invoice_split` remains at
+`83f6600412ced085d0876a3c7339ff12`. The filed-season helpers are absent. Live `save_job`
+remains the null-acreage refusal body `8acf34542105a90212ddb0a5e7c5d272`.
+The filed-season edit guard, phase-one `20260914101200_refuse_generic_field_invoice_creation.sql`,
+phase-two `20260914101300_finish_generic_field_invoice_cutover.sql`, and unchanged-source-date
+correction `20260914101100_preserve_unchanged_source_invoice_dates.sql` all remain
+**LOCAL CANDIDATES — NOT APPLIED**. Public-save creation/refusal, retries, existing
+edits, prior-season job/blend creation, replay drift and a byte-identical original-wrapper
+mutation passed in disposable PostgreSQL. This is local behavior proof, not live deployment.
+Original #592 and #599 are merged; their distinct later follow-ups are not thereby cleared.
+See the September 12 session closeout for current review gates and remaining obligations.
+
+September 14 read-only preflight at 12:34:52 UTC confirmed `postgres` has effective
+`pg_read_all_stats` membership despite not being superuser. Zero other open database
+transactions and zero prepared transactions were observed. The phase-two full quiet
+barrier is therefore feasible in this snapshot and remains mandatory at actual apply;
+this observation is not apply authorization or a guarantee of the next quiet window.
+All 29 invariant queries executed read-only in this session: 49 unchanged exact-contract
+allowlisted rows, zero new violations, and successful canonical captured-packet
+adjudication. No generic retry receipts were discarded or business data changed.
+
+Local current-main integration `372fe854ce83` received Sol/high CLEAN and Claude
+NEEDS-WORK. Claude's actionable workflow, history-binding and invoice-screen findings
+have local corrections with focused rendered regressions; fresh corrected-commit full
+checks and both separate reviews remain required before publication. No corrected
+candidate is merge-cleared by the old reviews. See the September 14 reconciliation
+changelog for each disposition and the point-in-time feasibility evidence.
+
+**Closeout supersession:** the handoff's older published #652 head `15742bdabd74`
+was superseded by corrected published head `7a0ed406b1`, as recorded in
+`KNOWN_ISSUES.md`. Preserve its dated proof/review history, but use the scoped
+September 13 status below instead of treating that older handoff as current.
+Fresh replacement #662 head `5818d67aee` received CodeRabbit changes requested
+on September 13; its five findings are being adjudicated/corrected before a new
+frozen candidate receives fresh exact-head proof, CI, and actual CodeRabbit review.
+No pending guard is applied and no corrected candidate is merge-cleared by that history.
+
+Published #652 head `7a0ed406b1` has executed retry-safe two-phase proof, exact-head
+Sol/high CLEAN and green implementation CI. Its two original Codex cutover findings
+have exact-head dispositions and resolved threads. A new-head Codex P2 about phase-two
+LF checkout has a local metadata-only correction; its next exact-head proof/publication
+and actual CodeRabbit review remain pending. September 13 live inspection found no
+valid generic save receipts, active mixed-season groups or active field date/season
+mismatches now; these are point-in-time pre-apply checks, not a future apply guarantee.
+
+## Historical captures — superseded by the scoped September 14 header above
+
 **Superseded 2026-09-06 header, kept for provenance — every boundary and counter claim in the next
 two paragraphs is superseded by the 2026-09-08 capture that follows them; do not number a migration
 off it.** It was last verified 2026-09-06 for the migration ledger (read-only ledger read against project
