@@ -29,6 +29,10 @@ try {
   writeRecords(path.join(project, "main.jsonl"), [
     user("Review my usage."),
     user([{ type: "text", text: "Keep the report concise." }]),
+    // A subagent's hand-back is not a prompt Mason typed (2026-09-25): before
+    // the fix it fell back to the raw text and counted as a third human prompt.
+    user("Another Claude session sent a message:\n<\\~agent-message from=\"a1\">\n" +
+      "[Subagent hand-back] report\n  all done\n<\\~/agent-message>"),
     assistant("main-response"),
   ]);
   writeRecords(path.join(subagents, "agent-fixture.jsonl"), [

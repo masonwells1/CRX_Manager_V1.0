@@ -114,7 +114,10 @@ const isEnvelope = (text) => isMachineGenerated(text) || CI_MONITOR_ENVELOPE_RE.
 // quoted lines) and keeps what he wrote around them; a record whose authored
 // remainder is empty is not counted, and the title comes from that remainder so a
 // peer block never becomes the session title under --titles (Codex App, PR #613).
-const PEER_ENVELOPE_RE = /<cross-session-message\b/i;
+// A subagent's hand-back (2026-09-25) is stripped the same way. The harness puts
+// its "Another Claude session sent a message:" line in front of every peer
+// envelope, so that line — not a tag Mason might type — is what marks one.
+const PEER_ENVELOPE_RE = /<cross-session-message\b|^[ \t]*Another Claude session sent a message:/im;
 const masonWords = (text) => {
   if (isEnvelope(text)) return "";
   const authored = authoredByMason(text).replace(/\s+/g, " ").trim();
