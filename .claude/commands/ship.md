@@ -84,7 +84,7 @@ For every **confirmed** BLOCKER or HIGH finding (the workflows already adversari
 2. Re-run Step 2 (verify) and re-dispatch the reviewers whose scope you touched (Step 3).
 3. Repeat until: reviewers return **clean** (or BLOCKER/HIGH all fixed) AND build + tests are green.
 
-MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. **When to stop looping:** follow the stop rule in `AGENTS.md` › Operating Contract. Keep going while each round closes findings; if the SAME BLOCKER/HIGH survives two consecutive rounds, STOP and hand it to Mason with both positions — do not keep thrashing or burn rounds on a finding you can't resolve.
+MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. **Hard loop cap: max 3 fix→re-review rounds** — a ceiling under the stop rule in `AGENTS.md` › Operating Contract. If the SAME finding survives two rounds in a row, or you reach round 3 with anything still open, STOP and hand it to Mason with both positions — do not keep thrashing or burn rounds on a finding you can't resolve.
 
 ## Step 5 — If a migration is involved: prepare the live-apply gate
 

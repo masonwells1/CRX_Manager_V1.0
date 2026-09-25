@@ -17,7 +17,7 @@ Mason's standing tier decision (2026-09-20, carried to GPT-6 on 2026-09-25): Lun
 | Iterating code review (advisory, every kind of work) | `gpt-5.6-luna` | `gpt-6-luna` | `xhigh` |
 | Early escalation of one review round for genuinely complex work (say why) | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
 | Final exact-SHA ship gate for risky work (the only proof the push, merge, and migration guards accept) | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
-| Plan, spec, or architecture review; a problem two review rounds could not settle | `gpt-6-astra` | `gpt-6-astra` | `high`; `max` only for a foundation-wide or money-critical plan |
+| Plan, spec, or architecture review; a problem two review rounds could not settle | none (no script runs Astra yet; it has been run by hand, e.g. `docs/plans/2026-09-11-open-pr-backlog-plan.md`) | `gpt-6-astra` | `high`; `max` only for a foundation-wide or money-critical plan |
 | Builder for a standard unit (`scripts/codex-build.mjs` default) | `gpt-5.6-terra` | `gpt-6-sol` | `medium` (the script defaults to `xhigh` until the switch) |
 | Builder for a money, database, or complex unit | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
 | Mechanical sweeps and read-only subagent scans | `gpt-5.6-luna` | `gpt-6-luna` | `medium` |
@@ -41,7 +41,7 @@ OpenAI's GPT-6 guidance (September 2026) matches this repository's design; keep 
 
 The proof gates hard-require `gpt-5.6-sol` at `high` in three separate places, so a `gpt-6-sol` proof is rejected today. Changing that is a protected change to a gate Mason decided on. It needs his approval and must run on a machine with the Codex CLI, because the new model IDs have to be smoke-tested and the change itself needs a Sol proof. A cloud session without `codex` cannot do it.
 
-1. Update the Codex CLI, then confirm each model answers: `codex exec -m gpt-6-sol -c model_reasoning_effort="high" "Reply OK"`, and the same for `gpt-6-luna` at `xhigh`.
+1. Update the Codex CLI, then confirm each model answers: `codex exec -m gpt-6-sol -c model_reasoning_effort="high" "Reply OK"`, and the same for `gpt-6-luna` at `xhigh` and `gpt-6-astra` at `high`.
 2. In one PR, define the gate model once and import it everywhere. `scripts/write-codex-push-proof.mjs` already exports `CODEX_REVIEW_MODEL` / `CODEX_REVIEW_EFFORT`. Make `proofValid` in `.claude/hooks/codex-push-lib.mjs` and `REQUIRED_CODEX_MODEL` / `REQUIRED_CODEX_EFFORT` in `.claude/hooks/migration-apply-lib.mjs` use that one value instead of their own literals. Then set it to `gpt-6-sol`.
 3. In the same PR, move the advisory and builder pins: the Luna literal in `scripts/overnight-codex-gate.mjs`, the builder default in `scripts/codex-build.mjs`, the hunter model in `scripts/codex-hunt.mjs`, and the runnable commands in `.claude/skills/codex-review/SKILL.md`. Update this table, the denial text in `.codex/hooks/production-action-guard.mjs`, and `docs/reference/agent-guardrails.md`. Then run `node scripts/sync-agent-workflows.mjs --write`.
 4. Update the pinned tests, and add negative tests that reject `gpt-5.6-sol` and `gpt-6-luna` in both the push proof and the migration-apply proof, so the cheap tier still cannot satisfy the gate.

@@ -22,15 +22,13 @@ Read first:
 
 ## Mode Selection
 
-Ask Mason one concise question if the mode is unclear:
+If the mode is unclear, default to **per-change** and say so to Mason in one line; do not stop to ask.
 
-`Should I run this as a per-change review, a foundation audit, or both?`
-
-Default to **per-change** when there are current branch or working-tree changes. Use **foundation** only when Mason asks whether the app is broadly safe to build on or asks for whole-app workflow review.
+Use **per-change** when there are current branch or working-tree changes. Use **foundation** only when Mason asks whether the app is broadly safe to build on or asks for whole-app workflow review.
 
 ## Hard Safety Gates
 
-- Do not push. The gauntlet only reviews; landing a reviewed change follows `.claude/commands/ship.md`.
+- Do not push. The gauntlet never lands code itself; landing a reviewed change follows `.claude/commands/ship.md`.
 - Do not deploy.
 - Do not apply live migrations.
 - Do not delete data.

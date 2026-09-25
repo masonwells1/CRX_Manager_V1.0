@@ -70,7 +70,7 @@ emit([
   "",
   "IF this is a substantive coding job (a feature, page, RPC, migration, or a fix beyond a one-line tweak) OR a request to ship/push existing work, drive it through the /ship pipeline automatically (read .claude/commands/ship.md):",
   "  Step 0.5 size it + write a plain-English plan on real (multi-file / SQL / money / RLS) changes (Claude waits for Mason's OK; Codex posts the plan and proceeds — AGENTS.md › Operating Contract)",
-  "  -> implement -> Step 2.5 prove it actually RUNS (not just 'tests pass') -> scoped review fan-out + fix (until clean; stop rule in AGENTS.md) -> migration/Codex gates.",
+  "  -> implement -> Step 2.5 prove it actually RUNS (not just 'tests pass') -> scoped review fan-out + fix (hard cap 3 rounds; stop rule in AGENTS.md) -> migration/Codex gates.",
   "Tell Mason in ONE line you're running it through /ship; do NOT make him type the command.",
   "",
   PUSH_POLICY,

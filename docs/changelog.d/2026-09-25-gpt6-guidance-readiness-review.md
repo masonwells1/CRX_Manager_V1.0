@@ -15,8 +15,10 @@ of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointe
 
 **Changed (guidance):**
 
-- `AGENTS.md` — adds an instruction-priority order, one stop rule (workflow round caps defer to it),
-  done-by-task-type, a "search, never read whole" rule for the large logs and schema registry, a
+- `AGENTS.md` — adds an instruction-priority order (the CRX Hard Rules and every "never" rule sit
+  above everything, including Mason's current message, which sets scope and limits but never
+  loosens a rule or gate), one stop rule (a workflow's round cap stays a ceiling), done-by-task-type,
+  the landing order with the Sol proof before the push, a "search, never read whole" rule for the large logs and schema registry, a
   routing row for Codex model choice, and CodeRabbit on the protected path. The review-tier bullets
   now name the Luna and Sol roles and defer exact model IDs to one document. Still 84 lines and
   under the 12,000-byte budget; every validator-pinned sentence is kept.
@@ -47,10 +49,11 @@ of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointe
   approval; the dangerous-phrase warning no longer says `/ship` "auto-pushes to main"; the
   session-start text no longer tells Claude to re-read `AGENTS.md` and `CLAUDE.md`, which the
   `@` import already loads.
-- `.claude/settings.json` — the Vercel deny list now names the tools the Vercel connector actually
-  exposes: out-of-band `create_deployment`, `request_promote`, `request_rollback`, the two
-  protection-bypass tools, `buy_single_domain`, `buy_domains`, `buy_credits_endpoint`, and
-  `create_or_transfer_domain`. Under `defaultMode: dontAsk` these were already refused as unlisted
+- `.claude/settings.json` — the Vercel deny list now names the mutating tools the Vercel connector
+  exposed in this session: out-of-band deploy, promote, rollback, alias, and cancel; project
+  create, update, pause, and transfer; environment variables (secrets); domains and DNS records;
+  firewall and network; API keys, auth tokens, and SDK keys; edge-config writes; rolling releases;
+  and every domain and credit purchase. Under `defaultMode: dontAsk` these were already refused as unlisted
   tools. Listing them in `deny` makes that explicit and keeps it if the mode ever changes. No
   workflow uses them, because production deploys only through a PR merge, and a Vercel rollback
   stays one click in the Vercel dashboard. The old tool names are kept; they match nothing but are
@@ -64,11 +67,18 @@ gate Mason decided on. It needs the Codex CLI to smoke-test the new IDs and to m
 proof, and this cloud session has no Codex CLI. The checklist is in
 `docs/reference/codex-model-tuning.md`.
 
-**Proof observed (cloud session):** `npm run test:agent-workflows` passed; all 53 `*.test.mjs`
-files under `.claude/hooks/`, `.codex/hooks/`, and `scripts/` passed; `scripts/check-agent-guidance.mjs`
+**Independent review.** An adversarial Claude (Opus) reviewer read the whole diff and returned
+FIX-THEN-SHIP: 1 HIGH, 4 MED, 5 LOW, all confirmed and fixed in this change. The HIGH was that the
+first draft of the priority order let Mason's message outrank the Hard Rules. The MEDs were the
+unbounded stop rule, the landing order, two gauntlet contradictions, and missing Vercel denies.
+
+**Proof observed (cloud session):** `npm run test:agent-workflows` passed; all 53 top-level
+`*.test.mjs` files directly under `.claude/hooks/`, `.codex/hooks/`, and `scripts/` passed (the
+`scripts/smoke/` and `scripts/db-invariant-sweeps/` tests need live or database fixtures and were
+not run); `scripts/check-agent-guidance.mjs`
 passed; `node scripts/sync-agent-workflows.mjs --write` regenerated the 37 Codex adapters.
 
 **Not verified here:** no Codex (Luna) review ran, because the Codex CLI is not installed in the
-cloud container, and `npm run agent-health` fails only on that and on unset git hooks. It was not
+cloud container, and `npm run agent-health` fails only on the missing Codex CLI. It was not
 confirmed that the Claude Code `opus` alias resolves identically in `claude -p` on Mason's machine,
 though `--model` accepts aliases by design.

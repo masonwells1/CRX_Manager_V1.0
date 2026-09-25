@@ -208,7 +208,7 @@ emit([
   "- Use per-change mode for current branch, commit, staged, unstaged, or untracked work.",
   "- Use foundation audit mode only when Mason asks for a broad app/workflow safety review.",
   "- If the mode or scope is unclear, default to per-change mode and say so in one line.",
-  "- The gauntlet itself only reviews; landing a reviewed change follows .claude/commands/ship.md.",
+  "- The gauntlet never lands code itself; landing a reviewed change follows .claude/commands/ship.md.",
   "",
   PUSH_POLICY,
   "",

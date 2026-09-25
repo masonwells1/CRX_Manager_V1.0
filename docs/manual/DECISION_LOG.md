@@ -25,9 +25,11 @@ a GPT-6 ID the gates reject. The switch must run where the Codex CLI exists, kee
 cannot satisfy the gate" asymmetry (negative tests reject `gpt-6-luna` and `gpt-5.6-sol`), and does
 not accept old and new IDs together unless `gpt-5.6-sol` stops being served first.
 
-**What this forbids/implies.** `AGENTS.md` now sets the order to follow when sources disagree (hard
-gates, then Mason's current message, then `AGENTS.md`, then the selected workflow, then routed
-references, then history). It also holds the one stop rule that workflow round caps defer to. Hook
+**What this forbids/implies.** `AGENTS.md` now sets the order to follow when sources disagree: the
+Hard Rules and every "never", which no request overrides; then the approval gates; then Mason's
+current message, which sets scope and limits but never loosens either; then the rest of `AGENTS.md`,
+the selected workflow, routed references, and history. It also holds one stop rule, under which a
+workflow's round cap remains a ceiling. Hook
 reminders point at `AGENTS.md` for the hard-gate list rather than restating a shorter one. Claude
 agents and workflows pin model aliases (`opus`), not dated IDs.
 
