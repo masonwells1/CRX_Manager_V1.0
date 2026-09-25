@@ -12,9 +12,14 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-20 against the live ledger (read-only ledger query, which confirmed by name that the
-six-generator year fix `20260908140000` IS applied, and that the parked commission and
-next-invoice-number candidates below are still not; boundary figures are
+**Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
+`20260914100100` through `20260914100400` — including the next-invoice-number year fix — were applied
+live that day, that `20260914100500`, `100600`, `100800` and `100900` are still not, and that the
+customer-document candidate (then `20260914100450`) has never been applied; entries below that still call
+the first four "parked" predate that read. A 2026-09-22 UTC read-only ledger read confirmed by name that
+`20260914100500` and `100600` have since applied, so the customer-document candidate was restamped
+`20260914100700` and is still not applied. The 2026-09-20 read had confirmed by name that the
+six-generator year fix `20260908140000` IS applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
 count, or `max(version)`. The single source for all three is the live-ledger capture at the top of
@@ -370,6 +375,70 @@ The remaining fractional historical rows described below are still tracked data 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN 2026-09-21 (FIX WRITTEN AND PROVEN LOCALLY — NOT DEPLOYED) — a customer-document download link can outlive the document's soft delete
+
+**What is wrong on live.** The live Storage policies let the uploader, and any admin, read objects in
+the private `customer-documents` bucket. Whoever can read an object can also ask Storage for a
+signed download URL with any expiry they choose, and Storage never re-checks a signed URL against
+the database. So a link minted while a document was live keeps working after it is removed. The
+uploader's owner branch in `customer_documents_objects_rep_select` also lets them read the bytes
+directly after removal. Codex raised it as a P1 on PR #635; that PR's first fix only changed the
+page, which a rep can bypass.
+
+**Exposure today: none in practice.** Live held 0 customer documents and 0 bucket objects on
+2026-09-21, so no link exists that could survive the fix.
+
+**The fix (successor to PR #635).** Browsers lose every Storage policy on the bucket, and each
+document's `storage_path` must be exactly the shape the server issues
+(`20260914100700_customer_document_bytes_server_only.sql`, migration-history row 935). Bytes move only
+through the new `customer-document-files` Edge Function, which re-checks the document row on every
+download and refuses removed documents. The path-shape rule closes a second route the security review
+found: without it, a new document row naming a look-alike of a removed document's path (a `#`, `?` or
+`%` variant) could fetch the removed file. Proven against a real local Supabase stack by
+`scripts/smoke/prove-customer-document-bytes-server-only.mjs`: the leak reproduces before the fix
+(5/5) and every attack step fails after it (30/30). Luna round 3 (2026-09-21) tightened two
+postflight checks to exact matches (the path-matches-customer rule's definition, and the bucket's
+size and type limits). Its BLOCKER, that a storage policy with no condition grants everything, did
+not reproduce locally (on Postgres 17 such a policy let an authenticated user read, insert and
+delete nothing), but Sol raised it again, so the postflight now refuses any such policy as drift
+(none on live 2026-09-21; SELECT, INSERT and ALL variants each refused locally).
+
+**Accepted residuals.** An upload whose document row then fails to save leaves its file behind with
+no row; nothing can read it (only the function serves bytes, and only for live rows), so it is left
+in place rather than giving browsers a delete power. A download already in progress when a document
+is removed still completes. The function checks a file's declared type and size only as early
+refusals; the bucket's own limits enforce them.
+
+**Still owed, in this order, each with Mason's explicit approval:** deploy the Edge Function (done:
+v1 live 2026-09-22 UTC, Mason-approved); merge the PR (ships the page that calls it); apply the
+migration — promptly, because while it sits on `main` unapplied the pending-migration guard holds the
+waiting commission migrations (`20260914100800` onward) behind it. The migration applied first would break the Documents tab until
+the other two land. The migration refuses to apply if the bucket already holds any file, because a
+link minted under the old rules in that window could not be revoked; a refusal means a person decides.
+It locks the Storage objects table before that check, so no upload can land between the check and the
+policy drops (a Luna review finding; live `postgres` holds the rights the lock needs). Its final
+checks also refuse to finish unless the older rules this design relies on still hold: row security on
+the Storage objects table, a path that can never be reused (even after a soft delete), a path whose
+folder is the row's own customer, and the bucket's 20 MiB / four-type limits (all confirmed on live
+2026-09-21; each check was shown to stop the migration when its rule was broken locally).
+Before the apply, refresh the schema registry and applied-migration snapshot so the pending-migration
+guard sees the 2026-09-21 commission applies. After the apply, a live check should confirm the five
+browser policies are gone, the shape constraint exists, and the Documents tab uploads and downloads.
+
+**Owner decision flagged by review (not blocking):** removed documents are now unrecoverable in the
+app. Admins can no longer open a removed document either, and soft delete cannot be undone. The
+bytes stay in Storage, so recovery is possible only through an out-of-app service-role action.
+
+## OPEN 2026-09-21 — a sales rep cannot remove a customer document (admins can)
+
+Found while proving the fix above; separate from it and unchanged by it. `customer_documents_rep_select`
+hides soft-deleted rows (`deleted_at IS NULL`). PostgreSQL applies an UPDATE's SELECT policy to the
+**new** row as well as the old one, so a rep's soft delete — which makes the row invisible to them —
+is refused with `new row violates row-level security policy for table "customer_documents"`, with or
+without `RETURNING`. Reproduced on a local copy of the live policies; admins are unaffected. No live
+document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
+`SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
 
 ## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
 
