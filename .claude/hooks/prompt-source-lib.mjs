@@ -97,26 +97,71 @@ export function isMachineGenerated(prompt) {
 // "stop" / "pause" / "hold on" / scope-only wording still fires exactly as
 // before, including when it shares a message with a stripped block.
 //
-// Order matters: fences first (a fence may contain a bare envelope tag that
-// would otherwise swallow the rest), then inline code (`stop-wrap.mjs`), then
-// envelopes, then blockquotes.
+// Order matters, and the order below was corrected on 2026-09-21 (#504b).
+//
+// The original order ran fences FIRST, so that a fence containing a bare
+// envelope OPEN tag could not trip the unterminated-envelope rule below and
+// swallow the rest of the prompt. That protected a prompt Mason wrote, and
+// broke one he received: an unterminated ``` fence INSIDE a peer envelope ran
+// past the peer's own closing tag and consumed everything after it — including
+// the "stop" Mason typed below the peer's message. A real halt then matched
+// nothing. Fail-OPEN on the halt path, which is the wrong direction.
+//
+// So CLOSED envelopes come out first, whole: a peer's unfinished markdown
+// cannot reach past the closing tag that ends that peer's own turn. Fences run
+// next, on what is left, which still shields a quoted open tag from the
+// unterminated-envelope rule — the case the original order existed for. Then
+// inline code (`stop-wrap.mjs`), then any UNCLOSED envelope, then blockquotes.
+//
+// That order alone has its own hole (2026-09-24 review): an open tag Mason
+// quotes in code pairs with a real peer's closing tag further down, and his
+// "stop" between them is cut out. The original code-first order handles that
+// shape. authoredByMason() therefore runs BOTH orders and keeps what either
+// keeps — see the note above it.
+//
+// Residual, accepted deliberately: a peer that writes a fake closing tag inside
+// its own message ends its envelope early, so peer words after the fake tag are
+// read as Mason's and can latch a hold he did not ask for. That is the
+// fail-SAFE direction (a spurious pause costs a round-trip; a missed "stop"
+// does not stop), and it is how this file already behaved before #504b. It
+// stays fail-safe even when the peer follows its fake tag with an unterminated
+// fence, because stripFencedCode() gives an unclosed fence's lines back instead
+// of dropping the rest of the prompt.
 
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
 const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
 
-// ``` / ~~~ fenced blocks, line-based so an unterminated fence drops to the end.
+// ``` / ~~~ fenced blocks, line-based. Only a fence that CLOSES is removed.
+//
+// An unterminated fence keeps its lines (2026-09-24, #504b follow-up). It used
+// to drop everything to the end of the prompt, and a dangling fence can be left
+// over after stripClosedEnvelopes() by text Mason did not write — a peer's fake
+// closing tag followed by a fence, or a quoted open tag in Mason's own fence
+// pairing with a real peer's close. Either way it swallowed the "stop" Mason
+// typed below: fail-OPEN on the halt path. Keeping the lines is fail-SAFE —
+// at worst code or peer text is read as Mason's and latches a spurious hold.
 function stripFencedCode(text) {
   const kept = [];
   let openFence = null;
+  let pending = [];
   for (const line of text.split("\n")) {
     const m = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line);
     if (openFence === null) {
-      if (m) { openFence = m[1][0]; continue; }
+      if (m) { openFence = m[1][0]; pending = [line]; continue; }
       kept.push(line);
     } else if (m && m[1][0] === openFence) {
       openFence = null; // closing line is dropped with the block
+      pending = [];
+    } else {
+      pending.push(line);
     }
+  }
+  // Never closed: give the lines back rather than dropping them. The opener
+  // line comes back as-is; the rest is re-scanned so a CLOSED inner fence of
+  // the other marker (``` inside ~~~ or vice versa) is still removed.
+  if (openFence !== null) {
+    kept.push(pending[0], stripFencedCode(pending.slice(1).join("\n")));
   }
   return kept.join("\n");
 }
@@ -124,11 +169,22 @@ function stripFencedCode(text) {
 const INLINE_CODE_RE = /`+[^`\n]*`+/g;
 const BLOCKQUOTE_LINE_RE = /^[ \t]{0,3}>.*$/gm;
 
-function stripEnvelopes(text) {
+// Closed blocks anywhere in the prompt: an open tag through its matching close.
+// Non-greedy, so two envelopes in one prompt are two separate removals and what
+// Mason typed BETWEEN them survives.
+function stripClosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
-    // Closed blocks anywhere in the prompt.
     out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+  }
+  return out;
+}
+
+// What is left over once every closed envelope is gone: a truncated envelope
+// with no close, and any orphaned closing tag.
+function stripUnclosedEnvelopes(text) {
+  let out = text;
+  for (const tag of NON_AUTHORED_TAG_NAMES) {
     // A truncated/unterminated envelope: everything from the open tag onward.
     out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
     // Any orphaned closing tag left behind.
@@ -137,21 +193,56 @@ function stripEnvelopes(text) {
   return out;
 }
 
+// Envelopes first: a peer's unfinished markdown cannot reach past the closing
+// tag that ends the peer's own turn.
+function stripEnvelopesFirst(text) {
+  let out = stripClosedEnvelopes(text);
+  out = stripFencedCode(out);
+  out = out.replace(INLINE_CODE_RE, " ");
+  out = stripUnclosedEnvelopes(out);
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// Code first (the pre-#504b order): an envelope tag Mason QUOTES in a fence or
+// inline code is gone before it can pair with a real peer's closing tag and
+// cut out what he typed between them.
+function stripCodeFirst(text) {
+  let out = stripFencedCode(text);
+  out = out.replace(INLINE_CODE_RE, " ");
+  out = stripUnclosedEnvelopes(stripClosedEnvelopes(out));
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// Each order loses Mason's words in a shape the other handles (2026-09-24,
+// #504b review): envelopes-first loses a "stop" between a quoted open tag and
+// a real peer message; code-first loses one below a peer's unfinished fence.
+// So both run, and anything EITHER order keeps counts as his. That is the
+// fail-safe union — at worst text one order would strip is read as Mason's and
+// latches a spurious hold; a halt either order preserves always latches.
 export function authoredByMason(prompt) {
   const text = String(prompt || "");
   if (!text) return "";
-  let out = stripFencedCode(text);
-  out = out.replace(INLINE_CODE_RE, " ");
-  out = stripEnvelopes(out);
-  out = out.replace(BLOCKQUOTE_LINE_RE, " ");
-  return out;
+  const envelopesFirst = stripEnvelopesFirst(text);
+  const codeFirst = stripCodeFirst(text);
+  if (envelopesFirst.trim() === codeFirst.trim()) return envelopesFirst;
+  return `${envelopesFirst}\n${codeFirst}`;
 }
 
 // True when the prompt still carries words Mason typed after stripping. A prompt
 // that is ENTIRELY not-his (a bare peer message) is not his turn to speak: it
 // must neither latch a hold nor clear one.
+//
+// This is the INTERSECTION of the two orders, deliberately not the union that
+// authoredByMason() returns (2026-09-24 review). Deciding "Mason spoke" is what
+// lets a prompt CLEAR a hold, so it must be conservative in the other
+// direction: a peer that merely quotes its own closing tag leaves text in one
+// order only, and under the union that peer-only message released a hold Mason
+// latched. Requiring BOTH orders to keep text means a sibling session can
+// never clear his hold by how it formats its own message.
 export function hasAuthoredText(prompt) {
-  return authoredByMason(prompt).trim() !== "";
+  const text = String(prompt || "");
+  if (!text) return false;
+  return stripEnvelopesFirst(text).trim() !== "" && stripCodeFirst(text).trim() !== "";
 }
 
 export const PUSH_POLICY =
