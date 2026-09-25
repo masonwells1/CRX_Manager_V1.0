@@ -72,7 +72,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 
 ## Which AI does what
 
-- **Claude** (Anthropic) is usually the one you talk to. It plans, builds, and runs the reviewer helpers. The careful reviewers use the newest Opus (Claude's most capable model) and quick status checks use the faster Sonnet. Both are named so they update automatically when Anthropic releases a newer version.
+- **Claude** (Anthropic) is usually the one you talk to. It plans, builds, and runs the reviewer helpers. The careful reviewers use the newest Opus (one of Claude's top-tier models) and quick status checks use the faster Sonnet. Both are named so they update automatically when Anthropic releases a newer version.
 - **Codex** (OpenAI) is the independent second opinion, so nothing ships on one AI's word alone. It has three GPT-6 models:
   - **Luna** is fast and cheap. It does the repeated review rounds until the code is clean.
   - **Sol** is stronger. It does one final review of risky changes, and the safety gates won't let risky code land without it.

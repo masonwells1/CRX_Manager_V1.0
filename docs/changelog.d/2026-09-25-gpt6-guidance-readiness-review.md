@@ -49,11 +49,16 @@ of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointe
   approval; the dangerous-phrase warning no longer says `/ship` "auto-pushes to main"; the
   session-start text no longer tells Claude to re-read `AGENTS.md` and `CLAUDE.md`, which the
   `@` import already loads.
-- `.claude/settings.json` — the Vercel deny list now names the mutating tools the Vercel connector
-  exposed in this session: out-of-band deploy, promote, rollback, alias, and cancel; project
-  create, update, pause, and transfer; environment variables (secrets); domains and DNS records;
-  firewall and network; API keys, auth tokens, and SDK keys; edge-config writes; rolling releases;
-  and every domain and credit purchase. Under `defaultMode: dontAsk` these were already refused as unlisted
+- `.claude/settings.json` — the Vercel deny list now names the mutating and secret-reading tools
+  listed in this session's Vercel connector tool list: out-of-band deploy, promote, rollback,
+  alias, and cancel; project create (including git import), update, pause, and transfer; the
+  Vercel CLI passthrough; routes, redirects, and versions; feature flags and cache invalidation;
+  certificates and KMS signing keys; environment variables and any tool that returns secret
+  values or tokens; domains and DNS records; firewall and network; drains, connectors, and
+  private links; API keys, auth tokens, and SDK keys; edge-config writes; rolling releases; and
+  every domain and credit purchase. Connector tool lists change between sessions, so this is a
+  best-effort explicit list on top of `defaultMode: dontAsk`, which already refuses any unlisted
+  tool. Under `defaultMode: dontAsk` these were already refused as unlisted
   tools. Listing them in `deny` makes that explicit and keeps it if the mode ever changes. No
   workflow uses them, because production deploys only through a PR merge, and a Vercel rollback
   stays one click in the Vercel dashboard. The old tool names are kept; they match nothing but are

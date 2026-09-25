@@ -82,7 +82,7 @@ Choose exactly one:
 - `--uncommitted` for staged, unstaged, and untracked working-tree changes.
 - `--commit <sha>` for one commit.
 
-If the branch has both committed and uncommitted work and Mason did not specify scope, ask one concise scope question before running Codex.
+If the branch has both committed and uncommitted work and Mason did not specify scope, review both together (the branch against `origin/main` plus the working tree) and say so in one line; do not stop to ask.
 
 ### Step 2: Evidence Gates
 

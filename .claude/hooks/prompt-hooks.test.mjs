@@ -200,6 +200,7 @@ for (const gate of ["force-push", "live migration", "live-data change", "Edge Fu
   ok(PUSH_POLICY.includes(gate), `policy names the ${gate} gate`);
 }
 ok(/CodeRabbit/.test(PUSH_POLICY), "policy names the CodeRabbit landing step");
+ok(/destructive migrations[^.]*refused even then/i.test(PUSH_POLICY), "policy states destructive migrations stay refused while armed");
 ok(!/never pushes/i.test(PUSH_POLICY), "policy has no stale never-pushes text");
 // 2026-07-14 branch protection: the constant MUST describe the PR landing path —
 // this is the drift test the 2026-07-16 scaffolding review demanded, so the

@@ -20,8 +20,8 @@ Mason's standing tier decision (2026-09-20, carried to GPT-6 on 2026-09-25): Lun
 | Plan, spec, or architecture review; a problem two review rounds could not settle | none (no script runs Astra yet; it has been run by hand, e.g. `docs/plans/2026-09-11-open-pr-backlog-plan.md`) | `gpt-6-astra` | `high`; `max` only for a foundation-wide or money-critical plan |
 | Builder for a standard unit (`scripts/codex-build.mjs` default) | `gpt-5.6-terra` | `gpt-6-sol` | `medium` (the script defaults to `xhigh` until the switch) |
 | Builder for a money, database, or complex unit | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
-| Mechanical sweeps and read-only subagent scans | `gpt-5.6-luna` | `gpt-6-luna` | `medium` |
-| Bug-hunt driver (`scripts/codex-hunt.mjs`) | `gpt-5.3-codex-spark` | `gpt-6-luna` | `medium` |
+| Mechanical sweeps and read-only subagent scans | `gpt-5.6-luna` | `gpt-6-luna` | `medium` (target; `codex-build.mjs` defaults to `xhigh` today) |
+| Bug-hunt driver (`scripts/codex-hunt.mjs`) | `gpt-5.3-codex-spark` | `gpt-6-luna` | `medium` (target; the script pins no effort today, so pin one in the switch) |
 
 Never lower effort on a money, RLS, or migration path to save tokens. Never run a Luna round through `scripts/write-codex-push-proof.mjs`: it unlinks the existing proof for that HEAD when it starts.
 
