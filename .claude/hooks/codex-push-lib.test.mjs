@@ -12,8 +12,13 @@ import {
   claudeProofValid,
   contentIsRisky,
   createHardGateBudget,
+  expandNestedCommands,
+  GH_BUILTIN_COMMANDS,
+  ghCommandUnreadable,
+  ghCommandUnreadableDenial,
   hardGateBudgetDenial,
   hookDeadlineMs,
+  nestedTooDeepDenial,
   shellArgvWord,
   splitShellArgv,
   ghApiMutates,
@@ -3258,6 +3263,141 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     /^PR MERGE GATE: .*time limit.*fail closed/s,
     "the denial names the gate, the cause, and that it fails closed",
   );
+  assert.match(
+    hardGateBudgetDenial("CODEX PRODUCTION GATE", "push"),
+    /^CODEX PRODUCTION GATE: the push checks .*time limit.*push is denied .*fail closed/s,
+    "a push refused for time says it was the PUSH, not a merge",
+  );
+}
+
+// ── commands carried inside another program's argument (2026-09-24) ──────────
+// Every one of these returned allow from BOTH merge guards on PR #630's head,
+// because the whole inner command was one argv word to every parser.
+{
+  const encode = (text) => Buffer.from(text, "utf16le").toString("base64");
+  const inner = (command, options) => expandNestedCommands(command, options).commands;
+  const carries = (command, expected, message) => {
+    const found = inner(command);
+    assert.ok(found.includes(expected), `${message}: expected ${JSON.stringify(expected)} in ${JSON.stringify(found)}`);
+  };
+  const ADMIN = "gh pr merge 123 --admin --squash";
+  carries(`bash -c "${ADMIN}"`, ADMIN, "bash -c");
+  carries(`bash -lc '${ADMIN}'`, ADMIN, "a -c inside an option cluster");
+  carries(`/usr/bin/sh -e -c '${ADMIN}'`, ADMIN, "a path to the shell and an option before -c");
+  carries(`cmd /c "${ADMIN}"`, ADMIN, "cmd /c with a quoted command");
+  carries(`C:\\Windows\\System32\\cmd.exe /d /s /k ${ADMIN}`, ADMIN, "cmd /k with switches before it and the rest of the line unquoted");
+  carries(`pwsh -Command "${ADMIN}"`, ADMIN, "pwsh -Command");
+  carries(`pwsh -NoProfile -ExecutionPolicy Bypass -c "${ADMIN}"`, ADMIN, "a value-taking host parameter is skipped");
+  carries(`powershell.exe "${ADMIN}"`, ADMIN, "Windows PowerShell's positional -Command");
+  carries(`pwsh -EncodedCommand ${encode(ADMIN)}`, ADMIN, "-EncodedCommand is decoded");
+  carries(`powershell -enc ${encode(ADMIN)}`, ADMIN, "-enc is decoded");
+  carries(`pwsh -e ${encode(ADMIN)}`, ADMIN, "-e is decoded");
+  carries(`eval "${ADMIN}"`, ADMIN, "eval");
+  carries(`Invoke-Expression "${ADMIN}"`, ADMIN, "Invoke-Expression");
+  carries(`iex -Command '${ADMIN}'`, ADMIN, "iex with a named -Command");
+  carries(`Start-Process gh -ArgumentList 'pr','merge','123','--admin','--squash'`, ADMIN, "Start-Process with an array argument list");
+  carries(`Start-Process -FilePath gh -ArgumentList "pr merge 123 --admin --squash" -Wait`, ADMIN, "Start-Process by name");
+  carries(`bash -c "bash -c \\"${ADMIN}\\""`, ADMIN, "two levels of nesting");
+  carries(`cmd /d bash -c '${ADMIN}'`, ADMIN, "a cmd with no /c runs nothing itself, so the scan continues to a later shell");
+  carries(`pwsh -c "bash -c '${ADMIN}'"`, ADMIN, "nesting across shells");
+  assert.ok(inner(`&{${ADMIN}}`).some((text) => splitCommandSegments(text).includes(ADMIN)), "a script block's body is a command");
+  assert.ok(inner(`echo $(${ADMIN})`).some((text) => splitCommandSegments(text).includes(ADMIN)), "a substitution's body is a command");
+
+  // Braces and parens inside QUOTES are data, not grouping.
+  assert.deepEqual(inner(`gh pr merge 123 --squash --body "fix (typo) {x}"`), [], "quoted parens produce no reading");
+  // The push guard asks for no grouping reading; its composition check owns that syntax.
+  assert.deepEqual(inner(`&{git push origin HEAD:main}`, { grouping: false }), [], "grouping: false leaves blocks to the caller");
+  assert.ok(inner(`pwsh -enc ${encode("git push origin HEAD:main")}`, { grouping: false }).includes("git push origin HEAD:main"),
+    "grouping: false still decodes a nested push");
+
+  // Inner commands that cannot reach a gate are not returned.
+  assert.deepEqual(inner(`bash -c "npm test"`), [], "a nested command with no gh/git is not re-inspected");
+  assert.deepEqual(inner(`pwsh -NoProfile -Command "Get-ChildItem"`), [], "…in PowerShell either");
+  assert.deepEqual(inner(`pwsh -File build.ps1 -Target gh`), [], "-File runs a script the guard cannot read, so nothing is inspected");
+  // …but a nested command that carries a FURTHER nested command is, so an
+  // encoded command cannot hide behind one more layer.
+  carries(`bash -c "pwsh -enc ${encode(ADMIN)}"`, ADMIN, "an encoded command inside a shell");
+
+  // Unbounded nesting is refused, not partly inspected.
+  let deep = ADMIN;
+  for (let level = 0; level < 6; level += 1) deep = `pwsh -enc ${encode(deep)}`;
+  assert.equal(expandNestedCommands(deep).tooDeep, true, "more than the maximum depth is reported as too deep");
+  assert.equal(expandNestedCommands(`bash -c "${ADMIN}"`).tooDeep, false, "ordinary nesting is not");
+  assert.match(nestedTooDeepDenial("PR MERGE GATE"), /^PR MERGE GATE: .*refused/s, "the too-deep denial names the gate");
+}
+
+// ── gh aliases and unknown gh commands (2026-09-24) ──────────────────────────
+// `gh alias set mm 'pr merge --admin'` followed by `gh mm 123` was an
+// administrator merge both guards allowed.
+{
+  const unreadable = (segment) => ghCommandUnreadable(segment);
+  assert.equal(unreadable("gh alias set mm 'pr merge --admin'"), "alias set", "creating an alias is refused");
+  assert.equal(unreadable("gh alias import aliases.yml"), "alias import", "importing aliases is refused");
+  assert.equal(unreadable("gh alias --help set x y"), "alias set", "a flag before the alias subcommand does not hide it");
+  assert.equal(unreadable("gh mm 123 --squash"), "mm", "an unknown top-level command is refused");
+  assert.equal(unreadable("gh.exe mm 123"), "mm", "whatever the binary's extension");
+  assert.equal(unreadable("C:\\Tools\\gh.cmd mm 123"), "mm", "or its path");
+  assert.equal(unreadable("g''h mm 123"), "mm", "or a quote-spliced binary name");
+  assert.equal(unreadable("GH_TOKEN=x gh mm 123"), "mm", "an environment prefix does not hide the command");
+  assert.equal(unreadable("env gh mm 123"), "mm", "nor does env");
+  assert.equal(unreadable("xargs -n1 gh mm"), "mm", "nor xargs with its options");
+  assert.equal(unreadable("gh -R o/r mm 123"), "mm", "a global --repo value is not the command");
+  assert.equal(unreadable("gh co 123"), "co", "`co` is a redefinable CONFIG alias, not a built-in");
+
+  for (const allowed of [
+    "gh alias list", "gh alias delete mm", "gh pr view 123", "gh pr checkout 123", "gh -R o/r pr view 123",
+    "gh --version", "gh", "gh auth status", "gh run list", "gh api user", "gh cs list", "gh ext list",
+    "echo gh mm", "grep -n gh README.md", "git log --grep gh", "npm run gh-pages",
+  ]) {
+    assert.equal(unreadable(allowed), null, `a readable or non-gh command is not refused: ${allowed}`);
+  }
+  assert.ok(GH_BUILTIN_COMMANDS.has("pr") && !GH_BUILTIN_COMMANDS.has("co"), "the built-in list excludes config aliases");
+  assert.match(ghCommandUnreadableDenial("PR MERGE GATE", "mm"), /^PR MERGE GATE: `gh mm` .*GH_BUILTIN_COMMANDS/s,
+    "the denial names the command and where to allow a genuine one");
+}
+
+// ── Claude's push guard refuses a push carried by another program (2026-09-24) ──
+// `pwsh -enc <base64 of a force-push to main>` passed this guard untouched.
+{
+  const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-guard-nested-"));
+  const encode = (text) => Buffer.from(text, "utf16le").toString("base64");
+  const runHook = (command) => {
+    const res = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ cwd: tmp, tool_input: { command } }),
+      encoding: "utf8",
+      env: scratchHookEnvironment(tmp, process.env),
+      timeout: 30_000,
+    });
+    assert.equal(res.status, 0, `guard exited ${res.status}: ${res.stderr}`);
+    const out = (res.stdout || "").trim();
+    return out ? JSON.parse(out).hookSpecificOutput : { permissionDecision: "allow" };
+  };
+  try {
+    // The encoded forms are invisible to every other check, so the nested-push
+    // refusal must be the one that fires.
+    for (const command of [
+      `pwsh -enc ${encode("git push origin HEAD:main --force")}`,
+      `git status; powershell -EncodedCommand ${encode("git push origin HEAD:main")}`,
+    ]) {
+      const verdict = runHook(command);
+      assert.equal(verdict.permissionDecision, "deny", `an encoded push is refused: ${command}`);
+      assert.match(verdict.permissionDecisionReason, /inside another shell or an evaluator/, `…for being nested: ${command}`);
+    }
+    // Plain-text forms may be refused first by the composition check; either way
+    // they must not pass.
+    for (const command of [
+      "cmd /c git push origin HEAD:main",
+      `Invoke-Expression 'git push origin HEAD:main'`,
+      "Start-Process git -ArgumentList 'push','origin','HEAD:main'",
+    ]) {
+      assert.equal(runHook(command).permissionDecision, "deny", `a nested push is refused: ${command}`);
+    }
+    assert.equal(runHook(`bash -c "npm test"`).permissionDecision, "allow", "a nested command that is not a push passes");
+    assert.equal(runHook(`pwsh -NoProfile -Command "Get-ChildItem"`).permissionDecision, "allow", "…in PowerShell too");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 console.log("OK - codex push shared library checks passed.");

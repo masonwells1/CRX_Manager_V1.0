@@ -430,9 +430,25 @@ ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directo
 // applied to a single segment inside the loop would type-check, read as the fix,
 // and miss every case, because a spliced merge verb is not a merge to the parser
 // that produced that segment either.
+// Since 2026-09-24 both checks run inside collectMergeRequests(scanned), which is
+// called for the WHOLE command and then for every nested command it carries
+// (`bash -c "…"`, `pwsh -EncodedCommand …`), so the subject is `scanned` and the
+// call-site pins below also pin that the whole command is what gets scanned.
 ok(
-  /if\s*\(\s*ghHiddenByShellComposition\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
-  "the gh composition refusal runs on the WHOLE command, before the segment loop",
+  /for\s*\(\s*const\s+scanned\s+of\s+\[\s*toolInput\.command\s*,\s*\.\.\.nested\.commands\s*\]\s*\)\s*collectMergeRequests\(\s*scanned\s*\)/.test(guardSource),
+  "the whole command and every nested command it carries are each scanned for merges",
+);
+ok(
+  /nested\s*=\s*expandNestedCommands\(\s*toolInput\.command\s*\)/.test(guardSource),
+  "nested commands are expanded from the whole command",
+);
+ok(
+  /if\s*\(\s*ghHiddenByShellComposition\(\s*scanned\s*\)\s*\)/.test(guardSource),
+  "the gh composition refusal runs on the WHOLE scanned command, before the segment loop",
+);
+ok(
+  /const\s+unreadableGh\s*=\s*ghCommandUnreadable\(\s*segment\s*\)/.test(guardSource),
+  "every segment is checked for a gh alias or unknown gh command",
 );
 // A single `&` runs both sides — POSIX in the background, cmd sequentially — so
 // it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved
@@ -444,7 +460,7 @@ ok(
 // (Codex sol, 2026-09-08, SEC-001). Asserting the call site, not the helper,
 // for the same reason the assertion above does.
 ok(
-  /for\s*\(\s*const\s+segment\s+of\s+splitCommandSegments\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
+  /for\s*\(\s*const\s+segment\s+of\s+splitCommandSegments\(\s*scanned\s*\)\s*\)/.test(guardSource),
   "the segment loop uses the shared quote-aware segmenter on the whole command",
 );
 ok(

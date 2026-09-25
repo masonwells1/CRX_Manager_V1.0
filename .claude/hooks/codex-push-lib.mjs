@@ -2846,6 +2846,325 @@ export function mergeRequestKey(request) {
   );
 }
 
+// ── Commands carried inside ANOTHER program's argument ──────────────────────
+//
+// Every parser above reads the argv of the command it is handed. A command
+// passed to another program as ONE argument — `bash -c "gh pr merge 1 --admin"`,
+// `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand <base64>`, `eval`,
+// `Invoke-Expression`, `Start-Process gh -ArgumentList …`, a `&{ … }` script
+// block — is a single word to them, so `pr` and `merge` were never separate
+// words and both merge guards let an administrator merge through (measured on
+// PR #630's head, 2026-09-24: all of those returned allow from both guards, as
+// did `bash -c "gh api -X DELETE …/git/refs/heads/main"`).
+//
+// expandNestedCommands returns the command text each such program would run,
+// recursively, so the callers can inspect it exactly like a top-level command.
+// It is an EXTRA reading, never a replacement: the outer command is still
+// inspected as typed. Where the inner text is ambiguous (a rest-of-line program
+// such as `cmd /c` re-reads its arguments with its own quoting) it yields more
+// than one reading, and callers deny when ANY reading is refused.
+//
+// Only inner commands that could reach a gate — ones that mention `gh` or `git`
+// or themselves carry a further nested command — are returned. The guards exist
+// for merges, pushes and GitHub writes; re-inspecting `bash -c "npm test"` buys
+// nothing and costs the chance of a false refusal.
+//
+// Still open, and named rather than half-covered: a script FILE (`bash x.sh`,
+// `pwsh -File x.ps1`) runs text the guard cannot see from the command line.
+const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish"]);
+const CMD_SHELLS = new Set(["cmd"]);
+const POWERSHELLS = new Set(["powershell", "pwsh"]);
+const EXPRESSION_EVALUATORS = new Set(["eval", "invoke-expression", "iex"]);
+const PROCESS_STARTERS = new Set(["start-process", "saps", "start"]);
+// PowerShell host parameters that take a value, as full names plus their
+// documented short forms. A parameter may be abbreviated to any unambiguous
+// prefix, so full names are matched by prefix (3+ letters) as well.
+const POWERSHELL_VALUE_PARAMS = [
+  "executionpolicy", "windowstyle", "outputformat", "inputformat", "workingdirectory",
+  "configurationname", "psconsolefile", "version", "settingsfile", "custompipename", "encodedarguments",
+];
+const POWERSHELL_VALUE_SHORTS = new Set(["ex", "ep", "w", "of", "o", "if", "wd", "config", "v", "settings", "ea"]);
+const NESTED_MAX_DEPTH = 4;
+const NESTED_MAX_COMMANDS = 32;
+
+// The program a command word names: basename, no extension, lowercased — so
+// `C:\Windows\System32\cmd.exe`, `"/usr/bin/bash"` and `PWSH.EXE` compare equal
+// to `cmd`, `bash` and `pwsh`.
+function programName(word) {
+  const base = String(word || "").split(/[\\/]/).pop().toLowerCase();
+  return base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base;
+}
+
+// Is the word at `index` the named program? Asked of the argv word (quotes and
+// POSIX escapes consumed, so `g''h` is gh) AND of the raw word, because a
+// Windows path's backslashes are separators there, not escapes: the argv reading
+// of `C:\Tools\gh.cmd` is `C:Toolsgh.cmd`.
+function wordIsProgram(rawWords, argvWords, index, names) {
+  return names.has(programName(argvWords[index])) || names.has(programName(rawWords[index]));
+}
+
+function mentionsGhOrGit(text) {
+  const words = splitShellArgv(text).join(" ");
+  return /(?:^|[^a-z0-9_-])(?:gh|git)(?:$|[^a-z0-9_-])/i.test(`${text} ${words}`);
+}
+
+// A program that runs the REST of its line as one command gets two readings:
+// the argv words joined (quotes consumed, as the program receives them) and the
+// raw words joined (quotes kept, as the program may re-read them).
+function restOfLine(rawWords, argvWords, from) {
+  if (from >= argvWords.length) return [];
+  return [argvWords.slice(from).join(" "), rawWords.slice(from).join(" ")];
+}
+
+// `-c`, `-lc`, `-xc`: a POSIX shell runs its first non-option argument after a
+// cluster carrying `c`. `-o`/`-O` take a value; `--` ends the options.
+function posixShellInner(argvWords, start) {
+  let sawC = false;
+  for (let index = start; index < argvWords.length; index += 1) {
+    const word = argvWords[index];
+    if (word === "--") return sawC ? argvWords[index + 1] ?? null : null;
+    if (/^[-+][A-Za-z]+$/.test(word)) {
+      if (word.slice(1).includes("c")) sawC = true;
+      if (/^[-+][oO]$/.test(word)) index += 1;
+      continue;
+    }
+    if (word.startsWith("--")) continue;
+    return sawC ? word : null;
+  }
+  return null;
+}
+
+// `cmd /c …`, `cmd /d /s /k …`, `cmd /c"…"`: everything after /c, /k or /r.
+function cmdInner(rawWords, argvWords, start) {
+  for (let index = start; index < argvWords.length; index += 1) {
+    const match = /^\/([ckr])(.*)$/i.exec(argvWords[index]);
+    if (match) {
+      const attached = match[2];
+      const rest = restOfLine(rawWords, argvWords, index + 1);
+      return attached ? [`${attached} ${rest[0] ?? ""}`.trim(), ...rest] : rest;
+    }
+    if (!argvWords[index].startsWith("/")) return [];
+  }
+  return [];
+}
+
+function powershellInner(rawWords, argvWords, start) {
+  for (let index = start; index < argvWords.length; index += 1) {
+    const word = argvWords[index];
+    if (!/^[-/]/.test(word)) {
+      // Windows PowerShell reads a bare first argument as -Command. (pwsh reads it
+      // as -File; inspecting it as a command as well only adds inspection.)
+      return restOfLine(rawWords, argvWords, index);
+    }
+    const name = word.replace(/^[-/]+/, "").replace(/:.*$/, "").toLowerCase();
+    if (!name) continue;
+    if (name === "cwa" || (name.length >= 8 && "commandwithargs".startsWith(name))) {
+      return argvWords[index + 1] !== undefined ? [argvWords[index + 1]] : [];
+    }
+    if ("command".startsWith(name)) return restOfLine(rawWords, argvWords, index + 1);
+    if (name === "e" || name === "ec" || (name.startsWith("en") && "encodedcommand".startsWith(name))) {
+      const encoded = argvWords[index + 1];
+      if (!encoded) return [];
+      // -EncodedCommand is base64 over UTF-16LE. Decoding is deterministic, so the
+      // command is inspected rather than refused.
+      return [Buffer.from(encoded, "base64").toString("utf16le")];
+    }
+    if (name === "f" || (name.length >= 2 && "file".startsWith(name))) return [];
+    if (POWERSHELL_VALUE_SHORTS.has(name) ||
+        (name.length >= 3 && POWERSHELL_VALUE_PARAMS.some((param) => param.startsWith(name)))) {
+      index += 1;
+    }
+  }
+  return [];
+}
+
+function evaluatorInner(rawWords, argvWords, start) {
+  let from = start;
+  if (/^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(argvWords[from] || "")) from += 1;
+  return restOfLine(rawWords, argvWords, from);
+}
+
+// Start-Process <FilePath> <ArgumentList>, positionally or by name. An argument
+// list written as `'pr','merge','1'` reaches the process as separate words.
+function processStarterInner(argvWords, start) {
+  let file = "";
+  let args = "";
+  const positional = [];
+  for (let index = start; index < argvWords.length; index += 1) {
+    const word = argvWords[index];
+    if (/^-[A-Za-z]/.test(word)) {
+      const name = word.slice(1).replace(/:.*$/, "").toLowerCase();
+      const value = argvWords[index + 1] ?? "";
+      if (["filepath", "fp", "path"].some((param) => param.startsWith(name) && name.length >= 2) || name === "f") {
+        file = value; index += 1;
+      } else if (name === "args" || (name.length >= 1 && "argumentlist".startsWith(name))) {
+        args = value; index += 1;
+      } else if (!["wait", "nonewwindow", "passthru", "usenewenvironment", "loaduserprofile"].some((param) => param.startsWith(name))) {
+        index += 1;
+      }
+      continue;
+    }
+    positional.push(word);
+  }
+  file = file || positional[0] || "";
+  args = args || (file === positional[0] ? positional[1] : positional[0]) || "";
+  if (!file) return [];
+  return [`${file} ${args.replace(/,/g, " ")}`.trim()];
+}
+
+// One level of nesting: the inner commands this command's segments carry.
+function nestedCommandsOneLevel(command, { grouping }) {
+  const inner = [];
+  const text = String(command || "");
+  // Grouping: `&{ gh … }`, `.{ … }`, `( … )`. Only UNQUOTED braces and parens are
+  // syntax, so a `--body "fix (typo)"` stays one argument.
+  let grouped = "";
+  let quote = "";
+  for (const char of text) {
+    if (quote) { grouped += char; if (char === quote) quote = ""; continue; }
+    if (char === "'" || char === '"') { quote = char; grouped += char; continue; }
+    grouped += "{}()".includes(char) ? " ; " : char;
+  }
+  if (grouping && grouped !== text) inner.push(grouped);
+  for (const segment of splitCommandSegments(text)) {
+    const rawWords = splitShellWordsRaw(segment);
+    const argvWords = rawWords.map(shellArgvWord);
+    for (let index = 0; index < argvWords.length; index += 1) {
+      // Past the cap the caller refuses the command anyway (tooDeep); stopping
+      // here keeps a command with thousands of `cmd /c` words from spending the
+      // hook's time limit — a hook cut off at its limit ALLOWS.
+      if (inner.length > NESTED_MAX_COMMANDS) return inner;
+      const is = (names) => wordIsProgram(rawWords, argvWords, index, names);
+      if (is(POSIX_SHELLS)) {
+        const found = posixShellInner(argvWords, index + 1);
+        if (found) inner.push(found);
+      } else if (is(CMD_SHELLS) || is(POWERSHELLS) || is(EXPRESSION_EVALUATORS)) {
+        // These run the REST of the line, so their inner command already holds
+        // every later word of this segment; the next level unwraps whatever
+        // program is nested there. Stopping here keeps each level linear instead
+        // of re-reading the rest of the line once per nested program.
+        // A program that found no inner command (`cmd /d` with no /c) runs
+        // nothing from this line, so the scan continues to the later words.
+        const unwrap = is(CMD_SHELLS) ? cmdInner : is(POWERSHELLS) ? powershellInner : evaluatorInner;
+        const found = unwrap(rawWords, argvWords, index + 1);
+        inner.push(...found);
+        if (found.length) break;
+      } else if (is(PROCESS_STARTERS)) {
+        inner.push(...processStarterInner(argvWords, index + 1));
+      }
+    }
+  }
+  return inner.map((value) => String(value).trim()).filter((value) => value && value !== text);
+}
+
+// Every nested command, at any depth, that could reach a merge/push/GitHub gate.
+// `tooDeep` means the nesting went past what the guard is willing to unwrap; the
+// callers refuse such a command rather than inspect part of it.
+//
+// `grouping: false` leaves out the `{ }` / `( )` reading. The push guard passes
+// it: its own composition check already refuses a push behind that syntax, and
+// the reading would pre-empt that check's more specific denials (a
+// `${env:GIT_CONFIG_COUNT} = '1'; git push` must still be refused as a
+// GIT_CONFIG redirect).
+export function expandNestedCommands(command, { grouping = true } = {}) {
+  const found = [];
+  const seen = new Set([String(command || "").trim()]);
+  let frontier = [String(command || "")];
+  for (let depth = 1; frontier.length; depth += 1) {
+    const next = [];
+    for (const text of frontier) {
+      for (const inner of nestedCommandsOneLevel(text, { grouping })) {
+        if (seen.has(inner)) continue;
+        seen.add(inner);
+        if (depth > NESTED_MAX_DEPTH || seen.size > NESTED_MAX_COMMANDS + 1) {
+          return { commands: found, tooDeep: true };
+        }
+        next.push(inner);
+      }
+    }
+    for (const inner of next) {
+      if (mentionsGhOrGit(inner) || nestedCommandsOneLevel(inner, { grouping }).length) found.push(inner);
+    }
+    frontier = next;
+  }
+  return { commands: found, tooDeep: false };
+}
+
+// ── gh commands the guards can read ────────────────────────────────────────
+//
+// A gh ALIAS or EXTENSION is a command name gh expands into something else —
+// `gh alias set mm 'pr merge --admin'` makes `gh mm 123` an administrator merge
+// that no parser here reads as a merge (measured on PR #630's head, 2026-09-24:
+// both guards allowed both commands). Expanding aliases would mean reading gh's
+// config at hook time, which an agent can also rewrite; so the guards instead
+// refuse to CREATE aliases, and refuse any top-level gh command they do not know.
+//
+// gh's built-in top-level commands and their built-in (non-config) aliases,
+// from gh's manual. `co` is deliberately absent: it is a CONFIG alias
+// (`pr checkout`) that can be redefined, so `gh pr checkout` is the spelling to
+// use. A genuine new gh command, or an extension installed on purpose, is added
+// here after checking what it does.
+export const GH_BUILTIN_COMMANDS = new Set([
+  "accessibility", "a11y", "actions", "agent-task", "alias", "api", "attestation", "auth", "browse",
+  "cache", "codespace", "cs", "completion", "config", "copilot", "environment", "exit-codes",
+  "extension", "extensions", "ext", "formatting", "gist", "gpg-key", "help", "issue", "label",
+  "licenses", "mintty", "org", "pr", "preview", "project", "reference", "release", "repo", "ruleset",
+  "rs", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow",
+]);
+// Words that may sit before a program without changing which program runs.
+const COMMAND_WRAPPERS = new Set(["env", "command", "exec", "time", "nohup", "sudo", "call", "xargs", "wsl", "&", "."]);
+
+// The gh command a segment runs, when it is one the guards cannot read: an
+// unknown top-level command (an alias or extension), or `gh alias set|import`.
+// Returns null when the segment does not run gh at its command position.
+const GH_PROGRAM = new Set(["gh"]);
+
+export function ghCommandUnreadable(segment) {
+  const rawWords = splitShellWordsRaw(String(segment || ""));
+  const words = rawWords.map(shellArgvWord);
+  let index = 0;
+  while (index < words.length) {
+    const word = words[index];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || COMMAND_WRAPPERS.has(word.toLowerCase())) { index += 1; continue; }
+    if (index > 0 && COMMAND_WRAPPERS.has(words[index - 1].toLowerCase()) && word.startsWith("-")) { index += 1; continue; }
+    break;
+  }
+  if (!wordIsProgram(rawWords, words, index, GH_PROGRAM)) return null;
+  index += 1;
+  while (index < words.length && words[index].startsWith("-")) {
+    index += ["-r", "--repo"].includes(words[index].toLowerCase()) ? 2 : 1;
+  }
+  const command = (words[index] || "").toLowerCase();
+  if (!command) return null;
+  if (!GH_BUILTIN_COMMANDS.has(command)) return command;
+  if (command === "alias") {
+    let sub = index + 1;
+    while (sub < words.length && words[sub].startsWith("-")) sub += 1;
+    const subcommand = (words[sub] || "").toLowerCase();
+    if (subcommand === "set" || subcommand === "import") return `alias ${subcommand}`;
+  }
+  return null;
+}
+
+export function ghCommandUnreadableDenial(prefix, command) {
+  return (
+    `${prefix}: \`gh ${command}\` is not a gh command this guard can read. A gh alias or extension can ` +
+    "expand into a merge or an API write (`gh alias set mm 'pr merge --admin'` makes `gh mm 1` an " +
+    "administrator merge), so aliases may not be created and unknown gh commands are refused. Use the " +
+    "built-in command it stands for (for example `gh pr checkout` instead of `gh co`). If this is a genuine " +
+    "new gh command or a deliberately installed extension, add it to GH_BUILTIN_COMMANDS in " +
+    ".claude/hooks/codex-push-lib.mjs after checking what it does."
+  );
+}
+
+export function nestedTooDeepDenial(prefix) {
+  return (
+    `${prefix}: this command nests shells or evaluators more deeply than the guard will unwrap ` +
+    `(more than ${NESTED_MAX_DEPTH} levels or ${NESTED_MAX_COMMANDS} inner commands), so it is refused rather than ` +
+    "partly inspected. Run the inner command directly."
+  );
+}
+
 // A shared time budget for a hook's NETWORK-BOUND hard gates.
 //
 // Why this exists: a PreToolUse hook killed at its timeout emits nothing, and a
@@ -2883,7 +3202,14 @@ export function hookDeadlineMs(hookTimeoutMs, reserveMs) {
 
 // One wording for both guards, so a merge refused for time reads the same from
 // Claude and from Codex.
-export function hardGateBudgetDenial(prefix) {
+export function hardGateBudgetDenial(prefix, action = "merge") {
+  if (action === "push") {
+    return (
+      `${prefix}: the push checks could not finish inside this hook's time limit, so the push is denied ` +
+      "(fail closed). A hook cut off mid-check says nothing, and saying nothing would ALLOW the push. Run " +
+      "one `git push` per command and retry."
+    );
+  }
   return (
     `${prefix}: the merge checks could not finish inside this hook's time limit, so the merge is denied ` +
     "(fail closed). A hook cut off mid-check says nothing, and saying nothing would ALLOW the merge. This " +
