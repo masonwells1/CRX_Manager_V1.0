@@ -349,7 +349,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       writeFileSync(codexProofPath, JSON.stringify({
         queryHash: sha(query),
         verdict: "clean",
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         reasoning_effort: "high",
         timestamp: new Date().toISOString(),
         ...overrides,
@@ -377,7 +377,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeCodexProof(BENIGN_SQL, { model: undefined, reasoning_effort: undefined });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: proof missing Sol/high identity is denied");
-    writeCodexProof(BENIGN_SQL, { model: "gpt-5.6-terra", reasoning_effort: "xhigh" });
+    writeCodexProof(BENIGN_SQL, { model: "gpt-6-luna", reasoning_effort: "xhigh" });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: non-Sol/non-high proof identity is denied");
 
