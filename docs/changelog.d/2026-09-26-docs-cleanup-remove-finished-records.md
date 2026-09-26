@@ -29,7 +29,8 @@ were left as history. Four code comments (`src/lib/money.ts`, `src/pages/FieldRo
 did not exist before this change; they were not touched.
 
 **Deliberately not touched:** `docs/changelog.d/` and `docs/CHANGELOG.md` (the ledger), ChemMan
-research and walkthrough transcripts, generated files, live bug-hunt output folders, and
+research and walkthrough transcripts, generated files, the bug-hunt state files the workflows read (each folder's `LEDGER.json`; only finished
+reports inside those folders were removed — the hunts recreate their morning report on the next run), and
 `docs/plans/sprayer-packet-feature-todo.md` (an open owner decision in `TODO.md` §4).
 
 **Proof observed:** `npm run check:docs`, `check:agent-guidance`, `check:agent-workflows`,

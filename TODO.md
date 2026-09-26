@@ -57,7 +57,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
    ACH pay-now links (the #1 competitive gap) and later portal payments.
 4. **Label data load + EPA backfill approval** — 0 of ~604 products have full
    label data; ~105 of 204 stored EPA reg numbers are wrong. The `/label-data-quality`
-   tool (shipped) makes this data-entry. Gates the whole compliance track.
+   tool (shipped) makes this data-entry. Gates the whole compliance track. A June 2026 filled
+   research draft (`docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv`, removed 2026-09-26)
+   can be recovered from git history as a starting point: `git show e81853970:<that path>` (the last `main` commit before the removal).
 5. **Decision packets** (details in `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3).
    **Decided 2026-07-16:** due dates = Net 30 + override (build spec in
    `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`, removed 2026-09-26, in git history) · dead structures = KEEP
@@ -270,8 +272,8 @@ path named. Re-verify against the live app before acting — these were checked 
   intentionally deferred-billing orders. The Pre-booked check's only flag was an inactive test product.
 - **Junk-customer line items** (detail for §1 item 5, flag list 2026-07-05; re-verify links live first):
   zero-link rows with id prefixes `73672cfe`, `b4d71a33` (a PO-bucket row), `e8508e65` and `b6a1d451`
-  (inactive duplicates). The inactive `d8bd091a` row has 2 orders and 4 commissions — merge it into its
-  active twin, do not delete it. The active `987c3722` row (1 field) is your call.
+  (inactive duplicates). The inactive `d8bd091a` row has linked orders and commissions — merge it into its
+  active twin, do not delete it. The active `987c3722` row is your call.
 
 **Owner smoke test**
 - Click-test the three act-from-the-list write buttons on real data (open since 2026-06-24): Quotes list
