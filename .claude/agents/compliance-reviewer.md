@@ -2,7 +2,7 @@
 name: compliance-reviewer
 description: Use this agent to audit changed frontend (`src/`) and migration code against the CRX Manager Hard Rules and canonical patterns in AGENTS.md — money-as-cents, RLS, assertRpcResult, checkMutationResult, no confirm()/alert(), Sentry-from-lib, logActivity shape, no service_role in frontend, no @ts-ignore/any, and the business-logic lifecycle invariants. Complements rls-security-reviewer (deep SQL/RLS) and migration-drift-reviewer (CHECK/overload drift) by covering the convention rules those two don't. Returns a structured findings report with severity (BLOCKER/HIGH/MED) and exact file:line. Read-only — never edits.
 tools: Read, Grep, Glob, Bash
-model: claude-opus-5
+model: opus
 effort: high
 ---
 

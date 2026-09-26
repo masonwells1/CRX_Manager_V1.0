@@ -57,7 +57,9 @@ const output = JSON.parse(runHook("run a pair review on this change").stdout);
 assert.equal(output.hookSpecificOutput.hookEventName, "UserPromptSubmit");
 assert.match(output.hookSpecificOutput.additionalContext, /Agent Pair Review/i);
 assert.match(output.hookSpecificOutput.additionalContext, /agent-pair-review\.md/);
-assert.match(output.hookSpecificOutput.additionalContext, /HARD GATES that ALWAYS need Mason's explicit OK/i);
+assert.match(output.hookSpecificOutput.additionalContext, /HARD GATES — every one in AGENTS\.md › Safety and Protected Delivery/);
+assert.match(output.hookSpecificOutput.additionalContext, /force-push[\s\S]*secrets, authentication, permissions, billing, domains, ownership/);
+assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /C:\\CRX_Manager/);
 assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /never pushes|do not push.*without.*explicit approval/i);
 
 assert.equal(failures, 0, `${failures} trigger classification failure(s)`);

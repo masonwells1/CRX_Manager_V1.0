@@ -1,11 +1,34 @@
 # Decision Log
 
-Last verified: 2026-09-25
+Last verified: 2026-09-26
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-25 — GPT-6 guidance: one priority order, Astra reviews plans, model IDs live in one reference
+
+**Source:** Mason's answers in the 2026-09-25 guidance-review session (PR #797): he approved the
+guidance and hook-text fixes ("Phases 1 + 2") and the roles "Luna reviews, Sol gate", with Astra
+reviewing plans.
+
+**Decision.** The model routing is the 2026-09-23 entry below, unchanged: `gpt-6-luna` builds standard
+units, hunts, and iterates reviews; `gpt-6-sol` builds money and database units and, at `high`, is the
+once-at-the-end gate for risky diffs. This entry adds
+`gpt-6-astra` for plan, spec, and architecture review — run by hand, advisory, never a gate. Exact
+IDs and efforts for every Codex role live in `docs/reference/codex-model-tuning.md`; `AGENTS.md`
+names the roles only, so a future model change edits one reference document. (The session first
+proposed `gpt-6-sol` at `medium` as the default builder; #796 landed first with Luna as builder,
+Mason merged it, and that stands.)
+
+**What this forbids/implies.** `AGENTS.md` now sets the order to follow when sources disagree: the
+Hard Rules and every "never", which no request overrides; then the approval gates; then Mason's
+current message, which sets scope and limits but never loosens either; then the rest of `AGENTS.md`,
+the selected workflow, routed references, and history. It also holds one stop rule, under which a
+workflow's round cap remains a ceiling. Hook reminders point at `AGENTS.md` for the hard-gate list
+rather than restating a shorter one. Claude agents and workflows pin model aliases (`opus`), not
+dated IDs.
 
 ## 2026-09-23 — retire the `gpt-5.6` class: `gpt-6-luna` builds and reviews, `gpt-6-sol` is the money gate
 

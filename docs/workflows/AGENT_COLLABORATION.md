@@ -24,6 +24,8 @@ Before delegating, give the worker a contract containing:
 
 Workers return distilled results, not raw logs or a bare “Done.”
 
+Pick the worker's model and effort from `docs/reference/claude-model-tuning.md` (Claude) or `docs/reference/codex-model-tuning.md` (Codex).
+
 ## Worktree and Writer Rules
 
 - Use exactly one writer per checkout. Concurrent writers require separate current-main worktrees and disjoint file ownership.

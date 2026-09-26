@@ -15,8 +15,9 @@ always pinned explicitly and isolated from the builder session.
 **Luna** (`gpt-6-luna`) at `xhigh` is the DEFAULT reviewer for every iterating round, on every
 kind of work. **Sol** (`gpt-6-sol`) at `high` is NOT the everyday reviewer any more — it is the
 once-at-the-end ship gate, and it runs after Luna comes back clean, not alongside it. **Luna is
-also the builder** (`scripts/codex-build.mjs`): the GPT-6 class ships only Luna and Sol, so the
-old three-tier split collapsed and Terra was retired (Mason, 2026-09-23).
+also the builder** (`scripts/codex-build.mjs`): Terra and Spark are not usable on GPT-6 here, so
+the old three-tier split collapsed and Terra was retired (Mason, 2026-09-23). Every Codex role, pin,
+and effort is listed in `docs/reference/codex-model-tuning.md`.
 
 Because Luna both builds and reviews, a Luna round on Codex-built code is the model checking its
 own work. That is accepted for ordinary reversible changes — the Sol gate below is still fully
@@ -525,7 +526,7 @@ Notes:
 ## Step 5: Hand back to the push gate
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
-clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → finish checks →
+clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
 freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge with
 `--match-head-commit <reviewed-head-sha>`**. Direct pushes to
 `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.

@@ -183,7 +183,11 @@ const alwaysLoadedGuidance = `${agents}\n${claude}\n${cursorRules}`;
 record(!/VERDICT\s*:/i.test(alwaysLoadedGuidance), "always-loaded guidance contains no review-proof verdict label");
 record(/Reviewer prompts must request every correctness, safety, and scope finding/i.test(claudeModelTuning), "Claude reviewer prompts retain the uncapped-finding default");
 record(/Never lower effort on a money, RLS, or migration path to save tokens/i.test(claudeModelTuning), "Claude tuning preserves the high-risk effort floor");
-record(/Fable 5 remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for Fable 5 until superseded");
+record(/newer models \(Opus 5\.5, Fable 5\.1\) remains provisional but binding[\s\S]*must not treat this guidance as Opus-only or skip it/i.test(claudeModelTuning), "Claude model tuning remains binding for newer Opus and Fable models until superseded");
+const codexModelTuning = readChecked("docs/reference/codex-model-tuning.md");
+record(/Never lower effort on a money, RLS, or migration path to save tokens/i.test(codexModelTuning), "Codex tuning preserves the high-risk effort floor");
+record(/Never run a Luna round through `scripts\/write-codex-push-proof\.mjs`/.test(codexModelTuning), "Codex tuning keeps Luna out of the proof wrapper");
+record(/docs\/reference\/codex-model-tuning\.md/.test(agents), "AGENTS.md routes Codex model choice on demand");
 record(
   /normal helper use requires no exemption marker/i.test(sqlCanonicalPatterns) &&
     !/When using helpers,\s+add[^\n]*idempotency-body-check:\s*exempt/i.test(sqlCanonicalPatterns),
