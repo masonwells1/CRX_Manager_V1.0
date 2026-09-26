@@ -1,0 +1,47 @@
+name: Daily landing summary
+
+# Mason's autonomous-landing rule (2026-09-26): agents merge and apply
+# non-destructive migrations on their own, and Mason gets one plain-English
+# summary a day of what merged, what the agents recorded as applied, and what is
+# waiting on him. The summary is posted as a comment that @-mentions him on a
+# single "Daily landing summary" issue, so GitHub emails it.
+#
+# Read-only apart from that one comment: it checks out the default branch, reads
+# pull requests and git history, and never touches the database or any code.
+# Scheduled and manual runs both use the default branch's copy of this file.
+on:
+  schedule:
+    # 13:00 UTC = 8:00 in Chicago during daylight time (7:00 in winter).
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: daily-landing-summary
+  cancel-in-progress: false
+
+jobs:
+  summary:
+    name: Post the daily landing summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          # The summary reads which changelog entries and migration files were
+          # ADDED in the last day, so it needs that much history.
+          fetch-depth: 200
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+      - name: Post the summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/daily-landing-summary.mjs --post

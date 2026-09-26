@@ -13,6 +13,28 @@
 > round must never be routed through `scripts/write-codex-push-proof.mjs`, which unlinks the existing proof for the
 > current HEAD at the start of a run. See `docs/manual/DECISION_LOG.md`, 2026-09-20.
 >
+> **Autonomous landing (Mason, 2026-09-26) — this block supersedes older wording in the rows below where they
+> differ.** (1) `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` merge route now deny any merge into
+> `main` unless CodeRabbit's latest verdict (`gh pr view --json reviews`) is APPROVED on the exact `headRefOid`
+> (`coderabbitApprovedHead`), the NEWEST run of every reported check is green with `mergeStateStatus` CLEAN
+> (`newestCheckRollup` — an older failed run no longer outvotes a later green one), and a fresh `gpt-6-sol`/`high`
+> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones. `--auto` into `main` is
+> refused outright; `--admin` and `CHANGES_REQUESTED` still are. (2) `migration-apply-lib.mjs` applies its former
+> hands-free-only proof set (content binding, both reviewer names, fresh content-bound Sol proof) in EVERY session,
+> and refuses DESTRUCTIVE SQL for agents in every session; the only door is Mason's in-chat yes plus
+> `scripts/apply-migration-file.mjs --mason-approved-destructive` in an UNARMED session (armed runs refuse it
+> regardless). The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
+> row below no longer exists. As its LAST check it runs `migration-landing-gate-lib.mjs`: the apply must come from a
+> clean checkout of the PR's branch (migration committed at HEAD, HEAD = the open PR's head into `main`) whose head
+> has CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof — so no migration reaches
+> production before its PR's final reviews. A fixture with no real PR therefore always ends at that refusal. (3) `autopilot-lib.mjs` lets exactly two whole-command shapes through to those guards
+> while armed — `git push [-u] origin [HEAD:]<work-branch>` and `gh pr merge <n> [--squash|--merge|--rebase|
+> --delete-branch|--match-head-commit <sha>]` (`isArmedLandingCommand`) — and keeps denying every other push or merge
+> spelling. (4) The CodeRabbit lifecycle workflow waits out running checks, releases its provider label after
+> delivery, and records candidate epochs so a fix on the same PR earns one follow-up review
+> (`docs/reference/coderabbit-native-review.md`). (5) `.github/workflows/daily-landing-summary.yml` posts Mason a
+> read-only daily summary. See `docs/manual/DECISION_LOG.md`, 2026-09-26.
+>
 > Last reconciled against `.claude/settings.json` and `.codex/hooks.json` hook wiring on 2026-09-04 (lean instruction review: the startup-reminder row now documents task-routed loading, and an accidental duplicate of the hook reference was removed). Previous reconciliation 2026-08-27 (first harness-simplification tranche:
 > the UserPromptSubmit and PostToolUse commands now enter through one event router apiece while preserving the existing rule modules;
 > Codex's MCP-only guards now use `mcp__.*` matcher parity with Claude; and Codex's `production-action-guard.mjs` deliberately remains

@@ -16,12 +16,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
+import { evaluateLandingGate } from "./migration-landing-gate-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -52,6 +53,15 @@ const iso = (msFromNow) => new Date(Date.now() + msFromNow).toISOString();
 const noWorktrees = () => "";
 
 const roots = [];
+// The pull-request half of the landing rule (migration-landing-gate-lib.mjs) needs
+// a real PR on GitHub, so these rule-book cases stand it in as "the PR is ready";
+// the gate itself is exercised in its own block at the end of this file, and a
+// refusal from it is asserted to block below.
+const landingOk = () => ({ ok: true });
+// A valid content-bound Sol proof. Since Mason's autonomous-landing rule
+// (2026-09-26) EVERY apply needs one, armed or not, so the known-good fixture
+// carries it by default and each case removes or breaks it on purpose.
+const goodCodex = { queryHash: HASH, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high", timestamp: iso(0) };
 /** Build a fixture project dir. Pass overrides to break exactly one thing. */
 function fixture({
   snapshot = { captured_at: iso(0), applied: [{ version: "20260101000000", name: "20260101000000_baseline" }] },
@@ -62,7 +72,9 @@ function fixture({
     findings: "clean",
     queryHash: HASH,
   },
-  codexProof = null,
+  // Default: a valid Sol proof bound to the SAME SQL the reviewer proof covers,
+  // so a case that applies different SQL stays a test of its own check.
+  codexProof = "default",
   autopilot = null,
   // The repository migration file the SQL must come from. Every real apply has
   // one — the source-provenance rule refuses SQL that is not the content of a
@@ -94,7 +106,8 @@ function fixture({
       "utf8");
   }
   if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(proof), "utf8");
-  if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexProof), "utf8");
+  const codexBody = codexProof === "default" ? { ...goodCodex, queryHash: proof?.queryHash || HASH } : codexProof;
+  if (codexBody !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexBody), "utf8");
   if (autopilot !== null) writeFileSync(path.join(stateDir, "AUTOPILOT.on"), autopilot, "utf8");
   if (baseline !== null) {
     const baselineDir = path.join(root, "supabase", "baselines");
@@ -149,7 +162,7 @@ function makeOriginMain(root) {
   writeFileSync(path.join(root, ".git", "FETCH_HEAD"), "fixture\n", "utf8");
 }
 
-const evaluate = (root, over = {}) => evaluateMigrationApply({
+const evaluate = (root, over = {}) => evaluateMigrationApply({ landingGate: landingOk,
   name: MIG,
   query: SQL,
   projectId: "rhyzpcqhnizqbxphqdkr",
@@ -162,7 +175,7 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
 });
 
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
-allows(evaluate(fixture()), "known-good interactive fixture is allowed");
+allows(evaluate(fixture()), "known-good UNARMED fixture (both reviewers + fresh Sol proof) is allowed — no per-migration ask since 2026-09-26");
 
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────
 // Each case asserts the SPECIFIC message for its condition, not just the guard
@@ -421,11 +434,36 @@ denies(evaluate(fixture({ autopilot: JSON.stringify({ expires: iso(-60 * 60 * 10
 denies(evaluate(fixture({ autopilot: "{ not valid json" })),
   "LAPSED", "malformed autopilot flag parks ALL applies");
 
-// ── CHECK 3: destructive content (hands-free only) ──────────────────────────
+// ── CHECK 3: destructive content (every session since 2026-09-26) ───────────
 const armed = () => JSON.stringify({ expires: iso(4 * 3600 * 1000) });
-const goodCodex = { queryHash: HASH, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high", timestamp: iso(0) };
 const DESTRUCTIVE = "DROP TABLE public.customers;\n";
 const destructiveHash = createHash("sha256").update(DESTRUCTIVE).digest("hex");
+const destructiveFixture = (autopilot) => fixture({
+  autopilot,
+  migrationFile: DESTRUCTIVE,
+  proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: destructiveHash },
+  codexProof: { ...goodCodex, queryHash: destructiveHash },
+});
+// Mason's autonomous-landing rule: destructive migrations are his. An UNARMED
+// session used to let one through on the reviewer proof alone (the "in-chat OK"
+// was prose); it is now refused for the agent, perfect proofs or not.
+denies(evaluate(destructiveFixture(null), { query: DESTRUCTIVE }),
+  "destructive statement", "UNARMED session refuses a destructive migration even with perfect proofs");
+// The one door Mason opens in person: after his in-chat yes, the apply script's
+// explicit flag, in an unarmed session, with every proof still required.
+allows(evaluate(destructiveFixture(null), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+  "UNARMED session + Mason's explicit destructive approval + perfect proofs is allowed");
+denies(evaluate(destructiveFixture(armed()), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+  "destructive statement", "an ARMED run refuses destructive SQL whatever the approval flag says");
+denies(evaluate(destructiveFixture(null), { query: DESTRUCTIVE, masonApprovedDestructive: "true" }),
+  "destructive statement", "only the boolean true opens the door (a truthy string does not)");
+denies(
+  evaluate(fixture({
+    migrationFile: DESTRUCTIVE,
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: destructiveHash },
+    codexProof: null,
+  }), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+  "Sol high-effort gate", "Mason's destructive approval never waives the Sol proof");
 denies(
   evaluate(
     fixture({
@@ -471,12 +509,45 @@ denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(60 * 60 * 1000
 denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "blockers", queryHash: HASH } })),
   "without subagent review proof", "reviewer proof whose findings are not clean/blockers-fixed");
 // The edited-after-review case: proof is fresh and clean but bound to other SQL.
+// Since 2026-09-26 every session gets the specific "not content-bound" refusal the
+// armed path always gave, instead of the generic missing-proof one.
 denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) } })),
-  "without subagent review proof", "reviewer proof bound to DIFFERENT SQL (edited after review)");
+  "not content-bound", "reviewer proof bound to DIFFERENT SQL (edited after review)");
 
-// ── CHECK 5: hands-free extras (content binding, reviewers, Codex gate) ─────
+// ── CHECK 5: content binding, reviewers, Codex gate ─────────────────────────
+// Hands-free only until 2026-09-26; Mason's autonomous-landing rule made them the
+// rule in EVERY session. The unarmed half below is the new behaviour; the armed
+// cases that follow it are unchanged.
 allows(evaluate(fixture({ autopilot: armed(), codexProof: goodCodex })),
   "known-good ARMED fixture is allowed");
+for (const [label, autopilot] of [["UNARMED", null], ["ARMED", armed()]]) {
+  denies(evaluate(fixture({ autopilot, codexProof: null })),
+    "Sol high-effort gate", `${label}: no Codex proof file is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, verdict: "blockers" } })),
+    "Sol high-effort gate", `${label}: a non-clean Codex verdict is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, queryHash: "0".repeat(64) } })),
+    "Sol high-effort gate", `${label}: a Codex proof bound to different SQL is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, model: "gpt-6-luna" } })),
+    "Sol high-effort gate", `${label}: a non-Sol Codex proof is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, reasoning_effort: "medium" } })),
+    "Sol high-effort gate", `${label}: the wrong reasoning effort is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, timestamp: iso(-31 * 60 * 1000) } })),
+    "Sol high-effort gate", `${label}: a stale (>30 min) Codex proof is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, timestamp: iso(60 * 60 * 1000) } })),
+    "Sol high-effort gate", `${label}: a FUTURE-dated Codex proof is refused`);
+  denies(
+    evaluate(fixture({
+      autopilot,
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer"], findings: "clean", queryHash: HASH },
+    })),
+    "does not record the required reviewers", `${label}: only one reviewer named is refused`);
+  denies(
+    evaluate(fixture({
+      autopilot,
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) },
+    })),
+    "not content-bound", `${label}: a reviewer proof bound to different SQL is refused`);
+}
 
 denies(
   evaluate(fixture({
@@ -524,7 +595,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
 {
   const root = fixture();
   const viaHookShape = evaluate(root);
-  const viaScriptShape = evaluateMigrationApply({
+  const viaScriptShape = evaluateMigrationApply({ landingGate: landingOk,
     name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
     projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
     gitTrackedMigrations: onlyThisMigration,
@@ -550,17 +621,23 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     });
   };
 
-  // Gate passes → dry run stops before the network, exit 0.
+  // Every LOCAL check passes here, but the fixture has no pull request on GitHub,
+  // so since 2026-09-26 the real landing gate (migration-landing-gate-lib.mjs)
+  // refuses — the script really runs it, with no injection point. The refusal
+  // reason proves everything before it passed; and nothing is transmitted.
   const okRoot = fixture();
   mkdirSync(path.join(okRoot, "supabase", "migrations"), { recursive: true });
   writeFileSync(path.join(okRoot, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
   makeOriginMain(okRoot);
   const dry = runScript(okRoot);
-  ok(dry.status === 0, `dry run on a passing gate exits 0 (got ${dry.status}: ${dry.stderr})`);
-  ok(dry.stdout.includes("APPLY GATE PASSED"), "dry run reports the gate passed");
-  ok(dry.stdout.includes("DRY RUN"), "dry run says it is a dry run");
-  ok(!dry.stdout.includes("Transmitting"), "dry run does NOT transmit without --confirm");
-  ok(!dry.stdout.includes("APPLY OK"), "dry run does not report an apply");
+  ok(dry.status === 2, `a migration whose PR is not ready is refused even on a dry run (got ${dry.status}: ${dry.stderr})`);
+  ok(dry.stderr.includes("MIGRATION LANDING GATE"), "the refusal is the PR landing gate — every local check before it passed");
+  ok(!dry.stdout.includes("Transmitting"), "the refused dry run does NOT transmit");
+  ok(!dry.stdout.includes("APPLY OK"), "the refused dry run does not report an apply");
+  const confirmed = runScript(okRoot, ["--confirm"]);
+  ok(confirmed.status === 2 && confirmed.stderr.includes("MIGRATION LANDING GATE"),
+    "--confirm cannot override the landing gate");
+  ok(!confirmed.stdout.includes("Transmitting"), "--confirm on a not-ready PR never transmits");
 
   // Gate refuses → the script refuses too, non-zero, and never reaches the network.
   const badRoot = fixture({ proof: null });
@@ -636,8 +713,10 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(existsSync(path.join(aliasRoot, ".claude", "session-state", "applied-migrations.json")),
       "a refused aliased filename leaves the snapshot intact");
   }
-  // A real repository migration name still passes unchanged.
-  ok(dry.status === 0, "the canonical-name rule does not reject a real migration filename");
+  // A real repository migration name still passes the canonical-name rule: the
+  // fixture above got all the way to the LAST gate (the PR landing gate).
+  ok(dry.stderr.includes("MIGRATION LANDING GATE") && !dry.stderr.includes("not a canonical migration name"),
+    "the canonical-name rule does not reject a real migration filename");
 
   // ROUND 7: the stamp-count rule closed a SHAPE, not the mechanism. A legacy
   // 8-digit name (`20260210_fix_rls_critical_issues`) aliased to
@@ -672,12 +751,18 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
     writeFileSync(path.join(root, "supabase", "migrations", `${alias}.sql`), legacySql, "utf8");
     writeFileSync(path.join(root, "supabase", "migrations", `${legacy}.sql`), legacySql, "utf8");
+    // Since 2026-09-26 every apply also needs a Sol proof keyed by the APPLIED name.
+    // Supplying one for the alias keeps these cases about reviewer-proof NAME
+    // matching; without it the Codex gate would refuse first and they would pass
+    // for the wrong reason.
+    writeFileSync(path.join(stateDir, `codex-review-mig-${alias.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80)}.json`),
+      JSON.stringify({ ...goodCodex, queryHash: legacyHash }), "utf8");
 
     // FIXED (PR: exact proof-name on the MCP path). requireExactProofName now
     // DEFAULTS to true, so the hook — which passes no such flag — refuses the alias.
     // This assertion used to read "substring matching DOES let the alias inherit the
     // proof (the bug)" and was a characterization test for a known-open hole.
-    const byDefault = evaluateMigrationApply({
+    const byDefault = evaluateMigrationApply({ landingGate: landingOk,
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
@@ -688,7 +773,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     // The lenient mode still behaves the old way when a caller explicitly opts in.
     // Kept deliberately: it documents WHY the default was flipped, and it fails loudly
     // if anyone ever reintroduces substring matching as the default.
-    const lenient = evaluateMigrationApply({
+    const lenient = evaluateMigrationApply({ landingGate: landingOk,
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
@@ -698,7 +783,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     ok(lenient.decision === "allow", "opt-in substring matching is still the vulnerable behaviour (no longer the default)");
 
     // Exact matching refuses it.
-    const strict = evaluateMigrationApply({
+    const strict = evaluateMigrationApply({ landingGate: landingOk,
       name: alias, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
@@ -711,7 +796,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     // applied HONESTLY either — the ordering guard refuses any candidate without a
     // 14-digit stamp. So the only thing its proof was ever good for was being
     // inherited by an alias that DID carry one. Exact matching removes that.
-    const honest = evaluateMigrationApply({
+    const honest = evaluateMigrationApply({ landingGate: landingOk,
       name: legacy, query: legacySql, projectId: "rhyzpcqhnizqbxphqdkr",
       projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       gitTrackedMigrations: aliasTracked,
@@ -762,8 +847,10 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       encoding: "utf8",
       env: cleanEnv({ CLAUDE_PROJECT_DIR: okRoot2, SUPABASE_ACCESS_TOKEN: "" }),
     });
-    ok(viaRepo.status === 0, `the repository file itself still passes (got ${viaRepo.status}: ${viaRepo.stderr})`);
-    ok(viaRepo.stdout.includes("APPLY GATE PASSED"), "the repository file reaches and passes the gate");
+    // With no pull request in the fixture the LAST gate (PR landing) refuses — which
+    // is exactly the proof that the identity rule itself passed this file.
+    ok(viaRepo.stderr.includes("MIGRATION LANDING GATE") && !viaRepo.stderr.includes("it is not that file"),
+      `the repository file itself passes the identity rule and reaches the last gate (got ${viaRepo.status}: ${viaRepo.stderr})`);
   }
 
   // SOURCE PROVENANCE THROUGH THE FILE-BYTES DOOR. This script takes a PATH, and
@@ -798,8 +885,8 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       encoding: "utf8",
       env: cleanEnv({ CLAUDE_PROJECT_DIR: parkedRoot, SUPABASE_ACCESS_TOKEN: "" }),
     });
-    ok(moved.status === 0, `the same migration under supabase/migrations/ passes (got ${moved.status}: ${moved.stderr})`);
-    ok(moved.stdout.includes("APPLY GATE PASSED"), "the moved migration reaches the gate and passes it");
+    ok(moved.stderr.includes("MIGRATION LANDING GATE") && !moved.stderr.includes("NOT A PERMITTED MIGRATION SOURCE"),
+      `the same migration under supabase/migrations/ passes the source rule and reaches the last gate (got ${moved.status}: ${moved.stderr})`);
   }
 }
 
@@ -872,7 +959,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(root, "scripts", ".staging-migrations"), { recursive: true });
     writeFileSync(path.join(root, "scripts", ".staging-migrations", `${parkedName}.sql`), PARKED_SQL, "utf8");
     denies(
-      evaluateMigrationApply({
+      evaluateMigrationApply({ landingGate: landingOk,
         name: parkedName, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
       }),
@@ -884,7 +971,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     for (const suffix of [".REJECTED", ".rejected", ".REJECTED.sql", ".bak", ".sql.REJECTED"]) {
       writeFileSync(path.join(root, "scripts", ".staging-migrations", `${parkedName}.sql${suffix}`), PARKED_SQL, "utf8");
       denies(
-        evaluateMigrationApply({
+        evaluateMigrationApply({ landingGate: landingOk,
           name: `${parkedName}.sql${suffix}`, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
         }),
@@ -911,7 +998,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       "",
     ]) {
       denies(
-        evaluateMigrationApply({
+        evaluateMigrationApply({ landingGate: landingOk,
           name, query: PARKED_SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: root, cwd: root, gitWorktreeList: noWorktrees,
         }),
@@ -930,7 +1017,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(sibling, "supabase", "migrations"), { recursive: true });
     writeFileSync(path.join(sibling, "supabase", "migrations", `${MIG}.sql`), SQL, "utf8");
     denies(
-      evaluateMigrationApply({
+      evaluateMigrationApply({ landingGate: landingOk,
         name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: mine, cwd: mine,
         gitWorktreeList: () => `worktree ${mine}\n\nworktree ${sibling}\n`,
@@ -955,7 +1042,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       path.join(linked, "supabase", "baselines", "manifest.json"),
       JSON.stringify({ format_version: 3, migrations_high_water: "20260727174805" }), "utf8");
     allows(
-      evaluateMigrationApply({
+      evaluateMigrationApply({ landingGate: landingOk,
         name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
         projectDir: primary, cwd: linked,
         gitWorktreeList: () => `worktree ${primary}\n\nworktree ${linked}\n`,
@@ -1128,7 +1215,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     try { symlinkSync(real, viaJunction, "junction"); linked = true; } catch { linked = false; }
     if (linked) {
       allows(
-        evaluateMigrationApply({
+        evaluateMigrationApply({ landingGate: landingOk,
           name: MIG, query: SQL, projectId: "rhyzpcqhnizqbxphqdkr",
           projectDir: viaJunction, cwd: viaJunction, gitWorktreeList: noWorktrees,
           gitTrackedMigrations: onlyThisMigration,
@@ -1327,9 +1414,20 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
   const snapshot = path.join(root, ".claude", "session-state", "applied-migrations.json");
   ok(existsSync(snapshot), "fixture starts with a snapshot present");
 
-  // --confirm with an unreachable endpoint: the gate passes, wrappability passes,
-  // the snapshot is invalidated, and transmission then fails. The snapshot must
-  // NOT come back.
+  // Since 2026-09-26 the LAST gate is the PR landing gate, which needs a real open
+  // pull request on GitHub and has deliberately no test seam in this script — so a
+  // subprocess can no longer reach transmission offline. The property is pinned
+  // at the source instead: the snapshot is deleted before the first fetch().
+  const applySource = readFileSync(path.resolve(__scriptsDir, "apply-migration-file.mjs"), "utf8");
+  const invalidateAt = applySource.indexOf("rmSync(snapshotPath)");
+  const firstFetchAt = applySource.indexOf("await fetch(");
+  ok(invalidateAt > 0 && firstFetchAt > 0 && invalidateAt < firstFetchAt,
+    "the snapshot is invalidated before the first transmission in the script's own code");
+  ok(applySource.indexOf("evaluateMigrationApply(") < invalidateAt,
+    "and only after the gate verdict was taken");
+
+  // Driven end to end, the run now stops at the landing gate: nothing transmits
+  // and the snapshot survives a refusal.
   const res = spawnSync(process.execPath, [
     path.resolve(__scriptsDir, "apply-migration-file.mjs"),
     path.join(root, "supabase", "migrations", `${MIG}.sql`),
@@ -1351,11 +1449,10 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
       no_proxy: "",
     }),
   });
-  ok(res.stdout.includes("Invalidated the applied-migration snapshot"),
-    "the snapshot is invalidated before transmission");
-  ok(!existsSync(snapshot),
-    "after an apply attempt the stale snapshot is GONE — the next apply blocks on missing evidence");
-  ok(res.status !== 0, `a failed transmission exits non-zero (got ${res.status})`);
+  ok(res.stderr.includes("MIGRATION LANDING GATE"), "the offline run stops at the PR landing gate");
+  ok(!res.stdout.includes("Transmitting"), "and never transmits");
+  ok(existsSync(snapshot), "a refused run leaves the snapshot intact");
+  ok(res.status === 2, `a refused run exits 2 (got ${res.status})`);
 }
 
 // ── name normalization: tolerate .sql and paths, never tolerate an alias ─────
@@ -1398,6 +1495,87 @@ ok(normalizeMigName("99999999999999_alias_20260210_fix_rls.sql") !== normalizeMi
     ok(normalizeMigName(mig) === normalizeMigName(proof),
       `normalization ACCEPTS it — a deliberate, bounded widening, not a fail-closed change`);
   }
+}
+
+// ── MIGRATION LANDING GATE (Sol HIGH, 2026-09-26) ────────────────────────────
+// A non-destructive apply happens with no ask only "under the same conditions" as
+// an agent merge. The rule book must refuse when the PR half refuses, and the
+// gate must refuse each missing condition on its own.
+denies(evaluate(fixture(), { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: CodeRabbit has not APPROVED" }) }),
+  "MIGRATION LANDING GATE", "a perfectly proved migration is still refused while its PR is not ready");
+denies(evaluate(fixture(), { landingGate: () => { throw new Error("boom"); } }),
+  "MIGRATION LANDING GATE", "a crashing landing check fails closed");
+denies(evaluate(fixture(), { landingGate: () => ({ ok: "yes" }) }),
+  "MIGRATION LANDING GATE", "only ok === true passes");
+denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: x" }) }),
+  "Sol high-effort gate", "the local proof checks still run first, so a PR-side refusal always means everything else passed");
+{
+  const HEAD_SHA = "a".repeat(40);
+  const BASE_SHA = "b".repeat(40);
+  const gateDir = mkdtempSync(path.join(os.tmpdir(), "crx-landing-gate-"));
+  roots.push(gateDir);
+  mkdirSync(path.join(gateDir, ".claude", "session-state"), { recursive: true });
+  const goodProof = { codex_ran: true, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high",
+    head_sha: HEAD_SHA, base_sha: BASE_SHA, timestamp: new Date().toISOString() };
+  writeFileSync(path.join(gateDir, ".claude", "session-state", `codex-review-${HEAD_SHA}.json`), JSON.stringify(goodProof));
+  const readyPr = {
+    number: 900, state: "OPEN", baseRefName: "main", baseRefOid: BASE_SHA, headRefOid: HEAD_SHA,
+    mergeStateStatus: "CLEAN", reviewDecision: "APPROVED",
+    reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: HEAD_SHA }, submittedAt: new Date().toISOString() }],
+    statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
+  };
+  const gate = ({ git = {}, pr = {}, prError = null, migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+    checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
+    runGit: (args) => {
+      const key = args.join(" ");
+      if (key in git) { if (git[key] instanceof Error) throw git[key]; return git[key]; }
+      if (key === "rev-parse HEAD") return `${HEAD_SHA}\n`;
+      if (key === "rev-parse --abbrev-ref HEAD") return "claude/feature\n";
+      if (key.startsWith("show HEAD:")) return SQL;
+      if (key.startsWith("status --porcelain")) return "";
+      throw new Error(`unexpected git ${key}`);
+    },
+    runGh: () => { if (prError) throw prError; return JSON.stringify({ ...readyPr, ...pr }); },
+  });
+  const refused = (verdict, fragment, message) => {
+    assert.equal(verdict.ok, false, `${message} — expected a refusal`);
+    assert.ok(String(verdict.reason).includes(fragment), `${message} — refusal did not mention ${JSON.stringify(fragment)}: ${verdict.reason}`);
+    pass++;
+  };
+  ok(gate().ok === true, "a ready PR — committed file, head matches, CodeRabbit APPROVED, green, fresh Sol proof — passes");
+  refused(gate({ git: { "rev-parse --abbrev-ref HEAD": "main" } }), "not from the pull request's own branch", "applying from main is refused");
+  refused(gate({ git: { "rev-parse --abbrev-ref HEAD": "HEAD" } }), "detached HEAD", "a detached checkout is refused");
+  refused(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: new Error("missing") } }), "is not committed at HEAD", "an uncommitted migration is refused");
+  // Sol HIGH, round 2: a committed same-named file is not enough — the SQL being
+  // transmitted must be byte-identical to it.
+  refused(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: `${SQL}-- different SQL\n` } }),
+    "not byte-identical", "SQL that differs from the reviewed commit is refused");
+  refused(gate({ queryHash: "0".repeat(64) }), "not byte-identical", "a transmitted hash that matches nothing is refused");
+  refused(gate({ queryHash: null }), "no content hash", "a missing transmitted hash fails closed");
+  ok(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: SQL.replace(/\n/g, "\r\n") } }).ok === true,
+    "CRLF in the committed blob is normalized the same way the apply script normalizes the file");
+  refused(gate({ git: { [`status --porcelain --untracked-files=all -- supabase/migrations/${MIG}.sql`]: " M supabase/migrations/x.sql" } }),
+    "uncommitted changes", "an edited-after-commit migration is refused");
+  refused(gate({ prError: new Error("no pull requests found") }), "could not find or read the open pull request", "no PR is refused");
+  refused(gate({ pr: { state: "MERGED" } }), "is not open", "a closed or merged PR is refused");
+  refused(gate({ pr: { baseRefName: "develop" } }), "does not target main", "a PR into another branch is refused");
+  refused(gate({ pr: { headRefOid: "c".repeat(40) } }), "is not this checkout's HEAD", "a checkout behind or ahead of the PR head is refused");
+  refused(gate({ pr: { reviewDecision: "CHANGES_REQUESTED" } }), "CHANGES_REQUESTED", "an open objection is refused");
+  refused(gate({ pr: { reviews: [] } }), "CodeRabbit has not APPROVED", "no CodeRabbit approval is refused");
+  refused(gate({ pr: { reviews: [{ ...readyPr.reviews[0], commit: { oid: "c".repeat(40) } }] } }), "CodeRabbit has not APPROVED",
+    "an approval of an older commit is refused");
+  refused(gate({ pr: { mergeStateStatus: "BLOCKED" } }), "not merge-ready", "a PR that is not CLEAN is refused");
+  refused(gate({ pr: { statusCheckRollup: [{ ...readyPr.statusCheckRollup[0], conclusion: "FAILURE" }] } }), "not merge-ready",
+    "a failed check is refused");
+  refused(gate({ pr: { baseRefOid: "d".repeat(40) } }), "no fresh gpt-6-sol/high proof", "a proof bound to another base is refused");
+  refused(gate({ migName: "" }), "migration name is missing", "no migration name fails closed");
+  writeFileSync(path.join(gateDir, ".claude", "session-state", `codex-review-${HEAD_SHA}.json`),
+    JSON.stringify({ ...goodProof, model: "gpt-6-luna" }));
+  refused(gate(), "no fresh gpt-6-sol/high proof", "a non-Sol proof is refused");
+  writeFileSync(path.join(gateDir, ".claude", "session-state", `codex-review-${HEAD_SHA}.json`),
+    JSON.stringify({ ...goodProof, timestamp: new Date(Date.now() - 31 * 60_000).toISOString() }));
+  refused(gate(), "no fresh gpt-6-sol/high proof", "a stale proof is refused");
 }
 
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }

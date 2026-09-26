@@ -46,7 +46,10 @@ const shipWorkflow = readChecked(".claude/commands/ship.md");
 const routingTable = agents.match(/## Start and Route([\s\S]*?)## Engineering Principles/)?.[1] || "";
 const protectedDelivery = agents.match(/## Safety and Protected Delivery([\s\S]*?)## Verification and Closeout/)?.[1] || "";
 const protectedApprovalBullet = protectedDelivery.match(/^- Get Mason’s explicit approval in the current conversation before[^\r\n]*$/m)?.[0] || "";
-const migrationExceptionSentence = protectedApprovalBullet.match(/The only migration exception[^.]*?destructive migrations\./i)?.[0] || "";
+// Mason's autonomous-landing rule (2026-09-26) replaced the armed-only migration
+// exception. The rule lives in its own bullet; the checks below pin every
+// condition it attaches, so trimming a condition out of AGENTS.md fails here.
+const autonomousLandingBullet = protectedDelivery.match(/^- \*\*Autonomous landing[^\r\n]*$/m)?.[0] || "";
 const routedGuidance = [...new Set(
   [...routingTable.matchAll(/`([^`]+\.(?:md|json))`/g)].map((match) => match[1]),
 )];
@@ -135,15 +138,18 @@ record(/Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NU
 record(/Money must resolve to exact whole cents/i.test(agents), "AGENTS.md retains exact-money requirements");
 record(/Use `src\/lib\/db\.ts` as the only Supabase client[\s\S]*assertRpcResult\(\)[\s\S]*checkMutationResult\(\)/i.test(agents), "AGENTS.md retains Supabase client and result-check requirements");
 record(/never use `--no-verify`[\s\S]*never push directly to `main`/i.test(agents), "AGENTS.md retains protected-delivery bans");
-const migrationExceptionChecks = [
-  ["Mason pre-authorizes the hands-free run", /hands-free run Mason explicitly pre-authorized/i],
-  ["the autopilot arm is unexpired", /unexpired autopilot arm flag/i],
-  ["migration-apply-guard proof is fresh", /fresh migration-apply-guard proof/i],
-  ["the Codex verdict is fresh", /fresh Codex verdict/i],
-  ["destructive migrations remain prohibited", /never permits destructive migrations/i],
+const autonomousLandingChecks = [
+  ["CodeRabbit approval of the frozen final head", /CodeRabbit has APPROVED the frozen final head/i],
+  ["a clean exact-SHA Sol review of that head", /fresh exact-SHA Sol[^.]*review of that head is clean/i],
+  ["every required check green", /every required check is green/i],
+  ["migrations limited to NON-destructive ones", /NON-destructive migration/i],
+  ["the migration-apply-guard proof gate", /migration-apply-guard proof gate/i],
+  ["both reviewer proofs and a fresh Sol proof", /both reviewer proofs and a fresh content-bound Sol proof/i],
+  ["30-minute proof freshness", /under 30 minutes/i],
+  ["enforcement by the gates, not prose", /merge and apply gates enforce it/i],
 ];
-for (const [name, pattern] of migrationExceptionChecks) {
-  record(pattern.test(migrationExceptionSentence), `AGENTS.md hands-free exception sentence requires ${name}`);
+for (const [name, pattern] of autonomousLandingChecks) {
+  record(pattern.test(autonomousLandingBullet), `AGENTS.md autonomous-landing rule requires ${name}`);
 }
 record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
 record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
@@ -164,7 +170,7 @@ record(/AGENTS\.md.*canonical shared (?:project )?contract/i.test(claude), "CLAU
 record(/explicit approval in the current conversation/i.test(protectedApprovalBullet), "AGENTS.md defines the current-conversation approval sentence");
 const protectedActionChecks = [
   ["force-pushing", /force-pushing/i],
-  ["applying a live migration", /applying a live migration/i],
+  ["applying a destructive migration", /applying a DESTRUCTIVE migration/i],
   ["changing live data", /changing live data/i],
   ["deploying an Edge Function", /deploying an Edge Function/i],
   ["out-of-band production changes", /out-of-band production change/i],

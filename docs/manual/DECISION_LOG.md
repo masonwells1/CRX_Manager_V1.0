@@ -1,11 +1,79 @@
 # Decision Log
 
-Last verified: 2026-09-26
+Last verified: 2026-09-26 (autonomous landing entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
+
+**Source:** Mason, in the autonomous-landing build session on 2026-09-26. He first chose this in
+another session ("yes to both"); a relayed decision is not authorization, so the rule was restated to
+him in plain English in this session — including that every change, even a small wording fix, would
+now need a Sol review and so use more Codex credits — and he replied, in his words: **"Yes I
+approve."** He did not pick a different channel for the daily summary, so it goes to a GitHub issue
+comment that emails him.
+
+**Decision.**
+1. Every change gets a final exact-SHA `gpt-6-sol` (high) Codex review and a CodeRabbit review of the
+   final head. When both are clean — CodeRabbit APPROVED that exact head, no unresolved objection —
+   and every required check is green, the agent **merges by itself**. No per-merge ask.
+2. Under the same conditions, that change's **non-destructive migration is applied live by the
+   agent**, in any session, armed or not. The proof gate is unchanged and now required everywhere:
+   the `rls-security-reviewer` + `migration-drift-reviewer` proof and a fresh content-bound Sol proof,
+   minted by `scripts/write-apply-proofs.mjs`, each under 30 minutes.
+3. **Still Mason's, always:** destructive migrations (DELETE/TRUNCATE of business rows, DROP of
+   data-bearing tables or columns — `destructiveMigrationCheck`), Edge Function deploys, and
+   secrets, authentication, billing and permissions changes.
+4. Mason gets a short plain-English daily summary of what merged, what was applied, and what is
+   waiting on him (`.github/workflows/daily-landing-summary.yml`).
+
+**What this supersedes.** The parts of the **2026-06-16 standing push policy** that limited
+unattended landing, the **2026-07-13 hands-free migration policy** (its proof gate now applies in
+every session, and the in-chat OK for a non-destructive migration is gone; its destructive refusal
+stands and now also binds unarmed sessions), the **2026-07-17 CodeRabbit policy** and the
+**2026-09-02 required-review removal** where they made a merge possible without CodeRabbit's
+approval of the exact head, or required a replacement PR for every fix round, and the
+**2026-09-20** entry where it confined the Sol gate to risky diffs. CI stays required; CHANGES_REQUESTED
+still blocks; `--admin` and `--auto` merges stay refused.
+
+**Operative rule (how it is enforced).**
+- `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` deny a merge into `main` unless
+  CodeRabbit's latest verdict is APPROVED on the exact `headRefOid`, the newest run of every reported
+  check is green with `mergeStateStatus` CLEAN, and a fresh Sol proof is bound to that head and
+  GitHub's real base. `--auto` into `main` is refused outright.
+- `migration-apply-lib.mjs` applies the formerly hands-free-only proof set in every session and refuses
+  destructive SQL for agents everywhere. The one door for a destructive migration is Mason's in-chat
+  yes, then `scripts/apply-migration-file.mjs ... --mason-approved-destructive` in an UNARMED session,
+  with every proof still required; an armed run refuses it regardless. The flag is self-attested — the
+  same trust the in-chat OK always carried — so it is a deliberate speed bump, not proof.
+- Armed autopilot lets exactly two whole-command shapes through to those guards — a plain
+  `git push origin <work-branch>` and a plain `gh pr merge <n> [--squash|…]` — and still denies every
+  other push or merge spelling.
+- The CodeRabbit lifecycle workflow waits out running checks instead of failing, no longer restarts CI
+  with a PR-description summary, releases its provider label once a review lands, and lets a fix on the
+  SAME PR earn one follow-up review (candidate epochs). See `docs/reference/coderabbit-native-review.md`.
+
+- The apply is bound to its pull request (`migration-landing-gate-lib.mjs`, added after the exact-SHA
+  Sol review of the introducing PR raised it HIGH): it must run from a clean checkout of the PR's
+  branch with the migration committed at HEAD, HEAD must be the open PR's head into `main`, and that
+  head must carry CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof —
+  the same predicates the merge gates use. So a migration can no longer reach production before its
+  PR's final reviews.
+
+**Known residuals, stated plainly.** (a) The merge and apply proofs are self-attestable files on disk
+(the documented `KNOWN_ISSUES` §4b residual); the gates make skipping a review an explicit act, not an
+impossible one. (b) The daily summary reports
+applies as the agents recorded them in `docs/changelog.d/`; it holds no database credential, and
+adding one is a secrets decision that stays Mason's. (c) The plumbing PR that introduced this changed
+the merge gate and lifecycle workflow themselves, so it cannot pass its own new rules: Mason merges it
+by hand, once. (d) `.claude/settings.json` still lists `Bash(gh pr merge:*)` in its `ask` tier,
+which `defaultMode: "dontAsk"` turns into a silent denial; the agent could not change its own permission
+file (the auto-mode classifier refused it as self-modification), so that one line is Mason's to change
+before agents can merge from an ordinary session. Until then the merge gate is correct but the harness
+denies the command first.
 
 ## 2026-09-25 — GPT-6 guidance: one priority order, Astra reviews plans, model IDs live in one reference
 

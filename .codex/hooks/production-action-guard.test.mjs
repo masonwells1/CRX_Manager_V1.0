@@ -336,6 +336,30 @@ try {
   const ordinary = makeRepo("src/components/Label.tsx", "export const label = 'ordinary';\n");
   assert.equal(evaluatePush(ordinary.repo).blocked, false, "non-risky main push allowed without proof");
 
+  // Mason's autonomous-landing rule (2026-09-26): a PR MERGE into main needs the
+  // exact-SHA Sol proof even when nothing in the diff is risky. Everything else
+  // about this PR is merge-ready, so the missing proof is the only reason to deny.
+  const ordinaryPrJson = JSON.stringify({
+    baseRefName: "main", baseRefOid: ordinary.base, headRefName: "feature/test", headRefOid: ordinary.sha,
+    reviewDecision: "APPROVED", mergeStateStatus: "CLEAN",
+    reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: ordinary.sha }, submittedAt: "2026-09-26T12:00:00Z" }],
+    statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "build" }],
+  });
+  const ordinaryMerge = evaluateProductionAction({
+    toolName: "PowerShell", toolInput: { command: "gh pr merge 5 --squash" }, repoDir: ordinary.repo,
+    nowMs: Date.now(), runGh: () => ordinaryPrJson,
+  });
+  assert.equal(ordinaryMerge.blocked, true, "a non-risky PR merge into main still needs the Sol proof");
+  assert.match(ordinaryMerge.reason, /every merge into main needs an exact-SHA Sol proof/, "and says it is the landing rule, not a risk finding");
+  writeProof(ordinary.repo, {
+    codex_ran: true, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high",
+    head_sha: ordinary.sha, base_sha: ordinary.base, timestamp: new Date().toISOString(),
+  });
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell", toolInput: { command: "gh pr merge 5 --squash" }, repoDir: ordinary.repo,
+    nowMs: Date.now(), runGh: () => ordinaryPrJson,
+  }).blocked, false, "...and merges once the exact-SHA Sol proof exists");
+
   // ── codex-bot-review-lib is guard-critical: it is IMPORTED at startup ──────
   // Codex HIGH on PR #563's own exact-head review: the module was reachable by
   // apply_patch (blocked:false) while the identical patch against
@@ -1372,6 +1396,8 @@ try {
     headRefName: "feature/test",
     headRefOid: risky.sha,
     reviewDecision: "APPROVED",
+    // Mason's autonomous-landing rule (2026-09-26): CodeRabbit approved THIS head.
+    reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: risky.sha }, submittedAt: "2026-09-26T12:00:00Z" }],
     mergeStateStatus: "CLEAN",
     statusCheckRollup: greenChecks,
   };
@@ -1405,6 +1431,48 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "gh PR merge to main uses the same valid proof gate");
+
+  // ── Mason's autonomous-landing rule (2026-09-26) ────────────────────────────
+  // Everything below runs against the merge-READY fixture above (green, approved,
+  // valid Sol proof), so each denial is caused by the one thing it removes.
+  const noCodeRabbit = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviews: [] }),
+  });
+  assert.equal(noCodeRabbit.blocked, true, "no CodeRabbit review of the head: the merge stays with Mason");
+  assert.match(noCodeRabbit.reason, /CodeRabbit has not APPROVED this exact head/, "and the denial says why");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] }),
+  }).blocked, true, "an approval of an OLDER commit does not cover the head");
+  const autoMerge = evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => mainPrJson,
+  });
+  assert.equal(autoMerge.blocked, true, "--auto into main is refused even on a merge-ready PR");
+  assert.match(autoMerge.reason, /--auto/, "and the denial names the flag");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: "gh pr merge 123 --squash" },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: () => JSON.stringify({ ...mainPr, statusCheckRollup: [
+      { __typename: "CheckRun", workflowName: "CodeRabbit final review gate", name: "CodeRabbit candidate lifecycle",
+        status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-25T03:36:40Z", completedAt: "2026-09-25T03:40:57Z" },
+      { __typename: "CheckRun", workflowName: "CodeRabbit final review gate", name: "CodeRabbit candidate lifecycle",
+        status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-25T04:10:13Z", completedAt: "2026-09-25T04:10:24Z" },
+      ...greenChecks,
+    ] }),
+  }).blocked, false, "an older failed lifecycle run no longer blocks once a newer run of it is green (PR #794)");
 
   // Codex sol, 2026-09-08, SEC-001 and SEC-002. These run against THIS fixture
   // on purpose: the PR above is APPROVED, CLEAN, green and carries a valid Sol
@@ -2701,6 +2769,7 @@ try {
       headRefName: "feature/test",
       headRefOid: stale.sha,
       reviewDecision: "APPROVED",
+      reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: stale.sha }, submittedAt: "2026-09-26T12:00:00Z" }],
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     });
@@ -2760,6 +2829,7 @@ try {
         headRefName: "feature/test",
         headRefOid: updatedHead,
         reviewDecision: "APPROVED",
+        reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: updatedHead }, submittedAt: "2026-09-26T12:00:00Z" }],
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),
@@ -2789,6 +2859,7 @@ try {
       headRefName: "feature/test",
       headRefOid: stale.sha,
       reviewDecision: "APPROVED",
+      reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: stale.sha }, submittedAt: "2026-09-26T12:00:00Z" }],
       mergeStateStatus: "CLEAN",
       statusCheckRollup: greenChecks,
     }));
@@ -2840,6 +2911,7 @@ try {
         headRefName: "feature/test",
         headRefOid: updatedHead,
         reviewDecision: "APPROVED",
+        reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: updatedHead }, submittedAt: "2026-09-26T12:00:00Z" }],
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),

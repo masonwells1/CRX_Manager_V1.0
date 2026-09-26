@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  coderabbitApprovedHead,
   contentIsRisky,
   createHardGateBudget,
   extractPatchDestinations,
@@ -29,6 +30,7 @@ import {
   pushIsForced,
   pushTargetsCurrentHead,
   pushUsesBulkMode,
+  pullRequestChecksGreen as sharedPullRequestChecksGreen,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
@@ -910,7 +912,11 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
   );
 }
 
-function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authoritativeBaseSha }) {
+// `requireProof` (PR merges into main, Mason's autonomous-landing rule of
+// 2026-09-26): every merge needs the exact-SHA Sol proof, whether or not the diff
+// is classified risky. The classification still runs so the denial can say what
+// is risky, but it no longer opens an allow path of its own.
+function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authoritativeBaseSha, requireProof = false }) {
   let headSha = sourceSha || "";
   let baseSha = "";
   try {
@@ -997,9 +1003,10 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
     }
   }
 
-  if (risky.length === 0 && !contentFlagged) return { blocked: false };
+  if (risky.length === 0 && !contentFlagged && !requireProof) return { blocked: false };
 
-  // The change is risky, so a Sol proof is about to be demanded. That proof is
+  // A Sol proof is about to be demanded (the change is risky, or it is a PR
+  // merge under the autonomous-landing rule). That proof is
   // only meaningful if the reviewed diff actually covers what will land on main.
   // When the head does not contain GitHub's current base, the merge result also
   // includes base-only commits that no review in this flow ever saw — and
@@ -1016,7 +1023,7 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
     }
     if (!headContainsBase) {
       return denied(
-        `CODEX PRODUCTION GATE: this pull request is risky and its head ${headSha.slice(0, 12)} does not ` +
+        `CODEX PRODUCTION GATE: this pull request needs a Sol proof and its head ${headSha.slice(0, 12)} does not ` +
         `contain the base it will merge onto (${baseSha.slice(0, 12)}), so the reviewed diff cannot cover ` +
         `everything the merge lands (fail closed). Update the branch first — merge origin/main into it (or ` +
         `rebase onto it) and push — then re-run the review so the proof covers the real merge result.`
@@ -1026,7 +1033,9 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
 
   const riskDescription = risky.length > 0
     ? `the main-bound diff changes ${risky.length} risky file(s): ${risky.slice(0, 6).join(", ")}${risky.length > 6 ? ", ..." : ""}`
-    : "the main-bound diff contains money or financial-audit identifiers even though its paths look ordinary";
+    : contentFlagged
+      ? "the main-bound diff contains money or financial-audit identifiers even though its paths look ordinary"
+      : "every merge into main needs an exact-SHA Sol proof (Mason's autonomous-landing rule, 2026-09-26)";
   const proofPath = path.join(repoDir, ".claude", "session-state", `codex-review-${headSha}.json`);
   if (!existsSync(proofPath)) {
     return proofRequirement(headSha, riskDescription, `Missing required Sol high-effort proof: ${proofPath}`, baseSha);
@@ -1116,7 +1125,7 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
   // will actually land on. Without it the gate falls back to local origin/main,
   // which can be stale (Codex P1, 2026-07-25).
-  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup,autoMergeRequest");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   // baseRefOid is required only for main-bound merges; gatePullRequestMerge
@@ -1143,21 +1152,11 @@ export function pullRequestApproved(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
 }
 
+// One definition, shared with pr-merge-guard: the newest run of every reported
+// check must be green (2026-09-26). This copy used to judge every run ever
+// reported at the head, so one failed lifecycle run blocked a merge forever.
 export function pullRequestChecksGreen(pullRequest) {
-  if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
-  const checks = pullRequest?.statusCheckRollup;
-  if (!Array.isArray(checks) || checks.length === 0) return false;
-  return checks.every((check) => {
-    if (check?.__typename === "StatusContext") {
-      return String(check.state || "").toUpperCase() === "SUCCESS";
-    }
-    if (check?.__typename === "CheckRun") {
-      const status = String(check.status || "").toUpperCase();
-      const conclusion = String(check.conclusion || "").toUpperCase();
-      return status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion);
-    }
-    return false;
-  });
+  return sharedPullRequestChecksGreen(pullRequest);
 }
 
 function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
@@ -1201,9 +1200,28 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "a genuine nitpick may be dismissed with a one-line reason in the thread. Merge only after that."
     );
   }
+  // Mason's autonomous-landing rule (2026-09-26) — mirror of pr-merge-guard.mjs.
+  // An agent merges into main only when CodeRabbit APPROVED the exact head, the
+  // newest run of every check is green, and a fresh exact-SHA Sol proof exists.
+  // `--auto` would land commits pushed after this gate ran, so it is refused.
+  if (request.auto) {
+    return denied(
+      "CODEX PRODUCTION GATE: `--auto` is not allowed into main — auto-merge lands the PR after this gate has " +
+      "run, so commits pushed in the meantime would merge without an exact-head Sol proof or a CodeRabbit " +
+      "review of them. Wait for the checks, then merge immediately."
+    );
+  }
+  if (!coderabbitApprovedHead(pullRequest)) {
+    return denied(
+      `CODEX PRODUCTION GATE: CodeRabbit has not APPROVED this exact head (${String(pullRequest.headRefOid).slice(0, 12)}). ` +
+      "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required check " +
+      "is green, apply the `ready-for-coderabbit` label so the default-branch workflow dispatches one review, " +
+      "fix every real finding, and retry. Do not post `@coderabbitai` commands by hand."
+    );
+  }
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
-      "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
+      "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and the newest run of every reported check is completed successfully, neutral, or skipped."
     );
   }
   const mainVerdict = gateMainChange({
@@ -1213,6 +1231,7 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     authoritativeBaseSha: pullRequest.baseRefOid,
     nowMs,
     runGit,
+    requireProof: true,
   });
   if (mainVerdict.blocked) return mainVerdict;
 

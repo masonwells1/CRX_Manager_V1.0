@@ -248,9 +248,9 @@ Reviewers:    rls-security-reviewer / migration-drift-reviewer verdicts
 Smoke:        SMOKE_PASS_ROLLBACK (or: not run — say so)
 
 ⚠️  Remember: This migration is LOCAL only. Applying it to the live database goes
-    through `/migration-review` → Supabase MCP `apply_migration` (interactive
-    session: Mason's in-chat OK; pre-authorized armed hands-free run: full proof +
-    Codex gate per the settled 2026-07-13 policy). NEVER `supabase db push` and
+    through `/migration-review` → `scripts/apply-migration-file.mjs` after the PR's
+    final CodeRabbit and Sol reviews are clean (Mason's 2026-09-26 landing rule:
+    non-destructive = full proof + Sol gate, no ask; destructive = his in-chat yes). NEVER `supabase db push` and
     NEVER the dashboard SQL editor — both bypass the review gate and are blocked.
 ```
 

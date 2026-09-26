@@ -15,6 +15,7 @@ const {
   reviewCommandBody,
   nativeDispatchReceiptBody,
   candidateBirthBody,
+  candidateEpochBody,
   run,
   validateAuthorizationState,
   validatePullRequest,
@@ -413,7 +414,10 @@ test('CodeRabbit native review is disabled until the distinct dispatch label is 
   const autoReview = config.slice(autoReviewStart, config.indexOf('  path_instructions:', autoReviewStart));
   assert.notEqual(autoReviewStart, -1);
   assert.match(autoReview, /^\s*enabled:\s*false\b/m);
-  assert.match(autoReview, /^\s*auto_incremental_review:\s*false\b/m);
+  // TRUE since 2026-09-26 so a fix on the SAME PR can earn one follow-up review.
+  // Work-in-progress pushes stay unreviewed because the positive label below is
+  // attached only while a validated dispatch is in flight (releaseDeliveredDispatch).
+  assert.match(autoReview, /^\s*auto_incremental_review:\s*true\b/m);
   assert.match(autoReview, /^\s*labels:\s*\r?\n\s*- coderabbit-review-dispatch\b/m);
   assert.doesNotMatch(autoReview, /- ready-for-coderabbit\b/);
   assert.match(workflow, /nativeDispatch:\s*true\b/);
@@ -2843,7 +2847,11 @@ test('a ready relabel reconciles a substantive exact-head native review without 
 
   assert.equal(result.status, 'reviewed');
   assert.equal(harness.actionsComments.length, 0);
-  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  // The provider label is taken back once the review is observed, so a later
+  // work-in-progress push cannot buy an unvalidated incremental review.
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.equal(harness.receiptComments.length, 1, 'the receipt stays as the dedupe record for this head');
 });
 
 test('native delivered-review reconciliation retries transient unknown mergeability without redispatching', async () => {
@@ -2872,7 +2880,7 @@ test('native delivered-review reconciliation retries transient unknown mergeabil
   assert.equal(result.status, 'reviewed');
   assert.deepEqual(waits, [17]);
   assert.equal(harness.actionsComments.length, 0);
-  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false, 'released after delivery');
 });
 
 test('a native review is not accepted when its head changes during reconciliation', async () => {
@@ -3038,7 +3046,7 @@ test('public and low-permission commands cannot permanently poison authorized na
       assert.equal(result.status, 'reviewed');
       assert.equal(harness.comments.some((comment) => comment.id === command.id), true);
       assert.equal(harness.receiptComments.length, 1);
-      assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+      assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false, 'released after delivery');
     }
   }
 });
@@ -3116,7 +3124,7 @@ test('a base edit and restoration after dispatch cannot reuse the active receipt
   assert.equal(result.reason, 'ambiguous_native_history');
 });
 
-test('a changed candidate requires a fresh PR even when an earlier-head review completed', async () => {
+test('an earlier-head receipt inside the SAME candidate scope still blocks crediting (no epoch recorded it)', async () => {
   const labels = [READY_LABEL, REQUESTED_LABEL, DISPATCH_LABEL];
   const oldReceipt = nativeReceipt({ id: 90, created_at: '2026-09-07T03:43:00Z',
     body: nativeDispatchReceiptBody({ headSha: NEXT_HEAD, baseSha: BASE, runId: 808080 }) });
@@ -3136,7 +3144,7 @@ test('a changed candidate requires a fresh PR even when an earlier-head review c
   assert.equal(result.status, 'blocked');
   assert.equal(harness.actionsComments.length, 0);
   assert.match(harness.failures.join('\n'),
-    /retargeted, rewritten or changed; open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment/);
+    /retargeted, rewritten or changed within the current candidate; wait for this PR's own trusted synchronize run/);
   assert.doesNotMatch(harness.failures.join('\n'), /preserve (this PR|it)/);
 });
 
@@ -3249,7 +3257,10 @@ test('a reset cannot spend another native request for a head with a retained rec
   assert.equal(result.status, 'blocked');
   assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
   assert.equal(harness.receiptComments.length, 1);
-  assert.match(harness.failures.join('\n'), /potentially spent native attempt.*fresh delivery PR/);
+  // A head with a retained receipt is now RECONCILED against that receipt rather
+  // than refused outright — and this one has no provider-label event after it,
+  // so reconciliation cannot attribute anything and nothing is dispatched.
+  assert.match(harness.failures.join('\n'), /already has a native attempt whose history is ambiguous/);
 });
 
 test('a failed receipt write cannot start a provider review', async () => {
@@ -3366,7 +3377,7 @@ test('a valid receipt reconciles a late review from its original failed observat
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'reviewed');
   assert.equal(harness.receiptComments.length, 1);
-  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false, 'released once the review is reconciled');
   assert.deepEqual(harness.failures, []);
 });
 
@@ -3461,8 +3472,16 @@ for (const [action, eventLabel, permission] of [
       coderabbitReviews: [nativeReview()],
     });
     const result = await execute(harness, { nativeDispatch: true });
-    assert.equal(result.status, 'blocked');
-    assert.notEqual(harness.failures.length, 0);
+    // The security property is unchanged: nothing is reconciled, credited,
+    // released or posted, and every dedupe label survives. What changed on
+    // 2026-09-26 is the colour of the row for a NON-ready event — it is now a
+    // neutral "still in flight" pass instead of a red failure, because that red
+    // row outlived every rerun and stranded agent merges (PR #726/#794).
+    const isReadyEvent = action === 'labeled' && eventLabel === READY_LABEL;
+    assert.equal(result.status, isReadyEvent ? 'blocked' : 'pending');
+    assert.notEqual(result.status, 'reviewed');
+    if (isReadyEvent) assert.notEqual(harness.failures.length, 0);
+    else assert.match(harness.notices.join('\n'), /still in flight; this event cannot reconcile it/);
     assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
     assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
     assert.equal(harness.actionsComments.length, 0);
@@ -3689,23 +3708,26 @@ test('a former administrator now read-only cannot launder a late review from the
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'blocked');
   assert.equal(result.reason, 'ambiguous_native_history');
-  assert.match(harness.failures.join('\n'),
-    /changed since PR creation; open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment/);
+  // Since 2026-09-26 a changed candidate is a new EPOCH of the same PR, not a
+  // replacement PR — but with no trusted epoch recording this head/base, the old
+  // review still cannot be credited.
+  assert.match(harness.failures.join('\n'), /changed since PR creation and no trusted epoch records it yet/);
   assert.doesNotMatch(harness.failures.join('\n'), /preserve (this PR|it)/);
   assert.equal(harness.liveLabels.has(REQUESTED_LABEL), true);
   assert.equal(harness.receiptComments.length, 1);
 });
 
-test('a candidate changed since PR creation is told to replace and close the PR, not relabel it', async () => {
+test('a candidate changed with no recorded epoch is told to record one on THIS PR, not to replace it', async () => {
   const changed = pullRequest({ labels: [READY_LABEL], baseSha: NEXT_BASE });
   const harness = makeNativeHarness({ pulls: [changed], eventPullRequest: changed, runHeadSha: HEAD });
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'blocked');
   assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.receiptComments.length, 0, 'nothing was spent');
   const failures = harness.failures.join('\n');
-  assert.match(failures, /changed since PR creation; open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment/);
-  assert.match(failures, /Apply ready-for-coderabbit on the fresh PR once its checks pass; a new commit is unnecessary/);
-  assert.doesNotMatch(failures, /preserve (this PR|it)|after correcting the blocker/);
+  assert.match(failures, /no trusted epoch records it yet; wait for this PR's own trusted synchronize run/);
+  assert.match(failures, /No replacement PR is needed/);
+  assert.doesNotMatch(failures, /open a fresh delivery PR|Replaced by #N/);
 });
 
 test('missing edited duplicate or forged original context stops before spending provider quota', async () => {
@@ -3803,7 +3825,11 @@ test('a CodeRabbit changes-requested review blocks even if the aggregate decisio
   assert.equal(result.status, 'blocked');
   assert.equal(result.reviewed, true);
   assert.match(harness.failures.join('\n'), /CodeRabbit requested changes/);
-  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
+  // Delivered, so the provider label is taken back: the fix will be a new head
+  // that earns its own follow-up review, and a work-in-progress push meanwhile
+  // must not buy an unvalidated one.
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.equal(harness.receiptComments.length, 1);
 });
 
 test('native review-list failures stay blocked and preserve both labels', async () => {
@@ -3836,3 +3862,337 @@ for (const [name, overrides] of [
     assert.equal(harness.liveLabels.has(DISPATCH_LABEL), true);
   });
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// AUTONOMOUS LANDING (Mason, 2026-09-26)
+//   A. the lifecycle check waits for running checks instead of failing on them;
+//   C. a fix pushed to the SAME PR is a new candidate epoch and earns one review;
+//   plus: the provider label is released after delivery, and a delivered review
+//   is reconciled from its receipt on a relabel without dispatching again.
+// ════════════════════════════════════════════════════════════════════════════
+const OLD_HEAD = '5555555555555555555555555555555555555555';
+const EPOCH_RUN_ID = 606060;
+
+function epochRun(overrides = {}) {
+  return {
+    id: EPOCH_RUN_ID, workflow_id: 818181, path: '.github/workflows/coderabbit-final-review.yml',
+    display_title: `CodeRabbit gate synchronize PR 42 head ${HEAD} base ${BASE} execution ${BASE}`,
+    event: 'pull_request_target', head_sha: BASE, actor: { id: 999, login: 'masonwells1' },
+    repository: { id: 123456, full_name: 'masonwells1/FarmRx' },
+    pull_requests: [{ number: 42, head: { sha: HEAD }, base: { sha: BASE } }],
+    status: 'completed', conclusion: 'success', created_at: '2026-09-07T09:59:50Z', updated_at: '2026-09-07T10:00:10Z',
+    ...overrides,
+  };
+}
+
+function epochComment(overrides = {}, bodyOverrides = {}) {
+  return {
+    id: 95, user: { login: 'github-actions[bot]', type: 'Bot' },
+    created_at: '2026-09-07T10:00:00Z', updated_at: '2026-09-07T10:00:00Z',
+    body: candidateEpochBody({ action: 'synchronize', headSha: HEAD, baseSha: BASE, executionSha: BASE,
+      runId: EPOCH_RUN_ID, repoId: 123456, repoFullName: 'masonwells1/FarmRx', pullNumber: 42,
+      prCreatedAt: '2026-09-06T03:42:00Z', ...bodyOverrides }),
+    ...overrides,
+  };
+}
+
+// A PR that was OPENED at OLD_HEAD, reviewed there (CodeRabbit asked for
+// changes), then fixed by a push to HEAD whose trusted synchronize run recorded
+// the epoch. Everything about the old candidate — its receipt, its provider-label
+// event, a force-push event, CodeRabbit's objection — predates the epoch.
+function makeEpochHarness(options = {}) {
+  const oldReceipt = { id: 90, user: { login: 'github-actions[bot]', type: 'Bot' }, created_at: '2026-09-06T05:00:00Z',
+    body: nativeDispatchReceiptBody({ headSha: OLD_HEAD, baseSha: BASE, runId: 707070 }) };
+  const birthRun = {
+    id: 505050, workflow_id: 818181, path: '.github/workflows/coderabbit-final-review.yml',
+    display_title: `CodeRabbit gate opened PR 42 head ${OLD_HEAD} base ${BASE} execution ${BASE}`,
+    event: 'pull_request_target', head_sha: BASE, actor: { id: 1234, login: 'masonwells1' },
+    repository: { id: 123456, full_name: 'masonwells1/FarmRx' },
+    pull_requests: [{ number: 42, head: { sha: OLD_HEAD }, base: { sha: BASE } }],
+    status: 'completed', conclusion: 'success', created_at: '2026-09-06T03:42:01Z', updated_at: '2026-09-06T03:44:00Z',
+  };
+  const harness = makeNativeHarness({
+    ...options,
+    existingComments: options.existingComments ?? [oldReceipt, ...(options.withEpoch === false ? [] : [epochComment()])],
+    resolvedWorkflowByRunId: { 505050: birthRun, [EPOCH_RUN_ID]: epochRun(options.epochRun), ...options.resolvedWorkflowByRunId },
+  });
+  const birth = harness.comments.find((comment) => comment.body?.startsWith('<!-- crx-coderabbit-candidate-birth:'));
+  birth.body = candidateBirthBody({ headSha: OLD_HEAD, baseSha: BASE, executionSha: BASE, runId: 505050,
+    repoId: 123456, repoFullName: 'masonwells1/FarmRx', pullNumber: 42, creatorId: 1234, prCreatedAt: '2026-09-06T03:42:00Z' });
+  harness.timeline.push(
+    { event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' }, created_at: '2026-09-06T05:00:01Z' },
+    { event: 'unlabeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' }, created_at: '2026-09-06T05:09:00Z' },
+    { event: 'head_ref_force_pushed', created_at: '2026-09-07T09:59:40Z' },
+  );
+  return harness;
+}
+
+const staleCodeRabbitObjection = {
+  id: 5012391400, submitted_at: '2026-09-06T05:08:00Z', user: { login: 'coderabbitai[bot]', type: 'Bot' },
+  commit_id: OLD_HEAD, state: 'CHANGES_REQUESTED', body: '**Actionable comments posted: 2**',
+};
+
+test('C: a fix pushed to the SAME PR earns one follow-up review — no replacement PR', async () => {
+  const reviews = [staleCodeRabbitObjection];
+  const harness = makeEpochHarness({ coderabbitReviews: reviews });
+  // GitHub's aggregate follows each reviewer's LATEST verdict: CodeRabbit's old
+  // objection until its follow-up approval lands, then APPROVED.
+  harness.github.graphql = async () => ({ repository: { pullRequest: {
+    reviewDecision: reviews.length > 1 ? 'APPROVED' : 'CHANGES_REQUESTED' } } });
+  const result = await execute(harness, { nativeDispatch: true, reviewPollMs: 1,
+    settle: async () => { if (reviews.length === 1) reviews.push(nativeReview({ state: 'APPROVED', body: '' })); } });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+  assert.deepEqual(harness.failures, []);
+  const receipts = harness.receiptComments.map((comment) => comment.body);
+  assert.equal(receipts.length, 2, 'the old candidate keeps its receipt; the new head gets its own');
+  assert.equal(receipts[1], nativeDispatchReceiptBody({ headSha: HEAD, baseSha: BASE, runId: 909090 }));
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false, 'provider label released once the review landed');
+  assert.match(harness.notices.join('\n'), /only outstanding objection is CodeRabbit's, on a commit older than/);
+  assert.doesNotMatch(harness.failures.join('\n'), /fresh delivery PR|Replaced by #N/);
+});
+
+test('C: a HUMAN objection still refuses the follow-up review', async () => {
+  const humanObjection = { ...staleCodeRabbitObjection, id: 5012391401, user: { login: 'masonwells1', type: 'User' } };
+  const harness = makeEpochHarness({ coderabbitReviews: [staleCodeRabbitObjection, humanObjection], reviewDecision: 'CHANGES_REQUESTED' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1, 'nothing new was spent');
+  assert.match(harness.failures.join('\n'), /a reviewer has requested changes/);
+});
+
+test('C: a CodeRabbit objection AT the current head still refuses a new request', async () => {
+  const atHead = { ...staleCodeRabbitObjection, id: 5012391402, commit_id: HEAD, submitted_at: '2026-09-07T11:00:00Z' };
+  const harness = makeEpochHarness({ coderabbitReviews: [staleCodeRabbitObjection, atHead], reviewDecision: 'CHANGES_REQUESTED' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.match(harness.failures.join('\n'), /a reviewer has requested changes/);
+});
+
+test('C: an unreadable review list behind CHANGES_REQUESTED fails closed', async () => {
+  const harness = makeEpochHarness({ coderabbitReviews: [staleCodeRabbitObjection], reviewDecision: 'CHANGES_REQUESTED' });
+  harness.github.rest.pulls.listReviews = async () => { throw new Error('reviews unavailable'); };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+});
+
+test('C: without an epoch the moved head cannot be reviewed, and the PR is NOT told to replace itself', async () => {
+  const harness = makeEpochHarness({ withEpoch: false });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.match(harness.failures.join('\n'), /no trusted epoch records it yet/);
+  assert.doesNotMatch(harness.failures.join('\n'), /fresh delivery PR/);
+});
+
+for (const [name, mutate] of [
+  ['a run name for another head', (options) => { options.epochRun = { display_title: `CodeRabbit gate synchronize PR 42 head ${NEXT_HEAD} base ${BASE} execution ${BASE}` }; }],
+  ['a run name for another action', (options) => { options.epochRun = { display_title: `CodeRabbit gate labeled PR 42 head ${HEAD} base ${BASE} execution ${BASE}` }; }],
+  ['another workflow', (options) => { options.epochRun = { workflow_id: 999, path: '.github/workflows/untrusted.yml' }; }],
+  ['a failed recording run', (options) => { options.epochRun = { conclusion: 'failure' }; }],
+  ['a record written after its run finished', (options) => { options.epochRun = { updated_at: '2026-09-07T09:59:55Z' }; }],
+  ['another event', (options) => { options.epochRun = { event: 'pull_request' }; }],
+]) {
+  test(`C: an epoch bound to ${name} cannot open a follow-up review`, async () => {
+    const options = {};
+    mutate(options);
+    const harness = makeEpochHarness(options);
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.receiptComments.length, 1, 'nothing new was spent');
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  });
+}
+
+for (const [name, comments] of [
+  ['a person-authored epoch', () => [epochComment({ user: { login: 'masonwells1', type: 'User' } })]],
+  ['an edited epoch', () => [epochComment({ updated_at: '2026-09-07T10:05:00Z' })]],
+  ['an epoch for another pull request', () => [epochComment({}, { pullNumber: 43 })]],
+  ['a newest epoch for another head', () => [epochComment(), epochComment({ id: 96, created_at: '2026-09-07T10:30:00Z', updated_at: '2026-09-07T10:30:00Z' }, { headSha: NEXT_HEAD })]],
+  ['an epoch older than the birth record', () => [epochComment({ id: 12 })]],
+]) {
+  test(`C: ${name} cannot open a follow-up review`, async () => {
+    const harness = makeEpochHarness({ existingComments: [
+      { id: 90, user: { login: 'github-actions[bot]', type: 'Bot' }, created_at: '2026-09-06T05:00:00Z',
+        body: nativeDispatchReceiptBody({ headSha: OLD_HEAD, baseSha: BASE, runId: 707070 }) },
+      ...comments(),
+    ] });
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'blocked');
+    assert.equal(harness.receiptComments.length, 1, 'nothing new was spent');
+    assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  });
+}
+
+test('C: history rewritten INSIDE the current epoch still blocks', async () => {
+  const harness = makeEpochHarness();
+  harness.timeline.push({ event: 'head_ref_force_pushed', created_at: '2026-09-07T10:30:00Z' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.match(harness.failures.join('\n'), /rewritten or changed within the current candidate/);
+});
+
+test('C: an untracked provider-label attempt INSIDE the current epoch still blocks', async () => {
+  const harness = makeEpochHarness();
+  harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'outside-collaborator' },
+    created_at: '2026-09-07T10:30:00Z' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+});
+
+test('C: an undated history event is never excluded from the current epoch', async () => {
+  const harness = makeEpochHarness();
+  harness.timeline.push({ event: 'base_ref_changed', created_at: 'not-a-date' });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+});
+
+test('C: a push records a trusted epoch after its reset; the body is the webhook head and base', async () => {
+  const harness = makeNativeHarness({ action: 'synchronize', eventLabel: null,
+    pulls: [pullRequest({ labels: [REQUESTED_LABEL, DISPATCH_LABEL] })], eventPullRequest: pullRequest({ labels: [] }) });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reset');
+  const epochs = harness.comments.filter((comment) => comment.body?.startsWith('<!-- crx-coderabbit-candidate-epoch:'));
+  assert.equal(epochs.length, 1);
+  assert.equal(epochs[0].body, candidateEpochBody({ action: 'synchronize', headSha: HEAD, baseSha: BASE, executionSha: BASE,
+    runId: 909090, repoId: 123456, repoFullName: 'masonwells1/FarmRx', pullNumber: 42, prCreatedAt: '2026-09-06T03:42:00Z' }));
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+});
+
+test('C: a base retarget and a reopen record epochs too; an ordinary edit, a draft and a non-main base do not', async () => {
+  for (const [action, changes, base, expected] of [
+    ['edited', { base: { ref: { from: 'develop' } } }, 'main', 1],
+    ['reopened', undefined, 'main', 1],
+    ['edited', { title: { from: 'x' } }, 'main', 0],
+    ['converted_to_draft', undefined, 'main', 0],
+    ['synchronize', undefined, 'develop', 0],
+  ]) {
+    const pr = pullRequest({ labels: [], base });
+    const harness = makeNativeHarness({ action, changes, eventLabel: null, pulls: [pr], eventPullRequest: pr });
+    await execute(harness, { nativeDispatch: true });
+    const epochs = harness.comments.filter((comment) => comment.body?.startsWith('<!-- crx-coderabbit-candidate-epoch:'));
+    assert.equal(epochs.length, expected, `${action} ${JSON.stringify(changes)} on ${base}`);
+  }
+});
+
+test('C: a push records no epoch when native dispatch is off', async () => {
+  const harness = makeNativeHarness({ action: 'synchronize', eventLabel: null,
+    pulls: [pullRequest({ labels: [] })], eventPullRequest: pullRequest({ labels: [] }) });
+  await execute(harness);
+  assert.equal(harness.comments.filter((comment) => comment.body?.startsWith('<!-- crx-coderabbit-candidate-epoch:')).length, 0);
+});
+
+test('C: a relabel after release reconciles from the receipt and never dispatches again', async () => {
+  const harness = makeNativeHarness({ existingComments: [nativeReceipt()], coderabbitReviews: [nativeReview({ state: 'APPROVED', body: '' })] });
+  harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' },
+    created_at: nativeReceipt().created_at });
+  let providerWrites = 0;
+  const addLabels = harness.github.rest.issues.addLabels;
+  harness.github.rest.issues.addLabels = async (request) => {
+    if (request.labels.includes(DISPATCH_LABEL)) providerWrites += 1;
+    return addLabels(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+  assert.equal(providerWrites, 0, 'no second provider request');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(READY_LABEL), false);
+  assert.equal(harness.liveLabels.has(REQUESTED_LABEL), false);
+  assert.match(harness.notices.join('\n'), /reconciled from its receipt; no review was requested/);
+});
+
+test('C: a relabel of a head whose review has not landed stays pending and spends nothing', async () => {
+  const harness = makeNativeHarness({ existingComments: [nativeReceipt()], coderabbitReviews: [] });
+  harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' },
+    created_at: nativeReceipt().created_at });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'pending');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false);
+  assert.match(harness.failures.join('\n'), /no second review will be requested for this head/);
+});
+
+test('C: a relabel reconciling a CHANGES_REQUESTED review stays blocked', async () => {
+  const harness = makeNativeHarness({ existingComments: [nativeReceipt()],
+    coderabbitReviews: [nativeReview({ state: 'CHANGES_REQUESTED' })] });
+  harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' },
+    created_at: nativeReceipt().created_at });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 1);
+  assert.match(harness.failures.join('\n'), /CodeRabbit requested changes on this exact head/);
+});
+
+test('A: a check still running when the label lands is waited out, then the review is requested', async () => {
+  const running = inProgressCheck('foundation', 7001);
+  const done = completedCheck('foundation');
+  const waits = [];
+  const harness = makeNativeHarness({ coderabbitAcknowledgement: 'silent',
+    checkRunsSequence: [[running], [running], [running], [done]] });
+  const result = await execute(harness, { nativeDispatch: true, checkSettleAttempts: 10, checkSettlePollMs: 5,
+    settle: async (ms) => waits.push(ms) });
+  assert.equal(result.status, 'pending', harness.failures.join('\n'));
+  assert.equal(harness.receiptComments.length, 1, 'the review WAS requested once the check finished');
+  assert.match(harness.notices.join('\n'), /Waiting for foundation to finish/);
+  assert.ok(waits.filter((ms) => ms === 5).length >= 1);
+});
+
+test('A: without a configured wait the same running check still refuses immediately (old behaviour kept)', async () => {
+  const harness = makeNativeHarness({ checkRunsSequence: [[inProgressCheck('foundation', 7001)]] });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 0);
+  assert.match(harness.failures.join('\n'), /foundation: in_progress/);
+});
+
+test('A: a check that never finishes is still refused once the wait budget is spent', async () => {
+  const waits = [];
+  const harness = makeNativeHarness({ checkRunsSequence: [[inProgressCheck('foundation', 7001)]] });
+  const result = await execute(harness, { nativeDispatch: true, checkSettleAttempts: 4, checkSettlePollMs: 3,
+    settle: async (ms) => waits.push(ms) });
+  assert.equal(result.status, 'blocked');
+  assert.equal(harness.receiptComments.length, 0);
+  assert.equal(waits.filter((ms) => ms === 3).length, 4, 'waited exactly the configured budget');
+  assert.match(harness.failures.join('\n'), /foundation: in_progress/);
+});
+
+test('A: a required check that has not reported yet counts as running', async () => {
+  const harness = makeNativeHarness({ coderabbitAcknowledgement: 'silent', checkRunsSequence: [[], [], [completedCheck('foundation')]] });
+  const result = await execute(harness, { nativeDispatch: true, checkSettleAttempts: 5, checkSettlePollMs: 1, settle: async () => {} });
+  assert.equal(result.status, 'pending', harness.failures.join('\n'));
+  assert.equal(harness.receiptComments.length, 1);
+});
+
+test('A: a rerun started by a PR edit is waited out after delivery instead of failing the lifecycle (PR #794)', async () => {
+  const reviews = [];
+  let polls = 0;
+  const running = inProgressCheck('foundation', 7002);
+  const harness = makeNativeHarness({ coderabbitReviews: reviews });
+  const listForRef = harness.github.rest.checks.listForRef;
+  harness.github.rest.checks.listForRef = async (request) => {
+    // Green before dispatch; CodeRabbit's delivery then restarts the check,
+    // which finishes two polls later.
+    if (reviews.length && polls < 2) return { data: { total_count: 1, check_runs: [running] } };
+    return listForRef(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true, reviewPollMs: 1, checkSettleAttempts: 10, checkSettlePollMs: 2,
+    settle: async (ms) => { if (ms === 1 && !reviews.length) reviews.push(nativeReview()); if (ms === 2) polls += 1; } });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+  assert.deepEqual(harness.failures, []);
+  assert.equal(polls, 2);
+});
+
+test('A: the trusted workflow configures the wait and a job timeout that covers it', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'), 'utf8');
+  const attempts = Number(workflow.match(/checkSettleAttempts:\s*(\d+)/)?.[1]);
+  const pollMs = Number(String(workflow.match(/checkSettlePollMs:\s*([\d_]+)/)?.[1] || '').replaceAll('_', ''));
+  const timeout = Number(workflow.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+  assert.ok(attempts * pollMs >= 15 * 60_000, 'the wait covers ci.yml\'s ~11-minute required job with margin');
+  // Two waits (before dispatch and after delivery) plus the six-minute review poll must fit.
+  assert.ok(timeout * 60_000 >= 2 * attempts * pollMs + 6 * 60_000 + 60_000, 'the job timeout covers both waits and the poll');
+});

@@ -1,6 +1,6 @@
 # Owner Playbook — how to run CRX Manager through Claude and Codex
 
-**Last verified:** 2026-08-06
+**Last verified:** 2026-09-26 (autonomous landing)
 **Update triggers:** when commands/skills/policies change (the agent that changes them updates this file).
 
 This is your manual, Mason. You never have to remember a slash command (a typed
@@ -32,9 +32,11 @@ never have to type it yourself.
    written proof file, and — for the riskiest actions — your own explicit yes,
    typed in the conversation.
 
-If you remember nothing else: **you are always the last checkpoint before
-anything risky and irreversible happens.** The rest of this playbook is detail
-on top of that one fact.
+If you remember nothing else: **agents land ordinary work and non-deleting
+database changes on their own once two independent final reviews are clean, and
+you are still the last checkpoint for anything that deletes data, deploys an Edge
+Function, or touches secrets, logins, billing or permissions.** The rest of this
+playbook is detail on top of that.
 
 ---
 
@@ -48,25 +50,30 @@ on top of that one fact.
 | "Is my data backed up?" | Just reads the last backup's date/size — no new backup runs. | Quick reassurance check |
 | "What's the status of everything" | Shows every parallel worktree (a worktree is a separate folder/session working on its own piece of code) and every background loop at once — what's finished, what's still in progress, what's merged into the live app already. (`fleet`) Pair with "anything waiting on me" to see every written-but-not-yet-applied database change across all of them. (`parked`) | When you've had several sessions running and want the big picture |
 | "Review this before it ships" | Runs the code through the right combination of automated reviewers (security, database-drift, money-math, PDF-output checks) plus a genuinely independent second AI model, Codex, so nothing ships on one model's opinion alone. (`preflight` for the quick pre-commit check; `codex-gauntlet`/`codex-review` for the fuller adversarial pass) | Before committing or before anything you're nervous about |
-| "Ship it" | Runs the full pipeline: implement → verify it actually works → automated review → Codex's independent review → fix anything found → commit → land. Regular, reversible code lands on its own once every check is green (your standing authorization, explained below). It stops and shows you exactly what it wants to do before touching the live database, deploying an Edge Function, deleting data, or anything else on the "always needs your yes" list. (`ship`) | The standard way to get a feature or fix built end-to-end |
+| "Ship it" | Runs the full pipeline: implement → verify it actually works → automated review → Codex's independent review → fix anything found → CodeRabbit's final review → Sol's final review → apply its database change if it has one → merge. It lands on its own once both final reviews are clean and every check is green (your 2026-09-26 rule, explained below). It stops and shows you exactly what it wants to do before a database change that deletes data, an Edge Function deploy, or anything touching secrets, logins, billing or permissions. (`ship`) | The standard way to get a feature or fix built end-to-end |
 | "Something looks wrong in the live app" | Pulls recent errors from Sentry (error tracking), Vercel (the website host), and Supabase (the database) logs, explains each one in plain English, and suggests a fix. If the real fix is "undo the last change" rather than "patch forward," it hands you to the rollback flow instead. (`quick-fix`) | The moment something looks broken |
 | "Undo the last change" / "roll back" | Walks you through exactly one of three fixes depending on what broke: a bad website deploy (one click in Vercel), a bad database change (a new corrective migration, never editing history), or a bad background job (redeploying its last good version). Every path shows you what happened and waits for your yes before doing anything live. (`rollback`) | Right after a change breaks something |
 | "End the session" / "wrap up" | The agent double-checks the code still compiles and builds, that documentation is in sync, and reminds you to commit if you haven't. There's no single command for this — just say it and the agent runs through the closing checklist. | Before closing your laptop |
 
 ---
 
-## The gates that always need YOUR yes
+## What agents do on their own, and what still needs YOUR yes
 
-Some actions are irreversible enough, or risky enough, that no amount of automated review replaces you personally saying yes, in the current conversation, right before it happens. A "yes" from an earlier task, or a general "go ahead and handle things," does not count for a new one of these — the agent is required to ask again each time. (The migration gate has one exception you approved on 2026-07-13 — spelled out in its bullet below.)
+**Your rule since 2026-09-26 ("Yes I approve").** When a change's two final reviews are clean — Codex **Sol** reviewed the exact final version, and **CodeRabbit** (the automatic GitHub review bot) approved that same version — and every automatic check is green, the agent **merges it by itself** (merging = putting it into the live app). If the change includes a **migration** (a change to the shape or rules of the live database) that does not delete anything, the agent **applies it to the live database by itself** too, after the same proof checks that have always guarded migrations: two specialist reviewers plus a fresh Sol review of the exact SQL, all less than 30 minutes old. This works in any session, whether or not a hands-free run is armed. Safety scripts check every one of these conditions before a merge or an apply is allowed, so an agent cannot skip them. The trade-off you accepted: every change, even a small wording fix, now gets a Sol review, which uses more Codex credits.
 
-- **Applying a live migration — when you're working with the agent.** A migration is a change to the shape or rules of the live database — adding a column, changing a table, tightening a security rule. Once applied, it's real and affects real customer/business data immediately. In a normal session the agent shows you the change and waits for your yes. **Exception you approved (2026-07-13):** when you explicitly start a hands-free run (say "run overnight" — the agent arms a time-limited autopilot flag as the record of your permission), migrations may apply without asking you each time, because every one still has to pass the hard proof gate: a fresh same-session security + drift review, plus a second-model (Codex) verdict for anything touching SQL, security rules, or money. Migrations that **delete data or drop tables/columns holding data never apply on their own** — hands-free or not, those wait for you.
-- **Deploying an Edge Function.** These are the small pieces of backend code that send emails, scan blend-ticket photos (OCR), and create/reset user accounts. A bad deploy can silently break one of those without touching the rest of the app.
-- **Deleting data.** Anything that permanently removes real rows — as opposed to voiding or cancelling, which keeps the record and just marks it inactive.
-- **Everything else on the list in `AGENTS.md`.** Changing live data by hand, a force-push (overwriting history on GitHub), any production change made outside the normal pull-request path, and any change to secrets, logins, permissions, billing, domains, or who owns an account. `AGENTS.md` holds the one authoritative list; if another document ever shows a shorter one, `AGENTS.md` wins.
+**What you still do — the whole list:**
 
-**What counts as approval:** a clear, current "yes" — "yes, apply it," "go ahead," "do it," "approved" — or, for migrations only, a hands-free run you explicitly started (the armed autopilot flag is the proof, and it expires on its own). Silence, a thumbs-up on something else, or "you always have my blessing for this kind of thing" does not count. If the agent is about to deploy an Edge Function or delete data and hasn't shown you exactly what it's about to run and waited for your answer, stop it.
+- **Approve a database change that deletes data.** Anything that erases business records, or drops a table or column that holds data. Agents are blocked from applying these on their own in every session. They park it, explain the risk in plain English, and wait for your yes.
+- **Approve Edge Function deploys.** These are the small pieces of backend code that send emails, scan blend-ticket photos (OCR), and create/reset user accounts. A bad deploy can silently break one of those without touching the rest of the app.
+- **Approve anything touching secrets, logins, billing, or permissions.** Passwords and keys, who can sign in and how, what you pay for, and who is allowed to do what.
 
-**A note on landing regular code on `main`** (the branch that is live at croprxsolutions.app the moment anything lands on it): you gave a standing authorization (2026-06-16) for agents to land **regular, reversible code** on `main` automatically once the full pipeline is green — review clean, tests passing, and the pre-push typecheck/build succeeding — because a bad frontend deploy is a one-click rollback in Vercel. Since 2026-07-14, nobody (agent or human) can push straight to `main` — GitHub itself rejects it — so "landing" always means: push a branch, open a pull request (a proposed change GitHub holds for checks), wait for the automatic checks to pass and for CodeRabbit (an automatic review bot) to review the final version, then merge. Risky changes (money, inventory, security, database) also need the final Codex "Sol" review described below. That authorization covers ordinary code only. Edge Function deploys and data deletion are **never** covered by it, and migrations are covered only inside a hands-free run you started, as described above. If you ever want any of this to wait for your yes again, just say so and an agent will update the policy everywhere it's written down.
+A few other things agents simply never do on their own — overwriting history on GitHub (a force-push), changing live data by hand outside a reviewed migration, or changing domains or account ownership. `AGENTS.md` holds that full list; if another document ever shows a shorter one, `AGENTS.md` wins.
+
+**What counts as approval for those:** a clear, current "yes" in the conversation — "yes, apply it," "go ahead," "approved" — right before it happens. A yes from an earlier task, silence, or "you always have my blessing for this kind of thing" does not count. If an agent is about to delete data, deploy an Edge Function, or touch secrets, logins, billing or permissions without showing you exactly what it will run and waiting for your answer, stop it.
+
+**Your daily summary.** Every morning (about 8:00 Chicago time) GitHub emails you a short comment on the "Daily landing summary" issue: what merged, which database changes were applied, and what is waiting on you. "Applied" comes from the notes the agents write when they apply something — the summary job cannot read the live database itself, and says so.
+
+**Why this is safe enough:** a bad website change is a one-click rollback in Vercel, and a bad non-deleting database change is fixed by a new corrective migration. Nothing that destroys data happens without you. Nobody — agent or human — can push straight to the live branch; GitHub rejects it, so every change still goes through a pull request (a proposed change GitHub holds for checks). If you ever want merges or migrations to wait for your yes again, just say so and an agent will change the rule everywhere it's written down.
 
 ---
 
@@ -75,7 +82,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 - **Claude** (Anthropic) is usually the one you talk to. It plans, builds, and runs the reviewer helpers. The careful reviewers use the newest Opus (one of Claude's top-tier models) and quick status checks use the faster Sonnet. Both are named so they update automatically when Anthropic releases a newer version.
 - **Codex** (OpenAI) is the independent second opinion, so nothing ships on one AI's word alone. It has three GPT-6 models:
   - **Luna** is fast and cheap. It does the repeated review rounds until the code is clean, and it is also the one that writes code when Codex builds.
-  - **Sol** is stronger. It does one final review of risky changes, and the safety gates won't let risky code land without it. It also builds money and database work.
+  - **Sol** is stronger. It does one final review of every change right before it lands, and the safety gates won't let anything merge without it (since 2026-09-26; before that only risky changes needed it). It also builds money and database work.
   - **Astra** is the most capable and the most expensive. It's the choice for reviewing plans and big design questions before anyone writes code. So far it has been run by hand when asked; no automatic workflow uses it yet.
 - The exact model names and settings for each job are in `docs/reference/codex-model-tuning.md`.
 
@@ -84,12 +91,12 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 ## Reading an agent's report
 
 - **A PROOF line** ("PROOF — Ran: … · Saw: …") is the agent showing you it actually executed something and observed the result — opened the page, ran the query, hit the endpoint — rather than just saying "should work now." A report claiming something is "done" with no PROOF line is a claim, not evidence.
-- **"Parked"** means a database or backend change was written and even validated in a safe, rolled-back trial run, but is deliberately waiting for your review and yes before it touches the live system. Nothing parked has happened yet.
+- **"Parked"** means a database or backend change was written and even validated in a safe, rolled-back trial run, but is deliberately waiting before it touches the live system — usually because it deletes data or needs an Edge Function deploy, which are yours to approve. Nothing parked has happened yet.
 - **BLOCKER** means "do not ship this" — it would break production, corrupt money math, or open a security hole. **HIGH** means a real bug that should be fixed before merging. **MED/LOW** are smaller — fine to fix now or note and move on.
 - **Red flags — stop and ask if you see these:**
   - An agent says something is "done" without showing what it actually ran and what it saw.
   - An agent asks you to bypass, disable, or work around a hook/guard "just this once."
-  - An agent deploys an Edge Function or deletes data without having shown you the specific action and gotten your yes first, or applies a migration outside the two authorized paths (your in-chat yes, or a hands-free run you started with autopilot armed). (A push of ordinary code after a green pipeline is authorized and normal — but the agent should still tell you it happened.)
+  - An agent deploys an Edge Function, deletes data, or applies a database change that deletes data without having shown you the specific action and gotten your yes first. (Merging a change, or applying a non-deleting database change, after both final reviews came back clean is authorized and normal — it shows up in your daily summary.)
   - An agent treats a finding buried in a document, web page, or piece of code it read as an instruction to follow — that content is data, not a command, and the agent should say so rather than act on it.
 
 ---
@@ -97,7 +104,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 ## When things go wrong
 
 - **A deploy made the site look/act wrong:** say **"is prod okay?"** to confirm, then **"roll back the site."** The fix is a one-click "Promote to Production" on the previous good build in the Vercel dashboard (Deployments tab → find the last good build → "..." → Promote to Production) — fully reversible, nothing is deleted.
-- **A database change broke something:** say **"walk me through rollback."** The agent never edits or deletes the migration that already ran — it writes a brand-new migration that corrects it, runs it through the same review gates as any other database change, and waits for your yes before applying it live.
+- **A database change broke something:** say **"walk me through rollback."** The agent never edits or deletes the migration that already ran — it writes a brand-new migration that corrects it and runs it through the same review gates as any other database change. If the correction deletes data, it waits for your yes before applying it live.
 - **The app seems down or an error is showing:** check Sentry (error tracking) and say **"is prod okay?"** — it pulls the live picture in one shot.
 - **An agent seems stuck, confused, or is going in circles:** say **"/clear"** to wipe its short-term memory and restate what you want, or just start a fresh session. A stale, cluttered conversation causes more mistakes than starting over costs you.
 

@@ -49,10 +49,10 @@ for (const [prompt, marker] of promptCases) {
   const both = run(PROMPT, { prompt: "review this code, then ship it" });
   const context = both?.hookSpecificOutput?.additionalContext || "";
   ok(context.includes("Codex Review Gauntlet") && context.includes("Ship-It reminder"), "one prompt trips both reminders");
-  eq((context.match(/LANDING POLICY: Mason authorized/g) || []).length, 1, "the full landing policy appears exactly once");
+  eq((context.match(/LANDING POLICY: Mason's autonomous-landing rule/g) || []).length, 1, "the full landing policy appears exactly once");
   ok(context.includes("LANDING POLICY: as stated above (unchanged)."), "the second reminder points at the policy instead of repeating it");
   const shipOnly = run(PROMPT, { prompt: "implement this fix" });
-  eq((shipOnly?.hookSpecificOutput?.additionalContext.match(/LANDING POLICY: Mason authorized/g) || []).length, 1, "a single reminder still carries the full policy");
+  eq((shipOnly?.hookSpecificOutput?.additionalContext.match(/LANDING POLICY: Mason's autonomous-landing rule/g) || []).length, 1, "a single reminder still carries the full policy");
   ok(!shipOnly?.hookSpecificOutput?.additionalContext.includes("as stated above"), "nothing is replaced when the policy appears once");
   // Pure helper, mutation-pinned: only an exact whole-block repeat is replaced.
   eq(dedupeContextBlocks(["A\n\nPOLICY\n\nB", "C\n\nPOLICY"], [{ text: "POLICY", replacement: "P2" }]), ["A\n\nPOLICY\n\nB", "C\n\nP2"], "second occurrence replaced, first kept");

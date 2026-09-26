@@ -138,8 +138,18 @@ function describeHookRun(r) {
 }
 // Use this for EVERY assertion that expects the guard to allow. The diagnostics
 // are built only on failure, so the passing path stays as cheap as `ok`.
+//
+// Since 2026-09-26 (Mason's autonomous-landing rule, Sol HIGH on its PR) the LAST
+// check is the pull-request landing gate (migration-landing-gate-lib.mjs): the
+// apply must come from the PR's branch with CodeRabbit's approval, green checks
+// and a Sol proof on GitHub. This hook runs as a real subprocess with no seam, and
+// a fixture cannot have a real PR, so an apply that passes every OTHER check now
+// ends in exactly that refusal. It runs last, after every local check, so that
+// refusal — and only that one — still means "everything this suite tests
+// passed". Any other deny fails the assertion with the hook's own words.
+const reachedLandingGate = (r) => isDeny(r) && r.stdout.includes("MIGRATION LANDING GATE");
 function okAllow(r, m) {
-  if (isDeny(r)) ok(false, `${m}\n\n${describeHookRun(r)}`);
+  if (isDeny(r) && !reachedLandingGate(r)) ok(false, `${m}\n\n${describeHookRun(r)}`);
   else ok(true, m);
 }
 
@@ -156,6 +166,19 @@ function writeProof(stateDir, query, extra = {}) {
     findings: "clean",
     queryHash: sha(query),
     ...extra,
+  }));
+}
+// Since Mason's autonomous-landing rule (2026-09-26) EVERY apply, armed or not,
+// also needs the fresh content-bound Sol proof, keyed by the applied name.
+// Fixtures that are testing something ELSE write it so that other thing stays
+// the only variable.
+function writeSolProof(stateDir, query, name = MIG) {
+  writeFileSync(path.join(stateDir, `codex-review-mig-${name}.json`), JSON.stringify({
+    queryHash: sha(query),
+    verdict: "clean",
+    model: "gpt-6-sol",
+    reasoning_effort: "high",
+    timestamp: new Date().toISOString(),
   }));
 }
 // The ordering preflight (2026-08-08) requires evidence of what the database
@@ -292,14 +315,47 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "no proof file → apply denied");
     ok(r.stdout.includes("MIGRATION APPLY GUARD"), "deny message names the guard");
 
-    // 2. Valid proof, unarmed, benign → allow.
+    // Helper: write the separate content-bound Codex proof (R4 mechanism).
+    const codexProofPath = path.join(stateDir, `codex-review-mig-${MIG}.json`);
+    const writeCodexProof = (query, overrides = {}) =>
+      writeFileSync(codexProofPath, JSON.stringify({
+        queryHash: sha(query),
+        verdict: "clean",
+        model: "gpt-6-sol",
+        reasoning_effort: "high",
+        timestamp: new Date().toISOString(),
+        ...overrides,
+      }));
+
+    // 2. UNARMED, benign — Mason's autonomous-landing rule (2026-09-26). The
+    //    reviewer proof alone no longer suffices in an ordinary session: the fresh
+    //    content-bound Sol proof the armed path always required is now required
+    //    everywhere, and with it the apply goes through with no per-migration ask.
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
-    okAllow(r, "valid proof + benign migration → allowed");
+    ok(isDeny(r), "UNARMED: reviewer proof alone (no Sol proof) → denied since 2026-09-26");
+    ok(/Sol high-effort gate/.test(r.stdout), "and the deny names the Sol gate");
+    writeCodexProof(BENIGN_SQL, { model: "gpt-6-luna" });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "UNARMED: a non-Sol Codex proof → denied");
+    writeCodexProof(BENIGN_SQL, { timestamp: new Date(Date.now() - 31 * 60_000).toISOString() });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "UNARMED: a stale (>30 min) Sol proof → denied");
+    writeCodexProof(BENIGN_SQL);
+    r = runHook(call(BENIGN_SQL), tmp);
+    okAllow(r, "UNARMED: both reviewers + fresh content-bound Sol proof + benign migration → allowed, no ask");
+    // ...and the ONLY thing still standing is the PR half of the rule: this
+    // fixture is not a checkout of an approved, green, Sol-proven pull request.
+    ok(reachedLandingGate(r), "with every local proof in place, the PR landing gate is what refuses a fixture with no real PR");
+    ok(/not from the pull request's own branch|could not find or read the open pull request|is not committed at HEAD|could not read this checkout's HEAD/.test(r.stdout),
+      "and it names the missing PR evidence");
 
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "interactive proof without queryHash is denied");
+    writeProof(stateDir, BENIGN_SQL, { reviewers: ["rls-security-reviewer"] });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "UNARMED: a reviewer proof naming only one reviewer → denied since 2026-09-26");
     writeProof(stateDir, BENIGN_SQL);
 
     // 3. Proof whose queryHash doesn't match the transmitted SQL → deny.
@@ -321,39 +377,32 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "future-dated reviewer proof → denied");
 
-    // 4. No flag file at all + destructive + valid proof → allowed (Mason is
-    //    present; his in-chat OK is the gate — prose, the hook doesn't block).
+    // 4. UNARMED + destructive + perfect proofs → DENIED. Until 2026-09-26 this
+    //    was ALLOWED here — the "in-chat OK" was prose the hook never checked.
+    //    Mason's autonomous-landing rule keeps destructive migrations his, so the
+    //    MCP door (which can never carry his approval) refuses them outright.
     writeProof(stateDir, DESTRUCTIVE_SQL);
+    writeCodexProof(DESTRUCTIVE_SQL);
     writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
-    okAllow(r, "interactive session (no autopilot flag): destructive migration with proof is not hook-blocked");
+    ok(isDeny(r), "UNARMED session: destructive migration is denied even with perfect proofs");
+    ok(/destructive statement/.test(r.stdout) && /Mason/.test(r.stdout), "deny says it is destructive and Mason's decision");
 
     // 5. ARMED + destructive + valid proof → DENIED (the 2026-07-13 carve-out).
     armAutopilot(stateDir, 8);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
     ok(isDeny(r), "ARMED hands-free run: destructive migration denied even with clean proof");
-    ok(/hands-free/i.test(r.stdout), "deny message says it's the hands-free rule");
+    ok(/destructive statement/.test(r.stdout), "deny message names the destructive rule");
     ok(/PARK/i.test(r.stdout), "deny message tells the loop to park it for Mason");
 
     // 6. ARMED + benign + reviewer proof but NO Codex proof file → DENIED
     //    (the second-model gate must prove it actually ran).
     writeProof(stateDir, BENIGN_SQL);
     writeMigrationFile(tmp, MIG, BENIGN_SQL);
+    rmSync(codexProofPath);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: no Codex proof file → denied — the Codex gate is enforced");
     ok(/codex/i.test(r.stdout), "deny message names the Codex gate");
-
-    // Helper: write the separate content-bound Codex proof (R4 mechanism).
-    const codexProofPath = path.join(stateDir, `codex-review-mig-${MIG}.json`);
-    const writeCodexProof = (query, overrides = {}) =>
-      writeFileSync(codexProofPath, JSON.stringify({
-        queryHash: sha(query),
-        verdict: "clean",
-        model: "gpt-6-sol",
-        reasoning_effort: "high",
-        timestamp: new Date().toISOString(),
-        ...overrides,
-      }));
 
     // 6b. Codex proof with a NEEDS-WORK verdict → DENIED (Codex R4 P1: a run
     //     that happened but did not pass must not unlock the apply).
@@ -452,13 +501,23 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(/LAPSED/i.test(r.stdout), "deny message says the authorization lapsed");
 
     // 7c. Explicit disarm (flag DELETED, as autopilot-arm.mjs --off does) →
-    //     interactive rules return.
+    //     the ordinary-session rules return. Since 2026-09-26 those rules also
+    //     refuse a destructive migration through this (MCP) door, so disarming is
+    //     NOT a way around the refusal; only apply-migration-file.mjs's explicit
+    //     approval flag, after Mason's in-chat yes, opens it.
     rmSync(path.join(stateDir, "AUTOPILOT.on"));
     writeProof(stateDir, DESTRUCTIVE_SQL);
+    writeCodexProof(DESTRUCTIVE_SQL);
     writeMigrationFile(tmp, MIG, DESTRUCTIVE_SQL);
     r = runHook(call(DESTRUCTIVE_SQL), tmp);
-    okAllow(r, "flag deleted by explicit disarm → interactive rules apply again");
+    ok(isDeny(r), "flag deleted by explicit disarm → a destructive apply is still denied");
+    ok(!/LAPSED/i.test(r.stdout) && /destructive statement/.test(r.stdout),
+      "and it is the destructive rule firing, not the lapsed-flag rule");
+    writeProof(stateDir, BENIGN_SQL);
+    writeCodexProof(BENIGN_SQL);
     writeMigrationFile(tmp, MIG, BENIGN_SQL);
+    r = runHook(call(BENIGN_SQL), tmp);
+    okAllow(r, "after disarm a benign, fully-proved migration applies with no ask");
 
     // 8. Non-apply_migration tool → instant allow, no interference.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
@@ -486,6 +545,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // being exercised through each spelling.
     const PARKED = "CREATE TABLE public.parked_thing (id bigint primary key);";
     writeProof(stateDir, PARKED);
+    writeSolProof(stateDir, PARKED);
 
     const SPELLINGS = [
       "mcp__supabase__apply_migration",
@@ -583,6 +643,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
     // Proof exists ONLY in the linked worktree; the primary has none.
     writeProof(linkedState, BENIGN_SQL);
+    writeSolProof(linkedState, BENIGN_SQL);
     // The migration file exists in BOTH checkouts on purpose. Source provenance is
     // satisfied either way, so the ONLY thing that can differ between the calls
     // below is where the PROOF was minted — which is the behaviour under test.
@@ -621,6 +682,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     mkdirSync(nestedState, { recursive: true });
     writeAppliedSnapshot(nestedState);
     writeProof(nestedState, BENIGN_SQL);
+    writeSolProof(nestedState, BENIGN_SQL);
     r = runHook(callFrom(nested, BENIGN_SQL), primary);
     okAllow(r, "a worktree nested inside the primary checkout resolves to itself, not to its parent");
     git(["worktree", "remove", "--force", nested], primary);
@@ -634,7 +696,9 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeMigrationFile(linked, MIG, EDITED);
     r = runHook(callFrom(linked, EDITED), primary);
     ok(isDeny(r), "the session's own worktree proof does NOT excuse a queryHash mismatch — content binding survives");
-    ok(r.stdout.includes("without subagent review proof"),
+    // Since 2026-09-26 every session gets the specific content-binding refusal
+    // the armed path always gave.
+    ok(r.stdout.includes("not content-bound"),
       "the queryHash mismatch is refused by the proof gate, not by provenance short-circuiting it");
     writeMigrationFile(linked, MIG, BENIGN_SQL);
 

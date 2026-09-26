@@ -69,9 +69,10 @@ Compare against the live database (Supabase MCP `list_migrations`). If there are
 
 ```
 ⚠️  You have X new migration(s) not yet applied to production.
-    Apply them through /migration-review → apply_migration BEFORE
-    deploying (interactive: Mason's in-chat OK required), or the app
-    will reference tables/columns/functions that don't exist yet.
+    Apply them through /migration-review → scripts/apply-migration-file.mjs
+    BEFORE merging (non-destructive: under Mason's 2026-09-26 landing rule
+    once the final reviews are clean; destructive: his in-chat yes), or the
+    app will reference tables/columns/functions that don't exist yet.
     NEVER `supabase db push` — it bypasses the review gate and is blocked.
 ```
 
@@ -128,44 +129,34 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 2. Open a PR.
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
-4. Freeze the candidate after the separate Codex review is clean, record its head SHA, then apply
-   **`ready-for-coderabbit`**. The default-branch workflow rechecks the exact head,
-   draft/conflict/auto-merge state, actor permission, required checks, and every reported
-   non-CodeRabbit check before recording a trusted head/base receipt and adding
-   `coderabbit-review-dispatch` once. The receipt and labels record attempts, not merge
-   authorization. Require an actual substantive formal review of the frozen SHA. Pending or
-   uncertain delivery preserves dedupe state; after late delivery, reapply the ready label to
-   reconcile without another request. Never clear and re-add the provider label to retry. Only
-   verified cleanup before any provider call permits a same-head retry; retained attempts need
-   a fresh delivery PR, and ambiguous out-of-band requests need a fresh PR. Normal
-   native delivery also requires the head/base captured by the trusted opened
-   workflow to remain unchanged throughout the PR lifetime. Follow
-   `docs/reference/coderabbit-native-review.md`, including its introducing-PR bootstrap. Read the resulting
-   review and fix every real issue; nitpicks may be dismissed with a one-line reason. If a fix or
-   base update creates a new commit, the workflow resets its labels and obsolete canonical
-   Actions-authored legacy commands, but retains native receipts. Removing a provider label
-   cannot cancel an accepted review; verify earlier delivery before another request;
-   restart required checks,
-   rerun the exact-HEAD Codex proof when the corrected diff is Codex-worthy, freeze and record the
-   new SHA, open a fresh delivery PR, then apply the ready label for one review.
-   Close the prior PR with a `Replaced by #N` comment (closing keeps its branch, comments
-   and findings; never leave it open "as the record"); the provider skipped same-PR incremental
-   review with the current configuration. Never use `@coderabbitai resume`, and reserve
-   `@coderabbitai full review` for a deliberately justified complete reread. An approving GitHub
-   review is **NOT** required to merge: Mason removed `required_pull_request_reviews` from `main`
-   on 2026-09-02, so CI is the merge gate. A `CHANGES_REQUESTED` verdict still blocks, and both
-   agent merge gates refuse to merge over one. Before merge, verify live `main` protection still
-   requires a current branch and every required check green; `enforce_admins` is off and no agent
-   may act on that exemption. Confirm CodeRabbit actually reviewed the frozen candidate, and when
-   it HAS approved, require the native receipt's head SHA, that authenticated approval's `commit_id`, and the
-   final `headRefOid` to match; recheck every reported check and auto-merge OFF.
-   Ordinary green CodeRabbit or generic Actions status rows are insufficient. A separate exact-SHA
-   `gpt-6-sol` high-effort proof remains the additional hard gate for risky money/RLS/migration
-   diffs — both run, neither replaces the other.
-5. Merge. **The merge is the deploy.**
+4. Once required checks are green, freeze the candidate, record its head SHA, then apply
+   **`ready-for-coderabbit`**. The default-branch workflow waits out running checks, rechecks the
+   exact head, draft/conflict/auto-merge state, actor permission, required checks, and every
+   reported non-CodeRabbit check before recording a trusted head/base receipt and adding
+   `coderabbit-review-dispatch` once, then releases that provider label once the review lands.
+   The receipt and labels record attempts, not merge authorization. Pending or uncertain delivery
+   preserves dedupe state; after late delivery, reapply the ready label to reconcile without
+   another request. Never clear and re-add the provider label to retry. Follow
+   `docs/reference/coderabbit-native-review.md`, including its introducing-PR bootstrap. Read the
+   resulting review and fix every real issue; nitpicks may be dismissed with a one-line reason.
+   **A fix goes on the SAME PR:** the push resets the labels, the trusted synchronize run records
+   the new candidate epoch, and after checks pass a relabel earns one follow-up review — no
+   replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand,
+   and reserve `@coderabbitai full review` for a deliberately justified complete reread.
+5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
+   `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26), then apply the change's
+   non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
+   merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
+   newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound
+   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused;
+   `enforce_admins` is off and no agent may act on that exemption. **The merge is the deploy.**
 
-Landing regular reversible code with the full pipeline green is covered by Mason's standing push
-policy (2026-06-16, mechanics updated 2026-07-30); report that explicitly rather than assuming it. A direct `vercel --prod` deploy outside the push path or an Edge Function deploy still needs Mason's explicit yes. A live migration apply follows the settled 2026-07-13 rule: interactive session = Mason's in-chat OK; pre-authorized armed hands-free run = migration-apply-guard's full proof gate (hash-bound dual-reviewer proof + hash-bound Codex proof, both fresh ≤30 min); destructive migrations never apply autonomously.
+Landing under Mason's autonomous-landing rule (2026-09-26) needs no in-chat ask once those gates
+pass; report the merge explicitly rather than silently. A direct `vercel --prod` deploy outside the
+merge path or an Edge Function deploy still needs Mason's explicit yes. A non-destructive live
+migration applies under the same rule through migration-apply-guard's full proof gate (hash-bound
+dual-reviewer proof + hash-bound Sol proof, both fresh ≤30 min) in any session; a destructive one
+needs his in-chat yes, every time.
 If blocked: List every issue that needs fixing first.
 
 ## Rules
@@ -176,5 +167,5 @@ If blocked: List every issue that needs fixing first.
 - NEVER merge with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER trigger CodeRabbit while implementation or Codex review is still changing the branch
-- NEVER merge over a `CHANGES_REQUESTED` verdict; an approving CodeRabbit review is not required (removed 2026-09-02), but when one exists it must be bound to the current candidate commit
-- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization. Live migration applies need his in-chat OK in an interactive session — the one exception is a pre-authorized armed hands-free run passing migration-apply-guard's full proof + Codex gate (destructive migrations: never autonomous)
+- NEVER merge over a `CHANGES_REQUESTED` verdict, and never without CodeRabbit's APPROVED review bound to the exact candidate commit (Mason's autonomous-landing rule, 2026-09-26)
+- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive migrations need his in-chat yes

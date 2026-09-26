@@ -35,6 +35,13 @@ reviews:
   # existing required build/deployment contexts remain separate and unchanged.
   request_changes_workflow: true
   high_level_summary: true
+  # Put the summary in the walkthrough COMMENT, never in the PR description
+  # (2026-09-26, autonomous landing). Writing the description is a PR `edited`
+  # event, and ci.yml re-runs its ~11-minute required jobs on `edited`. So every
+  # review restarted CI under the lifecycle check that was waiting on it, and the
+  # check died "in_progress ... dispatch state was preserved" (PR #794 runs
+  # 36091053453/36091203653: the second run's actor was coderabbitai[bot]).
+  high_level_summary_in_walkthrough: true
   poem: false
   review_status: true
   collapse_walkthrough: false
@@ -85,7 +92,15 @@ reviews:
     # that exact head, then adds the separate provider label below. Keeping the
     # intent and provider labels separate prevents a review before validation.
     enabled: false
-    auto_incremental_review: false
+    # TRUE since 2026-09-26 so a fix on the SAME PR can get one fresh review
+    # instead of forcing a replacement PR. Per CodeRabbit's docs, after a PR is
+    # reviewed because of a positive label, later reviews happen only while this
+    # stays true; with it false a relabel at a new head was skipped with
+    # "incremental reviews are disabled". Work-in-progress pushes are still NOT
+    # reviewed, because the positive label below is attached only for the
+    # validated dispatch window: the trusted workflow removes it as soon as the
+    # review is observed, and every push resets it.
+    auto_incremental_review: true
     labels:
       - coderabbit-review-dispatch
     drafts: false
@@ -104,9 +119,10 @@ reviews:
         Security (RLS) with policies in the same file; any SECURITY DEFINER
         function missing `SET search_path = public, pg_temp`; any mutating RPC
         that does not accept and enforce `p_idempotency_key text DEFAULT NULL`;
-        any GRANT EXECUTE to anon/public on a function that writes data; any
-        edit to an already-applied migration (migrations must be new files
-        only). Money must be exact whole cents - never floating point. New
+        any GRANT EXECUTE to anon/public on a function that writes data. Do not
+        flag edits to an existing migration file as a violation by themselves:
+        a file can be a parked, never-applied draft, and only the CI check
+        `check-migration-hard-rules` knows the applied boundary. Money must be exact whole cents - never floating point. New
         money storage uses bigint cents; any new or changed money column must
         carry a finite whole-cent CHECK constraint named
         `<table>_<column>_whole_cents_chk`. A CHECK constraint that changes
@@ -353,17 +369,25 @@ reviews:
           write to a generated column such as invoices.balance_cents. (5) Money
           rounding done in binary floating point. Otherwise PASS.
 
+      # WARNING, not error, since 2026-09-26. This check cannot see which
+      # migrations are live, so it failed on edits to PARKED, never-applied
+      # drafts; only Mason could dismiss it, and dismissing stranded the
+      # lifecycle gate. The hard rule is enforced deterministically instead: the
+      # required CI job runs scripts/check-migration-hard-rules.mjs, which reads
+      # the applied boundary from the base tree's .claude/schema-registry.json
+      # and fails any modification or deletion of an applied migration.
       - name: Edit to an already-applied migration
-        mode: error
+        mode: warning
         instructions: >-
           Scope: only supabase/migrations/. If this pull request modifies no
           existing file there, PASS immediately.
 
-          FAIL if the diff MODIFIES or DELETES any pre-existing file under
-          supabase/migrations/. Database changes ship as brand-new migration
-          files only; rewriting a migration that already ran leaves the live
-          database and the repository permanently out of sync. ADDING a new file
-          there is correct and is never a failure. Otherwise PASS.
+          WARN if the diff MODIFIES or DELETES any pre-existing file under
+          supabase/migrations/, and say in one line that the required CI check
+          `check-migration-hard-rules` decides whether that file was already
+          applied: editing a parked, never-applied draft is allowed, editing an
+          applied one is not. ADDING a new file there is correct and is never a
+          warning. Otherwise PASS.
 
 # Teach CodeRabbit this repo's own written rules so it reviews against the
 # actual house standard instead of only the path instructions above.
