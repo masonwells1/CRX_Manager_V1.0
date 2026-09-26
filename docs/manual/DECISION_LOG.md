@@ -13,8 +13,9 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 guidance and hook-text fixes ("Phases 1 + 2") and the roles "Luna reviews, Sol gate", with Astra
 reviewing plans.
 
-**Decision.** The model routing is the 2026-09-23 entry below, unchanged: `gpt-6-luna` builds and
-iterates, `gpt-6-sol` at `high` is the once-at-the-end gate for risky diffs. This entry adds
+**Decision.** The model routing is the 2026-09-23 entry below, unchanged: `gpt-6-luna` builds standard
+units, hunts, and iterates reviews; `gpt-6-sol` builds money and database units and, at `high`, is the
+once-at-the-end gate for risky diffs. This entry adds
 `gpt-6-astra` for plan, spec, and architecture review — run by hand, advisory, never a gate. Exact
 IDs and efforts for every Codex role live in `docs/reference/codex-model-tuning.md`; `AGENTS.md`
 names the roles only, so a future model change edits one reference document. (The session first
