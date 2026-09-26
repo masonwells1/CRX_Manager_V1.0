@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-09-20",
+    "generated_at": "2026-09-26",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260920052149",
+    "migrations_high_water": "20260926163005",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -385,6 +385,13 @@
       "20260908130000_bind_create_inventory_hold_receipt_to_intent",
       "20260908140000_number_generators_year_chicago",
       "20260911120000_bind_adjust_inventory_receipt_to_intent",
+      "20260914100100_next_invoice_number_year_chicago",
+      "20260914100200_commission_history_report_replay_guard",
+      "20260914100300_refuse_stale_commission_payment_recipient",
+      "20260914100400_enforce_commission_payment_business_date",
+      "20260914100500_commission_dates_follow_chicago_business_day",
+      "20260914100600_latest_commission_recipient_label",
+      "20260914100700_customer_document_bytes_server_only",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -3053,6 +3060,12 @@
       "constraint": "customer_documents_soft_delete_stamp_check",
       "def": "CHECK ((((deleted_at IS NULL) AND (deleted_by IS NULL)) OR ((deleted_at IS NOT NULL) AND (deleted_by IS NOT NULL))))",
       "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "customer_documents",
+      "constraint": "customer_documents_storage_path_shape_check",
+      "def": "CHECK ((storage_path ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[A-Za-z0-9_-][A-Za-z0-9._-]{0,179}$'::text))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
     },
     {
       "table": "customer_facts",
