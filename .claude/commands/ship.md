@@ -117,12 +117,12 @@ If worthy, run a **separate Codex review directly via the headless CLI** — inv
 diff). It runs non-interactively, captures findings, and returns a verdict
 (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
 
-**Two tiers, in this order (Mason's standing decision, 2026-09-20; current model pins and the pending GPT-6 switch: `docs/reference/codex-model-tuning.md`).** Iterate on `gpt-5.6-luna` at
+**Two tiers, in this order (Mason's standing decision, 2026-09-20; every Codex pin: `docs/reference/codex-model-tuning.md`).** Iterate on `gpt-6-luna` at
 xhigh — `/codex-review` Step 3A — fixing and re-running until **no BLOCKER or HIGH remains**
 (deliberately deferred MED/LOW do not block the Sol pass). That is the
 whole review for ordinary reversible work. Only then, and only if the diff is risky (money,
 inventory, auth, RLS, migration, permission, Edge Function, or otherwise business-critical), spend
-one `gpt-5.6-sol` high-effort pass to mint the exact-SHA proof the push and merge guards require
+one `gpt-6-sol` high-effort pass to mint the exact-SHA proof the push and merge guards require
 (`/codex-review` Step 3B). Do not burn Sol rounds on iteration, and never route a Luna round
 through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
 

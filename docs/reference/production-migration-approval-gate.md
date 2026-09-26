@@ -111,7 +111,7 @@ Repeat this proof whenever the Codex GitHub credential is replaced or its permis
 
 ## Human dispatch plus authenticated review provenance
 
-Before merging a migration PR, the existing local `gpt-5.6-sol`/high exact-head review remains the
+Before merging a migration PR, the existing local `gpt-6-sol`/high exact-head review remains the
 hard pre-push gate. The PR must also receive CodeRabbit's authenticated GitHub App review on that
 same exact head, and the latest exact-head CodeRabbit review state must be `APPROVED`. A plain
 `CodeRabbit` success status is insufficient because it can coexist with a `CHANGES_REQUESTED`

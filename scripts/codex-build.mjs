@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * codex-build.mjs — run a headless, WRITE-ENABLED Codex (gpt-5.6 family) as the BUILDER
+ * codex-build.mjs — run a headless, WRITE-ENABLED Codex (GPT-6 class) as the BUILDER
  * of the CRX Workflow-Waves loop. This is the INVERSE of scripts/codex-hunt.mjs:
  *
  *   codex-hunt.mjs  : Codex read-only  → FINDS bugs  → Claude fixes.
@@ -10,18 +10,21 @@
  *   Claude (Opus) = orchestrator/advisor: grounds each unit, writes the build
  *     spec, reviews Codex's diff, runs the guard-equivalent checks + review
  *     subagents, and is the ONLY actor that commits / pushes / applies migrations.
- *   Codex (gpt-5.6-terra) = builder: edits the working tree per the spec, self-checks
+ *   Codex (gpt-6-luna) = builder: edits the working tree per the spec, self-checks
  *     with typecheck/build/test. It never reaches the live DB / Vercel / GitHub.
  *
  * Usage:
- *   node scripts/codex-build.mjs <promptFile> [--timeout 1800] [--model gpt-5.6-terra]
+ *   node scripts/codex-build.mjs <promptFile> [--timeout 1800] [--model gpt-6-luna]
  *                                [--effort xhigh] [--read-only]
  *
- * MODEL TIERS (Codex 5.6 family — verified live 2026-07-09; needs codex-cli >= 0.144):
- *   gpt-5.6-sol   : frontier tier (~Fable-class)  → money / DB / complex units
- *   gpt-5.6-terra : workhorse    (~Sonnet-class)  → standard UI units (DEFAULT)
- *   gpt-5.6-luna  : light        (~Haiku-class)   → mechanical sweeps
- *   The mission doc pins the tier per unit; the default is Terra.
+ * MODEL TIERS (Codex 6 family — model names verified live 2026-09-23 against
+ * codex-cli 0.156.1; needs codex-cli >= 0.156, which is what taught the CLI these
+ * names — on 0.153 every `gpt-6-*` name was refused as unsupported):
+ *   gpt-6-sol  : frontier tier → money / DB / complex units
+ *   gpt-6-luna : workhorse     → standard UI units and mechanical sweeps (DEFAULT)
+ *   The mission doc pins the tier per unit; the default is Luna.
+ *   There is no `gpt-6-terra` or `gpt-6-spark` — the GPT-6 class ships two tiers,
+ *   so the old three-tier split collapses onto Luna (volume) and Sol (money).
  *
  * --read-only : run with `--sandbox read-only` instead of full access — for review
  *   glances / verdict passes (e.g. the codex-push-guard verdict), where Codex must
@@ -38,7 +41,7 @@
  *       Codex can only touch the repo — every consequential live action stays on
  *       the Claude side. (Auth still resolves from CODEX_HOME, so the model works.)
  *       Because the user config is ignored, the model + reasoning effort are pinned
- *       explicitly below (the config normally sets model = "gpt-5.6-sol").
+ *       explicitly below (the config normally sets model = "gpt-6-sol").
  *   --sandbox danger-full-access : REQUIRED on Windows. Codex has no OS-level
  *       sandbox on Windows, so `--sandbox workspace-write` silently degrades to
  *       READ-ONLY (Codex refuses to write). Full-access is the only mode that lets
@@ -80,7 +83,7 @@ if (!existsSync(promptFile)) fail(`prompt file not found: ${promptFile}`)
 const tIdx = process.argv.indexOf('--timeout')
 const timeoutSec = tIdx > -1 ? Number(process.argv[tIdx + 1]) || 1800 : 1800
 const mIdx = process.argv.indexOf('--model')
-const model = mIdx > -1 ? String(process.argv[mIdx + 1] || 'gpt-5.6-terra') : 'gpt-5.6-terra'
+const model = mIdx > -1 ? String(process.argv[mIdx + 1] || 'gpt-6-luna') : 'gpt-6-luna'
 const eIdx = process.argv.indexOf('--effort')
 const effort = eIdx > -1 ? String(process.argv[eIdx + 1] || 'xhigh') : 'xhigh'
 const readOnly = process.argv.includes('--read-only')

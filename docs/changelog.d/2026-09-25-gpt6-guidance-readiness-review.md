@@ -22,9 +22,9 @@ of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointe
   routing row for Codex model choice, and CodeRabbit on the protected path. The review-tier bullets
   now name the Luna and Sol roles and defer exact model IDs to one document. Still 84 lines and
   under the 12,000-byte budget; every validator-pinned sentence is kept.
-- New `docs/reference/codex-model-tuning.md` — the Codex model and effort for each job, with the
-  model pinned today next to its GPT-6 target, GPT-6 prompting guidance, and the step-by-step
-  (pending) switch of the proof gates to `gpt-6-sol`.
+- New `docs/reference/codex-model-tuning.md` — the Codex model, effort, and pinning location for
+  each job (matching the GPT-6 pins PR #796 put on `main`), GPT-6 prompting guidance, and the rules
+  for changing a pinned model later.
 - `docs/reference/claude-model-tuning.md` — current Claude model IDs; use the `opus`/`fable`/
   `sonnet`/`haiku` aliases instead of dated IDs.
 - `CLAUDE.md` — Codex tuning route, cloud-session limits, and "search the schema registry".
@@ -65,11 +65,11 @@ of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointe
 - `scripts/check-agent-guidance.mjs` — tracks the new Claude tuning sentence and checks the Codex
   tuning document and its `AGENTS.md` route.
 
-**Not changed, on purpose.** The proof gates still hard-require `gpt-5.6-sol` at `high`, and every
-runnable Codex command still pins the GPT-5.6 IDs. Moving them to GPT-6 is a protected change to a
-gate Mason decided on. It needs the Codex CLI to smoke-test the new IDs and to mint its own Sol
-proof, and this cloud session has no Codex CLI. The checklist is in
-`docs/reference/codex-model-tuning.md`.
+**Not changed here.** This PR changes no gate code or Codex model pin. The switch of the proof gates
+and scripts to GPT-6 landed separately in PR #796 (Luna builds and reviews, Sol gates money), which
+merged while this PR was open. This PR's model document, decision-log entry, and owner playbook were
+then reconciled to #796's pins; where this session had proposed Sol at `medium` as the default
+builder, #796's Luna builder stands.
 
 **Independent review.** An adversarial Claude (Opus) reviewer read the whole diff and returned
 FIX-THEN-SHIP: 1 HIGH, 4 MED, 5 LOW, all confirmed and fixed in this change. The HIGH was that the

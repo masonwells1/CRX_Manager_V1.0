@@ -2,30 +2,31 @@
 
 Read this only when choosing a Codex (OpenAI) model or reasoning effort, writing a Codex prompt, or changing a script that runs `codex`. The shared owner, safety, delivery, and verification rules remain in `AGENTS.md`; the Claude equivalent is `docs/reference/claude-model-tuning.md`.
 
-Last verified: 2026-09-25.
+Last verified: 2026-09-26 (against the pins on `main` after PR #796).
 
 ## The GPT-6 family
 
-OpenAI's current models are GPT-6 Astra (`gpt-6-astra`, most capable, launched early September 2026), GPT-6 Sol (`gpt-6-sol`, complex coding and agentic work, launched 2026-09-22), and GPT-6 Luna (`gpt-6-luna`, fast and cheap for focused high-volume work, launched 2026-09-22). Reasoning effort is `none`, `low`, `medium`, `high`, `xhigh`, or `max`. There is no GPT-6 Terra.
+OpenAI's current models are GPT-6 Astra (`gpt-6-astra`, most capable, launched early September 2026), GPT-6 Sol (`gpt-6-sol`, complex coding and agentic work, launched 2026-09-22), and GPT-6 Luna (`gpt-6-luna`, fast and cheap for focused high-volume work, launched 2026-09-22). Reasoning effort is `none`, `low`, `medium`, `high`, `xhigh`, or `max`. `gpt-6-terra` and `gpt-6-spark` are refused for this account on the current CLI, so the retired three-tier split collapsed onto Luna (volume) and Sol (money).
 
 ## Which model does which job
 
-Mason's standing tier decision (2026-09-20, carried to GPT-6 on 2026-09-25): Luna iterates, Sol is the once-at-the-end gate for risky work, Astra reviews plans. The **Pinned now** column is what scripts, skills, and the proof gates use today. Use it. The **GPT-6 target** column takes effect only when the switch below lands.
+Mason's standing decisions: the 2026-09-20 tier split (Luna iterates, Sol is the once-at-the-end gate for risky work), moved to GPT-6 and with Luna as builder on 2026-09-23 (PR #796), plus Astra for plan review on 2026-09-25. Every scripted call pins the model below; the proof gates accept only `gpt-6-sol` at `high`.
 
-| Job | Pinned now | GPT-6 target | Effort |
+| Job | Model | Effort | Where it is pinned |
 |---|---|---|---|
-| Iterating code review (advisory, every kind of work) | `gpt-5.6-luna` | `gpt-6-luna` | `xhigh` |
-| Early escalation of one review round for genuinely complex work (say why) | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
-| Final exact-SHA ship gate for risky work (the only proof the push, merge, and migration guards accept) | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
-| Plan, spec, or architecture review; a problem two review rounds could not settle | none (no script runs Astra yet; it has been run by hand, e.g. `docs/plans/2026-09-11-open-pr-backlog-plan.md`) | `gpt-6-astra` | `high`; `max` only for a foundation-wide or money-critical plan |
-| Builder for a standard unit (`scripts/codex-build.mjs` default) | `gpt-5.6-terra` | `gpt-6-sol` | `medium` (the script defaults to `xhigh` until the switch) |
-| Builder for a money, database, or complex unit | `gpt-5.6-sol` | `gpt-6-sol` | `high` |
-| Mechanical sweeps and read-only subagent scans | `gpt-5.6-luna` | `gpt-6-luna` | `medium` (target; `codex-build.mjs` defaults to `xhigh` today) |
-| Bug-hunt driver (`scripts/codex-hunt.mjs`) | `gpt-5.3-codex-spark` | `gpt-6-luna` | `medium` (target; the script pins no effort today, so pin one in the switch) |
+| Iterating code review (advisory, every kind of work) | `gpt-6-luna` | `xhigh` | `scripts/overnight-codex-gate.mjs`, `/codex-review` Step 3A |
+| Early escalation of one review round for genuinely complex work (say why) | `gpt-6-sol` | `high` | `overnight-codex-gate.mjs --sol` |
+| Final exact-SHA ship gate for risky work (the only proof the push, merge, and migration guards accept) | `gpt-6-sol` | `high` | `scripts/write-codex-push-proof.mjs`, `.claude/hooks/codex-push-lib.mjs`, `.claude/hooks/migration-apply-lib.mjs`, `.codex/hooks/production-action-guard.mjs` |
+| Builder for a standard or mechanical unit | `gpt-6-luna` | `xhigh` | `scripts/codex-build.mjs` default |
+| Builder for a money, database, or complex unit | `gpt-6-sol` | `xhigh` (script default) | the mission doc passes `--model gpt-6-sol` |
+| Read-only bug hunter | `gpt-6-luna` | not pinned (CLI default) | `scripts/codex-hunt.mjs` |
+| Plan, spec, or architecture review; a problem two review rounds could not settle | `gpt-6-astra` | `high`; `max` only for a foundation-wide or money-critical plan | run by hand (no script), e.g. `docs/plans/2026-09-11-open-pr-backlog-plan.md` |
 
 Never lower effort on a money, RLS, or migration path to save tokens. Never run a Luna round through `scripts/write-codex-push-proof.mjs`: it unlinks the existing proof for that HEAD when it starts.
 
-Astra is not a gate. An Astra verdict is advisory evidence for Mason and does not replace the Sol proof on a risky diff.
+Luna builds and reviews, so a Luna round on Codex-built code is self-review. That is accepted for ordinary reversible work; the Sol gate stays independent and is the one that guards money. Astra is not a gate: an Astra verdict is advisory evidence for Mason and never replaces the Sol proof on a risky diff.
+
+Not yet proven when this was written (see `docs/changelog.d/2026-09-23-gpt6-model-routing.md`): an end-to-end GPT-6 review producing a parseable verdict, and `xhigh` as an accepted effort for `gpt-6-luna`. Run one real Luna round and one Sol gate before trusting the pins on money work.
 
 ## Prompting GPT-6 well
 
@@ -37,16 +38,12 @@ OpenAI's GPT-6 guidance (September 2026) matches this repository's design; keep 
 - **Give review prompts a frozen input.** Review a frozen diff file from a neutral directory with the CRX failure classes inlined. Never run an advisory review with `-C <repo>`: the repository's own instruction files tell the reviewer to start a review, and it recurses (observed 2026-08-23).
 - **Pin model and effort on every scripted call** (`-m <id> -c model_reasoning_effort="<effort>"`). Scripts ignore the user config on purpose, so an unpinned call silently uses whatever that machine's default is.
 
-## Switching the pins to GPT-6 (pending, needs Mason)
+## Changing a pinned model later
 
-The proof gates hard-require `gpt-5.6-sol` at `high` in three separate places, so a `gpt-6-sol` proof is rejected today. Changing that is a protected change to a gate Mason decided on. It needs his approval and must run on a machine with the Codex CLI, because the new model IDs have to be smoke-tested and the change itself needs a Sol proof. A cloud session without `codex` cannot do it.
-
-1. Update the Codex CLI, then confirm each model answers: `codex exec -m gpt-6-sol -c model_reasoning_effort="high" "Reply OK"`, and the same for `gpt-6-luna` at `xhigh` and `gpt-6-astra` at `high`.
-2. In one PR, define the gate model once and import it everywhere. `scripts/write-codex-push-proof.mjs` already exports `CODEX_REVIEW_MODEL` / `CODEX_REVIEW_EFFORT`. Make `proofValid` in `.claude/hooks/codex-push-lib.mjs` and `REQUIRED_CODEX_MODEL` / `REQUIRED_CODEX_EFFORT` in `.claude/hooks/migration-apply-lib.mjs` use that one value instead of their own literals. Then set it to `gpt-6-sol`.
-3. In the same PR, move the advisory and builder pins: the Luna literal in `scripts/overnight-codex-gate.mjs`, the builder default in `scripts/codex-build.mjs`, the hunter model in `scripts/codex-hunt.mjs`, and the runnable commands in `.claude/skills/codex-review/SKILL.md`. Update this table, the denial text in `.codex/hooks/production-action-guard.mjs`, and `docs/reference/agent-guardrails.md`. Then run `node scripts/sync-agent-workflows.mjs --write`.
-4. Update the pinned tests, and add negative tests that reject `gpt-5.6-sol` and `gpt-6-luna` in both the push proof and the migration-apply proof, so the cheap tier still cannot satisfy the gate.
-5. Do not accept both old and new IDs. Proofs expire in minutes and bind to one HEAD, so old proofs die on their own. The one exception: if `gpt-5.6-sol` is no longer served when the switch PR needs its own final proof, add a temporary exact-ID list (`["gpt-6-sol", "gpt-5.6-sol"]`, never a pattern) and remove it in the next PR. The merge guard runs from `main`, so the switch PR's own proof is otherwise minted at the old ID.
-6. Add a `docs/manual/DECISION_LOG.md` entry and a `docs/changelog.d/` entry. The final Sol pass on the exact candidate SHA runs last.
+- Probe new names with a known-bogus control in the same batch: a valid model reaches the usage-limit or answer stage, an invalid one stops at "not supported". The refusal text alone proves nothing.
+- The proof identity is an exact string match. Move every enforcement point listed in the table above, the `.codex/` mirror, and every test fixture together, and keep negative tests proving the cheap tier cannot satisfy the gate.
+- A PR that changes the gate model cannot satisfy its own new requirement, because the merge guard runs from `main`. Mason merges that PR by hand. Do not widen a validator to accept both models to get around it.
+- Update this table, `docs/reference/agent-guardrails.md`, a `docs/manual/DECISION_LOG.md` entry, and a `docs/changelog.d/` entry in the same change, then run `node scripts/sync-agent-workflows.mjs --write`.
 
 ## External guidance
 

@@ -12,20 +12,22 @@
  *   Passing the prompt via a FILE avoids argv-escaping landmines; the contents
  *   are then fed to codex on STDIN (like codex-hunt.mjs), so a large staged
  *   diff never hits the Windows ~32K command-line length cap.
- * - `--sol`: run the review on `gpt-5.6-sol` at high effort instead of the
- *   default. DEFAULT SINCE 2026-09-20 is `gpt-5.6-luna` at xhigh (Mason's
- *   standing review-tier decision): these loops run many rounds, and the cheap
- *   tier is what makes that affordable. Pass `--sol` for the one end-of-run
- *   adversarial pass, or for genuinely complex work Luna is out of its depth on.
+ * - `--sol`: run the review on `gpt-6-sol` at high effort instead of the
+ *   default. DEFAULT SINCE 2026-09-20 is Luna at xhigh (Mason's standing
+ *   review-tier decision), re-pinned to `gpt-6-luna` on 2026-09-23 when the
+ *   GPT-6 class shipped: these loops run many rounds, and the cheap tier is what
+ *   makes that affordable. Pass `--sol` for the one end-of-run adversarial pass,
+ *   or for genuinely complex work Luna is out of its depth on.
  *   This wrapper is ADVISORY either way — it writes no proof JSON, so it can
  *   never satisfy (or corrupt) the push / migration-apply gates, which keep
- *   hard-requiring a `gpt-5.6-sol`/high proof minted by write-codex-push-proof.mjs.
+ *   hard-requiring a `gpt-6-sol`/high proof minted by write-codex-push-proof.mjs.
  * - Resolves the newest codex.exe (version-hashed dir) and falls back to the
  *   `codex` shim on PATH. Runs an ephemeral, user-config-isolated
  *   `codex exec` review under the read-only sandbox. The model and effort are
  *   always pinned explicitly here and never inherited from workstation
- *   configuration — the configured default is a model this CLI cannot run, so an
- *   unpinned call fails on the model rather than on anything real.
+ *   configuration — an unpinned call would silently take whatever
+ *   ~/.codex/config.toml happens to say, making the reviewing tier a property of
+ *   the workstation instead of this wrapper.
  *   spawnSync writes the prompt to stdin and closes it, so codex never blocks
  *   waiting on input. Prints Codex's output to stdout; exits with its code.
  *
@@ -52,7 +54,7 @@ const timeoutSec = tIdx > -1 ? Number(process.argv[tIdx + 1]) || 540 : 540
 // Review tier. Luna/xhigh is the default (2026-09-20); `--sol` opts into the
 // frontier tier for the one end-of-run pass. Both are advisory — see the header.
 const useSol = process.argv.includes('--sol')
-const reviewModel = useSol ? CODEX_REVIEW_MODEL : 'gpt-5.6-luna'
+const reviewModel = useSol ? CODEX_REVIEW_MODEL : 'gpt-6-luna'
 const reviewEffort = useSol ? CODEX_REVIEW_EFFORT : 'xhigh'
 // Escalating to Sol requires a stated reason, and the wrapper enforces that rather than trusting
 // the caller to write one into a report afterwards. An unattended loop that can escalate spend

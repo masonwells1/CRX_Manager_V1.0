@@ -74,10 +74,10 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 
 - **Claude** (Anthropic) is usually the one you talk to. It plans, builds, and runs the reviewer helpers. The careful reviewers use the newest Opus (one of Claude's top-tier models) and quick status checks use the faster Sonnet. Both are named so they update automatically when Anthropic releases a newer version.
 - **Codex** (OpenAI) is the independent second opinion, so nothing ships on one AI's word alone. It has three GPT-6 models:
-  - **Luna** is fast and cheap. It does the repeated review rounds until the code is clean.
-  - **Sol** is stronger. It does one final review of risky changes, and the safety gates won't let risky code land without it.
+  - **Luna** is fast and cheap. It does the repeated review rounds until the code is clean, and it is also the one that writes code when Codex builds.
+  - **Sol** is stronger. It does one final review of risky changes, and the safety gates won't let risky code land without it. It also builds money and database work.
   - **Astra** is the most capable and the most expensive. It's the choice for reviewing plans and big design questions before anyone writes code. So far it has been run by hand when asked; no automatic workflow uses it yet.
-- As of 2026-09-25, the scripts and safety gates still name the older GPT-5.6 Luna and Sol. Moving them to GPT-6 is a separate, protected change that has to be run on your PC. The step-by-step list is in `docs/reference/codex-model-tuning.md`.
+- The exact model names and settings for each job are in `docs/reference/codex-model-tuning.md`.
 
 ---
 
