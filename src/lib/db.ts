@@ -342,6 +342,23 @@ export const RpcErrorCodes = {
   // so one key creates at most one service — callers must NOT rotate there, or a
   // lost response plus any edited field manufactures a duplicate service.
   IDEMPOTENCY_CROSS_OP_KEY_REUSE: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE',
+  // Raised by every intent-bound mutating RPC: a missing or unusable key, a key
+  // held by another actor, and a key reused for a different request. Most RPCs
+  // raise these BARE, and pages classify them through src/lib/idempotency.ts
+  // (isDefinitiveRpcRejection / getIdempotencyBindingRejection), which match the
+  // token by EXACT equality. soft_delete_customer_document is the exception: it
+  // raises IDEMPOTENCY_INTENT_MISMATCH and IDEMPOTENCY_RESULT_INVALID with a
+  // human suffix ("TOKEN: text"), which those exact-match helpers do NOT
+  // recognise. Its callers must classify with hasRpcCode / rpcCodeDetail below,
+  // which accept the suffixed form.
+  IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
+  IDEMPOTENCY_ACTOR_MISMATCH: 'IDEMPOTENCY_ACTOR_MISMATCH',
+  IDEMPOTENCY_INTENT_MISMATCH: 'IDEMPOTENCY_INTENT_MISMATCH',
+  // Raised by soft_delete_customer_document when the shared idempotency helper
+  // answers 22023 with anything other than an intent mismatch: an internal
+  // fault, raised BEFORE any mutation, so it must not be shown as an
+  // "we cannot tell whether it happened" replay outcome.
+  IDEMPOTENCY_HELPER_FAULT: 'IDEMPOTENCY_HELPER_FAULT',
   // CRM relationship-intelligence loop (2026-07-16/17)
   CONTACT_NOT_FOUND: 'CONTACT_NOT_FOUND',
   FACT_NOT_FOUND: 'FACT_NOT_FOUND',
@@ -358,6 +375,10 @@ export const RpcErrorCodes = {
   ASSIGNMENT_SALES_REP_INACTIVE: 'ASSIGNMENT_SALES_REP_INACTIVE',
   ASSIGNMENT_CUSTOMER_SET_CHANGED: 'ASSIGNMENT_CUSTOMER_SET_CHANGED',
   ASSIGNMENT_REPLAY_PAYLOAD_MISMATCH: 'ASSIGNMENT_REPLAY_PAYLOAD_MISMATCH',
+  // soft_delete_customer_document (20260921180000). One token for "missing,
+  // already removed, or a customer not assigned to this rep" — deliberately
+  // indistinguishable so a rep cannot probe for documents they cannot see.
+  CUSTOMER_DOCUMENT_NOT_FOUND: 'CUSTOMER_DOCUMENT_NOT_FOUND',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

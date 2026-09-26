@@ -2917,6 +2917,9 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 
+  // Parked 20260921180000; moves to MUTATING_RPCS_WITH_IDEMPOTENCY at the
+  // post-apply live type regeneration.
+  'soft_delete_customer_document',
 ]);
 
 /**

@@ -38,7 +38,23 @@ registry has not been regenerated since those four applies. **Update, read-only 
 UTC:** `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`) and
 `20260914100600_latest_commission_recipient_label` (`20260922020038`) have since applied, so the
 effective ordering high-water is now `20260914100600`; `20260914100700` (the customer-document
-candidate), `20260914100800` and `20260914100900` are not applied.** Carried forward from the 2026-09-20
+candidate), `20260914100800` and `20260914100900` are not applied.** Also parked, above the whole
+cohort: `20260921180000_soft_delete_customer_document_rpc` (migration-history row 936), which lets
+an active sales rep remove a document of a customer assigned to them. Remove on the Documents tab
+works for reps only after **both** steps land: this migration applies, **and** the separate page
+change (branch `claude/customer-document-rep-remove-page-v3`) deploys. The migration alone is not
+enough — until the page deploys it keeps issuing the direct `UPDATE`, which the rep's RLS policy
+still refuses (see KNOWN_ISSUES). It applies after
+`20260914100700`, `20260914100800` and `20260914100900`, **and only with Mason's explicit approval
+in the applying session** — the predecessor order and the gate are not the only apply conditions
+(`KNOWN_ISSUES.md` records the same requirement). Its Sol gate has not passed ON THE CURRENT HEAD. It
+returned CLEAN (`gpt-5.6-sol`) on the earlier heads `1789c72b3` and `8069cd45a`, but the signature
+changed after them and every commit since unbinds those proofs. On 2026-09-26 it ran on `f351c4a20`
+and returned BLOCKERS, but both findings were artifacts of a stale base: that head was two commits
+behind `main` (#794 halt-latch fix, #796 GPT-6 routing), so the review read `main`'s newer hook and
+model-routing files as this branch reverting them. The branch touches none of those files, and the
+same run found no blocker in the RPC itself. The branch has since merged `main`; since #796 the
+gate is `gpt-6-sol`, and a fresh run on the final head is required. Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under

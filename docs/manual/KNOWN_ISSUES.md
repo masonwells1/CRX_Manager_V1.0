@@ -92,6 +92,23 @@ The final label-selection candidate replaces alphabetical historical-name select
 earned-state label at the requested cutoff for both earned and paid-only balance rows; until it is
 separately approved and applied, production can still display an older salesperson name.
 
+**A sales rep cannot remove a customer document (found 2026-09-21; fix PARKED, not applied).** The
+Documents tab's Remove made a direct UPDATE that PostgreSQL refuses for reps ("new row violates
+row-level security policy"), because `customer_documents_rep_select` hides soft-deleted rows and an
+UPDATE's new row is checked against SELECT policies. Admins are unaffected, and live held 0
+customer-document rows when this was found, so nobody has hit it. The fix is the parked
+`20260921180000_soft_delete_customer_document_rpc` (new SECURITY DEFINER RPC, no policy change;
+migration-history row 936), which applies only after `20260914100700`, `20260914100800` and
+`20260914100900`, and with Mason's approval. The page change that calls it merges only after that
+apply. The `gpt-5.6-sol` gate returned CLEAN on two earlier heads of the candidate (`1789c72b3`,
+`8069cd45a`); those proofs are void because the signature changed after them. Its 2026-09-26 run
+on `f351c4a20` returned BLOCKERS that were both stale-base artifacts (that head predated #794 and
+#796 on `main`, so their hook and GPT-6 routing files read as reversions; the branch touches
+neither, and the RPC itself drew no blocker). The branch has since merged `main`, and the gate
+(`gpt-6-sol` since #796) must pass on the final head. An independent Claude Opus round, `rls-security-reviewer` and
+`migration-drift-reviewer` all came back with no BLOCKER and no HIGH, which is supporting evidence,
+not that gate.
+
 **F06 (`20260903150000_job_chemicals_persist_driver`) IS NOW APPLIED LIVE — ledger version
 `20260903153402`.** It was the ordering boundary when this paragraph was written; later migrations
 have since applied above it. It remains the installed `save_job` source body for the local row-916
@@ -430,15 +447,21 @@ browser policies are gone, the shape constraint exists, and the Documents tab up
 app. Admins can no longer open a removed document either, and soft delete cannot be undone. The
 bytes stay in Storage, so recovery is possible only through an out-of-app service-role action.
 
-## OPEN 2026-09-21 — a sales rep cannot remove a customer document (admins can)
+## SUPERSEDED 2026-09-21 — a sales rep cannot remove a customer document (admins can)
 
 Found while proving the fix above; separate from it and unchanged by it. `customer_documents_rep_select`
 hides soft-deleted rows (`deleted_at IS NULL`). PostgreSQL applies an UPDATE's SELECT policy to the
 **new** row as well as the old one, so a rep's soft delete — which makes the row invisible to them —
 is refused with `new row violates row-level security policy for table "customer_documents"`, with or
 without `RETURNING`. Reproduced on a local copy of the live policies; admins are unaffected. No live
-document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
-`SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
+document exists, so no one has hit it yet.
+
+**This is the same issue as the 2026-09-22 entry above, which supersedes this one.** That change was
+written: the parked `20260921180000_soft_delete_customer_document_rpc` (a `SECURITY DEFINER`
+soft-delete RPC with an idempotency key — the design this entry anticipated). Both steps are
+required before Remove works for a rep: the migration applies, **and** the separate page change
+deploys. Read the entry above for the current state, the prerequisites and the outstanding gate; do
+not track this issue from here.
 
 ## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
 
