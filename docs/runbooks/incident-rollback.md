@@ -28,7 +28,7 @@ is unavailable.
 
 **Symptoms:** pages blank or broken, buttons erroring, layout scrambled, a feature that
 worked yesterday failing — but the *data* (customers, invoices, inventory) looks intact.
-Usually starts right after a push to `main` (every push to `main` deploys the site).
+Usually starts right after a pull request merges into `main` (every merge to `main` deploys the site; direct pushes to `main` are blocked).
 
 **Fix — one click in Vercel (fully reversible):**
 

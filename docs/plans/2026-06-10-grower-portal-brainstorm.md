@@ -1,14 +1,15 @@
 # Grower Portal + Precision Profitability — Vision / Brainstorm Doc
 
 **Date:** 2026-06-10 (last iterated 2026-06-10) · **Status:** VISION — collecting & iterating ideas. NOT a plan yet.
-**Branch:** `claude/customer-portal-architecture-ej5in9` (PR #74 — the living home for this doc)
+**Branch (original):** `claude/customer-portal-architecture-ej5in9` (PR #74, since CLOSED; this doc now lives on `main`)
 **Owner:** Mason
+**Current status (2026-09-26):** the portal is deferred and not built — see `TODO.md` §3 "Grower portal".
 
 This doc collects the vision for CRX's expansion into agronomy services
 (tissue sampling, soil testing, fertilizer/nutrition programs), a customer-facing
 grower portal, grower-uploaded planting/harvest data, and a field profitability map.
 
-**How to use this doc:** dump ideas in (chat them to Claude or comment on PR #74 and
+**How to use this doc:** dump ideas in (chat them to Claude and
 they get folded in), argue with what's here, mark things ❤️ keep / 🗑 cut. Nothing in
 here is committed-to. When the vision feels settled, we'll spin the *implementation
 plan* as a separate exercise (`/ship` per piece, with real data-model design). The

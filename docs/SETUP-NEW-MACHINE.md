@@ -13,7 +13,7 @@ This is the step-by-step bootstrap for getting CRX Manager + all Claude Code aut
 You need three things installed on the machine before anything else works:
 
 ### 1a. Node.js (required for Claude Code hooks)
-- Go to https://nodejs.org and download the **LTS** version (currently 20.x or higher).
+- Go to https://nodejs.org and download **Node.js 24** — the version the project pins in its `.nvmrc` file (CI uses the same file).
 - Install with default options.
 - Verify in a terminal:
   ```
@@ -61,10 +61,10 @@ npm install
 
 This does two important things:
 1. Downloads all the JavaScript/TypeScript packages the app needs.
-2. Runs the `prepare` script, which installs the Husky hooks. Every `git commit` now runs the fast staged-file safety checks; typecheck/build run at pre-push and the full lint/test/build proof runs in CI.
+2. Runs the `prepare` script (`scripts/install-git-hooks.mjs`), which points git at the tracked `.husky/` folder of hooks. Every `git commit` now runs the fast staged-file safety checks; typecheck/build run at pre-push and the full lint/test/build proof runs in CI.
 
 If `npm install` fails:
-- Check your Node.js version (`node --version`) — must be 20 or higher.
+- Check your Node.js version (`node --version`) — it should be 24 (see `.nvmrc`).
 - On Windows, sometimes a stale npm cache causes problems. Try `npm cache clean --force` then retry.
 
 ---
@@ -188,13 +188,16 @@ If all three demos work, the automation is fully active.
 Memory files (Claude's persistent notes about you and the project) live at:
 
 ```
-C:\Users\<your-username>\.claude\projects\C--Users-<your-username>-CRX-Manager-V1-0\memory\
+C:\Users\<your-username>\.claude\projects\<encoded-checkout-path>\memory\
 ```
+
+The folder name is the checkout's full path with `:`, `\`, `_`, and `.` turned into `-`. On Mason's
+machine the checkout is `C:\CRX_Manager`, so the folder is `C--CRX-Manager`.
 
 These are NOT in the repo. If you want your home machine's memory to follow you:
 
 1. Copy the entire `memory/` folder from home to work (USB stick, OneDrive, Dropbox, etc.).
-2. Watch out for the path — the directory name encodes your username, so on a different machine with a different username, you'll need to rename the folder.
+2. Watch out for the path — the directory name encodes where the repo is checked out, so if you clone it to a different folder on the new machine, rename the copied folder to match.
 
 If you skip this step, the work-computer Claude starts with a blank memory and rebuilds context over time as you use it. That's fine for most cases.
 
@@ -216,7 +219,7 @@ If both fire, you are 100% set up.
 - ❌ Re-deploy any Edge Function. Same — they're already live.
 - ❌ Reconfigure CLAUDE.md, hooks, agents, skills — all in the repo, already pulled.
 - ❌ Re-add the `supabase/migrations/` files — same, in repo.
-- ❌ Worry about pushing — Vercel auto-deploys on push to main; the live app updates automatically.
+- ❌ Set up deploys. Vercel is already connected: when a pull request merges into `main`, the live app updates automatically. (`main` is protected — you never push to it directly; changes land through a branch and a pull request.)
 
 ---
 
@@ -232,7 +235,8 @@ If both fire, you are 100% set up.
 
 ### Husky pre-commit isn't running
 - `npm install` may not have triggered the prepare script. Run `npm run prepare` manually.
-- Verify `.git/hooks/pre-commit` exists.
+- Run `git config core.hooksPath` — it should print `.husky`. The hooks live in the tracked `.husky/` folder, not in `.git/hooks/`.
+- `npm run agent-health` reports the hook state in its `Git hooks installed` row.
 
 ### MCP server doesn't connect
 - Check the auth token hasn't expired.
@@ -242,13 +246,14 @@ If both fire, you are 100% set up.
 ### Build fails on first run
 - Usually a stale node_modules or missing peer dep. Try:
   ```
-  rm -rf node_modules package-lock.json
-  npm install
+  rm -rf node_modules
+  npm ci
   ```
 
 ### "I broke something and want to start fresh"
 - Don't `git reset --hard` (bash-safety blocks it for good reason).
-- Instead: `git stash` to safely shelf your changes, then `git pull` to get the latest, then you can either `git stash pop` to restore or `git stash drop` to discard.
+- Don't use a bare `git stash` / `git stash pop` either: the stash list is shared by every worktree and every Claude session on the machine, so `pop` can grab someone else's work.
+- Instead: commit your changes to a temporary work-in-progress branch, then `git pull` on a clean checkout. If you must stash, use a named one (`git stash push -u -m "<unique name>"`), restore it with `git stash apply <its id>` rather than `pop`, and ask Claude to help find the right entry.
 
 ---
 
@@ -265,6 +270,6 @@ These should run periodically on whichever machine you're working from:
 
 ## When you're stuck
 
-Most things in CRX Manager have a corresponding skill that knows the right pattern. When in doubt, describe the problem in plain English to Claude — the CLAUDE.md trigger-phrase table should route to the right skill automatically.
+Most things in CRX Manager have a corresponding skill that knows the right pattern. When in doubt, describe the problem in plain English to Claude — the task table in `AGENTS.md` and the "Claude Workflows" table in `CLAUDE.md` route requests to the right guidance and workflow.
 
-If a skill should fire and doesn't, that's a CLAUDE.md gap. Tell Claude "this phrase should have triggered X skill" and Claude can add the row.
+If a workflow should fire and doesn't, tell Claude "this phrase should have triggered X". Claude can add the routing row, and updates the affected manual or reference doc in the same change.

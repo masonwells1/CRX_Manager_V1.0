@@ -1,21 +1,29 @@
 # Product Data Model — Master Record
 
+> **STATUS 2026-09-26 — ACTIVE project; build not started.** The planning decisions were taken after
+> this record was written (`docs/manual/DECISION_LOG.md`, 2026-08-19 entries; the 2026-08-26 amendment
+> in the build plan). The executable plan is `2026-08-19-product-data-model-BUILD-PLAN.md`, driven by
+> `docs/loops/product-data-model-loop-2026-08.md`; that loop has not started — every work package on
+> `docs/loops/product-data-model-ledger.md` is ⬜ and no product-data migration exists. This record
+> merged to `main` via PRs #429 and #435. It still holds the reasoning; the original header follows.
+
 **Date:** 2026-08-18
-**Status:** AWAITING YOUR APPROVAL. Nothing built. No database changed. No code written.
-**Branch:** `claude/product-data-storage-58ba26` — local commits only, nothing pushed.
+**Status (original, 2026-08-18):** AWAITING YOUR APPROVAL. Nothing built. No database changed. No code written.
+**Branch (original):** `claude/product-data-storage-58ba26` — since merged to `main`.
 
 ---
 
 ## How to read this
 
 You asked for one document with all the issues, the reasoning behind every decision, and
-the planned changes. This is that document. It is the **one to read**; the other three are
-working files it was compiled from.
+the planned changes. This is that document. It is the **one to read**; the other two below are
+working files it was compiled from. (A third, the plain-English GAMEPLAN walkthrough, was folded
+into this record and removed on 2026-09-26; its only unique points are in §2E. It remains in git
+history.)
 
 | Document | What it is | Read it when |
 |---|---|---|
 | **This file** | The complete record — issues, reasoning, changes | **Now, before you approve** |
-| `2026-08-18-product-data-model-GAMEPLAN.md` | Plain-English design walkthrough | You want the design explained again |
 | `2026-08-18-product-data-model-plan.md` | The full working plan + three review rounds | Someone is building and needs the *why* |
 | `2026-08-18-product-data-model-PRD.md` | Numbered requirements with acceptance tests | Someone is building and needs the *what* |
 
@@ -1161,6 +1169,19 @@ in place rather than quietly softened.
 | Codex cannot reach the live database | **False** — its connector is configured against the live project |
 | Brand table versus families is a free choice | **False.** Both are needed (C-28) |
 | 30 products have a filled rate with a blank unit | **Zero do.** The trap is armed but not firing |
+
+## 2E — Three rules carried over from the GAMEPLAN walkthrough
+
+Folded in on 2026-09-26, when the plain-English GAMEPLAN (2026-08-18) was retired. Everything else
+in it is already recorded above; these three were stated only there.
+
+- **Brand name and EPA number are copied onto a record when it is written, never looked up later.**
+  Fixing a typo in a brand's registration number next year must not silently rewrite this year's
+  spray record. (The build plan implements this as `brand_name_snapshot` / `brand_epa_snapshot`.)
+- **Concentrations and densities are measurements, not money.** They must not be forced into the
+  project's whole-cents money pattern.
+- **No pricing, margin or cost calculation changes anywhere in this project.** The comparison tool
+  reads prices; nothing here changes how a price, margin or cost is computed.
 
 ---
 

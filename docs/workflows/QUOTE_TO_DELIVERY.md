@@ -69,9 +69,9 @@ therefore fails earlier and with a clearer error, while the trigger remains auth
 Quote sections and quote items are RPC-owned: browser roles may read them but must not write them directly. `save_quote()` locks the parent quote and replaces its child collection in the same transaction, so its row-version check covers both header and line edits.
 
 ### Rules
-- Tier pricing: customers have assigned tier (1-4). Quote inherits the customer's tier but can be overridden per item.
+- Tier pricing: customers have assigned tier (1-3). Quote inherits the customer's tier but can be overridden per item.
 - `is_planned` flag: when true, inventory holds are created to reserve stock.
-- Commission splits stored as JSONB: `{ splits: [{ recipient, percentage }] }`
+- Commission splits stored as JSONB: `{ splits: [{ recipient, recipient_user_id, percentage }] }` — the immutable `recipient_user_id` (profile UUID), not the display name, routes the money (since `20260722174029`).
 - Always call `logActivity()` after send/accept/decline events.
 
 ### What can go wrong
@@ -93,10 +93,8 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 - `src/pages/OrderDetail.tsx` — order detail with status transitions
 - `src/pages/NewOrder.tsx` — direct order creation (bypasses quote)
 
-### Status transitions
-```
-confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
-```
+### Status values
+`confirmed`, `partially_fulfilled`, `fulfilled`, `cancelled`, `voided` — a list of allowed values, not a transition chain.
 - **confirmed**: Order is active and ready for delivery.
 - **partially_fulfilled**: Some items have been delivered (quantity_remaining > 0 for some items).
 - **fulfilled**: All items delivered (quantity_remaining = 0 for all items).
@@ -111,12 +109,9 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
 ### Rules
 - Accounts receivable is tracked on `invoices` (`invoices.balance_cents`, GENERATED), NOT on the order. The order header has no `total_paid`/`balance_due` — those columns were dropped.
 - Commission records are created automatically during order creation.
-- Money must remain exact whole cents: new storage uses bigint cents. Legacy PostgreSQL
-  numeric-dollar storage is approved only after exact `numeric` arithmetic, clean finite whole-cent
-  values, and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain
-  findings. Parse decimal input exactly instead of multiplying a binary float.
+- Money must remain exact whole cents — follow "Money Handling" in `docs/workflows/SAFE_DEVELOPMENT_RULES.md`. Parse decimal input exactly instead of multiplying a binary float.
 - Always use `checkMutationResult()` after writes.
-- Always use `generateIdempotencyKey()` for order creation to prevent double-submissions.
+- Always send a persisted idempotency key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`) for order creation to prevent double-submissions. ESLint (`local-rules/idempotency-key-from-hook`) rejects a fresh `generateIdempotencyKey()` call at the RPC call site, because a retry would send a different key.
 
 ### What can go wrong
 - Creating an order from a quote that wasn't accepted
@@ -128,21 +123,19 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
 ## Stage 3: Delivery
 
 ### Tables involved
-- `deliveries` — header (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window, is_quick_delivery)
+- `deliveries` — header (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start, delivery_window_end, is_quick_delivery)
 - `delivery_items` — items on delivery (order_item_id, product_id, quantity)
 - `delivery_photos` — driver-uploaded photos (storage_path, image_url)
-- `delivery_remainders` — partial delivery leftovers (remainder_quantity, status)
+- `delivery_remainders` — partial delivery leftovers (quantity_remaining, status)
 
 ### Source files
-- `src/pages/Deliveries.tsx` — delivery list + driver dashboard + batch actions (~900 lines)
+- `src/pages/Deliveries.tsx` — delivery list + driver dashboard + batch actions
 - `src/pages/NewDelivery.tsx` — create delivery from an order
-- `src/pages/DeliveryDetail.tsx` — full lifecycle: confirm, edit, cancel, photos, issues (~1350 lines)
+- `src/pages/DeliveryDetail.tsx` — full lifecycle: confirm, edit, cancel, photos, issues
 - `src/pages/DeliveryRemainders.tsx` — pending remainders across all customers
 
-### Status transitions
-```
-scheduled -> in_progress -> completed -> cancelled -> voided
-```
+### Status values
+`scheduled`, `in_progress`, `completed`, `cancelled`, `voided` — a list of allowed values, not a transition chain (the real edges are described below).
 - **scheduled**: Delivery is planned, driver assigned.
 - **in_progress**: Driver has confirmed/started delivery (`confirm_delivery()` RPC).
 - **completed**: Delivery finished (`complete_delivery()` RPC). Inventory deducted, order updated.
@@ -177,7 +170,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 - Drivers can report issues (issue_type + issue_notes fields).
 - Quick deliveries have `is_quick_delivery = true` flag and skip the quote/order flow.
 - Always call `logActivity()` on status transitions.
-- Always use `generateIdempotencyKey()` for `complete_delivery()`.
+- Always send a persisted `useIdempotencyKey()` key for `complete_delivery()`.
 
 ### What can go wrong
 - Trying to complete a delivery that's still in "scheduled" status
@@ -198,10 +191,8 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 - `src/pages/Invoices.tsx` — invoice list (unposted/posted), batch print, batch void
 - `src/pages/InvoiceDetail.tsx` — post/unpost, print PDF, write-off
 
-### Status transitions
-```
-draft -> unposted -> posted -> paid -> overdue -> voided -> cancelled
-```
+### Status values
+`draft`, `unposted`, `posted`, `paid`, `overdue`, `voided`, `cancelled` — a list of allowed values, not a transition chain.
 - **draft**: Created from order or quick delivery. Can be edited.
 - **posted**: Locked. Starts AR aging. Amounts cannot be changed.
 - **paid**: Fully paid (balance_cents = 0).
@@ -224,7 +215,7 @@ draft -> unposted -> posted -> paid -> overdue -> voided -> cancelled
 - `allocation_sets` — payment-to-invoice groupings
 - `order_line_allocations` — payment portions applied to order items
 - `invoice_line_allocations` — payment portions applied to invoice items
-- `prepay_credits` — prepayment credits (remaining_cents)
+- `prepay_credits` — prepayment credits (original_amount_cents, balance_cents)
 - `prepay_applications` — prepay credit applications to invoices
 
 ### Source files
@@ -233,9 +224,9 @@ draft -> unposted -> posted -> paid -> overdue -> voided -> cancelled
 ### Rules
 - Payments are allocated to invoices via `allocate_payment` RPC. AR is tracked on invoices (single source of truth).
 - Payment allocation links specific payment amounts to specific invoice line items.
-- Prepay credits can be auto-applied to oldest unpaid invoices.
+- Prepay credits are applied one invoice at a time with `apply_prepay_to_invoice`. Bulk auto-apply (`apply_remaining_prepayments`, `batch_apply_all_prepayments`) is disabled and raises `PREPAY_BULK_APPLY_DISABLED` (migration `20260620200000`).
 - All payment activity is logged in `financial_audit_log`.
-- Use `generateIdempotencyKey()` for payment creation.
+- Use a persisted `useIdempotencyKey()` key for payment creation.
 
 ---
 
@@ -275,9 +266,9 @@ If you change one stage, check everything downstream:
 
 - [ ] Read the RPC source code before modifying any step
 - [ ] Use `checkMutationResult()` after every write
-- [ ] Use `generateIdempotencyKey()` for order creation, delivery completion, payment recording
+- [ ] Use a persisted `useIdempotencyKey()` key (never a fresh `generateIdempotencyKey()` at the call site) for order creation, delivery completion, payment recording
 - [ ] Call `logActivity()` for status transitions
-- [ ] Test with all 3 roles: admin, sales_rep, driver
+- [ ] Test with all 4 app roles: admin, sales_rep, driver, applicator
 - [ ] Verify inventory levels after delivery completion
 - [ ] Verify order status updates after delivery completion
 - [ ] Check that delivery remainders are created for partial deliveries

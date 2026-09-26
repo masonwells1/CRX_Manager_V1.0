@@ -43,6 +43,16 @@ This runner makes those queries **standing executable gates** that run **before*
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
 | `save-field-actor-binding.sql` | exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` actor-binding body | **zero** (missing signature or any body drift fails closed) |
 | `product-name-vs-return-policy.sql` | a product whose **name** asserts it cannot be returned is classified `return_policy = 'no_return'` | **zero** (a business-**data** predicate — emits the product **id** only, never the name or SKU; see *Output containment* below) |
+| `audit-log-completeness.sql` | a money-mutating SECDEF function that writes no `financial_audit_log` or `activity_feed` row | **zero** |
+| `dispatch-sync-nonqualifying-profile.sql` | an open job assigned to a profile that is not an active applicator, leaving a field with no dispatch row (so it never reaches the Dispatch Board) | **zero** in normal operation (measures a known trigger gap that is not yet fixed; emits ids only) |
+| `office-only-pricing-secdef-gates.sql` | `compute_application_service_fee` and `get_program_completion` keep their in-body office-role gate, SECURITY DEFINER, and pinned `search_path` | **zero** |
+| `profile-role-lock-insert-arm.sql` | the profile role-lock trigger covers INSERT as well as UPDATE (closes the delete-and-reinsert-as-admin path) | **zero** |
+| `quote-versions-rpc-owned.sql` | `quote_versions` has no browser write path; only the owner-side RPC writes version snapshots | **zero** |
+| `return-credit-intent-binding.sql` | the six return RPC entry points and the shared credit-reversal helper are the exact reviewed actor/intent wrappers | **zero** |
+| `section9-po-ap-controls.sql` | PO on-order cache equals the open PO remainder; browsers cannot mutate vendors or vendor bills; active bills do not reference deleted vendors or draft/cancelled POs; the remediated AP RPCs keep their fail-closed controls | **zero** |
+
+The `fin-*.sql` predicates (money identities) are documented separately in
+[`FIN-README.md`](FIN-README.md).
 
 The actor-forgery predicates treat grouping, casts, field/subscript access, and
 reverse operands as transparent around actor-bearing symbolic operators. They
@@ -93,8 +103,11 @@ output contains, and the difference decides where that output may be pasted:
   and `fin-invoice-balance-identity.sql` emits customer ids, invoice numbers, and cent amounts. That
   is correct for triage and **wrong for anywhere public**. Today the business-data predicates are
   `fin-allocations-bounded`, `fin-ar-statement-balance`, `fin-commission-split-sum`,
-  `fin-invoice-balance-identity`, `fin-prepay-balance`, `fin-quote-override-survival`, and
-  `product-name-vs-return-policy`.
+  `fin-invoice-balance-identity`, `fin-money-whole-cents` (order numbers and amounts),
+  `fin-po-receipt-identity` (PO numbers, product names, and quantities), `fin-prepay-balance`,
+  `fin-quote-override-survival`, `fin-vendor-bill-balance-identity` (bill numbers and cent
+  amounts), and `product-name-vs-return-policy`. `dispatch-sync-nonqualifying-profile` and
+  `section9-po-ap-controls` also read business rows but emit only opaque ids.
 
 **Never paste raw business-data sweep output into a tracked file, a commit message, an issue, or a
 PR comment.** Read it in the session, act on it, and record only the `violation_key` — and only when
