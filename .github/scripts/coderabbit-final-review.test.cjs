@@ -4187,6 +4187,27 @@ test('A: a rerun started by a PR edit is waited out after delivery instead of fa
   assert.equal(polls, 2);
 });
 
+test('the trusted workflow\'s github-script block is valid JavaScript', () => {
+  // Sol round 5, 2026-09-26: two YAML-style `#` comments inside the `script: |`
+  // block would have made the whole gate unrunnable on main. Compile the block
+  // exactly as actions/github-script does — as the body of an async function.
+  const workflow = fs.readFileSync(path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'), 'utf8');
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^\s*script:\s*\|\s*$/.test(line));
+  assert.notEqual(start, -1, 'the workflow has a script: | block');
+  const indent = lines[start + 1].match(/^\s*/)[0].length;
+  const body = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() && line.match(/^\s*/)[0].length < indent) break;
+    body.push(line.slice(Math.min(indent, line.length)));
+  }
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  assert.doesNotThrow(() => new AsyncFunction('require', 'github', 'context', 'core', body.join('\n')),
+    'the embedded script compiles');
+  assert.ok(!body.some((line) => /^\s*#/.test(line)), 'no YAML-style # comment lines inside the JavaScript');
+});
+
 test('A: the trusted workflow configures the wait and a job timeout that covers it', () => {
   const workflow = fs.readFileSync(path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'), 'utf8');
   const attempts = Number(workflow.match(/checkSettleAttempts:\s*(\d+)/)?.[1]);

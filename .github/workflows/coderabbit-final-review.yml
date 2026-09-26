@@ -108,8 +108,8 @@ jobs:
               config: {
                 nativeDispatch: true,
                 quietPeriodMs: 30_000,
-                # Wait out running checks (80 x 15s = 20 min) rather than fail on
-                # them: ci.yml's "Lint, Type Check, Test, Build" takes ~11 minutes.
+                // Wait out running checks (80 x 15s = 20 min) rather than fail on
+                // them: ci.yml's "Lint, Type Check, Test, Build" takes ~11 minutes.
                 checkSettleAttempts: 80,
                 checkSettlePollMs: 15_000,
                 requiredChecks: [
