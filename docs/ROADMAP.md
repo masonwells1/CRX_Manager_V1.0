@@ -1,6 +1,6 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-07-16 | **Owner:** Mason Wells
+> **Last updated:** 2026-07-16 (portal-doc pointer corrected 2026-09-26) | **Owner:** Mason Wells
 >
 > ⭐ **Current direction lives in `docs/roadmap/2026-07-15-roadmap-and-execution-plan.md`** (3–6 month plan + engineering ticket board), and the combined open-items list lives in root `TODO.md`. This file remains the item-by-item historical backlog (strategic IDs A1–F3, portal G1–G15, March priorities); its done/TODO statuses were spot-verified against code on 2026-07-16.
 >
@@ -92,7 +92,7 @@ services — agronomy (soil/tissue testing, nutrition programs), a grower portal
 grower data uploads, and field profitability analytics.
 
 Detailed living vision doc: **`docs/plans/2026-06-10-grower-portal-brainstorm.md`**
-(PR #74 — keep iterating there; this table is the index). Settled so far:
+(now on `main`; its original PR #74 was closed — this table is the index). Settled so far:
 **separate portal app, same Supabase DB**, walled off by RLS + customer-scoped
 `portal_*` RPCs and a new `customer` role. Nothing below is scheduled yet — when
 the vision settles, each item gets its own `/ship`-grade implementation plan.

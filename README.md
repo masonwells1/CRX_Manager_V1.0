@@ -14,7 +14,7 @@ Business management system for **Crop RX Solutions**, an agricultural chemical d
 ## Quick Start
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 24 (the version pinned in `.nvmrc`; CI uses the same file)
 - Supabase project with migrations applied
 - Mapbox account (free tier) for satellite field maps
 - Git
@@ -68,6 +68,8 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | **driver** | Own assigned deliveries, customer addresses (read-only) |
 | **applicator** | Own assigned jobs, application records, products/fields (read-only) |
 
+The database also allows a fifth role, `entity_recipient`. It is not a login role: it marks the service profiles for business entities that receive commission payments. Those profiles can never sign in and are left out of the Team Board and Settings user lists.
+
 ## Features
 
 ### Core Business
@@ -106,13 +108,15 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 ## Database
 
-Production currently has 156 public base tables (+2 views), 440 callable function overloads across 432 names, and 129 trigger-function overloads. The repository contains 869 migration files, including local candidates that may not yet be live. Seven JWT-protected Edge Functions are active in production.
+Counts (tables, functions, migrations, Edge Functions) change with almost every release, so this page does not repeat them. Every database change is a file under `supabase/migrations/`, and each Edge Function is a folder under `supabase/functions/`. For current, dated figures and live state see [docs/manual/CURRENT_STATE.md](./docs/manual/CURRENT_STATE.md) and the [migration history](./docs/reference/migration-history.md).
 
 See the [database schema reference](./docs/reference/database-schema.md) for the table and RLS policy inventory, and the [RPC reference](./docs/reference/rpc-functions.md) for database functions.
 
 ## Deployment
 
 Deployed to **Vercel** at [croprxsolutions.app](https://croprxsolutions.app). Configuration in `vercel.json` with security headers.
+
+`main` is protected: nobody pushes to it directly. A change lands through a branch, a pull request, the required CI checks, and review; merging that pull request into `main` is what deploys the live site, and Vercel keeps one-click rollback to an earlier deployment.
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environment setup, and rollback procedures.
 
@@ -129,13 +133,12 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 
 ## Current State
 
-- **80 pages**, fully lazy-loaded across **88 routes**
-- **323 unit-test files** + **94 E2E spec files** (pass totals come from the current test run)
-- **156 live database tables** (+2 views), 440 callable function overloads, 869 migration files on disk
-- **0 ESLint errors**, 0 TypeScript errors
-- **Pre-commit hook** blocks commits if build or tests fail
+- Every page is lazy-loaded; the page and route list is in [docs/reference/pages-routes.md](./docs/reference/pages-routes.md)
+- Unit tests (Vitest) live next to the code in `src/`; Playwright E2E specs live in `tests/e2e/` but cannot run until a staging Supabase project exists (see [TESTING.md](./TESTING.md))
+- CI blocks a merge on any ESLint warning, TypeScript error, failing unit test, or failed build
+- Git hooks: pre-commit runs fast checks on staged files; pre-push runs TypeScript and the production build (see the note under Commands)
 - **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
-- Security audit, codebase audit, all hardening sprints: **Complete**
+- Current status, open problems, and dated counts: [docs/manual/CURRENT_STATE.md](./docs/manual/CURRENT_STATE.md) and [docs/manual/KNOWN_ISSUES.md](./docs/manual/KNOWN_ISSUES.md)
 
 ## License
 
@@ -144,4 +147,4 @@ Private - All rights reserved
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-08-11
+**Last Updated:** 2026-09-26

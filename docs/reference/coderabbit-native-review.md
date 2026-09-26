@@ -126,6 +126,13 @@ of this repair.
 
 ## Introducing this workflow
 
+**DONE — history, do not repeat.** The introducing PR (#657) merged on
+2026-09-13 as commit `6c128a79a`, and the first normal ready-label request
+through the default-branch workflow was observed on PR #682 on 2026-09-14
+(`ready-for-coderabbit` → `coderabbit-review-dispatch` → an `APPROVED`
+CodeRabbit review). The one-time bootstrap authorization below is not needed
+again; only the rollback paragraph at the end still applies.
+
 The old default-branch workflow cannot attach the new provider label, while the
 repair PR must receive a real review before merge. Finish a concrete PR and
 obtain Mason's exact one-time authorization to create

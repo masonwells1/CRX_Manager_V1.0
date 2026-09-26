@@ -36,14 +36,14 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 | Use `checkMutationResult()` after every `.update()` or `.delete()` | Catches silent RLS failures that return empty data with no error |
 | Use `assertRpcResult()` after RPC calls | Catches RPCs that return null due to permission denial |
 | Use `logActivity()` for important user actions | Feeds the activity timeline and keeps audit history |
-| Require and enforce `p_idempotency_key text DEFAULT NULL` on mutating RPCs; use `generateIdempotencyKey()` at callers | Prevents retries or double-clicks from applying the same business action twice |
+| Require and enforce `p_idempotency_key text DEFAULT NULL` on mutating RPCs; at callers send a persisted key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`) — ESLint rule `local-rules/idempotency-key-from-hook` rejects a fresh `generateIdempotencyKey()` at the RPC call site | Prevents retries or double-clicks from applying the same business action twice |
 | Create migration files for ALL database changes | Keeps the schema version-controlled and reproducible |
 | Run `npm run lint` after changes | Catches static-analysis and project-convention violations |
 | Run `npm run typecheck` after changes | Catches type mismatches before they become runtime bugs |
 | Run `npm run build` after changes | Catches import errors and compile failures |
 | Update `src/types/index.ts` when database schema changes | Keeps TypeScript in sync with the database |
 | Use `(select auth.uid())` in RLS policies (not bare `auth.uid()`) | Performance: evaluates once per query instead of once per row |
-| Test as all roles (admin, sales_rep, driver) | Each role sees different data — bugs often hide in role-specific paths |
+| Test as all 4 app roles (admin, sales_rep, driver, applicator) | Each role sees different data — bugs often hide in role-specific paths |
 | Match status values to `.claude/schema-registry.json` | Prevents frontend/RPC strings from violating live database constraints |
 
 ---
@@ -64,16 +64,16 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 |------|------------------------|
 | NEVER skip delivery confirm->complete flow | Must go scheduled -> in_progress -> completed. Skipping breaks inventory. |
 | NEVER allow editing delivery items once in_progress or beyond | Items are only editable while status = 'scheduled'. Once started, items are locked. |
-| NEVER create invoices without an order | Invoices always link to an order via order_id. |
+| NEVER create a chemical-sale invoice without its order | Chemical-sale invoices link to their order via `order_id`. Field-application, blend-ticket and job invoices are separate paths that have no order (`order_id` is nullable) — see `docs/workflows/QUOTE_TO_DELIVERY.md`. |
 | NEVER bypass `check_period_open()` | Closed periods prevent backdated transactions. Bypassing corrupts financials. |
-| NEVER allow non-admin access to month-end, commissions, or settings | These are admin-only features. |
+| NEVER allow non-admin access to month-end, commissions, or settings | These are admin-only features. (Live exception, recorded in `RLS_SECURITY_GUIDE.md`: `comm_select` lets a sales rep read only their own commission rows. Widening or removing that is Mason's call.) |
 | NEVER skip a status transition step | Every lifecycle has defined transitions (see QUOTE_TO_DELIVERY.md). |
 
 ### Code Quality
 | Rule | Consequence of breaking |
 |------|------------------------|
 | NEVER remove the pre-commit hook | Removes the safety net that catches errors before commits |
-| NEVER commit with `--no-verify` | Bypasses lint + build + test checks and the ledger guard |
+| NEVER commit with `--no-verify` | Bypasses the pre-commit ledger guard, private-artifact containment, the staged SQL/frontend validators, and the conditional agent-parity and dependency checks (typecheck and build run in pre-push; lint and tests run in CI) |
 | NEVER use destructive recovery such as `git reset --hard`, broad discard-all commands, or recursive force-delete without Mason's exact request after the risk is explained | Can permanently erase unrelated or another session's work |
 | NEVER commit agent-surface changes or a new migration without a ledger update in the same commit | The pre-commit ledger guard (`scripts/check-ledger-update.mjs`, 2026-07-13) blocks commits that stage `.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, any `.codex/` file, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, guard scripts, or a new `supabase/migrations/*.sql` file with no ledger update. PREFERRED: add `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` — a NEW dated file of your own, since two sessions never write the same path and it cannot conflict. The guard requires it be ADDED (not modified, deleted or renamed) and to carry a `## <YYYY-MM-DD> - <what changed>` heading with detail beneath it. Also accepted: `docs/CHANGELOG.md` / `docs/manual/*.md` / `docs/reference/agent-guardrails.md` / `docs/reference/migration-history.md` / `docs/loops/` — policy changes must leave a written record Mason can find |
 | NEVER add `@ts-ignore` or `any` types | Hides bugs that TypeScript would catch |
@@ -87,7 +87,7 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 | Rule | Consequence of breaking |
 |------|------------------------|
 | NEVER commit `.env` files | Exposes API keys and secrets publicly |
-| NEVER deploy without `ALLOWED_ORIGIN` set | Edge Functions fail with CORS errors |
+| NEVER deploy without `ALLOWED_ORIGIN` set | Every Edge Function uses `supabase/functions/_shared/cors.ts`, which throws when the secret is unset outside localhost |
 
 ---
 
@@ -133,14 +133,7 @@ If you're changing anything in the quote -> order -> delivery -> invoice -> paym
 5. Verify order status updates correctly
 6. Verify invoice amounts match order totals
 
-### Downstream impact reference:
-| If you change... | Also check... |
-|-----------------|--------------|
-| Quote pricing | Order totals, invoice amounts, commission calculations |
-| Order items | Delivery items (locked), invoice items, quantity_remaining |
-| Delivery completion logic | Inventory levels, order fulfillment status, delivery remainders |
-| Invoice posting | AR aging, payment allocation, finance charges |
-| Payment recording | Order balance_due, invoice balance_cents, prepay credits |
+The downstream impact map lives in `docs/workflows/QUOTE_TO_DELIVERY.md` ("Downstream Impact Map").
 
 ---
 
@@ -226,7 +219,7 @@ exact `numeric`, not `real` or `double precision`.
 | TypeScript types | `src/types/index.ts` |
 | Supabase client | `src/lib/db.ts` |
 | Activity logging | `src/lib/activityLogger.ts` |
-| Idempotency | `src/lib/idempotency.ts` |
+| Idempotency | `src/hooks/useIdempotencyKey.ts` (callers), `src/lib/idempotency.ts` (key format) |
 | Migrations | `supabase/migrations/` |
 | Edge Functions | `supabase/functions/` |
 
@@ -242,4 +235,4 @@ Before finishing a session:
 - [ ] Activity logging added for new user actions
 - [ ] No `@ts-ignore`, `any`, or `console.log` left in code
 - [ ] Migration safety verified (no function overloads, CHECK constraints complete)
-- [ ] Land the work the standard way: commit on a branch → open a PR → finish the separate Codex review and required checks (Vercel) → bring the branch current → freeze and record the candidate head → apply `ready-for-coderabbit` → let the trusted default-branch workflow validate the candidate and attach `coderabbit-review-dispatch` once → observe a formal CodeRabbit review of that exact commit and resolve its findings → recheck every reported check and auto-merge OFF → merge with `--match-head-commit <that-exact-sha>`. An approving review is NOT required (Mason removed it 2026-09-02) but a `CHANGES_REQUESTED` verdict still blocks. Label writes and skipped statuses are not review proof; preserve pending or uncertain request state and follow `docs/reference/coderabbit-native-review.md` before retrying. A fix or base update resets workflow state and restarts checks; freeze the corrected candidate and open a fresh delivery PR before its ready-label trigger. Normal native delivery requires the original opened head/base to remain unchanged for the PR lifetime; once the fresh PR exists, close the previous PR with a `Replaced by #N` comment (closing keeps its branch, comments and findings; never leave it open "as the record"). Labels are dedupe evidence, not an independent trust identity. Direct pushes to `main` are impossible (the `protect-main` ruleset); agents land reviewed code themselves under the standing policy — Mason does not hand-commit code.
+- [ ] Land the work the standard way in `.claude/commands/ship.md` (Step 8) — the single source for the landing order. In short: branch → exact-SHA Sol review last, only when the diff is risky → push and PR → required checks → resolved agent findings → CodeRabbit review of the frozen head → merge with `--match-head-commit <that-exact-sha>`. A Sol proof binds to the head it reviewed, so any later commit (including a merge that brings the branch current) voids it. An approving review is NOT required, but a `CHANGES_REQUESTED` verdict still blocks. Direct pushes to `main` are impossible (the `protect-main` ruleset); agents land reviewed code themselves under the standing policy — Mason does not hand-commit code.

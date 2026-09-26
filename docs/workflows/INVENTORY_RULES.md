@@ -14,9 +14,9 @@ Complete reference for inventory management, calculations, and transaction handl
 | `purchase_orders` | Supplier POs (po_number, vendor, status, total_cost) |
 | `purchase_order_items` | PO line items (quantity_ordered, quantity_received, unit_cost) |
 | `receiving_records` | Per-event receiving details (condition, lot_number, notes, storage_location) |
-| `warehouses` | Storage locations (warehouse_name, code, is_active, is_default) |
-| `cycle_counts` | Count sessions (status, counted_by) |
-| `cycle_count_items` | Individual count lines (expected_qty, counted_qty, variance) |
+| `warehouses` | Storage locations (name, code, is_active, is_default) |
+| `cycle_counts` | Count sessions (count_number, warehouse, status, initiated_by, completed_by) |
+| `cycle_count_items` | Individual count lines (expected_qty, counted_qty, variance, is_counted, counted_by) |
 
 ---
 
@@ -132,14 +132,14 @@ Holds reserve inventory for planned quotes without actually deducting stock.
 
 ### Fields
 - `quantity` — how much is reserved
-- `hold_type` — `manual` or `crop_program`
+- `hold_type` — `manual`, `crop_program`, or `job` (job reservations)
 - `expires_at` — when the hold automatically releases (nullable)
 - `is_active` — whether the hold is currently in effect
 
 ### How holds work
 1. Quote is marked `is_planned = true`
 2. System creates `inventory_holds` records for each quote item
-3. Holds reduce "Net Free" inventory but NOT `quantity_available`
+3. Holds reduce "Today's Free" but NOT `quantity_available` (and not Net Position)
 4. When quote is accepted and converted to order, holds are released
 5. Expired holds (past `expires_at`) are no longer counted
 
@@ -159,7 +159,7 @@ If `today's free − requested qty < 0`, the RPC `RAISE EXCEPTION 'INSUFFICIENT_
 This closes the concurrency window where two admins clicking "Create Hold" simultaneously could each pass the client-side warning and both succeed, leaving total holds in excess of available inventory.
 
 ### Important
-- Holds do NOT deduct from `quantity_available` — they only affect Net Free / today's free calculations
+- Holds do NOT deduct from `quantity_available` — they only affect the Today's Free calculation
 - Multiple holds can exist for the same product
 - The browser-side warning at hold-creation is now a UX preview only; the server is the authoritative gate
 
@@ -178,10 +178,9 @@ When the flag is true, the row surfaces on `/integrity-cleanup` under the "Phant
 
 ## Purchase Order Lifecycle
 
-### Status transitions
-```
-draft -> submitted -> partially_received -> fully_received -> cancelled
-```
+### Status values
+`draft`, `submitted`, `partially_received`, `fully_received`, `cancelled`.
+The normal path is `draft` → `submitted` → `partially_received` → `fully_received`; `cancelled` is a separate end state, not a step after `fully_received`.
 
 ### Tables
 - `purchase_orders` — PO header (po_number format: PO-YYYY-NNNN via `next_po_number()`)
@@ -190,7 +189,7 @@ draft -> submitted -> partially_received -> fully_received -> cancelled
 ### Source files
 - `src/pages/PurchaseOrders.tsx` — PO list
 - `src/pages/NewPurchaseOrder.tsx` — create PO
-- `src/pages/PurchaseOrderDetail.tsx` — PO detail with receive modal (~823 lines)
+- `src/pages/PurchaseOrderDetail.tsx` — PO detail with receive modal
 
 ### Receiving flow
 1. Open a submitted PO
@@ -200,7 +199,7 @@ draft -> submitted -> partially_received -> fully_received -> cancelled
    - Creates `receiving_records` entries (one per item received)
    - Updates `purchase_order_items.quantity_received`
    - Updates `inventory.quantity_available` (adds received quantity)
-   - If unit cost differs from existing product cost, creates a `cost_history` record
+   - Does NOT change product cost/tier prices or write `cost_history` (see Cost History below)
    - Updates PO status to `partially_received` or `fully_received`
 
 ### Quick Receive (shortcut)
@@ -218,14 +217,15 @@ draft -> submitted -> partially_received -> fully_received -> cancelled
 
 ## Cost History
 
-When receiving items where the PO unit cost differs from the product's current cost:
-
-1. A `cost_history` record is created with old/new costs and prices
-2. The product's cost fields are updated to the new PO cost
-3. This ensures the product catalog always reflects the most recent cost
+Receiving does **not** touch product cost, tier prices, or `cost_history` — the current
+`receive_po_items()` body (last rewritten in `20260714230000`, later only wrapped) writes inventory,
+the ledger, receiving records and PO rows only. Product cost and tier prices change only through the
+pricing edit paths, and each change writes a `cost_history` row whose `change_source` is one of
+`pricing_worksheet`, `product_page`, `products_inline` (or `legacy_frontend` for old rows).
 
 ### Table: `cost_history`
-- `product_id`, `old_cost`, `new_cost`, `old_price`, `new_price`, `change_note`
+- `product_id`, `old_cost` / `new_cost`, `old_tierN_price` / `new_tierN_price` and `old_tierN_margin` / `new_tierN_margin` (N = 1–3), `change_source`, `change_reason`, `change_note`, `change_set_id`, `old_pricing_version` / `new_pricing_version`, `changed_by`, `changed_at`
+- Full column list: `.claude/schema-registry.json` → `columns.cost_history`
 
 ---
 
@@ -243,7 +243,7 @@ Physical inventory verification process.
 
 ### Tables
 - `cycle_counts` — count sessions (status: in_progress/completed/cancelled)
-- `cycle_count_items` — per-product count lines (expected_qty, counted_qty, variance, variance_pct, resolved)
+- `cycle_count_items` — per-product count lines (expected_qty, counted_qty, variance, variance_pct, is_counted, counted_by, counted_at)
 
 ### Source: `src/pages/CycleCounts.tsx`
 
@@ -280,8 +280,6 @@ tab of the same browser and survives a reload. Plain steps for staff:
 - [ ] Use `checkMutationResult()` after inventory writes
 - [ ] Test with edge cases: zero stock, negative variance, concurrent holds
 - [ ] Verify that receiving updates both PO items AND inventory levels
-- [ ] Check cost_history creation when PO cost differs from product cost
+- [ ] Verify receiving leaves product cost, tier prices and `cost_history` unchanged
 - [ ] Remember: season is October 1 to September 30 for all YTD calculations
-- [ ] Money remains exact whole cents: new storage uses bigint cents; legacy PostgreSQL
-      numeric-dollar storage is approved only after exact numeric math, clean finite whole-cent
-      values, and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain findings
+- [ ] Money remains exact whole cents — follow "Money Handling" in `docs/workflows/SAFE_DEVELOPMENT_RULES.md`

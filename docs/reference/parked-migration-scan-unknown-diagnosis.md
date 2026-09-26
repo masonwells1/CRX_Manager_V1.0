@@ -1,6 +1,15 @@
 # Why the parked-migration scan reports PARKED STATE UNKNOWN
 
-**Diagnosed 2026-08-20. Proven, not inferred. Implementation not yet done.**
+> **RESOLVED 2026-08-20 by PR #437 (merged 2026-08-21 UTC, merge commit `bf9237bb9`). This page is now history — do not implement "The fix" below.**
+> The recommended fix was not what shipped. Broadly exempting "mainline-known" candidates was rejected in
+> review (Codex P1 on PR #437: it could hide a genuinely parked migration). The shipped rule exempts only a
+> candidate that `origin/main`'s own migration history registers as a LOCAL CANDIDATE, and only while its pin
+> still matches mainline — see `createOwnDraftPathsReader` in `.claude/hooks/worktree-awareness-lib.mjs` and
+> its "DO NOT widen" note. The three LOCAL CANDIDATE migrations named below were all applied live on 2026-08-24
+> (ledger versions `20260824185408`, `20260825025241`, `20260825033106`), so none is parked any more. File and
+> line references below are as of 2026-08-20 and have since drifted.
+
+**Diagnosed 2026-08-20. Proven, not inferred.** (Original status line: "Implementation not yet done.")
 
 `node scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
 with the same note each time:

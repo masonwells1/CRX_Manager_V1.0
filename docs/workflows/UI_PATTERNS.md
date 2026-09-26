@@ -4,72 +4,33 @@ Reference for how the CRX Manager frontend is built. Follow these patterns for c
 
 ---
 
-## Adding a New Page (4-Step Checklist)
+## Adding a New Page
 
-### Step 1: Create the page component
-Create a new file in `src/pages/`:
-```typescript
-// src/pages/MyNewPage.tsx
-import { useState, useEffect } from 'react';
-import { supabase, checkMutationResult } from '../lib/db';
+Follow `.claude/skills/new-page/SKILL.md` — it is the maintained step-by-step source. In short:
 
-export default function MyNewPage() {
-  // ... component code
-}
-```
-
-### Step 2: Add lazy import in App.tsx
-```typescript
-// src/App.tsx — add near the top with other lazy imports
-const MyNewPage = lazy(() => import('./pages/MyNewPage'));
-```
-
-### Step 3: Add the Route
-```typescript
-// src/App.tsx — add inside the protected route block
-<Route path="/my-new-page" element={<MyNewPage />} />
-```
-
-### Step 4: Add sidebar link
-```typescript
-// src/components/layout/AppLayout.tsx — add to the navigation array
-{ path: '/my-new-page', label: 'My New Page', icon: SomeIcon }
-```
-
-**Important:** All pages are lazy-loaded using `React.lazy()` and wrapped in `<Suspense>`. This is mandatory.
+1. **Create the page component** in `src/pages/` as a `default` export (required for lazy loading).
+2. **Add the lazy import** in `src/App.tsx`:
+   ```typescript
+   const MyNewPage = lazy(() => import('./pages/MyNewPage'));
+   ```
+3. **Add a route object** to the `RouteShell` children array in `src/App.tsx`. The app uses
+   `createBrowserRouter` route objects, not `<Route>` JSX, and suspense is centralized in
+   `RouteShell` (do not add a per-route `<Suspense>`). Paths there are relative:
+   ```tsx
+   { path: 'my-new-page', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><MyNewPage /></ProtectedRoute> },
+   ```
+4. **Add the `PAGE_PERMISSIONS` entry (REQUIRED)** in `src/lib/pagePermissions.ts`. Without it
+   `ProtectedRoute` redirects users away and `pagePermissions.test.ts` fails.
+5. **Add the sidebar link** in `src/components/layout/Sidebar.tsx`, in the right role tree
+   (`officeNavigation`, `applicatorNavigation`, or `driverNavigation`).
+6. **Document it** in `docs/reference/pages-routes.md`, then open the page and verify it.
 
 ---
 
-## Existing Pages (65 total)
+## Existing Pages
 
-Before creating a new page, check that it doesn't already exist. Here are all current pages grouped by area:
-
-### Core
-Dashboard, Products, ProductDetail, Customers, CustomerDetail
-
-### Quoting & Orders
-Quotes, QuoteBuilder (new + edit), Orders, NewOrder, OrderDetail
-
-### Delivery
-Deliveries (includes driver dashboard), NewDelivery, DeliveryDetail, DeliveryRemainders
-
-### Inventory & Receiving
-InventoryPage, PurchaseOrders, NewPurchaseOrder, PurchaseOrderDetail, ReceivingLog, QuickReceive, CycleCounts
-
-### Jobs & Application
-Jobs, JobDetail, ApplicationRecords, BlendTickets, BlendTicketDetail, BlendRecipes
-
-### Financial
-Invoices, InvoiceDetail, Payments, PaymentAllocation, PaymentHistory, ARaging, MonthEndClose, CommissionPayments, CustomerTransactionReview, PrepaymentManager, PrepayWorkspace, FinancialDashboard, SalesReports
-
-### Accounts Payable
-AccountsPayable (AP Dashboard), VendorBills, NewVendorBill, VendorBillDetail
-
-### Fields & Compliance
-Fields, Compliance, Rebates
-
-### Other
-BrandVsGeneric, CropPrograms, Vehicles, VehicleDetail, Returns, Reports, TeamBoard, Notifications, SettingsPage
+Before creating a new page, check that it doesn't already exist: `docs/reference/pages-routes.md`
+lists every route and page, and `src/pages/` is the ground truth.
 
 ---
 
@@ -84,14 +45,16 @@ const [loading, setLoading] = useState(true);
 
 useEffect(() => {
   async function loadCustomers() {
+    // Name the columns you need; avoid select('*') + `as` casts (untyped DB access).
     const { data, error } = await supabase
       .from('customers')
-      .select('*')
-      .is('deleted_at', null)
+      .select('id, farm_name, assigned_tier')
       .order('farm_name');
 
     if (error) {
-      console.error('Failed to load customers:', error);
+      // Lint forbids console.error; report through Sentry (src/lib/sentry) and a toast.
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_customers' } });
+      toast('error', 'Failed to load customers');
     } else {
       setCustomers(data || []);
     }
@@ -170,7 +133,7 @@ const rows = selected.size > 0 ? selectedRows : filtered;
 ```
 
 ### Pages using this pattern
-Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets, Orders, Vehicles, Fields, Returns, ReceivingLog
+Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets, Orders, Vehicles, Fields, Returns, ApplicationServices, plus the Receiving hub's `ReceivingLogPanel` and `JobMassEditModal` (check `grep -rl useRowSelection src` for the current list)
 
 ### Exceptions
 - **Invoices and Deliveries** use hand-rolled `Set<string>` selection (pre-existing pattern, kept for stability)
@@ -230,15 +193,15 @@ src/
 
 | Entity | Format | Generated by |
 |--------|--------|-------------|
-| Invoice | `INV-YYYY-NNNN` | Count query |
-| Return | `RMA-YYYY-NNNN` | Count query |
-| Rebate claim | `RC-YYYY-NNNN` | Count query |
-| Cycle count | `CC-YYYY-NNNN` | Count query |
+| Invoice | `<PREFIX>-YYYY-NNNN` — `CS` chemical sale, `MC` misc charge, `CM` credit memo, `INV` field application and other types | `next_invoice_number(p_invoice_type)`, called inside the invoice-creating RPCs |
+| Return | `RMA-YYYY-NNNN` | `next_return_number()`, called inside the `create_return` RPC |
+| Rebate claim | `RC-YYYY-NNNN` | Per-year counter row inside the `create_rebate_claim()` RPC |
+| Cycle count | `CC-YYYY-NNNNN` (5 digits) | `next_cycle_count_number()` RPC |
 | PO | `PO-YYYY-NNNN` | `next_po_number()` RPC |
 | Job | `JOB-YYYY-NNNN` | `next_job_number()` RPC |
 | Application record | `APP-YYYY-NNNN` | `next_application_record_number()` RPC |
 | Commission payment | `CP-YYYY-NNNN` | `next_commission_payment_number()` RPC |
-| Delivery | `DEL-YYYY-NNNN` | `next_delivery_number()` RPC |
+| Delivery | `DEL-NNNNN` (no year, 5 digits) | `next_delivery_number()` RPC |
 
 ---
 
@@ -248,9 +211,9 @@ All PDF generation is client-side using `jspdf` and `jspdf-autotable`:
 
 | PDF | Source file | Notes |
 |-----|-----------|-------|
-| Invoice | `src/lib/invoicePdf.ts` | 3 layouts (756 lines) |
-| Statement | `src/lib/statementPdf.ts` | Dual-mode (818 lines) |
-| Year-end summary | `src/lib/yearEndSummaryPdf.ts` | (633 lines) |
+| Invoice | `src/lib/invoicePdf.ts` | 3 layouts |
+| Statement | `src/lib/statementPdf.ts` | Dual-mode |
+| Year-end summary | `src/lib/yearEndSummaryPdf.ts` | |
 | Delivery | `src/lib/deliveryPdf.ts` | Batch support, partial delivery highlighting |
 | Receiving | `src/lib/receivingPdf.ts` | CRX green header, condition color-coding |
 

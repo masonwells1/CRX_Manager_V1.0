@@ -20,7 +20,7 @@ Run the gauntlet for:
 - any change Claude fixed after Codex found a BLOCKER or HIGH bug;
 - weekly or pre-feature foundation audits when Mason asks whether the app is safe to build on.
 
-Do not run it as a production deployment command. It reviews and fixes locally, then stops for Mason's approval.
+Do not run it as a production deployment command. It reviews and fixes locally, then stops and reports; landing follows `.claude/commands/ship.md` and the hard gates in `AGENTS.md`.
 
 ## Modes
 
@@ -37,7 +37,7 @@ Use this when reviewing a branch, commit, or uncommitted work before push.
 5. Verify every BLOCKER and HIGH finding against source, migration, constraint, test, smoke, or live database evidence.
 6. Fix confirmed BLOCKER and HIGH issues.
 7. Add one prevention action for every confirmed BLOCKER and HIGH bug.
-8. Re-run the same Codex review scope until the verdict is `SHIP` or `SHIP-WITH-FOLLOWUPS`.
+8. Re-run the same Codex review scope until the verdict is `SHIP` or `SHIP-WITH-FOLLOWUPS`. These iterating rounds run on Luna (see the two review tiers in `AGENTS.md`): no BLOCKER or HIGH may remain, and every MED/LOW is fixed, refuted with evidence, or named as a deferral. A risky diff then needs one fresh Sol review of the exact final head, run last — any later commit voids it (`.claude/commands/codex-gauntlet.md` Step 3).
 9. Stop and report the verdict. The gauntlet does not push, deploy, or apply production changes; landing follows `.claude/commands/ship.md` and the hard gates in `AGENTS.md`.
 
 ### Foundation Audit Mode
@@ -95,7 +95,7 @@ Do not close a repeated bug class with documentation only when an executable che
 The gauntlet is a **review** layer — it catches *semantic* classes (actor-forgery, money, idempotency, drift, lifecycle) by having an independent model read the change. It is on-demand and DB/security/money-scoped, so it must not be relied on for *mechanical* classes. Those are caught for free, every commit, by deterministic gates that sit beneath it:
 
 - **Type errors** → `npm run typecheck` runs in `/ship`, pre-push, and CI. (`npm run build` is vite/esbuild — it transpiles, it does **not** type-check.)
-- **Untyped DB access** (`.select('*')` + `as` casts), **unhandled Supabase `{ error }`** (returned, not thrown), **pages that throw on mount** → ESLint contract rules + a render-smoke test (see `docs/audits/2026-06-14-field-mode-error-retrospective-and-prevention-spec.md` and the reconciliation in `…-gauntlet-vs-fieldmode-controls-reconciliation.md`).
+- **Unhandled Supabase `{ error }`** (returned, not thrown), missing `assertRpcResult()` / `checkMutationResult()`, **pages that throw on mount** → ESLint contract rules in `eslint-local-rules/rules/` + the page render-smoke test in `src/pages/__smoke__/` (see `docs/audits/2026-06-14-field-mode-error-retrospective-and-prevention-spec.md`; the 2026-06-14 gauntlet-vs-field-mode reconciliation was removed in the 2026-09-26 docs cleanup and survives in git history). **Untyped DB access** (`.select('*')` + `as` casts) has no deterministic gate yet — reviewers still have to catch it.
 - **Schema drift** → the live-schema Vitest suite fails closed when a trusted operator explicitly supplies live credentials, but GitHub automation is intentionally parked until a least-privilege credential exists. A mock, skipped, missing-secret, or unexecuted suite is `BLOCKED`/`UNVERIFIED`, never a pass.
 - **Mutating RPC idempotency** → inventory must start from the current mutator set and require a key or an explicit evidence-backed exemption; scanning only RPCs that already declare a key is not coverage.
 - **Browser integration** → E2E setup must fail closed unless a non-production target and credentials are configured. Production fixtures are never the CI default.

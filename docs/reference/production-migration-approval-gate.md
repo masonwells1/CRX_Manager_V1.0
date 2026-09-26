@@ -20,6 +20,9 @@
 > parser hardening, which have consumers outside the deleted automation and were deliberately kept.
 >
 > Canonical decision: `docs/manual/DECISION_LOG.md`, 2026-08-31 entry.
+>
+> Model names in the body are those in force when it was written (the `gpt-5.6-sol` gate). The current
+> review models are in `docs/reference/codex-model-tuning.md`.
 
 This gate lets one GitHub account serve two different capabilities safely:
 
@@ -111,7 +114,7 @@ Repeat this proof whenever the Codex GitHub credential is replaced or its permis
 
 ## Human dispatch plus authenticated review provenance
 
-Before merging a migration PR, the existing local `gpt-6-sol`/high exact-head review remains the
+Before merging a migration PR, the existing local `gpt-5.6-sol`/high exact-head review remains the
 hard pre-push gate. The PR must also receive CodeRabbit's authenticated GitHub App review on that
 same exact head, and the latest exact-head CodeRabbit review state must be `APPROVED`. A plain
 `CodeRabbit` success status is insufficient because it can coexist with a `CHANGES_REQUESTED`

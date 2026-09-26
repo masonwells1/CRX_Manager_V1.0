@@ -1,6 +1,13 @@
 # Supplier Pricing Phase 3C Review-Packet Overnight Loop — July 26, 2026
 
-## Current mission status — packet complete; external gates only
+> **STATUS 2026-09-26 — COMPLETE; this loop is closed and is kept as history.** PR #246 (this packet)
+> merged 2026-07-28. Stage C itself then landed: PR #282 merged 2026-07-29 and migration
+> `20260729213733_supplier_pricing_phase3c_return_policy_classification` is in the live ledger
+> (21 products `no_return`, 2 `returnable`, the rest left `unknown` by owner decision — see
+> `docs/reference/database-schema.md`, "Supplier Pricing Phase 3 Stage C"). The "PARKED — PR #246 IS
+> OPEN" status below is the July 26–27 state, not the current one. Nothing here authorizes new work.
+
+## Mission status as of 2026-07-27 — packet complete; external gates only
 
 `PARKED — PR #246 IS OPEN; ACCEPTANCE REQUIRES ITS CURRENT HEAD TO MATCH A
 RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL

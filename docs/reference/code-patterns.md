@@ -1,15 +1,16 @@
 # Code Patterns & AI Dev Reference
 
 ## Number Formats
-- Invoice: `INV-{YYYY}-{sequential 4-digit}` via count query
-- Return: `RMA-{YYYY}-{sequential 4-digit}` via count query
-- Claim: `RC-{YYYY}-{sequential 4-digit}` via count query
-- Cycle count: `CC-{YYYY}-{sequential 4-digit}` via count query
-- PO: `PO-{YEAR}-{sequential 4-digit}` via count query
+All numbers are generated server-side. The year is the America/Chicago calendar year (`20260908140000`, `20260914100100`), and each generator serializes callers with an advisory lock or a counter-row lock. Never build a number in the browser from a count query.
+- Invoice: `{PREFIX}-{YYYY}-{sequential 4-digit}` via `next_invoice_number(p_invoice_type)`. Prefix by type: `CS` chemical_sale, `MC` misc_charge, `CM` credit_memo, `INV` everything else (field application is the default). Each prefix has its own sequence.
+- Return: `RMA-{YYYY}-{sequential 4-digit}` via `next_return_number()`
+- Rebate claim: `RC-{YYYY}-{sequential 4-digit}` from the per-year `rebate_claim_counters` row inside `create_rebate_claim`
+- Cycle count: `CC-{YYYY}-{sequential 5-digit}` via `next_cycle_count_number()`
+- PO: `PO-{YYYY}-{sequential 4-digit}` via `next_po_number()`
 - Job: `JOB-{YYYY}-{sequential 4-digit}` via `next_job_number()` RPC
 - Application record: `APP-{YYYY}-{sequential 4-digit}` via `next_application_record_number()`
 - Commission payment: `CP-{YYYY}-{sequential 4-digit}` via `next_commission_payment_number()`
-- Delivery: `DEL-{YYYY}-{sequential 4-digit}` via `next_delivery_number()`
+- Delivery: `DEL-{sequential 5-digit}` (no year) via `next_delivery_number()`
 
 ## UI Patterns
 - Bulk imports use a 3-state modal pattern: file selection -> validation/review -> results
@@ -21,16 +22,16 @@
 
 ## Bulk Operations Pattern
 - `useRowSelection` hook + `createCheckboxColumn` + `BulkActionBar` (auto-hides when 0 selected) + `BulkDeleteConfirmModal`
-- Used on 11 pages: Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets, Orders, Vehicles, Fields, Returns, ReceivingLog
+- Used on 11 pages: ApplicationServices, BlendTickets, Customers, Fields, Jobs, Orders, Products, PurchaseOrders, Quotes, Returns, Vehicles
 - Smart fallback export: `const rows = selected.size > 0 ? selectedRows : filtered;` — exports selected if any, otherwise all filtered
-- Soft delete pattern: `.update({ deleted_at: new Date().toISOString() })` + filter `.is('deleted_at', null)`. Used by Returns, Invoices
+- Soft delete pattern: `.update({ deleted_at: new Date().toISOString() })` + filter `.is('deleted_at', null)`. Still used directly by several list pages (for example Returns, Orders, Quotes, Jobs, BlendTickets, BlendRecipes). Invoices do NOT use it: they delete through the `delete_invoices` RPC.
 - Hand-rolled checkbox selection: Invoices and Deliveries use custom `Set<string>` state (pre-existing pattern, kept for stability)
 - InventoryPage uses `EditableDataTable` (inline editing) — has checkbox column for batch adjust, transaction ledger per product, "Needs Reorder" filter chip
 
 ## PDF Generation
-- Invoice PDF: 3 layouts via `src/lib/invoicePdf.ts` (756 lines)
-- Statement PDF: dual-mode via `src/lib/statementPdf.ts` (818 lines)
-- Year-end summary PDF: `src/lib/yearEndSummaryPdf.ts` (633 lines)
+- Invoice PDF: 3 layouts via `src/lib/invoicePdf.ts`
+- Statement PDF: dual-mode via `src/lib/statementPdf.ts`
+- Year-end summary PDF: `src/lib/yearEndSummaryPdf.ts`
 - Delivery PDF: `src/lib/deliveryPdf.ts` — batch support, delivered vs planned columns, partial delivery amber highlight
 - Receiving PDF: `src/lib/receivingPdf.ts` — CRX green header, condition color-coding, batch support
 - Load Sheet PDF: `src/lib/loadSheetPdf.ts` — product summary table + per-stop tables, aggregates quantities across stops, tote number column
@@ -43,13 +44,13 @@
 
 ## Key Component Patterns
 - Activity logging via `logActivity()` from `src/lib/activityLogger.ts`
-- Product search modal pattern reused from `NewPurchaseOrder.tsx:400-453`
+- Product search modal pattern reused from `NewPurchaseOrder.tsx` (the `productSearchOpen` modal)
 - Admin user edit via `admin_update_profile` RPC (SECURITY DEFINER)
 - ReportShell component: reusable date range + season presets + CSV/PDF export wrapper (`src/components/reports/ReportShell.tsx`)
 - LogbookReport component: 4 sub-tabs (by Customer/Applicator/Field/FAA)
 
 ## Financial Patterns
-- AR aging uses Supabase RPC `get_ar_aging()` — handles both invoiced and uninvoiced orders
+- AR aging uses Supabase RPC `get_ar_aging(p_as_of_date)` — admin-only gross AR aging over posted invoices as of a cutoff (it does not read `orders`); fails closed when a past cutoff can no longer be reconstructed. See `rpc-functions.md`.
 - Customer statement uses RPC `get_customer_statement()` — running balance via window function
 - Season comparison uses RPC `get_season_comparison()` — YoY metrics (October 1-September 30 seasons)
 - Financial audit log: immutable append-only table, logged via `financial_audit_log` inserts
@@ -73,7 +74,8 @@
 
 ## Offline Conflict Detection
 - `PendingAction` in `src/lib/offlineQueue.ts` has optional `snapshotAt`, `entityTable`, `entityId` fields
-- `syncPendingActions()` in `src/lib/offlineSync.ts` compares `snapshotAt` timestamp against the entity's `updated_at` before replaying — returns `conflicts: string[]` array for stale-data warnings
+- `syncPendingActions(currentUserId, options)` in `src/lib/offlineSync.ts` compares `snapshotAt` against the entity's `updated_at` before replaying, but only for operations that are NOT durable — returns `conflicts: string[]` for stale-data warnings
+- Durable operations (`complete_delivery`, `complete_job`; see `isDurableOfflineOperation` in `src/lib/offlineReceipts.ts`) skip that client check: the server decides conflicts when the action is staged (`stage_offline_action`), and conflicting work lands in the Offline Work Review queue instead of replaying
 
 ## Realtime Subscription Disabled Pattern
 - `useRealtimeSubscription({ table, disabled?: boolean })` — when `disabled` is true, hook skips channel creation entirely (no-op)
@@ -88,7 +90,7 @@
 
 ## Reconciliation Checks Pattern (Sprint 5b)
 - Pure computation functions in `src/lib/reconciliation.ts` — testable without DB mocks
-- 5 checks: order totals vs line items, inventory ledger vs transactions, invoice payments vs allocations, invoice balance formula (GENERATED ALWAYS sanity), commission splits sum to 100%
+- 10 checks: order totals vs line items, inventory ledger vs transactions, invoice payments vs allocations, invoice balance formula (GENERATED ALWAYS sanity), commission splits sum to 100%, quote hold parity, delivery-invoice quantity parity, prebooked inventory, return credit linkage, customer AR consistency
 - Each check: takes typed arrays → returns `Discrepancy[]`
 - DB wrapper `runReconciliationChecks()` fetches from Supabase and delegates to pure functions
 - Tolerance: ±1 cent for money (TOLERANCE_CENTS), ±0.01 for quantities (liquid products have decimals)
@@ -101,41 +103,40 @@
 - Returns `{ success: boolean, data?, error? }`
 
 ## Idempotency Pattern (Sprint 1a + Security Audit)
-- `useIdempotencyKey()` hook in `src/hooks/useIdempotencyKey.ts` — generates stable `crypto.randomUUID()` key per component mount
-- `useIdempotentAction` hook — retry-safe, prevents double-submit on network retries
-- `db.ts` includes multi-tab session recovery via `detectSessionFromOtherTabs()`
-- All 24 pages with write operations use `useIdempotencyKey()` (migrated from inline `generateIdempotencyKey()`)
+- `useIdempotencyKey(operation, userId, intentScope?)` in `src/hooks/useIdempotencyKey.ts` returns `{ getKey, resetKey, getKeyFor, resetKeyFor, ... }`. It keeps ONE key per intent scope (not one per mount): the key is minted lazily on the first `getKey()` and stays the same across retries until `resetKey()` after a confirmed success (or an authoritative reload). Switching scope mints a fresh key; returning to a scope with an unresolved outcome reuses its original key. Do not retire a key on `IDEMPOTENCY_PAYLOAD_CONFLICT` — see the hook's header comment.
+- `useUncertainMutationIntent` in `src/hooks/useUncertainMutationIntent.ts` — freezes an exact request whose reply was lost (persisted across reloads and tabs) so a retry re-sends the same payload under the same key; used for money/inventory writes such as the batch inventory adjustment below.
+- Most pages with write operations use `useIdempotencyKey()` rather than inline `generateIdempotencyKey()`.
 
 ## Server-Authoritative Math Pattern (Sprint 1b)
-- `calculate_quote_totals()` PostgreSQL RPC uses `NUMERIC(15,4)` for exact decimal math
-- Client-side calculation is display-only hint; server result is authoritative
-- Prevents penny-rounding drift between JS floats and Postgres
+- There is no `calculate_quote_totals()` RPC (it never existed in the migrations). Quote writes go through the `save_quote` RPC; see `rpc-functions.md`.
+- The money rule is in `AGENTS.md`: money resolves to exact whole cents, new storage uses bigint cents, and authoritative TypeScript parses decimals into integer cents before arithmetic. Financial invariants belong in PostgreSQL RPCs, triggers, or constraints.
+- Client-side calculation is a display-only hint; the server result is authoritative
 
 ## RUP Compliance Pattern (Audit Remediation)
 - `checkRUPCompliance(items, customerLicenses)` in `src/lib/rupCompliance.ts` — 3 checks: license expiry, certification type match, product registration status
 - Returns `string[]` of warning messages — empty array means compliant
-- Used on 4 pages: QuoteBuilder, NewOrder, NewDelivery, DeliveryDetail — shown as amber warning banner
+- Used on 6 pages: QuoteBuilder, NewOrder, NewDelivery, DeliveryDetail, InvoiceDetail, FieldAppSplitInvoiceEditor — shown as amber warning banner
 - Audit logging: RUP warnings written to `financial_audit_log` on order/delivery creation
-- 6 unit tests in `src/lib/rupCompliance.test.ts`
+- Unit tests in `src/lib/rupCompliance.test.ts`
 
 ## Prepay Bucket Pattern (Audit Remediation)
 - `prepay_credits.bucket_label` — categorizes credits (e.g., "Corn Chemical", "Soybean Fungicide", "General")
 - 8 bucket labels seeded in `app_settings.prepay_bucket_labels`
-- Split Check modal on PrepaymentManager: creates one `prepay_credits` row per bucket split
-- PrepayWorkspace: split-panel allocator with two-phase commit — stage allocations in React state, commit atomically via `batch_apply_prepayments()` RPC
+- Split Check modal on the Manager tab of `/prepay` (`src/components/prepay/PrepaymentManagerPanel.tsx`): creates one `prepay_credits` row per bucket split
+- Workspace tab of `/prepay` (`src/components/prepay/PrepayWorkspacePanel.tsx`): split-panel allocator with two-phase commit — stage allocations in React state, commit atomically via `batch_apply_prepayments()` RPC
 - `apply_prepay_to_invoice()` uses `FOR UPDATE` row locks on both `prepay_credits` and `invoices` for concurrent safety
 
 ## Tote Tracking Pattern (Audit Remediation)
 - `delivery_items.tote_number` (text, nullable) — tracks container/tote for each delivery item
-- `delivery_items.is_non_returnable` (boolean, default false) — flags items that don't need container return
-- Input on NewDelivery page, displayed on DeliveryDetail with non-returnable badge
+- There is no `delivery_items.is_non_returnable` column. Non-returnable containers are flagged on receipt instead: `receiving_records.is_non_returnable`, shown as a "Non-Returnable" badge in the receiving log (`src/components/receiving/ReceivingLogPanel.tsx`, `ReceivingLogMobileCards.tsx`)
+- Tote # is entered on the NewDelivery page and shown on DeliveryDetail
 - Tote # column added to delivery PDF export via `deliveryPdf.ts`
 - Threaded through `complete_delivery()` and `create_quick_delivery()` RPCs
 
 ## Email Integration Pattern (Track A)
 - **Service layer**: `src/lib/emailService.ts` — `sendEmail()`, `pdfToBase64()`, `buildEmailHtml()` (CRX-branded template)
 - **Edge Function**: `supabase/functions/send-email/index.ts` — Resend API, JWT auth, idempotency guard, base64 PDF attachments, `email_log` audit trail
-- **8 email types** (pre-defined enum): `invoice`, `statement`, `order_confirmed`, `delivery_completed`, `quote`, `ar_reminder`, `low_stock_alert`, `month_end_close`
+- **10 email types** in the Edge Function source (`ALL_EMAIL_TYPES`): `invoice`, `statement`, `order_confirmed`, `delivery_completed`, `quote`, `ar_reminder`, `low_stock_alert`, `month_end_close`, `pre_application_notice`, `post_application_notice`. Drivers may send only `delivery_completed`.
 - **Graceful degradation**: Email sends are always wrapped in try/catch inside the primary action handler. Email failure never blocks the core business action (quote send, order confirm, delivery complete)
 - **Pages using email**:
   - `InvoiceDetail.tsx` — "Email Invoice" button (admin, posted invoices only) with PDF attachment
@@ -149,7 +150,7 @@
 
 ## Team Board V2 Component Library Pattern
 
-The Team Board was decomposed from a monolith (`TeamBoard.tsx`) into 8 reusable components in `src/components/team/`:
+The Team Board was decomposed from a monolith (`TeamBoard.tsx`) into reusable components in `src/components/team/`. The table lists the original 8; the folder now holds more (for example ActivityFeed, CommentsSection, CustomerContextCard, NotificationsPanel, StaleTasksAlert, TagsManager, TeamBoardFilters, WorkloadView):
 
 | Component | Purpose | Reused On |
 |-----------|---------|-----------|
@@ -207,18 +208,19 @@ const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 - `signedQuantity(qty, type)` determines the signed delta per transaction type:
   - **Positive (adds):** received, returned, released, cancelled_delivery_reversal, void_delivery_reversal
   - **Negative (subtracts):** delivered, booked, prebooked, job_applied
-  - **Signed (as-is):** adjusted, transferred
-- `computeRunningBalance(txns)` accumulates `signedQuantity()` for running balance — matches reconciliation.ts logic
+  - **Signed (as-is):** adjusted, transferred, prebook_reconciliation
+- There is no running-balance helper any more. `summarizeInventoryPosition(rows, productId)` reports on-floor and prebooked quantities from the current `inventory` rows, because the inventory table/RPC is the current truth and the historical ledger can be incomplete
 - Triggered via inline FileText icon button next to product name in InventoryPage table
-- 20 unit tests in `TransactionLedgerModal.test.ts` covering all 11 types + real-world scenarios
+- Unit tests in `TransactionLedgerModal.test.ts`
 
 ## Batch Inventory Adjustment Pattern (Inventory Improvements)
 - `BatchAdjustModal` in `src/components/inventory/BatchAdjustModal.tsx` — applies uniform delta to selected products
-- `buildAdjustmentCalls()` exported pure function — filters zero-delta items, builds RPC call array with idempotency keys
-- Uses `supabase.rpc('adjust_inventory', call)` per item with `generateIdempotencyKey()`
+- `buildAdjustmentCalls(items, reason, userId, getKey)` exported pure function — filters zero-delta items and builds the RPC call array; the caller supplies each row's key through `getKey`
+- Keys come from a frozen batch: `useUncertainMutationIntent` (operation `adjust_inventory_batch`) freezes the exact rows, delta, and reason, and each row's key is `batchRowIdempotencyKey(batchKey, inventoryId)`. A retry re-sends every unsettled row under the key it was first sent with; any change to the batch is a new batch with new keys
+- Calls `supabase.rpc('adjust_inventory', call)` per row and classifies each result as adjusted / refused / uncertain / binding_rejected (an `IDEMPOTENCY_ACTOR_MISMATCH` or `IDEMPOTENCY_INTENT_MISMATCH` means that key can never succeed; check stock history before adjusting again)
 - Selection via `Set<string>` state + checkbox column in `EditableDataTable`
 - "Adjust N Selected" button appears when `selectedIds.size > 0`
-- 3 unit tests in `BatchAdjustModal.test.ts`
+- Unit tests in `BatchAdjustModal.test.ts` and `BatchAdjustModal.retry.test.tsx`
 
 ## Vendor-Grouped Reorder Alerts Pattern (Inventory Improvements)
 - Low-stock items grouped by `vendor` using `Map<string, InventoryRow[]>` in InventoryPage
