@@ -203,6 +203,14 @@ ok(!isMachineGenerated(""), "empty not machine");
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────
 ok(/\(2026-06-16/.test(PUSH_POLICY), "policy names the authorization");
 ok(/HARD GATES/.test(PUSH_POLICY), "policy names the hard gates");
+// 2026-09-25: the injected policy once listed only three gates while AGENTS.md
+// listed twelve. It must point at AGENTS.md and name every gate category.
+ok(/AGENTS\.md › Safety and Protected Delivery/.test(PUSH_POLICY), "policy points at the canonical gate list");
+for (const gate of ["force-push", "live migration", "live-data change", "Edge Function", "out-of-band production change", "data deletion", "secrets", "authentication", "permissions", "billing", "domains", "ownership"]) {
+  ok(PUSH_POLICY.includes(gate), `policy names the ${gate} gate`);
+}
+ok(/CodeRabbit/.test(PUSH_POLICY), "policy names the CodeRabbit landing step");
+ok(/destructive migrations[^.]*refused even then/i.test(PUSH_POLICY), "policy states destructive migrations stay refused while armed");
 ok(!/never pushes/i.test(PUSH_POLICY), "policy has no stale never-pushes text");
 // 2026-07-14 branch protection: the constant MUST describe the PR landing path —
 // this is the drift test the 2026-07-16 scaffolding review demanded, so the

@@ -289,7 +289,7 @@ const results = await pipeline(
       label: 'hunt:' + d.key,
       phase: 'Find',
       schema: FINDINGS_SCHEMA,
-      model: 'claude-opus-5',
+      model: 'opus',
       effort: 'high',
     }),
   (review, d) => {
@@ -330,7 +330,7 @@ const results = await pipeline(
           label: 'verify:' + d.key + ':' + f.severity,
           phase: 'Verify',
           schema: VERDICT_SCHEMA,
-          model: 'claude-opus-5',
+          model: 'opus',
           effort: 'high',
         }).then((v) => {
           const verdict = normalizeVerdict(v)
@@ -407,8 +407,8 @@ return {
   blocked,
   reviewerIndependence: {
     independentModelFamilies: false,
-    finderModel: 'claude-opus-5',
-    verifierModel: 'claude-opus-5',
+    finderModel: 'opus',
+    verifierModel: 'opus',
     limitation: 'Finder and verifier both use Opus; verdicts are adversarial but not cross-family independent.',
   },
 }

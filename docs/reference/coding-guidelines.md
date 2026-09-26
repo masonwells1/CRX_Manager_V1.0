@@ -1,6 +1,6 @@
 # Coding Guidelines
 
-Before changing code, check `docs/manual/DECISION_LOG.md` before reopening a settled design choice and `docs/manual/KNOWN_ISSUES.md` before claiming a problem is new.
+Search `docs/manual/DECISION_LOG.md` by keyword before reopening a settled design choice, and `docs/manual/KNOWN_ISSUES.md` before claiming a problem is new. Both are long running logs: search them for the area you are touching; never read them whole.
 
 Read this for every code change. `AGENTS.md` carries the short always-loaded version; this file explains how to apply it.
 
