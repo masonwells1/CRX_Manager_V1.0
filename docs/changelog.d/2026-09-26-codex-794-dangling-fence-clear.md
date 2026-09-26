@@ -13,7 +13,8 @@ end) — to leave text. Clearing a hold is therefore never easier than before #7
 
 ### Proof observed
 
-- `prompt-hooks.test.mjs`: 260/260, including the Codex prompt end to end (hold stays
+- `prompt-hooks.test.mjs`: 275/275 with current `main` merged in (260/260 on the fix
+  commit alone; #797 added 15), including the Codex prompt end to end (hold stays
   latched) and the same shape carrying `stop` still latching.
 - `npm run test:correction-guards` passes.
 - Fuzz, 400,000 random prompts: 0 where this version clears a hold that the pre-#794
