@@ -269,6 +269,16 @@ ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
   lifecycle("FAILURE", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
   { ...lifecycle("SUCCESS", null, null) },
 ] }), "an undated success cannot displace a dated failure");
+// Sol, 2026-09-26: a QUEUED rerun has no startedAt yet. It must not lose to an
+// older success of the same check, even when GitHub still reports CLEAN.
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  { ...lifecycle("", null, null), status: "QUEUED", conclusion: null },
+] }), "a queued rerun with no start time still blocks over an older success");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  { ...lifecycle("", null, null), status: "WAITING", conclusion: null },
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+] }), "order in the list does not matter: an unfinished run always ranks newest");
 
 // ── CodeRabbit approved the exact head (autonomous landing, 2026-09-26) ──────
 const HEAD = "890b41dcb233ad8c3f45c6dd9d3e14d38388135a";

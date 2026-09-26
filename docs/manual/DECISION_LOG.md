@@ -56,9 +56,16 @@ still blocks; `--admin` and `--auto` merges stay refused.
   with a PR-description summary, releases its provider label once a review lands, and lets a fix on the
   SAME PR earn one follow-up review (candidate epochs). See `docs/reference/coderabbit-native-review.md`.
 
-**Known residuals, stated plainly.** (a) The apply gate checks the reviewer and Sol proofs of the SQL;
-it does not itself look up the PR's CodeRabbit verdict — the ordering in `.claude/commands/ship.md`
-(CodeRabbit, then Sol last, then apply, then merge) carries that half. (b) The daily summary reports
+- The apply is bound to its pull request (`migration-landing-gate-lib.mjs`, added after the exact-SHA
+  Sol review of the introducing PR raised it HIGH): it must run from a clean checkout of the PR's
+  branch with the migration committed at HEAD, HEAD must be the open PR's head into `main`, and that
+  head must carry CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof —
+  the same predicates the merge gates use. So a migration can no longer reach production before its
+  PR's final reviews.
+
+**Known residuals, stated plainly.** (a) The merge and apply proofs are self-attestable files on disk
+(the documented `KNOWN_ISSUES` §4b residual); the gates make skipping a review an explicit act, not an
+impossible one. (b) The daily summary reports
 applies as the agents recorded them in `docs/changelog.d/`; it holds no database credential, and
 adding one is a secrets decision that stays Mason's. (c) The plumbing PR that introduced this changed
 the merge gate and lifecycle workflow themselves, so it cannot pass its own new rules: Mason merges it

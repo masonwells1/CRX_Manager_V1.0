@@ -19,7 +19,11 @@ secrets/auth/billing/permissions changes stay his. He gets a daily plain-English
   formerly hands-free-only proof set (content binding, both reviewer names, fresh content-bound Sol
   proof) applies in every session, and there is no longer an in-chat ask for a non-destructive
   migration. Destructive SQL is refused for agents in every session; the only door is Mason's in-chat
-  yes plus `--mason-approved-destructive`, unarmed only, every proof still required.
+  yes plus `--mason-approved-destructive`, unarmed only, every proof still required. New
+  `migration-landing-gate-lib.mjs` (from the exact-SHA Sol review's HIGH) binds every apply to its PR:
+  a clean checkout of the PR branch, migration committed at the open PR's head, CodeRabbit APPROVED,
+  green checks and a fresh Sol merge proof — so no migration reaches production before its PR's final
+  reviews. The merge gate also ranks an unfinished (queued) check run as newest (Sol's MEDIUM).
 - **Armed autopilot** (`autopilot-lib.mjs`, `unattended-autopilot.mjs`): lets exactly two whole-command
   shapes — a plain `git push origin <work-branch>` and a plain `gh pr merge <n>` — through to the push
   and merge guards; every other push or merge spelling is still denied (50-case bypass corpus in the
@@ -48,8 +52,11 @@ removing that one line is Mason's. This PR changes the merge gate and lifecycle 
 so it cannot pass its own new rules — Mason merges it by hand, once.
 
 **Proof.** `node .github/scripts/coderabbit-final-review.test.cjs` 251 passed (30 new);
-`npm run test:correction-guards` all passed (pr-merge-guard 182, autopilot-lib 314, migration-apply-lib
-232, migration-apply-guard 121, codex-bot-review-lib 124); `npm run test:agent-workflows` passed
+`npm run test:correction-guards` all passed (pr-merge-guard 184, autopilot-lib 314, migration-apply-lib
+256, migration-apply-guard 123, codex-bot-review-lib 124, prompt-hooks 274); real-data runs of the branch's
+guards: merging #804 was refused (no CodeRabbit approval), `--auto` refused, PR #794's real 54-row
+rollup was "blocked forever" under the old rule and green under the newest-run rule, and the landing
+gate refused an apply from #804's branch (not approved) and from `main` (not a PR branch); `npm run test:agent-workflows` passed
 (production action guard, manifest parity, daily summary 24); `npm run lint` and `npm run typecheck`
 clean; a real read-only dry run of the daily summary against GitHub listed the last 72 hours' four
 merges and posted nothing.

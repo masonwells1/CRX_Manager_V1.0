@@ -2973,8 +2973,11 @@ export function mcpMergeRequest(toolInput = {}) {
 // Identity is workflow name + check name (two workflows can share a job name);
 // statuses are keyed by context. Recency is startedAt, then completedAt: a run
 // cancelled before it started can carry completedAt < startedAt (measured on
-// #794's "E2E Smoke Tests"). An entry of unknown shape is kept as its own
-// identity so it still reaches the per-entry test below and fails closed.
+// #794's "E2E Smoke Tests"). A CheckRun that has not COMPLETED — queued, waiting
+// or in progress, often with no startedAt yet — always ranks newest, so a queued
+// rerun can never hide behind an older success (Sol, 2026-09-26). An entry of
+// unknown shape is kept as its own identity so it still reaches the per-entry
+// test below and fails closed.
 export function newestCheckRollup(checks) {
   if (!Array.isArray(checks)) return checks;
   const newest = new Map();
@@ -2983,7 +2986,8 @@ export function newestCheckRollup(checks) {
     if (check?.__typename === "CheckRun") key = `run\u0000${check.workflowName || ""}\u0000${check.name || ""}`;
     else if (check?.__typename === "StatusContext") key = `status\u0000${check.context || ""}`;
     else key = `unknown\u0000${index}`;
-    const stamp = [check?.startedAt, check?.completedAt].map((value) => {
+    const unfinished = check?.__typename === "CheckRun" && String(check?.status || "").toUpperCase() !== "COMPLETED";
+    const stamp = unfinished ? [Infinity, Infinity] : [check?.startedAt, check?.completedAt].map((value) => {
       const ms = Date.parse(String(value || ""));
       return Number.isFinite(ms) ? ms : -Infinity;
     });

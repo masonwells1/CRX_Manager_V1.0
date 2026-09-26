@@ -191,16 +191,18 @@ ok(!isMachineGenerated(""), "empty not machine");
 }
 
 // ── PUSH_POLICY is the one canonical, non-contradictory statement ────────
-ok(/\(2026-06-16/.test(PUSH_POLICY), "policy names the authorization");
+ok(/autonomous-landing rule \(2026-09-26\)/.test(PUSH_POLICY), "policy names the authorization");
+ok(/CodeRabbit APPROVED on the exact head/.test(PUSH_POLICY) && /exact-SHA Sol proof LAST/.test(PUSH_POLICY),
+  "policy names both final reviews the rule depends on");
 ok(/HARD GATES/.test(PUSH_POLICY), "policy names the hard gates");
 // 2026-09-25: the injected policy once listed only three gates while AGENTS.md
 // listed twelve. It must point at AGENTS.md and name every gate category.
 ok(/AGENTS\.md › Safety and Protected Delivery/.test(PUSH_POLICY), "policy points at the canonical gate list");
-for (const gate of ["force-push", "live migration", "live-data change", "Edge Function", "out-of-band production change", "data deletion", "secrets", "authentication", "permissions", "billing", "domains", "ownership"]) {
+for (const gate of ["force-push", "DESTRUCTIVE migration", "live-data change", "Edge Function", "out-of-band production change", "data deletion", "secrets", "authentication", "permissions", "billing", "domains", "ownership"]) {
   ok(PUSH_POLICY.includes(gate), `policy names the ${gate} gate`);
 }
 ok(/CodeRabbit/.test(PUSH_POLICY), "policy names the CodeRabbit landing step");
-ok(/destructive migrations[^.]*refused even then/i.test(PUSH_POLICY), "policy states destructive migrations stay refused while armed");
+ok(/destructive migrations[^.]*refused for agents even then, armed or not/i.test(PUSH_POLICY), "policy states destructive migrations stay refused, armed or not");
 ok(!/never pushes/i.test(PUSH_POLICY), "policy has no stale never-pushes text");
 // 2026-07-14 branch protection: the constant MUST describe the PR landing path —
 // this is the drift test the 2026-07-16 scaffolding review demanded, so the
@@ -208,9 +210,12 @@ ok(!/never pushes/i.test(PUSH_POLICY), "policy has no stale never-pushes text");
 ok(/branch → PR|PR →|pull request/i.test(PUSH_POLICY), "policy describes the PR landing path");
 ok(/direct pushes to main are impossible/i.test(PUSH_POLICY), "policy states direct main pushes are impossible");
 ok(!/no approval click/.test(PUSH_POLICY), "policy no longer claims click-free direct pushes");
-// The armed-mode carve-out must be stated so this constant can't contradict
-// autopilot-intent-reminder in the same injected context.
-ok(/ARMED hands-free run.*PARK/i.test(PUSH_POLICY), "policy states armed runs park pushes/merges");
+// The armed-mode behaviour must be stated so this constant can't contradict
+// autopilot-intent-reminder in the same injected context (2026-09-26: armed runs
+// pass only the two landing shapes on to the gates; they no longer park them).
+ok(/ARMED hands-free run passes only a plain branch push and a plain `gh pr merge <n>`/i.test(PUSH_POLICY),
+  "policy states what armed runs let through");
+ok(!/PARK for Mason's review/i.test(PUSH_POLICY), "policy no longer claims armed runs park every push and merge");
 
 // ── no hook still carries the stale contradictory policy text ────────────
 for (const f of readdirSync(__dirname)) {

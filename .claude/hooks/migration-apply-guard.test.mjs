@@ -138,8 +138,18 @@ function describeHookRun(r) {
 }
 // Use this for EVERY assertion that expects the guard to allow. The diagnostics
 // are built only on failure, so the passing path stays as cheap as `ok`.
+//
+// Since 2026-09-26 (Mason's autonomous-landing rule, Sol HIGH on its PR) the LAST
+// check is the pull-request landing gate (migration-landing-gate-lib.mjs): the
+// apply must come from the PR's branch with CodeRabbit's approval, green checks
+// and a Sol proof on GitHub. This hook runs as a real subprocess with no seam, and
+// a fixture cannot have a real PR, so an apply that passes every OTHER check now
+// ends in exactly that refusal. It runs last, after every local check, so that
+// refusal — and only that one — still means "everything this suite tests
+// passed". Any other deny fails the assertion with the hook's own words.
+const reachedLandingGate = (r) => isDeny(r) && r.stdout.includes("MIGRATION LANDING GATE");
 function okAllow(r, m) {
-  if (isDeny(r)) ok(false, `${m}\n\n${describeHookRun(r)}`);
+  if (isDeny(r) && !reachedLandingGate(r)) ok(false, `${m}\n\n${describeHookRun(r)}`);
   else ok(true, m);
 }
 
@@ -334,6 +344,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeCodexProof(BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     okAllow(r, "UNARMED: both reviewers + fresh content-bound Sol proof + benign migration → allowed, no ask");
+    // ...and the ONLY thing still standing is the PR half of the rule: this
+    // fixture is not a checkout of an approved, green, Sol-proven pull request.
+    ok(reachedLandingGate(r), "with every local proof in place, the PR landing gate is what refuses a fixture with no real PR");
+    ok(/not from the pull request's own branch|could not find or read the open pull request|is not committed at HEAD|could not read this checkout's HEAD/.test(r.stdout),
+      "and it names the missing PR evidence");
 
     writeProof(stateDir, BENIGN_SQL, { queryHash: undefined });
     r = runHook(call(BENIGN_SQL), tmp);

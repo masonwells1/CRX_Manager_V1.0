@@ -24,7 +24,10 @@
 > and refuses DESTRUCTIVE SQL for agents in every session; the only door is Mason's in-chat yes plus
 > `scripts/apply-migration-file.mjs --mason-approved-destructive` in an UNARMED session (armed runs refuse it
 > regardless). The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
-> row below no longer exists. (3) `autopilot-lib.mjs` lets exactly two whole-command shapes through to those guards
+> row below no longer exists. As its LAST check it runs `migration-landing-gate-lib.mjs`: the apply must come from a
+> clean checkout of the PR's branch (migration committed at HEAD, HEAD = the open PR's head into `main`) whose head
+> has CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof — so no migration reaches
+> production before its PR's final reviews. A fixture with no real PR therefore always ends at that refusal. (3) `autopilot-lib.mjs` lets exactly two whole-command shapes through to those guards
 > while armed — `git push [-u] origin [HEAD:]<work-branch>` and `gh pr merge <n> [--squash|--merge|--rebase|
 > --delete-branch|--match-head-commit <sha>]` (`isArmedLandingCommand`) — and keeps denying every other push or merge
 > spelling. (4) The CodeRabbit lifecycle workflow waits out running checks, releases its provider label after

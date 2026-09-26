@@ -30,6 +30,7 @@ import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
+import { evaluateLandingGate } from "./migration-landing-gate-lib.mjs";
 
 export const REQUIRED_CODEX_MODEL = "gpt-6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
@@ -326,6 +327,10 @@ export function evaluateMigrationApply({
   // is honoured only in an UNARMED session; armed runs refuse destructive SQL
   // whatever this says. The MCP PreToolUse hook never sets it.
   masonApprovedDestructive = false,
+  // The pull-request half of the autonomous-landing rule — see
+  // migration-landing-gate-lib.mjs. Injection point for tests only; both real
+  // callers leave it unset and get the real gate.
+  landingGate,
 } = {}) {
   const stateDir = path.join(projectDir, ".claude", "session-state");
   const targetProject = String(projectId || "").trim();
@@ -1038,6 +1043,20 @@ export function evaluateMigrationApply({
         `Do NOT hand-write the proof JSON (review-proof-guard blocks any command naming it, by design). ` +
         `A BLOCKERS verdict or a failed Codex run does NOT qualify — fix the findings or PARK the ` +
         `migration for Mason. Never self-certify.`);
+    }
+    // LAST: the pull request carrying this migration must itself be ready to merge
+    // (CodeRabbit APPROVED its exact head, checks green, exact-SHA Sol proof) —
+    // "under the same conditions" as an agent merge (Sol HIGH, 2026-09-26). Run
+    // after every local check so a refusal here always means "everything else
+    // passed", and fail closed on anything unexpected.
+    let landing;
+    try {
+      landing = (landingGate || evaluateLandingGate)({ checkoutDir: hookCwd, migName, now, listWorktrees });
+    } catch (error) {
+      landing = { ok: false, reason: `MIGRATION LANDING GATE: the check itself failed (${error?.message || error}); fail closed.` };
+    }
+    if (!landing || landing.ok !== true) {
+      return block(landing?.reason || "MIGRATION LANDING GATE: the pull-request landing check did not pass (fail closed).");
     }
     return allow();
   }

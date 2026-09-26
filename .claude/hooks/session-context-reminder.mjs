@@ -70,9 +70,10 @@ const SESSION_ONBOARDING =
   "CRITICAL CONTEXT: Mason cannot read code or safely review a diff. Own routine technical choices, " +
   "and explain outcomes and risk in plain English. Before multi-file work or work touching data, money, " +
   "security, or a live system, get his approval after a short plan; then continue routine implementation " +
-  "without repeated pauses. Every hard-gated live action listed in AGENTS.md—including each live migration, " +
+  "without repeated pauses. Every hard-gated live action listed in AGENTS.md—including each destructive migration, " +
   "Edge Function deployment, and data deletion—requires Mason's current approval immediately beforehand. " +
-  "Only the armed hands-free migration path waives per-migration approval, never for a destructive migration. " +
+  "Under his autonomous-landing rule (2026-09-26) a NON-destructive migration and the merge need no ask once " +
+  "CodeRabbit approved the exact head, the exact-SHA Sol proof is clean and checks are green; the gates enforce it. " +
   "Clearly identify the rare action or business decision only Mason can make.";
 
 emit(source === "compact" ? COMPACT_REANCHOR : SESSION_ONBOARDING);
