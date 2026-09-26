@@ -426,9 +426,9 @@ in place rather than giving browsers a delete power. A download already in progr
 is removed still completes. The function checks a file's declared type and size only as early
 refusals; the bucket's own limits enforce them.
 
-**Still owed, in this order, each with Mason's explicit approval:** deploy the Edge Function (done:
-v1 live 2026-09-22 UTC, Mason-approved); merge the PR (ships the page that calls it); apply the
-migration — promptly, because while it sits on `main` unapplied the pending-migration guard holds the
+**Owed at the time, in this order, each with Mason's explicit approval (all three done by 2026-09-26; nothing is owed now):** deploy the Edge Function (done:
+v1 live 2026-09-22 UTC, Mason-approved); merge the PR (done: #764); apply the
+migration (done: applied live 2026-09-26, ledger `20260926163005`) — promptly, because while it sits on `main` unapplied the pending-migration guard holds the
 waiting commission migrations (`20260914100800` onward) behind it. The migration applied first would break the Documents tab until
 the other two land. The migration refuses to apply if the bucket already holds any file, because a
 link minted under the old rules in that window could not be revoked; a refusal means a person decides.
@@ -829,8 +829,10 @@ substitution cannot pass by matching the real year), and makes each tested refus
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
 **That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
-#664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
-The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; of the
+#664's `20260911120000` applied eight minutes later, which made that file the high-water at the time
+(superseded 2026-09-26: `20260914100100`–`100700` have since applied and the current high-water is
+`20260914100700`; only `100800` and `100900` remain unapplied). The
+`20260914100100`..`20260914100900` cohort sorted above it and was clear to apply; of the
 field-app season files only `20260908190000` now sorts BELOW it and must be restamped, while
 `20260912165758`, `20260913040359` and `20260913152700` already sort above it. Read the boundary
 block in `docs/reference/migration-history.md` before ordering anything.**
