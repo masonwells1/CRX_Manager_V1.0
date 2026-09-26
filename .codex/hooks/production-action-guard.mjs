@@ -12,10 +12,13 @@ import {
   extractPatchDestinations,
   ghApiMergeRequest,
   ghApiMutates,
-  ghCommandUnreadable,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
   ghCommandUnreadableDenial,
+  ghCommandUnreadableIn,
   ghHiddenByShellComposition,
   hardGateBudgetDenial,
+  nestedComputedDenial,
   nestedTooDeepDenial,
   hookDeadlineMs,
   splitCommandSegments,
@@ -1475,6 +1478,10 @@ export function evaluateProductionAction({
   if (nestingDepth === 0) {
     const nested = expandNestedCommands(command);
     if (nested.tooDeep) return denied(nestedTooDeepDenial("CODEX PRODUCTION GATE"));
+    if (nested.computed) return denied(nestedComputedDenial("CODEX PRODUCTION GATE"));
+    if ([command, ...nested.commands].some(commandFedToInterpreter)) {
+      return denied(commandFedToInterpreterDenial("CODEX PRODUCTION GATE"));
+    }
     for (const inner of nested.commands) {
       const verdict = evaluateProductionAction({
         toolName,
@@ -1677,9 +1684,10 @@ export function evaluateProductionAction({
   // slow (CodeRabbit, 2026-09-09). Keyed on the COMPLETE parse — see
   // mergeRequestKey for why selector+repo would erase an `--admin` reading.
   const gatedRequests = new Set();
+  // A gh alias or extension expands into a command no check below can read.
+  const unreadableGh = ghCommandUnreadableIn(command);
+  if (unreadableGh) return denied(ghCommandUnreadableDenial("CODEX PRODUCTION GATE", unreadableGh));
   for (const segment of commandSegments) {
-    const unreadableGh = ghCommandUnreadable(segment);
-    if (unreadableGh) return denied(ghCommandUnreadableDenial("CODEX PRODUCTION GATE", unreadableGh));
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ───────────
     // Every gh-shaped route below requires the `gh` binary in the command text.

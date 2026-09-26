@@ -435,7 +435,8 @@ ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directo
 // (`bash -c "…"`, `pwsh -EncodedCommand …`), so the subject is `scanned` and the
 // call-site pins below also pin that the whole command is what gets scanned.
 ok(
-  /for\s*\(\s*const\s+scanned\s+of\s+\[\s*toolInput\.command\s*,\s*\.\.\.nested\.commands\s*\]\s*\)\s*collectMergeRequests\(\s*scanned\s*\)/.test(guardSource),
+  /const\s+scannedCommands\s*=\s*\[\s*toolInput\.command\s*,\s*\.\.\.nested\.commands\s*\]/.test(guardSource) &&
+    /for\s*\(\s*const\s+scanned\s+of\s+scannedCommands\s*\)\s*collectMergeRequests\(\s*scanned\s*\)/.test(guardSource),
   "the whole command and every nested command it carries are each scanned for merges",
 );
 ok(
@@ -447,8 +448,16 @@ ok(
   "the gh composition refusal runs on the WHOLE scanned command, before the segment loop",
 );
 ok(
-  /const\s+unreadableGh\s*=\s*ghCommandUnreadable\(\s*segment\s*\)/.test(guardSource),
-  "every segment is checked for a gh alias or unknown gh command",
+  /const\s+unreadableGh\s*=\s*ghCommandUnreadableIn\(\s*scanned\s*\)/.test(guardSource),
+  "every scanned command is checked for a gh alias or unknown gh command",
+);
+ok(
+  /if\s*\(\s*nested\.computed\s*\)\s*deny\(/.test(guardSource),
+  "a nested command built at run time is refused",
+);
+ok(
+  /scannedCommands\.some\(\s*commandFedToInterpreter\s*\)/.test(guardSource),
+  "a command fed to an interpreter on its input is refused",
 );
 // A single `&` runs both sides — POSIX in the background, cmd sequentially — so
 // it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved

@@ -2241,6 +2241,43 @@ try {
     assert.equal(evaluateReady(command).blocked, false, `CONTROL: a readable gh command passes: ${command}`);
   }
 
+  // ── independent Opus review of PR #795 (2026-09-25), against this fixture ──
+  for (const command of [
+    "Start-Process gh -ArgumentList 'pr', 'merge', '123', '--admin', '--squash'",
+    "Start-Process gh -ArgumentList:'pr merge 123 --admin --squash'",
+    `bash --rcfile /dev/null -c '${nestedAdmin}'`,
+    `pwsh –EncodedCommand ${Buffer.from(nestedAdmin, "utf16le").toString("base64")}`,
+  ]) {
+    const verdict = evaluateReady(command);
+    assert.equal(verdict.blocked, true, `a spelling the first version missed is refused: ${command}`);
+    assert.match(String(verdict.reason), /--admin/, `…by the --admin refusal: ${command}`);
+  }
+  for (const command of ["timeout 30 gh mm 123", "sudo -u root gh mm 123", "env -u FOO gh mm 123"]) {
+    assert.match(String(evaluateReady(command).reason), /is not a gh command this guard can read/, `a wrapper does not hide an alias: ${command}`);
+  }
+  for (const command of [`'${nestedAdmin}' | iex`, `echo '${nestedAdmin}' | bash`, `bash <<< '${nestedAdmin}'`, "echo pr merge 123 --admin | xargs gh"]) {
+    assert.match(String(evaluateReady(command).reason), /on its input/, `a command fed on stdin is refused: ${command}`);
+  }
+  assert.match(String(evaluateReady("bash -c '$0 pr merge 123 --admin' gh").reason), /builds at run time|builds text at run time/,
+    "a nested shell handed run-time text is refused");
+  // Over-blocks the review found must now pass.
+  for (const command of [
+    "which -a pwsh gh git node",
+    "git commit -m 'docs: note; gh mm now denied'",
+    "gh pr comment 5 --body 'cd repo && gh co 5'",
+    "git diff --name-only | xargs npx eslint",
+  ]) {
+    assert.equal(evaluateReady(command).blocked, false, `CONTROL: a harmless command passes: ${command}`);
+  }
+  // The unwrap stays linear, so the guard answers before its own time limit.
+  {
+    const huge = `echo (x) a\\b ${"start -x ".repeat(12000)}; ${nestedAdmin}`;
+    const started = Date.now();
+    const verdict = evaluateReady(huge);
+    assert.equal(verdict.blocked, true, "a ~100 KB command is still refused");
+    assert.ok(Date.now() - started < 5000, `…and answered well inside the 15 s hook limit (took ${Date.now() - started} ms)`);
+  }
+
   // The budget admits a call on the assumption it lasts at most ONE 5-second
   // timeout. defaultRunGh tries `gh` then the absolute gh.exe on Windows; if a
   // timed-out `gh` fell through to the second candidate, one admitted call could

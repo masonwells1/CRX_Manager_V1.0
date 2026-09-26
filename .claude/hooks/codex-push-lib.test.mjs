@@ -12,10 +12,13 @@ import {
   claudeProofValid,
   contentIsRisky,
   createHardGateBudget,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
   expandNestedCommands,
   GH_BUILTIN_COMMANDS,
   ghCommandUnreadable,
   ghCommandUnreadableDenial,
+  ghCommandUnreadableIn,
   hardGateBudgetDenial,
   hookDeadlineMs,
   nestedTooDeepDenial,
@@ -3318,6 +3321,38 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // encoded command cannot hide behind one more layer.
   carries(`bash -c "pwsh -enc ${encode(ADMIN)}"`, ADMIN, "an encoded command inside a shell");
 
+  // Independent Opus review of PR #795 (2026-09-25): spellings the first version missed.
+  carries("Start-Process gh -ArgumentList 'pr', 'merge', '123', '--admin', '--squash'", ADMIN, "an array with spaces after the commas");
+  carries("Start-Process gh -ArgumentList:'pr merge 123 --admin --squash'", ADMIN, "a -Name:value argument list");
+  carries("Start-Process -FilePath:gh -Args 'pr merge 123 --admin --squash'", ADMIN, "a -Name:value program");
+  carries(`bash --rcfile /dev/null -c '${ADMIN}'`, ADMIN, "--rcfile consumes its value");
+  carries(`bash --init-file x -c '${ADMIN}'`, ADMIN, "--init-file consumes its value");
+  carries(`iex -Command:'${ADMIN}'`, ADMIN, "iex -Command:value");
+  carries(`pwsh –EncodedCommand ${encode(ADMIN)}`, ADMIN, "an en dash is a dash to PowerShell");
+  carries(`pwsh —Command "${ADMIN}"`, ADMIN, "so is an em dash");
+  // A shell handed text it builds at run time cannot be read.
+  assert.equal(expandNestedCommands("bash -c '$0 pr merge 123 --admin' gh").computed, true, "a $0 program name is run-time text");
+  assert.equal(expandNestedCommands("bash -c \"git push origin $BRANCH\"").computed, true, "so is a $VAR in a nested git command");
+  assert.equal(expandNestedCommands('pwsh -Command "Get-ChildItem | % { $_.Name }"').computed, false, "without gh or git it is not refused");
+  assert.equal(expandNestedCommands("gh pr view $(git branch --show-current)").computed, false, "a plain substitution is the outer command's, not a nested shell's");
+  // Over-blocks the review found: a bare word after pwsh is a command only when pwsh is the program.
+  assert.deepEqual(inner("which -a pwsh gh git node"), [], "pwsh as an argument runs nothing");
+  assert.deepEqual(inner("for t in pwsh gh node; do echo $t; done"), [], "…nor in a loop list");
+  carries(`powershell.exe "${ADMIN}"`, ADMIN, "while pwsh as the program still runs its first argument");
+  carries(`sudo -u root powershell "${ADMIN}"`, ADMIN, "…after a wrapper too");
+
+  // The unwrap must stay linear: a hook cut off at its time limit ALLOWS. The
+  // review's input took 34.5 s at N=12000 before the scan window.
+  for (const unit of ["start -x ", "--/bash ", "cmd /d ", "pwsh -x "]) {
+    const huge = `echo (x) a\\b ${unit.repeat(12000)}; ${ADMIN}`;
+    const started = Date.now();
+    expandNestedCommands(huge);
+    ghCommandUnreadableIn(huge);
+    commandFedToInterpreter(huge);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 3000, `unwrapping ~100 KB of \`${unit.trim()}\` stays well inside the hook limit (took ${elapsed} ms)`);
+  }
+
   // Unbounded nesting is refused, not partly inspected.
   let deep = ADMIN;
   for (let level = 0; level < 6; level += 1) deep = `pwsh -enc ${encode(deep)}`;
@@ -3351,9 +3386,62 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ]) {
     assert.equal(unreadable(allowed), null, `a readable or non-gh command is not refused: ${allowed}`);
   }
+  // Independent Opus review of PR #795: a wrapper's own options hid the alias.
+  for (const wrapped of [
+    "timeout 30 gh mm 123", "nice gh mm 123", "nice -n 5 gh mm 123", "sudo -u root gh mm 123",
+    "env -u FOO gh mm 123", "doas gh mm 123", "stdbuf -oL gh mm 123",
+  ]) {
+    assert.equal(unreadable(wrapped), "mm", `a wrapper does not hide the alias: ${wrapped}`);
+  }
+  assert.equal(unreadable("timeout 30 gh alias set mm 'pr merge --admin'"), "alias set", "…nor alias creation");
+  assert.equal(unreadable("timeout 60 npm test"), null, "a wrapper around something other than gh is not refused");
+  assert.equal(unreadable("sudo apt-get install -y gh"), null, "…nor is gh as a package name at the end");
+
+  // Whole-command check: prose inside quotes is not a command.
+  const unreadableIn = (command) => ghCommandUnreadableIn(command);
+  assert.equal(unreadableIn("git commit -m 'docs: note; gh mm now denied'"), null, "a quoted `;` does not start a gh command");
+  assert.equal(unreadableIn("gh pr comment 5 --body 'cd repo && gh co 5'"), null, "…nor a quoted `&&`");
+  assert.equal(unreadableIn("gh pr view 1; gh mm 2"), "mm", "an unquoted separator still does");
+  assert.equal(unreadableIn("gh pr view 1 \\; gh mm 2"), "mm", "a backslash-escaped `;` is literal only to POSIX; PowerShell splits there");
+  assert.equal(unreadableIn("echo x^& gh mm 2"), "mm", "a caret-escaped `&` is literal only to cmd; PowerShell splits there");
+  assert.equal(unreadableIn("which -a pwsh gh git node"), null, "gh as an argument to another program is not a gh command");
+
   assert.ok(GH_BUILTIN_COMMANDS.has("pr") && !GH_BUILTIN_COMMANDS.has("co"), "the built-in list excludes config aliases");
   assert.match(ghCommandUnreadableDenial("PR MERGE GATE", "mm"), /^PR MERGE GATE: `gh mm` .*GH_BUILTIN_COMMANDS/s,
     "the denial names the command and where to allow a genuine one");
+}
+
+// ── a command fed to an interpreter on its INPUT (independent Opus review of PR #795) ──
+// Nothing on the command line is what the interpreter runs, so no argv parser
+// can see it. The bash, here-string and xargs forms were confirmed in real bash.
+{
+  for (const command of [
+    "'gh pr merge 123 --admin' | iex",
+    "'gh pr merge 123 --admin' | Invoke-Expression",
+    "echo 'gh pr merge 123 --admin' | bash",
+    "echo 'gh pr merge 123 --admin' | /bin/sh",
+    "Get-Content x.txt | pwsh -Command -  # gh",
+    "bash <<< 'gh pr merge 123 --admin'",
+    "bash <<'EOF'\ngh pr merge 123 --admin\nEOF",
+    "echo pr merge 123 --admin | xargs gh",
+    "echo origin HEAD:main | xargs git push",
+    "echo 'git push origin HEAD:main --force' | bash",
+  ]) {
+    assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command)}`);
+  }
+  for (const command of [
+    "git log --oneline | head -5",
+    "git diff --name-only | xargs npx eslint",
+    "git ls-files | xargs wc -l",
+    "gh pr list --json number | jq '.[]'",
+    "git commit -m 'pipe it | bash later'",
+    "npm test 2>&1 | Select-Object -Last 20",
+    "echo hello | bash",
+    "gh pr view 1 | shasum",
+  ]) {
+    assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
+  }
+  assert.match(commandFedToInterpreterDenial("PR MERGE GATE"), /^PR MERGE GATE: .*input/s, "the denial names the gate and the cause");
 }
 
 // ── Claude's push guard refuses a push carried by another program (2026-09-24) ──

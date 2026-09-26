@@ -33,9 +33,12 @@ import {
   describeRiskyContent,
   expandNestedCommands,
   ghApiMergeRequest,
-  ghCommandUnreadable,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
   ghCommandUnreadableDenial,
+  ghCommandUnreadableIn,
   ghHiddenByShellComposition,
+  nestedComputedDenial,
   nestedTooDeepDenial,
   hardGateBudgetDenial,
   hookDeadlineMs,
@@ -122,7 +125,10 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     deny(`PR MERGE GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
   }
   if (nested.tooDeep) deny(nestedTooDeepDenial("PR MERGE GATE"));
-  for (const scanned of [toolInput.command, ...nested.commands]) collectMergeRequests(scanned);
+  if (nested.computed) deny(nestedComputedDenial("PR MERGE GATE"));
+  const scannedCommands = [toolInput.command, ...nested.commands];
+  if (scannedCommands.some(commandFedToInterpreter)) deny(commandFedToInterpreterDenial("PR MERGE GATE"));
+  for (const scanned of scannedCommands) collectMergeRequests(scanned);
 }
 if (requests.length === 0) passthrough();
 
@@ -134,6 +140,9 @@ function collectMergeRequests(scanned) {
   // --admin`` is an ordinary administrator merge that ghMergeRequest reads as an
   // unknown word and this whole loop skips (Codex sol, 2026-09-08, finding 3).
   // Same helper and same reasoning as the push side's composition refusal.
+  // A gh alias or extension expands into a command this scan never sees.
+  const unreadableGh = ghCommandUnreadableIn(scanned);
+  if (unreadableGh) deny(ghCommandUnreadableDenial("PR MERGE GATE", unreadableGh));
   if (ghHiddenByShellComposition(scanned)) {
     deny("PR MERGE GATE: a PowerShell backtick or cmd.exe caret escape changes which gh command this runs (for example ``gh pr me`rge 1`` or `gh api --met^hod=PUT …/merge`). The gate reads command text, so analysing a spelling the shell rewrites would not prove the subcommand or the HTTP method. Write the gh command plainly: `gh pr merge <number> …`.");
   }
@@ -145,9 +154,6 @@ function collectMergeRequests(scanned) {
   // `--admin` had been carried off into a segment containing no `gh` at all
   // (Codex sol, 2026-09-08, SEC-001).
   for (const segment of splitCommandSegments(scanned)) {
-    // A gh alias or extension expands into a command this loop never sees.
-    const unreadableGh = ghCommandUnreadable(segment);
-    if (unreadableGh) deny(ghCommandUnreadableDenial("PR MERGE GATE", unreadableGh));
     // The mergePullRequest mutation is denied by NAME, whatever transport
     // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
     // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught
