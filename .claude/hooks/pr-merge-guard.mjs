@@ -5,17 +5,16 @@
 // the landing action moved to `gh pr merge` / the GitHub MCP merge tool — and
 // Claude's risky-diff Codex gate never followed. This hook closes that gap:
 //
-//   * merge into main with a fully green pipeline + non-risky diff → allowed
-//     (the standing 2026-06-16 landing authorization stays intact);
-//   * merge whose diff touches migrations / edge functions / money-RLS code /
-//     guard machinery → requires the same fresh, HEAD- and base-bound Codex
-//     proof codex-push-guard requires (minted only by
-//     scripts/write-codex-push-proof.mjs — hand-writing is blocked);
-//   * merge with a non-green pipeline → denied (for a NON-risky diff, `--auto`
-//     is tolerated — GitHub itself defers the merge until required checks pass;
-//     for a RISKY diff `--auto` is denied outright, because it would land
-//     later-pushed commits with a stale proof — Codex round-4 finding);
-//   * GraphQL mergePullRequest / unresolvable PR context → denied, fail closed.
+//   * merge into main → allowed only under Mason's autonomous-landing rule
+//     (2026-09-26): CodeRabbit APPROVED the exact head, the newest run of every
+//     check is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high
+//     Codex proof is bound to that head and GitHub's real base (minted only by
+//     scripts/write-codex-push-proof.mjs — hand-writing is blocked). Every diff
+//     needs the proof now, not only risky ones;
+//   * `--auto` into main → denied, because it lands later-pushed commits after
+//     this gate has run (Codex round-4 finding);
+//   * `--admin`, CHANGES_REQUESTED, GraphQL mergePullRequest, raw REST merges and
+//     unresolvable PR context → denied, fail closed.
 //
 // Mirrors .codex/hooks/production-action-guard.mjs's merge route (the Codex
 // side has had this gate since 2026-07-14). Shared parsing/validation lives in
@@ -28,9 +27,8 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  contentIsRisky,
+  coderabbitApprovedHead,
   createHardGateBudget,
-  describeRiskyContent,
   ghApiMergeRequest,
   ghHiddenByShellComposition,
   hardGateBudgetDenial,
@@ -41,10 +39,8 @@ import {
   mergeRequestKey,
   proofSearchDirs,
   proofValid,
-  pullRequestApproved,
   pullRequestChecksGreen,
   pullRequestReviewBlocked,
-  riskyFiles,
 } from "./codex-push-lib.mjs";
 import {
   CODEX_THREADS_QUERY,
@@ -355,7 +351,7 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(hardGateGh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
@@ -391,87 +387,54 @@ function gateRequest(request) {
     );
   }
 
-  // The Codex GitHub App's review is read at the ALLOW points below, not here.
+  // The Codex GitHub App's review is read at the ALLOW point below, not here.
   // @speed-bump — advisory; deferring it protects the hard gates, it is not one.
   // It is advisory and fail-open, and it costs up to four gh calls against a
   // 30-second hook budget — running it ahead of the hard denials would let a
   // slow GitHub kill this hook before they ran, which does not deny. See
   // codexAdvisory() above.
 
-  // An unreviewed PR may now land, but say so out loud — the standing policy is
-  // still that CodeRabbit reviews the frozen candidate and its real findings get
-  // fixed. This is a notice, not a gate: write to stderr, then keep going.
-  if (!request.auto && !pullRequestApproved(pr)) {
-    process.stderr.write(
-      `PR MERGE NOTICE: reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} — merging ` +
-      "without a current approval, which main no longer requires (Mason, 2026-09-02). If CodeRabbit has " +
-      "not reviewed this candidate, apply the `ready-for-coderabbit` label — the default-branch " +
-      "workflow revalidates this exact head and dispatches the native review once. Do not post " +
-      "`@coderabbitai review` by hand; that routes around the label gate. Read the review and fix " +
-      "what it finds first.\n"
+  // ── AUTONOMOUS LANDING RULE (Mason, 2026-09-26) ────────────────────────────
+  // An agent merges into main by itself only when ALL of these hold for the exact
+  // head GitHub will merge: CodeRabbit approved that head, every check's newest
+  // run is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high Codex
+  // proof is bound to that head and to GitHub's real base. Every change needs the
+  // Sol proof now, not only the risky ones — that is the rule Mason confirmed,
+  // accepting the extra Codex spend. Anything short of it is denied here and
+  // stays with Mason.
+
+  // `--auto` hands the landing to GitHub AFTER this gate has run, so a commit
+  // pushed in the meantime would merge with no exact-head proof and no CodeRabbit
+  // review of it (Codex round-4). With the proof now required for every merge,
+  // auto-merge is never allowed into main.
+  if (request.auto) {
+    deny(
+      "PR MERGE GATE: `--auto` is not allowed into main — auto-merge lands the PR later, after this gate " +
+      "has run, so commits pushed in the meantime would merge without an exact-head Sol proof or a " +
+      "CodeRabbit review of them. Wait for the checks, then merge immediately with `gh pr merge <n> --squash`."
+    );
+  }
+
+  if (!coderabbitApprovedHead(pr)) {
+    deny(
+      `PR MERGE GATE: CodeRabbit has not APPROVED this exact head (${String(pr.headRefOid || "<head>").slice(0, 12)}). ` +
+      "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required " +
+      "check is green, apply the `ready-for-coderabbit` label — the default-branch workflow revalidates this " +
+      "head and dispatches one review. Fix every real finding (a fix on this same PR earns one fresh review " +
+      "through the label), then retry. Do not post `@coderabbitai` commands by hand."
     );
   }
 
   // ── green-pipeline requirement ─────────────────────────────────────────────
-  // `--auto` defers the merge to GitHub, which itself enforces the required
-  // checks — so only immediate merges must already be green here.
-  if (!request.auto && !pullRequestChecksGreen(pr)) {
+  if (!pullRequestChecksGreen(pr)) {
     deny(
       "PR MERGE GATE: this pull request is not merge-ready with a fully green GitHub pipeline " +
-      "(mergeStateStatus must be CLEAN and every reported check completed successfully). " +
-      "Wait for the required Vercel check, or use `gh pr merge --auto` to let GitHub merge when green."
+      "(mergeStateStatus must be CLEAN and the newest run of every reported check must have completed " +
+      "successfully). Wait for the checks to finish, fix any that failed, and retry."
     );
   }
 
-  // ── risky-diff classification (same rules as the push gate) ────────────────
-  let files = [];
-  try {
-    const diffArgs = ["pr", "diff"];
-    if (request.selector) diffArgs.push(String(request.selector));
-    diffArgs.push("--name-only");
-    if (request.repo) diffArgs.push("--repo", request.repo);
-    files = hardGateGh(diffArgs).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  } catch (error) {
-    deny(`PR MERGE GATE: could not inspect this pull request's changed files, so the merge is denied (fail closed). ${error?.message || error}`);
-  }
-
-  const risky = riskyFiles(files);
-  let contentFlagged = false;
-  let contentDiffText = "";
-  if (risky.length === 0) {
-    try {
-      const diffArgs = ["pr", "diff"];
-      if (request.selector) diffArgs.push(String(request.selector));
-      if (request.repo) diffArgs.push("--repo", request.repo);
-      contentDiffText = hardGateGh(diffArgs);
-      contentFlagged = contentIsRisky(contentDiffText);
-    } catch (error) {
-      deny(`PR MERGE GATE: could not inspect this pull request's full diff for money/security risk, so the merge is denied (fail closed). ${error?.message || error}`);
-    }
-  }
-  // ALLOW point 1 — nothing risky. Every hard denial above has had its chance
-  // for THIS request; the advisory lookup is queued, not run, so a later merge
-  // in the same command still reaches its own hard denials first.
-  if (risky.length === 0 && !contentFlagged) {
-    advisoryQueue.push(request);
-    return;
-  }
-
-  // ── risky merge: --auto is denied outright ─────────────────────────────────
-  // Auto-merge defers the landing until GitHub's checks pass — AFTER this hook
-  // has run. Later commits pushed to the branch would then merge with no fresh
-  // proof and no re-run of this gate (Codex round-4). Risky diffs must merge
-  // immediately, with a fresh proof, while the gate can still see them.
-  if (request.auto) {
-    deny(
-      "PR MERGE GATE: `--auto` is not allowed for a risky diff — auto-merge lands the PR later, " +
-      "after this gate has run, so commits pushed in the meantime would merge with a stale (or no) " +
-      "Codex proof. Wait for the checks, then merge immediately: mint the proof with " +
-      "`node scripts/write-codex-push-proof.mjs` and run `gh pr merge <n> --squash` (no --auto)."
-    );
-  }
-
-  // ── risky merge → require the fresh, bound Codex proof ─────────────────────
+  // ── every main merge → require the fresh, bound Sol proof ──────────────────
   const headSha = pr.headRefOid;
   const baseSha = String(pr.baseRefOid).trim(); // GitHub's real base tip, not local origin/main
   if (!/^[0-9a-f]{40}$/i.test(baseSha)) {
@@ -491,21 +454,17 @@ function gateRequest(request) {
       }
     } catch { /* unreadable directory means no proof HERE — keep looking */ }
   }
-  // ALLOW point 2 — risky, but the exact-SHA proof validated. Same reasoning as
-  // ALLOW point 1: queued, drained only after every request has been gated.
+  // The ALLOW point for THIS request. Every hard denial above has had its
+  // chance; the advisory lookup is queued, not run, so a later merge in the same
+  // command still reaches its own hard denials first.
   if (valid) {
     advisoryQueue.push(request);
     return;
   }
 
-  const riskyDescription = risky.length > 0
-    ? `changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
-      risky.slice(0, 6).map((f) => "  " + f).join("\n") +
-      (risky.length > 6 ? `\n  ... and ${risky.length - 6} more` : "")
-    : describeRiskyContent(contentDiffText);
-
   deny(
-    `PR MERGE GATE: merging this PR lands a diff on main that ${riskyDescription}\n\n` +
+    `PR MERGE GATE: every merge into main needs a fresh gpt-6-sol/high Codex proof bound to this exact ` +
+    `head and GitHub's real base (Mason's autonomous-landing rule, 2026-09-26). None was found.\n\n` +
     `"Review is queued/scheduled" is NOT reviewed. Before merging:\n` +
     `  1. Check out the PR branch (\`gh pr checkout ${request.selector || "<number>"}\`) if it isn't the current branch.\n` +
     `  2. \`git fetch origin\` so local origin/main equals GitHub's real base (${baseSha.slice(0, 12)}...) — the proof is bound to the base GitHub will merge onto.\n` +

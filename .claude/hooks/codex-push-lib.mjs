@@ -2960,12 +2960,48 @@ export function mcpMergeRequest(toolInput = {}) {
   return { selector: String(selector), repo, auto: false };
 }
 
-// Fully-green pipeline: mergeStateStatus CLEAN and every reported check
-// completed successfully / neutral / skipped. Zero reported checks fails closed
-// (the Vercel check is required on main — its absence means "not reported yet").
+// The NEWEST run of each check, the way GitHub's own required-check evaluation
+// reads a commit (2026-09-26, autonomous landing).
+//
+// `statusCheckRollup` keeps EVERY run at the head SHA, not one per check. A
+// lifecycle run that failed once — measured on PR #794: three FAILURE rows of
+// "CodeRabbit candidate lifecycle" followed by two SUCCESS rows — therefore stayed
+// in the list forever, `gh run rerun` replays the stale event and fails again, and
+// the only exit was Mason's own Merge click. Judging the newest run per check
+// matches GitHub, which reported that same PR mergeStateStatus CLEAN.
+//
+// Identity is workflow name + check name (two workflows can share a job name);
+// statuses are keyed by context. Recency is startedAt, then completedAt: a run
+// cancelled before it started can carry completedAt < startedAt (measured on
+// #794's "E2E Smoke Tests"). An entry of unknown shape is kept as its own
+// identity so it still reaches the per-entry test below and fails closed.
+export function newestCheckRollup(checks) {
+  if (!Array.isArray(checks)) return checks;
+  const newest = new Map();
+  checks.forEach((check, index) => {
+    let key;
+    if (check?.__typename === "CheckRun") key = `run\u0000${check.workflowName || ""}\u0000${check.name || ""}`;
+    else if (check?.__typename === "StatusContext") key = `status\u0000${check.context || ""}`;
+    else key = `unknown\u0000${index}`;
+    const stamp = [check?.startedAt, check?.completedAt].map((value) => {
+      const ms = Date.parse(String(value || ""));
+      return Number.isFinite(ms) ? ms : -Infinity;
+    });
+    const held = newest.get(key);
+    if (!held || stamp[0] > held.stamp[0] || (stamp[0] === held.stamp[0] && stamp[1] >= held.stamp[1])) {
+      newest.set(key, { check, stamp });
+    }
+  });
+  return [...newest.values()].map((entry) => entry.check);
+}
+
+// Fully-green pipeline: mergeStateStatus CLEAN and the newest run of every
+// reported check completed successfully / neutral / skipped. Zero reported checks
+// fails closed (the Vercel check is required on main — its absence means "not
+// reported yet").
 export function pullRequestChecksGreen(pullRequest) {
   if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
-  const checks = pullRequest?.statusCheckRollup;
+  const checks = newestCheckRollup(pullRequest?.statusCheckRollup);
   if (!Array.isArray(checks) || checks.length === 0) return false;
   return checks.every((check) => {
     if (check?.__typename === "StatusContext") {
@@ -3017,6 +3053,38 @@ export function pullRequestApproved(pullRequest) {
 // CI, not a review, is what gates a landing now.
 export function pullRequestReviewBlocked(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
+}
+
+// Autonomous-landing rule (Mason, 2026-09-26): an agent merges only when
+// CodeRabbit has reviewed the FINAL head with no unresolved objection. Read from
+// `gh pr view --json reviews` — `author.login` is the bare `coderabbitai` there
+// (the `[bot]` suffix is REST-only), and `commit.oid` is the commit the review
+// was submitted against.
+//
+// The latest CodeRabbit VERDICT decides: APPROVED, CHANGES_REQUESTED or
+// DISMISSED. COMMENTED reviews are skipped because a thread reply mints an empty
+// COMMENTED review at the current head, and that is a reply artifact, not a
+// verdict. With `request_changes_workflow: true` CodeRabbit approves only once its
+// comments are resolved and the latest commit was reviewed, so APPROVED at the
+// exact head is the "clean final review" signal; an approval at an older commit,
+// or one GitHub dismissed on a later push, does not count.
+//
+// The name cannot be claimed by a person: `coderabbitai` is CodeRabbit's own
+// GitHub organization login, so no user account can hold it.
+export function coderabbitApprovedHead(pullRequest) {
+  const headSha = String(pullRequest?.headRefOid || "");
+  const reviews = pullRequest?.reviews;
+  if (!/^[0-9a-f]{40}$/i.test(headSha) || !Array.isArray(reviews)) return false;
+  const verdicts = reviews
+    .filter((review) => String(review?.author?.login || "").toLowerCase().replace(/\[bot\]$/, "") === "coderabbitai")
+    .filter((review) => ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(String(review?.state || "").toUpperCase()))
+    .map((review) => ({ review, at: Date.parse(String(review?.submittedAt || "")) }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((left, right) => left.at - right.at);
+  const latest = verdicts[verdicts.length - 1]?.review;
+  return Boolean(latest)
+    && String(latest.state).toUpperCase() === "APPROVED"
+    && String(latest?.commit?.oid || "").toLowerCase() === headSha.toLowerCase();
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

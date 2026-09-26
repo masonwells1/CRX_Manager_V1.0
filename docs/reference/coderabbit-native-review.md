@@ -1,18 +1,17 @@
 # CodeRabbit native review requests
 
 The operator applies `ready-for-coderabbit` after the candidate is frozen,
-current, green and independently reviewed. Complete and freeze the candidate
-before opening its delivery PR. The privileged `pull_request_target`
+current, green and independently reviewed. The privileged `pull_request_target`
 workflow runs trusted default-branch code and checks the actor's permission,
 head, branch, draft/conflict state, auto-merge, check provenance and outstanding
 review decision. After its quiet period and final checks, it records
 `coderabbit-review-requested` and adds `coderabbit-review-dispatch`.
 
 CodeRabbit's positive-label opt-in starts the review while automatic reviews
-and push-driven incremental reviews remain disabled. The provider label is
-separate from operator intent, so applying the ready label cannot start a
-review before the trusted checks. The workflow must find the configured
-provider label already present in the repository; it never creates one.
+remain disabled. The provider label is separate from operator intent, so
+applying the ready label cannot start a review before the trusted checks. The
+workflow must find the configured provider label already present in the
+repository; it never creates one.
 
 GitHub does not restrict a label to one writer. Collaborators who can manage
 labels can directly apply the provider label and potentially consume a review
@@ -25,24 +24,72 @@ Provider documentation:
 
 - [Automatic review controls](https://docs.coderabbit.ai/configuration/auto-review)
 - [Feature-branch YAML configuration](https://docs.coderabbit.ai/getting-started/yaml-configuration)
+- [Configuration reference](https://docs.coderabbit.ai/reference/configuration)
+
+## Autonomous landing (Mason, 2026-09-26)
+
+Mason's standing rule (see `docs/manual/DECISION_LOG.md`, 2026-09-26): once
+CodeRabbit has reviewed the FINAL head with no unresolved objection, a fresh
+exact-SHA `gpt-6-sol` high review of that head is clean, and every required
+check is green, the agent merges by itself. The merge gates enforce it — both
+`.claude/hooks/pr-merge-guard.mjs` and `.codex/hooks/production-action-guard.mjs`
+deny a merge into `main` unless CodeRabbit's latest verdict is `APPROVED` on the
+exact `headRefOid`, the newest run of every reported check is green with
+`mergeStateStatus` CLEAN, and the Sol proof is bound to that head and to GitHub's
+real base. `--auto` and `--admin` are refused.
+
+Three plumbing changes made that loop possible without a person:
+
+1. **The review no longer restarts CI.** `.coderabbit.yaml` sets
+   `high_level_summary_in_walkthrough: true`, so CodeRabbit writes its summary into
+   the walkthrough comment instead of the PR description. Writing the description
+   was an `edited` event, `ci.yml` re-runs its ~11-minute required jobs on
+   `edited`, and the lifecycle check that had just observed the review died
+   `in_progress ... dispatch state was preserved` (PR #794, runs `36091053453` and
+   `36091203653`, the second triggered by `coderabbitai[bot]`).
+2. **The lifecycle check waits instead of failing.** With `checkSettleAttempts`
+   configured (the trusted workflow sets 80 x 15 s = 20 minutes), the gate waits
+   out running checks before dispatch and again after delivery, then runs its
+   ordinary validation. Waiting only delays; it never credits anything. An
+   unrelated metadata or label event during an in-flight dispatch now reports a
+   neutral "still in flight" pass instead of a red row — the red row survived
+   every rerun and stranded agent merges — while a READY event that no longer
+   matches the live head/base still fails.
+3. **The merge gates judge the newest run per check**, the way GitHub's own
+   required-check evaluation does, so an early failed lifecycle run no longer
+   outvotes the later green one.
 
 ## Delivery and clearance
 
-The workflow observes reviews for up to six minutes, leaving time for validation
-and cleanup inside its ten-minute job limit. Success requires a submitted
-`coderabbitai[bot]` formal review on the frozen SHA with a valid identity and
-submission time. An approval or a substantive `COMMENTED` summary can prove
-delivery; an approving verdict is not newly required. A `CHANGES_REQUESTED`
-review proves delivery but keeps the gate blocked. A queued/skipped status,
-empty `COMMENTED` reply artifact or dismissed review is insufficient.
+The workflow observes reviews for up to six minutes and may wait up to twenty
+minutes on each side for running checks, inside its fifty-minute job limit.
+Success requires a submitted `coderabbitai[bot]` formal review on the frozen SHA
+with a valid identity and submission time. An approval or a substantive
+`COMMENTED` summary can prove delivery. A `CHANGES_REQUESTED` review proves
+delivery but keeps the gate blocked. A queued/skipped status, empty `COMMENTED`
+reply artifact or dismissed review is insufficient. Delivery is not merge
+clearance: the merge gates additionally require CodeRabbit's `APPROVED` verdict on
+the exact head.
 
 Each normal native attempt records a head/base receipt tied to its trusted
 Actions run before dispatch. A review must be submitted after that receipt;
 reconciliation verifies the original run's workflow, actor and candidate and
 requires both commits still to match. Receipts survive resets. A preexisting
-same-head review or retained attempt cannot establish attribution for another
-base: create a fresh delivery PR before another request, then close the superseded PR as described below. The receipt and labels
-record attempts; neither establishes merge authorization.
+same-head review with no receipt of this epoch cannot establish attribution:
+that case (rare — e.g. a base-only retarget that keeps the head) still needs a
+fresh delivery PR. The receipt and labels record attempts; neither establishes
+merge authorization.
+
+**The provider label is released once a review is observed.** As soon as the
+workflow sees CodeRabbit's review of the dispatched head (whatever its verdict),
+it removes `coderabbit-review-dispatch`, `coderabbit-review-requested` and the
+ready label. The head's receipt stays on the PR as the dedupe record: re-applying
+the ready label to that head **reconciles** against the receipt (verified
+receipt, exactly one provider-label event after it inside the current epoch, a
+review of this exact head submitted after the receipt) and never dispatches
+again. Releasing matters because `auto_incremental_review` is now `true` (below);
+a provider label left attached would let every later work-in-progress push buy an
+unvalidated review.
 
 The trusted workflow records the original `opened` webhook's head and base.
 Its opened job reports `CodeRabbit candidate snapshot`, a separate check context;
@@ -53,38 +100,56 @@ disposition of every real finding remain mandatory before merge.
 Its run name also includes the action, PR number, both original SHAs and the independent
 execution SHA from the trusted default branch; execution is provenance, never the PR base.
 All three SHAs are validated independently, and the execution value must match the
-authenticated original run name. A changed live PR head or base still requires a fresh PR. Receipt
-inspection checks that name on the authenticated original workflow run. Later
-REST PR and activity-event payloads can expose current values, so they cannot
-reconstruct this original context. The snapshot comment is an index to that
-run, never a grant of authority. Missing, edited, duplicate or mismatched
-snapshots block dispatch before provider quota is spent.
+authenticated original run name. Receipt inspection checks that name on the
+authenticated original workflow run. Later REST PR and activity-event payloads can
+expose current values, so they cannot reconstruct this original context. The
+snapshot comment is an index to that run, never a grant of authority. Missing,
+edited, duplicate or mismatched snapshots block dispatch before provider quota is
+spent.
 
-Normal delivery requires the candidate to retain its original head and base
-for the whole PR lifetime. Changed candidates, retargets and head/base force
-pushes require a fresh delivery PR. This prevents an old command from another
-base being credited to a new request, without guessing the commenter's historical
-permission or asserting that CodeRabbit ignores public commands. Manual comments
-on an unchanged candidate cannot change its review context and remain preserved;
-they never authorize a dispatch or merge. The active dispatch receipt still needs
-exactly one provider-label event. Untracked or duplicate provider-label attempts
-remain blocked and require a fresh PR.
+## Same-PR follow-up reviews (candidate epochs)
 
-The positive opt-in label delivered a first review but a same-PR follow-up at
-another head was observed to skip with `incremental reviews are disabled`.
-Keep `auto_incremental_review: false`: enabling it could spend quota on an
-unvalidated push. Finish corrections and required checks before opening a fresh
-delivery PR. As soon as the fresh PR exists, close the previous PR with a comment
-naming its replacement (`Replaced by #N`); do not leave it open "as the record".
-Closing keeps the branch, commits, comments and findings, is reversible, and the
-`closed` event only resets that PR's own workflow labels. Leaving superseded PRs
-open buried real work under about 40 stale copies by 2026-09-14. If a manual or
-status document names the old PR as a task owner, record the new PR number in the
-old PR's closing comment only. Update the tracked document after delivery lands, or
-in a separate later docs PR. Never commit that bookkeeping to the frozen candidate:
-changing its head or base would force yet another replacement. PRs opened
-before the trusted opened capture becomes available also need a fresh PR for
-normal native delivery. The introducing repair uses only the approved bootstrap.
+Until 2026-09-26 a review was bound to the head/base the `opened` webhook
+captured for the whole life of the PR, so every fix round needed a replacement
+PR (the field-invoice fix went through about fourteen). The reason — a late
+review of an OLD candidate must never be credited to a new request — is kept;
+only its unit shrank from "the PR" to "the candidate epoch".
+
+- A push (`synchronize`), a `reopened`, or a base retarget (`edited` with a base
+  change) resets the workflow labels as before and then, after a clean reset,
+  records a `crx-coderabbit-candidate-epoch:v1` comment from that event's own
+  webhook head and base. It is verified later exactly like the birth: parsed only
+  from an unedited `github-actions[bot]` comment, bound to the PR, repository and
+  PR creation time, and matched against the immutable run name
+  `CodeRabbit gate <action> PR <n> head <head> base <base> execution <sha>` of a
+  completed, successful run of this trusted workflow, recorded inside that run's
+  lifetime.
+- The newest birth/epoch record must describe the live head and base. If it does
+  not — the synchronize run has not finished, it failed, or the PR predates epochs
+  — dispatch is refused with guidance to wait for (or trigger, by pushing) the
+  trusted run. No replacement PR is needed.
+- Receipts, provider-label events and history-rewrite events (`base_ref_changed`,
+  force pushes) from before the current epoch belong to earlier candidates and are
+  ignored. Inside the epoch the one-candidate rules apply unchanged: an untracked
+  or duplicate provider-label event, a history rewrite, or a receipt for another
+  head/base blocks. An event whose timestamp cannot be read is never excluded.
+- `auto_incremental_review` is `true`, because per CodeRabbit's documentation a PR
+  first reviewed because of a positive label is only re-reviewed while that
+  setting stays true (with it false, a relabel at a new head was observed to skip
+  with `incremental reviews are disabled`). Work-in-progress pushes stay
+  unreviewed because the positive label is attached only during a validated
+  dispatch window and every push resets it.
+- **A stale CodeRabbit objection does not block its own follow-up.** When the
+  only outstanding `CHANGES_REQUESTED` is CodeRabbit's, recorded against an older
+  commit, the gate lets the ready label request the follow-up review — that is
+  the review that can clear it. A human reviewer's objection, or CodeRabbit's at
+  the current head, still refuses. The merge gates still deny while the aggregate
+  `reviewDecision` is `CHANGES_REQUESTED`.
+
+The loop for a fix is therefore: fix, push to the same PR, wait for checks, run
+the exact-SHA Sol proof, apply `ready-for-coderabbit`, and merge once CodeRabbit
+approves the new head. Never post `@coderabbitai` commands by hand and never use
+`@coderabbitai resume`.
 
 The run API's `head_sha` can expose either the PR head or the execution base.
 It is separate from `GITHUB_SHA`; both candidate commits must match the run's
@@ -114,8 +179,9 @@ reconcile that existing dispatch without requesting another review.
 Only a fresh ready-label event from an authorized actor can reconcile delivery,
 and that authorization is bound to the event's validated commit. Labels alone
 cannot prove authorization: lower-permission collaborators can manage labels.
-Unrelated label and metadata events therefore preserve dispatch state and stay
-blocked until an authorized ready action occurs.
+Unrelated label and metadata events therefore preserve dispatch state; since
+2026-09-26 they report a neutral pass rather than a failure, and they still
+cannot reconcile, credit or release anything.
 
 A head change or deliberate invalidating reset clears workflow labels, but
 removing a provider label cannot cancel an already accepted review. Before any
@@ -143,6 +209,10 @@ only then use the normal protected merge path. After merge, observe one normal
 ready-label request through the trusted default-branch workflow. Until those
 observations exist, distinguish local verification, bootstrap review and live
 workflow verification in the status report.
+
+A change to this workflow, `.coderabbit.yaml` or the merge gates is judged by the
+copies already on `main`, so it cannot pass its own new rules: Mason merges such a
+PR by hand, once (as with #796 and the 2026-09-26 autonomous-landing PR).
 
 Rollback uses a scoped protected revert. A revert does not cancel already
 dispatched reviews; inspect and preserve their evidence before another request.

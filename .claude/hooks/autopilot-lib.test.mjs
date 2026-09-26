@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
+import { autopilotDecision, flagActive, intentFresh, isArmedLandingCommand, overnightGateDecision } from "./autopilot-lib.mjs";
 
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
@@ -39,7 +39,10 @@ eq(autopilotDecision("Edit", { file_path: ".env" }), "deny", "Edit .env denied")
 // ── deny-set additions (2026-07-04): CLI deploy, PR merge, MCP write/exec ─
 eq(autopilotDecision("Bash", { command: "npx supabase functions deploy send-email" }), "deny", "CLI edge deploy denied");
 eq(autopilotDecision("Bash", { command: "supabase functions deploy process-document" }), "deny", "bare CLI edge deploy denied");
-eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "deny", "gh pr merge denied");
+// Mason's autonomous-landing rule (2026-09-26): the plain merge shape passes on to
+// pr-merge-guard, which enforces the rule. Every other spelling still denies —
+// see the landing-allowlist block at the end of this file.
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "plain gh pr merge passes on to pr-merge-guard");
 eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
 eq(autopilotDecision("mcp__github__merge_pull_request", {}), "deny", "GitHub MCP merge PR denied");
 eq(autopilotDecision("mcp__github__create_or_update_file", {}), "deny", "GitHub MCP file write denied");
@@ -550,5 +553,83 @@ try {
 } finally {
   rmSync(resolvedArmedDir, { recursive: true, force: true });
 }
+
+// ── the armed landing allowlist (Mason, 2026-09-26) ──────────────────────────
+// Armed mode lets exactly two whole-command shapes through to codex-push-guard
+// and pr-merge-guard. Everything else — including every bypass this file has
+// ever recorded — must still land in the deny set.
+for (const command of [
+  "git push origin claude/autonomous-landing",
+  "git push -u origin claude/autonomous-landing",
+  "git push --set-upstream origin HEAD:claude/autonomous-landing",
+  "git push origin refs/heads/fix/field-invoice-season",
+  "  git push origin feature/x  ",
+  "gh pr merge 812 --squash",
+  "gh pr merge 812 --squash --delete-branch",
+  "gh pr merge 812 --squash --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a",
+  "gh pr merge 812 --rebase",
+]) {
+  eq(autopilotDecision("Bash", { command }), "allow", `landing shape passes on to its guard: ${command}`);
+}
+for (const command of [
+  // protected targets
+  "git push origin main",
+  "git push origin HEAD:main",
+  "git push origin refs/heads/main",
+  "git push origin MAIN",
+  "git push origin production",
+  "git push origin master",
+  // force, delete, bulk and refspec tricks
+  "git push --force origin feature/x",
+  "git push origin feature/x --force",
+  "git push origin feature/x -f",
+  "git push origin +feature/x",
+  "git push origin :feature/x",
+  "git push origin --delete feature/x",
+  "git push -d origin feature/x",
+  "git push --mirror origin",
+  "git push --all origin",
+  "git push --prune origin feature/x",
+  "git push origin feature/x --force-with-lease",
+  // other remotes, global options, other spellings
+  "git push upstream feature/x",
+  "git -C /repo push origin feature/x",
+  "git -c core.hooksPath=/tmp push origin feature/x",
+  "GIT push origin feature/x",
+  "git.exe push origin feature/x",
+  '"git" push origin feature/x',
+  // chains, substitutions, newlines, extra arguments
+  "git push origin feature/x && git push origin main",
+  "git push origin feature/x; rm -rf build",
+  "git push origin feature/x\ngit push --force origin main",
+  "git push origin feature/x\r\ngh pr merge 1 --admin",
+  "git push origin $(git branch --show-current)",
+  "git push origin `whoami`",
+  "git push origin feature/x feature/y",
+  "git push origin feature/x --no-verify",
+  "git push origin feature/../main",
+  "git push origin feature.lock",
+  "git push origin feature/",
+  // merges: every flag outside the shape
+  "gh pr merge 812 --squash --admin",
+  "gh pr merge 812 --admin",
+  "gh pr merge 812 --squash --auto",
+  "gh pr merge 812 --auto",
+  "gh pr merge 812 -s",
+  "gh pr merge 812 --squash -R other/repo",
+  "gh -R other/repo pr merge 812 --squash",
+  "gh pr merge 812 --squash --body x",
+  "gh pr merge --squash",
+  "gh pr merge 0 --squash",
+  "gh pr merge 812 --match-head-commit HEAD",
+  "gh pr merge 812 --squash && gh pr merge 813 --admin",
+  "gh pr merge 812 --squash\ngh pr merge 813 --admin",
+  "GH pr merge 812 --squash",
+  "gh.cmd pr merge 812 --squash",
+]) {
+  eq(autopilotDecision("Bash", { command }), "deny", `outside the landing shape stays denied: ${JSON.stringify(command)}`);
+}
+ok(isArmedLandingCommand("gh pr merge 812 --squash") && !isArmedLandingCommand("gh pr merge 812 --admin"),
+  "the exported predicate agrees with the decision");
 
 console.log(`autopilot-lib: ${pass} assertions passed`);

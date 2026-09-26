@@ -210,7 +210,7 @@ const NPX = String.raw`(?:${bin("npx")}\s+)?`;
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
-  git(String.raw`push\b`),                         // no unattended push — Mason reviews in the morning
+  git(String.raw`push\b`),                         // every push EXCEPT the exact landing shape (isArmedLandingCommand)
   git(String.raw`(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)`),
   git(String.raw`reset\s+--hard\b`),
   git(String.raw`clean\s+-[A-Za-z]*[fdx]`),
@@ -223,7 +223,7 @@ const DENY_BASH_RES = [
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+db\s+(?:push|reset)\b`),
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+migration\s+repair\b`),
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+functions\s+deploy\b`), // CLI edge deploy = same gate as the MCP tool
-  gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
+  gh(String.raw`pr\s+merge\b`),                    // every merge EXCEPT the exact landing shape; pr-merge-guard gates that one
   // Same case defect as `bin()`, reached by the three rules that do NOT route
   // through it. `dropdb`/`createdb` are bare-word BINARY names (nothing required
   // after them, which is why an extension never broke them) and `.env` is a
@@ -241,6 +241,50 @@ const DENY_BASH_RES = [
 // Edit/Write targets that must never be auto-approved.
 const DENY_PATH_RE = /(^|[\\/])\.env(\.|$)/i;
 
+// ── Autonomous landing (Mason, 2026-09-26) ──────────────────────────────────
+// Armed mode used to park EVERY push and merge for Mason's morning review.
+// Mason's rule now lets an agent land work by itself once the final Sol and
+// CodeRabbit reviews are clean and every check is green — and that rule is
+// enforced by codex-push-guard (pushes) and pr-merge-guard (merges), which run on
+// every call whether or not autopilot is armed. So armed mode lets exactly TWO
+// command shapes through to those guards:
+//
+//   git push [-u|--set-upstream] origin [HEAD:]<work-branch>
+//   gh pr merge <number> [--squash|--merge|--rebase|--delete-branch|
+//                         --match-head-commit <40-hex sha>]...
+//
+// An ALLOWLIST of whole-command shapes, not a narrowed deny pattern. The deny set
+// above is untouched and still catches every other spelling — force, delete,
+// mirror, prune, `+`/`:` refspecs, global options, other binaries, chains. This
+// file's history is that narrowing a deny pattern by spelling does not converge;
+// an anchored shape with no shell metacharacters does, because a chain, a
+// substitution, a second command or an unexpected flag simply fails to match and
+// falls back to the deny. Lower-case `git`/`gh` only, horizontal whitespace only
+// (`\s` would admit a newline, which is a command separator), no `--admin`, no
+// `--auto`, no `-R`. The branch may not be main/master/production — pushes there
+// are impossible server-side anyway, but they never ride this allowance.
+const HWS = String.raw`[^\S\r\n]`;
+const SAFE_PUSH_RE = new RegExp(
+  String.raw`^${HWS}*git${HWS}+push(?:${HWS}+(?:-u|--set-upstream))?${HWS}+origin${HWS}+(?:HEAD:)?(?:refs/heads/)?([A-Za-z0-9][A-Za-z0-9._/-]{0,200})${HWS}*$`,
+);
+const SAFE_MERGE_RE = new RegExp(
+  String.raw`^${HWS}*gh${HWS}+pr${HWS}+merge${HWS}+[1-9][0-9]{0,6}(?:${HWS}+(?:--squash|--merge|--rebase|--delete-branch|--match-head-commit${HWS}+[0-9a-f]{40}))*${HWS}*$`,
+);
+const PROTECTED_BRANCH_RE = /^(?:main|master|production)$/i;
+
+export function isArmedLandingCommand(command) {
+  const cmd = String(command ?? "");
+  if (SAFE_MERGE_RE.test(cmd)) return true;
+  const push = SAFE_PUSH_RE.exec(cmd);
+  if (!push) return false;
+  const branch = push[1];
+  // git itself rejects these, but refuse them here so the allowance never depends
+  // on git's own ref-name validation.
+  if (PROTECTED_BRANCH_RE.test(branch) || branch.includes("..") || /[/.]$/.test(branch) || /\/\//.test(branch)
+    || /\.lock(?:\/|$)/i.test(branch)) return false;
+  return true;
+}
+
 export function autopilotDecision(toolName, toolInput) {
   const name = String(toolName || "");
   if (DENY_TOOLNAME_RE.test(name)) return "deny";
@@ -250,6 +294,8 @@ export function autopilotDecision(toolName, toolInput) {
   // Bash
   const cmd = typeof input.command === "string" ? input.command : "";
   if (cmd) {
+    // The two landing shapes go on to their own guards; see isArmedLandingCommand.
+    if (isArmedLandingCommand(cmd)) return "allow";
     for (const re of DENY_BASH_RES) {
       if (re.test(cmd)) return "deny";
     }

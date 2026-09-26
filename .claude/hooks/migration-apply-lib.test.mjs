@@ -52,6 +52,10 @@ const iso = (msFromNow) => new Date(Date.now() + msFromNow).toISOString();
 const noWorktrees = () => "";
 
 const roots = [];
+// A valid content-bound Sol proof. Since Mason's autonomous-landing rule
+// (2026-09-26) EVERY apply needs one, armed or not, so the known-good fixture
+// carries it by default and each case removes or breaks it on purpose.
+const goodCodex = { queryHash: HASH, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high", timestamp: iso(0) };
 /** Build a fixture project dir. Pass overrides to break exactly one thing. */
 function fixture({
   snapshot = { captured_at: iso(0), applied: [{ version: "20260101000000", name: "20260101000000_baseline" }] },
@@ -62,7 +66,9 @@ function fixture({
     findings: "clean",
     queryHash: HASH,
   },
-  codexProof = null,
+  // Default: a valid Sol proof bound to the SAME SQL the reviewer proof covers,
+  // so a case that applies different SQL stays a test of its own check.
+  codexProof = "default",
   autopilot = null,
   // The repository migration file the SQL must come from. Every real apply has
   // one — the source-provenance rule refuses SQL that is not the content of a
@@ -94,7 +100,8 @@ function fixture({
       "utf8");
   }
   if (proof !== null) writeFileSync(path.join(stateDir, `migration-review-${SAFE}.json`), JSON.stringify(proof), "utf8");
-  if (codexProof !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexProof), "utf8");
+  const codexBody = codexProof === "default" ? { ...goodCodex, queryHash: proof?.queryHash || HASH } : codexProof;
+  if (codexBody !== null) writeFileSync(path.join(stateDir, `codex-review-mig-${SAFE}.json`), JSON.stringify(codexBody), "utf8");
   if (autopilot !== null) writeFileSync(path.join(stateDir, "AUTOPILOT.on"), autopilot, "utf8");
   if (baseline !== null) {
     const baselineDir = path.join(root, "supabase", "baselines");
@@ -162,7 +169,7 @@ const evaluate = (root, over = {}) => evaluateMigrationApply({
 });
 
 // ── BASELINE: the fixture must ALLOW, or every deny below proves nothing ─────
-allows(evaluate(fixture()), "known-good interactive fixture is allowed");
+allows(evaluate(fixture()), "known-good UNARMED fixture (both reviewers + fresh Sol proof) is allowed — no per-migration ask since 2026-09-26");
 
 // ── CHECK 1: ordering preflight ─────────────────────────────────────────────
 // Each case asserts the SPECIFIC message for its condition, not just the guard
@@ -421,11 +428,36 @@ denies(evaluate(fixture({ autopilot: JSON.stringify({ expires: iso(-60 * 60 * 10
 denies(evaluate(fixture({ autopilot: "{ not valid json" })),
   "LAPSED", "malformed autopilot flag parks ALL applies");
 
-// ── CHECK 3: destructive content (hands-free only) ──────────────────────────
+// ── CHECK 3: destructive content (every session since 2026-09-26) ───────────
 const armed = () => JSON.stringify({ expires: iso(4 * 3600 * 1000) });
-const goodCodex = { queryHash: HASH, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high", timestamp: iso(0) };
 const DESTRUCTIVE = "DROP TABLE public.customers;\n";
 const destructiveHash = createHash("sha256").update(DESTRUCTIVE).digest("hex");
+const destructiveFixture = (autopilot) => fixture({
+  autopilot,
+  migrationFile: DESTRUCTIVE,
+  proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: destructiveHash },
+  codexProof: { ...goodCodex, queryHash: destructiveHash },
+});
+// Mason's autonomous-landing rule: destructive migrations are his. An UNARMED
+// session used to let one through on the reviewer proof alone (the "in-chat OK"
+// was prose); it is now refused for the agent, perfect proofs or not.
+denies(evaluate(destructiveFixture(null), { query: DESTRUCTIVE }),
+  "destructive statement", "UNARMED session refuses a destructive migration even with perfect proofs");
+// The one door Mason opens in person: after his in-chat yes, the apply script's
+// explicit flag, in an unarmed session, with every proof still required.
+allows(evaluate(destructiveFixture(null), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+  "UNARMED session + Mason's explicit destructive approval + perfect proofs is allowed");
+denies(evaluate(destructiveFixture(armed()), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+  "destructive statement", "an ARMED run refuses destructive SQL whatever the approval flag says");
+denies(evaluate(destructiveFixture(null), { query: DESTRUCTIVE, masonApprovedDestructive: "true" }),
+  "destructive statement", "only the boolean true opens the door (a truthy string does not)");
+denies(
+  evaluate(fixture({
+    migrationFile: DESTRUCTIVE,
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: destructiveHash },
+    codexProof: null,
+  }), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+  "Sol high-effort gate", "Mason's destructive approval never waives the Sol proof");
 denies(
   evaluate(
     fixture({
@@ -471,12 +503,45 @@ denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(60 * 60 * 1000
 denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "blockers", queryHash: HASH } })),
   "without subagent review proof", "reviewer proof whose findings are not clean/blockers-fixed");
 // The edited-after-review case: proof is fresh and clean but bound to other SQL.
+// Since 2026-09-26 every session gets the specific "not content-bound" refusal the
+// armed path always gave, instead of the generic missing-proof one.
 denies(evaluate(fixture({ proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) } })),
-  "without subagent review proof", "reviewer proof bound to DIFFERENT SQL (edited after review)");
+  "not content-bound", "reviewer proof bound to DIFFERENT SQL (edited after review)");
 
-// ── CHECK 5: hands-free extras (content binding, reviewers, Codex gate) ─────
+// ── CHECK 5: content binding, reviewers, Codex gate ─────────────────────────
+// Hands-free only until 2026-09-26; Mason's autonomous-landing rule made them the
+// rule in EVERY session. The unarmed half below is the new behaviour; the armed
+// cases that follow it are unchanged.
 allows(evaluate(fixture({ autopilot: armed(), codexProof: goodCodex })),
   "known-good ARMED fixture is allowed");
+for (const [label, autopilot] of [["UNARMED", null], ["ARMED", armed()]]) {
+  denies(evaluate(fixture({ autopilot, codexProof: null })),
+    "Sol high-effort gate", `${label}: no Codex proof file is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, verdict: "blockers" } })),
+    "Sol high-effort gate", `${label}: a non-clean Codex verdict is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, queryHash: "0".repeat(64) } })),
+    "Sol high-effort gate", `${label}: a Codex proof bound to different SQL is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, model: "gpt-6-luna" } })),
+    "Sol high-effort gate", `${label}: a non-Sol Codex proof is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, reasoning_effort: "medium" } })),
+    "Sol high-effort gate", `${label}: the wrong reasoning effort is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, timestamp: iso(-31 * 60 * 1000) } })),
+    "Sol high-effort gate", `${label}: a stale (>30 min) Codex proof is refused`);
+  denies(evaluate(fixture({ autopilot, codexProof: { ...goodCodex, timestamp: iso(60 * 60 * 1000) } })),
+    "Sol high-effort gate", `${label}: a FUTURE-dated Codex proof is refused`);
+  denies(
+    evaluate(fixture({
+      autopilot,
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer"], findings: "clean", queryHash: HASH },
+    })),
+    "does not record the required reviewers", `${label}: only one reviewer named is refused`);
+  denies(
+    evaluate(fixture({
+      autopilot,
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: "0".repeat(64) },
+    })),
+    "not content-bound", `${label}: a reviewer proof bound to different SQL is refused`);
+}
 
 denies(
   evaluate(fixture({
@@ -672,6 +737,12 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, timest
     mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
     writeFileSync(path.join(root, "supabase", "migrations", `${alias}.sql`), legacySql, "utf8");
     writeFileSync(path.join(root, "supabase", "migrations", `${legacy}.sql`), legacySql, "utf8");
+    // Since 2026-09-26 every apply also needs a Sol proof keyed by the APPLIED name.
+    // Supplying one for the alias keeps these cases about reviewer-proof NAME
+    // matching; without it the Codex gate would refuse first and they would pass
+    // for the wrong reason.
+    writeFileSync(path.join(stateDir, `codex-review-mig-${alias.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80)}.json`),
+      JSON.stringify({ ...goodCodex, queryHash: legacyHash }), "utf8");
 
     // FIXED (PR: exact proof-name on the MCP path). requireExactProofName now
     // DEFAULTS to true, so the hook — which passes no such flag — refuses the alias.

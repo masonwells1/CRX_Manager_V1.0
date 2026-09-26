@@ -320,6 +320,12 @@ export function evaluateMigrationApply({
   // still matching by substring. Flipping the default closes that; both known callers
   // are the PreToolUse hook and apply-migration-file.mjs, and both want exact.
   requireExactProofName = true,
+  // Mason's autonomous-landing rule (2026-09-26): a DESTRUCTIVE migration stays
+  // Mason's decision. Only scripts/apply-migration-file.mjs can set this, from its
+  // explicit `--mason-approved-destructive` flag, after Mason says yes in chat. It
+  // is honoured only in an UNARMED session; armed runs refuse destructive SQL
+  // whatever this says. The MCP PreToolUse hook never sets it.
+  masonApprovedDestructive = false,
 } = {}) {
   const stateDir = path.join(projectDir, ".claude", "session-state");
   const targetProject = String(projectId || "").trim();
@@ -828,21 +834,30 @@ export function evaluateMigrationApply({
 
   const handsFree = flagState === "active";
 
-  if (handsFree && migQuery) {
-    // Fail CLOSED in hands-free mode: a classifier error counts as destructive.
+  // AUTONOMOUS LANDING (Mason, 2026-09-26). The rule-set that used to apply only
+  // to an armed hands-free run now applies in EVERY session: a NON-destructive
+  // migration with a fresh, content-bound reviewer proof (both reviewers) and a
+  // fresh content-bound gpt-6-sol/high Codex proof applies with no per-migration
+  // ask. That is what Mason confirmed; the proof checks below are unchanged, they
+  // simply stopped being optional outside autopilot. A DESTRUCTIVE migration is
+  // still Mason's: refused for agents in every session, except the one door he
+  // opens in person (masonApprovedDestructive, unarmed only).
+  if (migQuery) {
+    // Fail CLOSED: a classifier error counts as destructive.
     let d;
     try { d = destructiveMigrationCheck(migQuery); }
-    catch (e) { d = { destructive: true, reason: `destructive-check error (${e && e.message ? e.message : e}) — failing closed hands-free` }; }
-    if (d.destructive) {
+    catch (e) { d = { destructive: true, reason: `destructive-check error (${e && e.message ? e.message : e}) — failing closed` }; }
+    if (d.destructive && (handsFree || masonApprovedDestructive !== true)) {
       return block(
-        `MIGRATION APPLY GUARD (hands-free run): migration "${migName || "(unnamed)"}" contains a ` +
-        `destructive statement (${d.reason}). Destructive migrations NEVER apply autonomously — ` +
-        `Mason's settled 2026-07-13 policy — because deleted data has no point-in-time recovery on ` +
-        `this Supabase plan. PARK it (scripts/.staging-migrations/ + a docs/manual/KNOWN_ISSUES.md ` +
-        `entry with the plain-English risk) and leave it for Mason's explicit in-chat OK in the morning. ` +
-        `Do NOT disarm autopilot to route around this. (This rule also fires on an EXPIRED autopilot ` +
-        `flag — deliberate fail-closed. If Mason IS present and approves in chat, HE can ask you to ` +
-        `disarm first: node .claude/hooks/autopilot-arm.mjs --off.)`);
+        `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" contains a destructive statement ` +
+        `(${d.reason}). Destructive migrations are Mason's decision and never apply on an agent's own ` +
+        `authority — Mason's autonomous-landing rule (2026-09-26), which keeps the settled 2026-07-13 ` +
+        `refusal — because deleted data has no point-in-time recovery on this Supabase plan. PARK it ` +
+        `(scripts/.staging-migrations/ + a docs/manual/KNOWN_ISSUES.md entry with the plain-English risk) ` +
+        `and ask Mason. Only after he says yes IN CHAT may the apply be re-run, in an UNARMED session, with ` +
+        `scripts/apply-migration-file.mjs --mason-approved-destructive; every proof below is still required. ` +
+        `An armed run refuses destructive SQL whatever the flag says — do NOT disarm autopilot to route ` +
+        `around this (an EXPIRED flag also refuses, deliberately).`);
     }
   }
 
@@ -921,111 +936,108 @@ export function evaluateMigrationApply({
     } catch { /* directory unreadable — try the next one, then fall through to block */ }
   }
 
-  if (!validProof && handsFree && contentMismatchedProof) {
+  if (!validProof && contentMismatchedProof) {
     const proofHash = String(contentMismatchedProof.data.queryHash || "");
     return block(
-      `MIGRATION APPLY GUARD (hands-free run): the reviewer proof for "${migName || "(unnamed)"}" ` +
-      `is not content-bound — autonomous applies require "queryHash" in the proof to be present and ` +
+      `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" ` +
+      `is not content-bound — every apply requires "queryHash" in the proof to be present and ` +
       `exactly match the SHA-256 of the transmitted SQL (expected: ${currentHash || "(no query text)"}; ` +
       `received: ${proofHash || "(missing)"}). Re-confirm the reviewers against the CURRENT SQL, ` +
       `update the proof's queryHash, and retry.`);
   }
 
   if (validProof) {
-    // Hands-free applies carry three EXTRA requirements (Codex P1s 2026-07-13
-    // rounds 2-3) — with Mason absent, the proof must be maximally bound:
+    // Every apply carries these requirements — hands-free only until 2026-09-26,
+    // when Mason's autonomous-landing rule made them the rule in EVERY session
+    // (Codex P1s 2026-07-13 rounds 2-3 designed them for "Mason absent", which is
+    // now the normal case):
     //   1. Exact content binding is already mandatory for every apply above;
-    //      the hands-free branch repeats it as defense in depth.
-    //   2. A recorded Codex Sol/high verdict (separate reviewer gate actually ran — Mason's
-    //      "ran, not queued" rule).
-    //   3. A FRESH Codex output artifact on disk (<30 min): /codex-review tees
-    //      its output to .claude/session-state/codex-review-latest.txt. A
-    //      verdict field with no fresh artifact means Codex was not actually
-    //      run this session. (Honest-mistake net: a determined agent could
-    //      forge the artifact — that residual is documented in
-    //      docs/manual/KNOWN_ISSUES.md §4b proof self-attestation.)
-    if (handsFree) {
-      const proofHash = String(validProof.data.queryHash || "");
-      if (!proofHash || !currentHash || proofHash !== currentHash) {
-        return block(
-          `MIGRATION APPLY GUARD (hands-free run): the reviewer proof for "${migName || "(unnamed)"}" ` +
-          `is not content-bound — autonomous applies require "queryHash" in the proof to be present and ` +
-          `exactly match the SHA-256 of the transmitted SQL (expected: ${currentHash || "(no query text)"}). ` +
-          `Re-confirm the reviewers against the CURRENT SQL, update the proof's queryHash, and retry.`);
-      }
-      // The proof must name BOTH required reviewers (Codex P1 2026-07-13 round
-      // 5: a minimal hand-written proof with no reviewers array reached allow).
-      // Still self-attestable — the residual documented in KNOWN_ISSUES §4b —
-      // but it forces the /migration-review flow, which only writes the array
-      // after the reviewer subagents actually returned clean.
-      const reviewers = Array.isArray(validProof.data.reviewers) ? validProof.data.reviewers.map(String) : [];
-      const missing = ["rls-security-reviewer", "migration-drift-reviewer"].filter(r => !reviewers.includes(r));
-      if (missing.length) {
-        return block(
-          `MIGRATION APPLY GUARD (hands-free run): the reviewer proof for "${migName || "(unnamed)"}" ` +
-          `does not record the required reviewers (missing: ${missing.join(", ")}). Autonomous applies ` +
-          `require BOTH rls-security-reviewer and migration-drift-reviewer to have actually run clean ` +
-          `this session (dispatch them via /migration-review, then write the proof with its "reviewers" ` +
-          `array). Never add names for reviewers that did not run.`);
-      }
-      // The Codex gate is its own content-bound proof file — NOT a field in the
-      // reviewer proof, NOT the mtime of a tee'd log (Codex P1 2026-07-13 round
-      // 4: a stray codex-review-latest.txt from an unrelated or FAILED run
-      // satisfied an mtime check). Required shape at
-      // .claude/session-state/codex-review-mig-<safeName>.json:
-      //   { "queryHash": <sha256 of the EXACT transmitted SQL>,
-      //     "verdict": "clean" | "ship" | "ship-with-followups",
-      //     "model": "gpt-6-sol",
-      //     "reasoning_effort": "high",
-      //     "timestamp": <ISO-8601, <30 min old> }
-      // Write it ONLY after an ACTUAL /codex-review run on this migration this
-      // session — a fabricated file violates Mason's codex-gate rule and is the
-      // documented self-attestation residual (KNOWN_ISSUES §4b).
-      // Searched across the same session-scoped directories as the reviewer proof
-      // above, for the same reason. A candidate only WINS by satisfying
-      // every criterion the single-directory version demanded — clean verdict,
-      // exact queryHash, age inside [0, 30min]; the first parseable file is kept
-      // only so the block message below can say which criterion failed.
-      let codexProof = null;
-      for (const dir of proofDirs) {
-        let candidate = null;
-        try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
-        if (!candidate) continue;
-        if (!codexProof) codexProof = candidate;
-        const okVerdict = ["clean", "ship", "ship-with-followups"].includes(String(candidate.verdict || "").toLowerCase());
-        const okHash = !!currentHash && String(candidate.queryHash || "") === currentHash;
-        const okIdentity = candidate.model === REQUIRED_CODEX_MODEL
-          && candidate.reasoning_effort === REQUIRED_CODEX_EFFORT;
-        let okFresh = false;
-        try {
-          const candidateAge = now - new Date(candidate.timestamp).getTime();
-          okFresh = candidateAge >= 0 && candidateAge <= MAX_AGE_MS;
-        } catch { okFresh = false; }
-        if (okVerdict && okHash && okIdentity && okFresh) { codexProof = candidate; break; }
-      }
-      const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
-      const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
-      const cvIdentityOk = codexProof
-        && codexProof.model === REQUIRED_CODEX_MODEL
-        && codexProof.reasoning_effort === REQUIRED_CODEX_EFFORT;
-      // Freshness = age inside [0, 30min]; a FUTURE-dated timestamp must not
-      // count as fresh (Codex P2 round 5 — clock skew / typo / fabrication).
-      let cvFresh = false;
+    //      it is repeated here as defense in depth.
+    //   2. The reviewer proof names BOTH required reviewers.
+    //   3. A fresh, content-bound Codex gpt-6-sol/high proof (a separate reviewer
+    //      gate actually ran — Mason's "ran, not queued" rule). Honest-mistake
+    //      net: a determined agent could forge it — the residual documented in
+    //      docs/manual/KNOWN_ISSUES.md §4b proof self-attestation.
+    const proofHash = String(validProof.data.queryHash || "");
+    if (!proofHash || !currentHash || proofHash !== currentHash) {
+      return block(
+        `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" ` +
+        `is not content-bound — every apply requires "queryHash" in the proof to be present and ` +
+        `exactly match the SHA-256 of the transmitted SQL (expected: ${currentHash || "(no query text)"}). ` +
+        `Re-confirm the reviewers against the CURRENT SQL, update the proof's queryHash, and retry.`);
+    }
+    // The proof must name BOTH required reviewers (Codex P1 2026-07-13 round
+    // 5: a minimal hand-written proof with no reviewers array reached allow).
+    // Still self-attestable — the residual documented in KNOWN_ISSUES §4b —
+    // but it forces the /migration-review flow, which only writes the array
+    // after the reviewer subagents actually returned clean.
+    const reviewers = Array.isArray(validProof.data.reviewers) ? validProof.data.reviewers.map(String) : [];
+    const missing = ["rls-security-reviewer", "migration-drift-reviewer"].filter(r => !reviewers.includes(r));
+    if (missing.length) {
+      return block(
+        `MIGRATION APPLY GUARD: the reviewer proof for "${migName || "(unnamed)"}" ` +
+        `does not record the required reviewers (missing: ${missing.join(", ")}). Every apply ` +
+        `requires BOTH rls-security-reviewer and migration-drift-reviewer to have actually run clean ` +
+        `this session (dispatch them via /migration-review, then write the proof with its "reviewers" ` +
+        `array). Never add names for reviewers that did not run.`);
+    }
+    // The Codex gate is its own content-bound proof file — NOT a field in the
+    // reviewer proof, NOT the mtime of a tee'd log (Codex P1 2026-07-13 round
+    // 4: a stray codex-review-latest.txt from an unrelated or FAILED run
+    // satisfied an mtime check). Required shape at
+    // .claude/session-state/codex-review-mig-<safeName>.json:
+    //   { "queryHash": <sha256 of the EXACT transmitted SQL>,
+    //     "verdict": "clean" | "ship" | "ship-with-followups",
+    //     "model": "gpt-6-sol",
+    //     "reasoning_effort": "high",
+    //     "timestamp": <ISO-8601, <30 min old> }
+    // Write it ONLY after an ACTUAL /codex-review run on this migration this
+    // session — a fabricated file violates Mason's codex-gate rule and is the
+    // documented self-attestation residual (KNOWN_ISSUES §4b).
+    // Searched across the same session-scoped directories as the reviewer proof
+    // above, for the same reason. A candidate only WINS by satisfying
+    // every criterion the single-directory version demanded — clean verdict,
+    // exact queryHash, age inside [0, 30min]; the first parseable file is kept
+    // only so the block message below can say which criterion failed.
+    let codexProof = null;
+    for (const dir of proofDirs) {
+      let candidate = null;
+      try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
+      if (!candidate) continue;
+      if (!codexProof) codexProof = candidate;
+      const okVerdict = ["clean", "ship", "ship-with-followups"].includes(String(candidate.verdict || "").toLowerCase());
+      const okHash = !!currentHash && String(candidate.queryHash || "") === currentHash;
+      const okIdentity = candidate.model === REQUIRED_CODEX_MODEL
+        && candidate.reasoning_effort === REQUIRED_CODEX_EFFORT;
+      let okFresh = false;
       try {
-        const cvAge = now - new Date(codexProof.timestamp).getTime();
-        cvFresh = !!codexProof && cvAge >= 0 && cvAge <= MAX_AGE_MS;
-      } catch { cvFresh = false; }
-      if (!cvOk || !cvHashOk || !cvIdentityOk || !cvFresh) {
-        return block(
-          `MIGRATION APPLY GUARD (hands-free run): the Sol high-effort gate is not satisfied for ` +
-          `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
-          `Autonomous applies require a fresh, content-bound Codex verdict (Mason's settled 2026-07-13 ` +
-          `policy). Run: node scripts/write-apply-proofs.mjs ${migName || "<migName>"} — it runs the ` +
-          `trusted Codex CLI itself and mints the content-bound proof ONLY on a CLEAN machine verdict. ` +
-          `Do NOT hand-write the proof JSON (review-proof-guard blocks any command naming it, by design). ` +
-          `A BLOCKERS verdict or a failed Codex run does NOT qualify — fix the findings or PARK the ` +
-          `migration for Mason. Never self-certify.`);
-      }
+        const candidateAge = now - new Date(candidate.timestamp).getTime();
+        okFresh = candidateAge >= 0 && candidateAge <= MAX_AGE_MS;
+      } catch { okFresh = false; }
+      if (okVerdict && okHash && okIdentity && okFresh) { codexProof = candidate; break; }
+    }
+    const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
+    const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
+    const cvIdentityOk = codexProof
+      && codexProof.model === REQUIRED_CODEX_MODEL
+      && codexProof.reasoning_effort === REQUIRED_CODEX_EFFORT;
+    // Freshness = age inside [0, 30min]; a FUTURE-dated timestamp must not
+    // count as fresh (Codex P2 round 5 — clock skew / typo / fabrication).
+    let cvFresh = false;
+    try {
+      const cvAge = now - new Date(codexProof.timestamp).getTime();
+      cvFresh = !!codexProof && cvAge >= 0 && cvAge <= MAX_AGE_MS;
+    } catch { cvFresh = false; }
+    if (!cvOk || !cvHashOk || !cvIdentityOk || !cvFresh) {
+      return block(
+        `MIGRATION APPLY GUARD: the Sol high-effort gate is not satisfied for ` +
+        `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
+        `Every apply requires a fresh, content-bound Codex verdict (Mason's autonomous-landing rule, ` +
+        `2026-09-26). Run: node scripts/write-apply-proofs.mjs ${migName || "<migName>"} — it runs the ` +
+        `trusted Codex CLI itself and mints the content-bound proof ONLY on a CLEAN machine verdict. ` +
+        `Do NOT hand-write the proof JSON (review-proof-guard blocks any command naming it, by design). ` +
+        `A BLOCKERS verdict or a failed Codex run does NOT qualify — fix the findings or PARK the ` +
+        `migration for Mason. Never self-certify.`);
     }
     return allow();
   }
@@ -1053,10 +1065,9 @@ export function evaluateMigrationApply({
     `       node scripts/write-apply-proofs.mjs ${migName || "<migName>"}\n` +
     `     (The wrapper ALWAYS runs a real Codex review of the file and mints nothing\n` +
     `      without a CLEAN machine verdict — a BLOCKERS or failed run means fix or park.)\n` +
-    `  4. AUTHORIZATION — the proof gate is a floor, NOT the authorization: in an\n` +
-    `     ordinary interactive session, get Mason's explicit in-chat OK before applying.\n` +
-    `     (Only a Mason-pre-authorized hands-free run with autopilot armed may apply\n` +
-    `      without the per-migration ask — settled 2026-07-13; destructive migrations never.)\n` +
+    `  4. AUTHORIZATION — Mason's autonomous-landing rule (2026-09-26): a NON-destructive\n` +
+    `     migration whose final Sol and CodeRabbit reviews are clean applies with no per-\n` +
+    `     migration ask once every proof here passes. DESTRUCTIVE migrations stay Mason's.\n` +
     `  5. Retry the apply_migration call.\n\n` +
     `The proof file expires after 30 minutes — this catches stale reviews on long sessions.\n` +
     `The "queryHash" above is the SHA-256 of the exact SQL being applied; it binds this proof to\n` +

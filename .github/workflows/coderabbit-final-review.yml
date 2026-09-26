@@ -54,8 +54,11 @@ jobs:
     # Lifecycle success includes ignored/reset events; it never attests review delivery.
     name: ${{ github.event.action == 'opened' && 'CodeRabbit candidate snapshot' || 'CodeRabbit candidate lifecycle' }}
     runs-on: ubuntu-latest
-    # Native reviews can take minutes; leave cleanup time beyond the six-minute poll.
-    timeout-minutes: 10
+    # Native reviews can take minutes, and since 2026-09-26 the gate waits out
+    # running checks instead of failing on them (up to 20 minutes before dispatch
+    # and 20 after delivery, around the six-minute review poll). Pinned by the
+    # test `A: the trusted workflow configures the wait and a job timeout that covers it`.
+    timeout-minutes: 50
     steps:
       # pull_request_target is privileged. Checkout the trusted default branch
       # only; never fetch or execute the pull request's code in this workflow.
@@ -105,6 +108,10 @@ jobs:
               config: {
                 nativeDispatch: true,
                 quietPeriodMs: 30_000,
+                # Wait out running checks (80 x 15s = 20 min) rather than fail on
+                # them: ci.yml's "Lint, Type Check, Test, Build" takes ~11 minutes.
+                checkSettleAttempts: 80,
+                checkSettlePollMs: 15_000,
                 requiredChecks: [
                   {
                     name: 'Lint, Type Check, Test, Build',
