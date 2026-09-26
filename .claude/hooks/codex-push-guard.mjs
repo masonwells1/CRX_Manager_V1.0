@@ -18,11 +18,16 @@ import {
   contentIsRisky,
   describeRiskyContent,
   eachPush,
+  expandNestedCommands,
   gitPushCwd,
   gitSubcommandIsDynamic,
   isGitPush,
   pushUsesExecPathOption,
   mainPushSource,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
+  nestedComputedDenial,
+  nestedTooDeepDenial,
   proofValid,
   pushContextIsAmbiguous,
   pushHiddenByShellComposition,
@@ -80,6 +85,28 @@ if (gitSubcommandIsDynamic(cmd)) {
 // proves nothing about where the objects go.
 if (pushHiddenByShellComposition(cmd)) {
   deny("CODEX GATE: shell quoting or command substitution changes this push's meaning or reveals an additional push (for example `git p\"us\"h`, `HEAD:ma\"in\"`, `$(git push …)`, or a backtick). The review gate reads command text, so analysing a spelling the shell rewrites would not prove the executed destination, force intent, or refspec. Write each push plainly: `git -C <repo> push <remote> <refspec>`.");
+}
+// A push handed to another program as one argument — `bash -c "git push …"`,
+// `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand <base64>`, `eval`,
+// or `Invoke-Expression`/`Start-Process` — is text the parsers below do not read
+// as a push; the base64 form in particular passed this guard untouched (measured
+// on PR #630's head, 2026-09-24). An agent never needs that shape to push, so it
+// is refused rather than analysed, like a substitution. A `{ }` / `( )` block is
+// left to pushHiddenByShellComposition above, which already refuses it.
+// A hook that throws emits no decision, and that ALLOWS — so an unexpected
+// failure here denies instead of skipping every check below.
+let nestedCommands;
+try {
+  nestedCommands = expandNestedCommands(cmd, { grouping: false });
+} catch (error) {
+  deny(`CODEX GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
+}
+if (nestedCommands.tooDeep) deny(nestedTooDeepDenial("CODEX GATE"));
+if (nestedCommands.computed) deny(nestedComputedDenial("CODEX GATE"));
+if ([cmd, ...nestedCommands.commands].some(commandFedToInterpreter)) deny(commandFedToInterpreterDenial("CODEX GATE"));
+if (nestedCommands.commands.some((inner) =>
+  isGitPush(inner) || gitSubcommandIsDynamic(inner) || pushHiddenByShellComposition(inner))) {
+  deny("CODEX GATE: this command runs a git push inside another shell or an evaluator (bash -c, cmd /c, pwsh -Command or -EncodedCommand, eval, Invoke-Expression, Start-Process). The review gate reads the outer command's text, so it cannot prove where a push carried that way would go. Run the push as its own plain command: `git -C <repo> push <remote> <refspec>`.");
 }
 if (pushUsesExecPathOption(cmd)) {
   deny("CODEX GATE: git --exec-path is denied for pushes. It replaces Git's transport helpers, so a planted git-remote-https program can ignore the destination this guard verified. Use Git's normal executable path.");

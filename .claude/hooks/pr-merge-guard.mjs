@@ -31,8 +31,15 @@ import {
   contentIsRisky,
   createHardGateBudget,
   describeRiskyContent,
+  expandNestedCommands,
   ghApiMergeRequest,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
+  ghCommandUnreadableDenial,
+  ghCommandUnreadableIn,
   ghHiddenByShellComposition,
+  nestedComputedDenial,
+  nestedTooDeepDenial,
   hardGateBudgetDenial,
   hookDeadlineMs,
   splitCommandSegments,
@@ -103,12 +110,40 @@ function addRequest(request) {
 if (GITHUB_MERGE_TOOL.test(toolName)) {
   requests.push(mcpMergeRequest(toolInput));
 } else if (typeof toolInput.command === "string" && toolInput.command) {
+  // A command handed to another program as one argument — `bash -c "…"`,
+  // `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand …`, `eval`,
+  // `Invoke-Expression`, `Start-Process`, a `&{ … }` block — is one word to the
+  // parsers below, so an administrator merge inside it passed this guard
+  // (measured on PR #630's head, 2026-09-24). Every such inner command is
+  // scanned exactly like the command itself.
+  // A hook that throws emits no decision, and that ALLOWS — so an unexpected
+  // failure here denies instead of skipping the merge scan.
+  let nested;
+  try {
+    nested = expandNestedCommands(toolInput.command);
+  } catch (error) {
+    deny(`PR MERGE GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
+  }
+  if (nested.tooDeep) deny(nestedTooDeepDenial("PR MERGE GATE"));
+  if (nested.computed) deny(nestedComputedDenial("PR MERGE GATE"));
+  const scannedCommands = [toolInput.command, ...nested.commands];
+  if (scannedCommands.some(commandFedToInterpreter)) deny(commandFedToInterpreterDenial("PR MERGE GATE"));
+  for (const scanned of scannedCommands) collectMergeRequests(scanned);
+}
+if (requests.length === 0) passthrough();
+
+// Collects every merge request one command's text carries, denying on any
+// unresolvable form. Called for the command itself and for each nested command.
+function collectMergeRequests(scanned) {
   // Refused before the segment scan, not analysed: a PowerShell backtick or a
   // cmd.exe caret is consumed before gh sees the word, so ``gh pr me`rge 1
   // --admin`` is an ordinary administrator merge that ghMergeRequest reads as an
   // unknown word and this whole loop skips (Codex sol, 2026-09-08, finding 3).
   // Same helper and same reasoning as the push side's composition refusal.
-  if (ghHiddenByShellComposition(toolInput.command)) {
+  // A gh alias or extension expands into a command this scan never sees.
+  const unreadableGh = ghCommandUnreadableIn(scanned);
+  if (unreadableGh) deny(ghCommandUnreadableDenial("PR MERGE GATE", unreadableGh));
+  if (ghHiddenByShellComposition(scanned)) {
     deny("PR MERGE GATE: a PowerShell backtick or cmd.exe caret escape changes which gh command this runs (for example ``gh pr me`rge 1`` or `gh api --met^hod=PUT …/merge`). The gate reads command text, so analysing a spelling the shell rewrites would not prove the subcommand or the HTTP method. Write the gh command plainly: `gh pr merge <number> …`.");
   }
   // A single `&` separates commands too — POSIX backgrounds the left side, cmd
@@ -118,7 +153,7 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   // splits inside `--body 'note&more'`, which would hand this loop a merge whose
   // `--admin` had been carried off into a segment containing no `gh` at all
   // (Codex sol, 2026-09-08, SEC-001).
-  for (const segment of splitCommandSegments(toolInput.command)) {
+  for (const segment of splitCommandSegments(scanned)) {
     // The mergePullRequest mutation is denied by NAME, whatever transport
     // carries it — `gh api graphql`, curl, Invoke-RestMethod, a fetch in a node
     // one-liner. Until 2026-09-01 only the `gh api graphql` spelling was caught
@@ -171,7 +206,6 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
     if (found) { addRequest(found); continue; }
   }
 }
-if (requests.length === 0) passthrough();
 
 // ── the administrator override is Mason's, never an agent's ─────────────────
 // On 2026-09-01 Mason turned "Include administrators" OFF on main's branch
