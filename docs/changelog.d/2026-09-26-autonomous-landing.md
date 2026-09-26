@@ -34,9 +34,9 @@ secrets/auth/billing/permissions changes stay his. He gets a daily plain-English
   unrelated edit during a dispatch is a neutral pass, not a permanent red row; the provider label is
   released once a review lands and a relabel reconciles from the receipt; a push records a trusted
   candidate epoch so a fix on the SAME PR earns one follow-up review (`auto_incremental_review: true`);
-  and a stale CodeRabbit objection on an older commit no longer blocks its own follow-up review. The
-  pre-merge check "Edit to an already-applied migration" is a warning — the required CI check
-  `check-migration-hard-rules` is the hard gate and knows the applied boundary.
+  and a stale CodeRabbit objection on an older commit no longer blocks its own follow-up review. (The
+  pre-merge check "Edit to an already-applied migration" was briefly made a warning, then restored to
+  an error — see `2026-09-26-autonomous-landing-sol-round-4.md`.)
 - **Daily summary** (`scripts/daily-landing-summary.mjs`, `.github/workflows/daily-landing-summary.yml`):
   read-only; posts one @-mention comment a day to a "Daily landing summary" issue.
 - **Docs**: `AGENTS.md`, `docs/manual/OWNER_PLAYBOOK.md` (Mason's list is now exactly: destructive

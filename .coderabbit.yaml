@@ -119,10 +119,9 @@ reviews:
         Security (RLS) with policies in the same file; any SECURITY DEFINER
         function missing `SET search_path = public, pg_temp`; any mutating RPC
         that does not accept and enforce `p_idempotency_key text DEFAULT NULL`;
-        any GRANT EXECUTE to anon/public on a function that writes data. Do not
-        flag edits to an existing migration file as a violation by themselves:
-        a file can be a parked, never-applied draft, and only the CI check
-        `check-migration-hard-rules` knows the applied boundary. Money must be exact whole cents - never floating point. New
+        any GRANT EXECUTE to anon/public on a function that writes data; any
+        edit to an already-applied migration (migrations must be new files
+        only). Money must be exact whole cents - never floating point. New
         money storage uses bigint cents; any new or changed money column must
         carry a finite whole-cent CHECK constraint named
         `<table>_<column>_whole_cents_chk`. A CHECK constraint that changes
@@ -369,25 +368,25 @@ reviews:
           write to a generated column such as invoices.balance_cents. (5) Money
           rounding done in binary floating point. Otherwise PASS.
 
-      # WARNING, not error, since 2026-09-26. This check cannot see which
-      # migrations are live, so it failed on edits to PARKED, never-applied
-      # drafts; only Mason could dismiss it, and dismissing stranded the
-      # lifecycle gate. The hard rule is enforced deterministically instead: the
-      # required CI job runs scripts/check-migration-hard-rules.mjs, which reads
-      # the applied boundary from the base tree's .claude/schema-registry.json
-      # and fails any modification or deletion of an applied migration.
+      # STAYS error (2026-09-26). The autonomous-landing PR tried to make this a
+      # warning and lean on scripts/check-migration-hard-rules.mjs, but the exact-
+      # SHA Sol review (round 4, HIGH) showed that CI check reads the applied
+      # boundary from .claude/schema-registry.json, which can lag a live apply —
+      # so during the lag an applied migration could be edited with green CI.
+      # Until a required check can prove from current ledger evidence that a
+      # migration never ran, a false positive on a parked draft is the price:
+      # Mason clears it with "Ignore failed checks" in the walkthrough.
       - name: Edit to an already-applied migration
-        mode: warning
+        mode: error
         instructions: >-
           Scope: only supabase/migrations/. If this pull request modifies no
           existing file there, PASS immediately.
 
-          WARN if the diff MODIFIES or DELETES any pre-existing file under
-          supabase/migrations/, and say in one line that the required CI check
-          `check-migration-hard-rules` decides whether that file was already
-          applied: editing a parked, never-applied draft is allowed, editing an
-          applied one is not. ADDING a new file there is correct and is never a
-          warning. Otherwise PASS.
+          FAIL if the diff MODIFIES or DELETES any pre-existing file under
+          supabase/migrations/. Database changes ship as brand-new migration
+          files only; rewriting a migration that already ran leaves the live
+          database and the repository permanently out of sync. ADDING a new file
+          there is correct and is never a failure. Otherwise PASS.
 
 # Teach CodeRabbit this repo's own written rules so it reviews against the
 # actual house standard instead of only the path instructions above.
