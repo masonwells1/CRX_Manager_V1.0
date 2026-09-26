@@ -46,6 +46,14 @@ item still carries its earlier verification date. See `docs/manual/CURRENT_STATE
 disk-vs-live migration record, including PR #599's file, which reached `main` when that PR merged on
 2026-09-11 (`791bc3d86`).
 
+**Superseded 2026-09-26: the status in this paragraph is historical.** Read-only ledger reads
+confirm `20260914100200`–`20260914100400` applied live 2026-09-21 and `20260914100500`–`20260914100600`
+on 2026-09-22. The stale-batch recipient guard, the Chicago business-date payout guard, the unified
+Chicago-date cutover and the latest-label fix are therefore live, and the "until … applied" risks
+below for those items no longer apply. Only the transfer intent wrapper `20260914100800` and the
+label repair `20260914100900` remain unapplied; boundary detail is in
+`docs/reference/migration-history.md`. What follows is the pre-apply record.
+
 Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`
 and the separate transfer wrapper below) remain unapplied;
 the complete six-file set was restamped together on 2026-09-05 evening (and again on 2026-09-14, from

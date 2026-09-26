@@ -95,6 +95,12 @@ rows immediately after that apply.)
 
 **Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and was applied live on 2026-09-15 (see below).
 
+**Superseded 2026-09-26: the status in this paragraph and the next is historical.** Read-only
+ledger reads confirm `20260914100100`–`20260914100400` applied live 2026-09-21, `20260914100500` and
+`20260914100600` on 2026-09-22, and `20260914100700` on 2026-09-26. Only the transfer intent
+wrapper `20260914100800` and the label repair `20260914100900` remain unapplied. The live Chicago-date
+cutover that `100800` required is now in place. What follows describes the pre-apply plan.
+
 Six local commission follow-ups (`20260914100200` through `20260914100900`, with no `20260905200500` file) are not applied. The
 six-file set was restamped together on 2026-09-05 evening and again on 2026-09-14 (from
 `20260905200000`..`20260905210000`, to sort above the applied `20260908120000_close_pr535_live_gaps`),
@@ -174,7 +180,9 @@ source files formerly missing from `main`,
 `20260914100400`, `20260914100500` and `20260914100600`, with no `20260905200500` file; the intent
 wrapper is `20260914100800` (formerly `20260908130800`) and the repair remains last at
 `20260914100900`). All of them sort above the applied high-water
-`20260908120000_close_pr535_live_gaps`; none is applied.
+`20260908120000_close_pr535_live_gaps`; none was applied at the time. (Superseded 2026-09-26: all of them
+except `20260914100800` and `20260914100900` have since applied live; see the note above the
+six-follow-up paragraph.)
 
 **Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
 called `20260904185900` a pending "#582 candidate" sitting above the live high-water. Every clause of
