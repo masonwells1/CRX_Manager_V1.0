@@ -18,7 +18,8 @@ live that day, that `20260914100500`, `100600`, `100800` and `100900` are still 
 customer-document candidate (then `20260914100450`) has never been applied; entries below that still call
 the first four "parked" predate that read. A 2026-09-22 UTC read-only ledger read confirmed by name that
 `20260914100500` and `100600` have since applied, so the customer-document candidate was restamped
-`20260914100700` and is still not applied. The 2026-09-20 read had confirmed by name that the
+`20260914100700`; a 2026-09-26 read-only ledger read confirmed it has since applied (the entry below is
+now resolved). The 2026-09-20 read had confirmed by name that the
 six-generator year fix `20260908140000` IS applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
@@ -44,6 +45,14 @@ The F2 item below was last re-verified against live on 2026-09-04
 item still carries its earlier verification date. See `docs/manual/CURRENT_STATE.md` for the
 disk-vs-live migration record, including PR #599's file, which reached `main` when that PR merged on
 2026-09-11 (`791bc3d86`).
+
+**Superseded 2026-09-26: the status in this paragraph is historical.** Read-only ledger reads
+confirm `20260914100200`–`20260914100400` applied live 2026-09-21 and `20260914100500`–`20260914100600`
+on 2026-09-22. The stale-batch recipient guard, the Chicago business-date payout guard, the unified
+Chicago-date cutover and the latest-label fix are therefore live, and the "until … applied" risks
+below for those items no longer apply. Only the transfer intent wrapper `20260914100800` and the
+label repair `20260914100900` remain unapplied; boundary detail is in
+`docs/reference/migration-history.md`. What follows is the pre-apply record.
 
 Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`
 and the separate transfer wrapper below) remain unapplied;
@@ -376,7 +385,14 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-21 (FIX WRITTEN AND PROVEN LOCALLY — NOT DEPLOYED) — a customer-document download link can outlive the document's soft delete
+## RESOLVED 2026-09-26 (opened 2026-09-21) — a customer-document download link can outlive the document's soft delete
+
+**Resolved.** All three pieces are live: the Edge Function (v1, 2026-09-22), the page that calls it
+(#764 on `main`), and migration `20260914100700_customer_document_bytes_server_only` (applied live
+2026-09-26 as ledger version `20260926163005`). A read-only post-apply check on 2026-09-26 found no
+Storage policy on `storage.objects` naming the `customer-documents` bucket,
+`customer_documents_storage_path_shape_check` present, and 0 bucket objects and 0 document rows. The
+text below is the original record, kept for history.
 
 **What is wrong on live.** The live Storage policies let the uploader, and any admin, read objects in
 the private `customer-documents` bucket. Whoever can read an object can also ask Storage for a
@@ -410,9 +426,9 @@ in place rather than giving browsers a delete power. A download already in progr
 is removed still completes. The function checks a file's declared type and size only as early
 refusals; the bucket's own limits enforce them.
 
-**Still owed, in this order, each with Mason's explicit approval:** deploy the Edge Function (done:
-v1 live 2026-09-22 UTC, Mason-approved); merge the PR (ships the page that calls it); apply the
-migration — promptly, because while it sits on `main` unapplied the pending-migration guard holds the
+**Owed at the time, in this order, each with Mason's explicit approval (all three done by 2026-09-26; nothing is owed now):** deploy the Edge Function (done:
+v1 live 2026-09-22 UTC, Mason-approved); merge the PR (done: #764); apply the
+migration (done: applied live 2026-09-26, ledger `20260926163005`) — promptly, because while it sits on `main` unapplied the pending-migration guard holds the
 waiting commission migrations (`20260914100800` onward) behind it. The migration applied first would break the Documents tab until
 the other two land. The migration refuses to apply if the bucket already holds any file, because a
 link minted under the old rules in that window could not be revoked; a refusal means a person decides.
@@ -813,8 +829,10 @@ substitution cannot pass by matching the real year), and makes each tested refus
 checked with its own code: once this merges, the guard refuses every one of those until this file
 is applied. If any of them applies live first, this file is stranded and must be restamped above it.
 **That ordering requirement is discharged — it applied first, on 2026-09-20 at 05:13 UTC, and
-#664's `20260911120000` applied eight minutes later, which makes that file the current high-water.
-The `20260914100100`..`20260914100900` cohort still sorts above it and is clear to apply; of the
+#664's `20260911120000` applied eight minutes later, which made that file the high-water at the time
+(superseded 2026-09-26: `20260914100100`–`100700` have since applied and the current high-water is
+`20260914100700`; only `100800` and `100900` remain unapplied). The
+`20260914100100`..`20260914100900` cohort sorted above it and was clear to apply; of the
 field-app season files only `20260908190000` now sorts BELOW it and must be restamped, while
 `20260912165758`, `20260913040359` and `20260913152700` already sort above it. Read the boundary
 block in `docs/reference/migration-history.md` before ordering anything.**
