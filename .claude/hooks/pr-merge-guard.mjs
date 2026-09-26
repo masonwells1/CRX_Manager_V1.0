@@ -28,6 +28,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   coderabbitApprovedHead,
+  headContainsBaseOnGitHub,
   createHardGateBudget,
   ghApiMergeRequest,
   ghHiddenByShellComposition,
@@ -454,6 +455,25 @@ function gateRequest(request) {
   const baseSha = String(pr.baseRefOid).trim(); // GitHub's real base tip, not local origin/main
   if (!/^[0-9a-f]{40}$/i.test(baseSha)) {
     deny("PR MERGE GATE: GitHub returned an unusable baseRefOid, so the proof cannot be bound to the real base (fail closed).");
+  }
+
+  // The head must already contain that base (Sol HIGH, round 7 — the Codex merge
+  // guard already required it). A head behind main merges base-only commits the
+  // Sol proof never reviewed alongside this change, and GitHub does not always
+  // refuse a behind branch, so check it here rather than assume it.
+  let headContainsBase = false;
+  try {
+    headContainsBase = headContainsBaseOnGitHub({ baseSha, headSha, repo: request.repo, gh: hardGateGh });
+  } catch {
+    headContainsBase = false;
+  }
+  if (!headContainsBase) {
+    deny(
+      `PR MERGE GATE: this pull request's head ${String(headSha).slice(0, 12)} does not contain the base it will ` +
+      `merge onto (${baseSha.slice(0, 12)}), or GitHub could not confirm it (fail closed). The reviewed diff cannot ` +
+      "cover everything the merge lands. Update the branch — merge origin/main into it and push — then re-run the " +
+      "checks and the exact-SHA Sol review of the new head."
+    );
   }
 
   let valid = false;

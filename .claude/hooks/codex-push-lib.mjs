@@ -3107,4 +3107,34 @@ export function coderabbitApprovedHead(pullRequest) {
     && String(latest?.commit?.oid || "").toLowerCase() === headSha.toLowerCase();
 }
 
+// The API path for `gh api` calls about a merge request's repository. `gh pr
+// merge --repo` accepts OWNER/REPO, HOST/OWNER/REPO or a URL; `gh api` takes a
+// path, so reduce it to OWNER/REPO. No --repo means the checkout's own remote,
+// which gh's {owner}/{repo} placeholder resolves. Anything unrecognizable is null
+// so the caller fails closed.
+export function ghApiRepoPath(repo) {
+  if (repo === undefined || repo === null || repo === "") return "repos/{owner}/{repo}";
+  const parts = String(repo).trim().replace(/^https?:\/\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "").split("/");
+  const [owner, name] = parts.slice(-2);
+  const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+  if (parts.length < 2 || parts.length > 3 || !SEGMENT.test(owner || "") || !SEGMENT.test(name || "")) return null;
+  return `repos/${owner}/${name}`;
+}
+
+// True only when GitHub reports that `headSha` already contains `baseSha` — the
+// pull request is not behind the base it will merge onto (Sol HIGH, round 7).
+// The Sol proof reviews the head's diff against the merge base; if main moved on
+// since, the merge result also carries base-only commits nobody reviewed together
+// with this change, so a proof bound to (head, base) would vouch for a tree it
+// never saw. Uses GitHub's compare API, not local git, so it works from any
+// checkout whether or not the base commit was fetched. Throws on a failed call;
+// the caller must treat that as "not contained".
+export function headContainsBaseOnGitHub({ baseSha, headSha, repo, gh }) {
+  const SHA = /^[0-9a-f]{40}$/i;
+  const repoPath = ghApiRepoPath(repo);
+  if (!repoPath || !SHA.test(String(baseSha || "")) || !SHA.test(String(headSha || ""))) return false;
+  const behindBy = String(gh(["api", `${repoPath}/compare/${baseSha}...${headSha}`, "--jq", ".behind_by"])).trim();
+  return behindBy === "0";
+}
+
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

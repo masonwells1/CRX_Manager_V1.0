@@ -10,7 +10,9 @@ import {
   coderabbitApprovedHead,
   ghApiMergeRequest,
   ghApiMutates,
+  ghApiRepoPath,
   ghMergeRequest,
+  headContainsBaseOnGitHub,
   mcpMergeRequest,
   newestCheckRollup,
   proofSearchDirs,
@@ -482,6 +484,45 @@ eq(
   0,
   "no hard gate calls gh() directly, around the budget",
 );
+// Sol HIGH, round 7: the second hard gh call — GitHub's compare of base...head —
+// is handed hardGateGh itself, so it spends the same budget, and its denial sits
+// before the proof scan's single allow point.
+ok(
+  /headContainsBaseOnGitHub\(\{\s*baseSha,\s*headSha,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\)/.test(gateRequestSource),
+  "the base-containment check runs through the budgeted hardGateGh",
+);
+ok(
+  gateRequestSource.indexOf("if (!headContainsBase)") > 0
+    && gateRequestSource.indexOf("if (!headContainsBase)") < gateRequestSource.indexOf("advisoryQueue.push(request)"),
+  "a head behind its base is denied before the merge's allow point",
+);
+
+// headContainsBaseOnGitHub / ghApiRepoPath — driven in-process with an injected gh.
+{
+  const B = "b".repeat(40);
+  const H = "a".repeat(40);
+  const calls = [];
+  const fakeGh = (answer) => (args) => { calls.push(args); if (answer instanceof Error) throw answer; return answer; };
+  ok(headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("0\n") }), "behind_by 0 means the head contains the base");
+  eq(calls.at(-1), ["api", `repos/{owner}/{repo}/compare/${B}...${H}`, "--jq", ".behind_by"],
+    "no --repo asks about the checkout's own remote, base...head in GitHub's order");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("3") }), "a head 3 commits behind its base is refused");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("") }), "an empty answer is refused (fail closed)");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("null") }), "a missing behind_by is refused");
+  let threw = false;
+  try { headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh(new Error("HTTP 404")) }); } catch { threw = true; }
+  ok(threw, "a failed call throws, and the caller treats that as not contained");
+  const before = calls.length;
+  ok(!headContainsBaseOnGitHub({ baseSha: "main", headSha: H, gh: fakeGh("0") }), "a non-sha base is refused without asking GitHub");
+  eq(calls.length, before, "no call was made for a malformed sha");
+  headContainsBaseOnGitHub({ baseSha: B, headSha: H, repo: "masonwells1/CRX_Manager_V1.0", gh: fakeGh("0") });
+  ok(calls.at(-1)[1].startsWith("repos/masonwells1/CRX_Manager_V1.0/compare/"), "--repo OWNER/REPO is honoured");
+  eq(ghApiRepoPath("github.com/masonwells1/CRX_Manager_V1.0"), "repos/masonwells1/CRX_Manager_V1.0", "HOST/OWNER/REPO reduces to OWNER/REPO");
+  eq(ghApiRepoPath("https://github.com/masonwells1/CRX_Manager_V1.0.git"), "repos/masonwells1/CRX_Manager_V1.0", "a URL reduces to OWNER/REPO");
+  eq(ghApiRepoPath("owner/re po"), null, "an unrecognizable repo is null, so the gate fails closed");
+  eq(ghApiRepoPath("a/b/c/d"), null, "too many segments is null");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, repo: "a/b/c/d", gh: fakeGh("0") }), "an unusable --repo is refused");
+}
 ok(
   /function\s+listWorktreesFromProjectDir\(\)\s*\{\s*if \(!hardGateBudget\.admit\(\)\) deny\(/.test(guardSource),
   "the proof scan's git call spends the shared budget too",

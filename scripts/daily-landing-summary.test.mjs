@@ -37,6 +37,14 @@ eq(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/2026092
 eq(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_keep.sql",
   patch: "@@ -1,2 +1,1 @@\n-DROP TABLE public.gone;\n+SELECT 1;" }] }), [],
   "a REMOVED destructive line is not a destructive change");
+// Sol MEDIUM, round 7: GitHub omits `patch` for a diff too large to show. That
+// migration is unreadable, not harmless.
+ok(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_huge.sql", status: "added" }] })[0]
+  .includes("could not be read"), "a migration whose diff GitHub did not return is flagged for Mason");
+eq(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_old.sql", status: "removed" }] }), [],
+  "a removed migration file adds no SQL, so a missing patch there flags nothing");
+ok(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_x.sql", patch: null, status: "modified" }] })[0]
+  .includes("could not be read"), "a null patch counts as unreadable too");
 ok(waitingReasons({ labels: [{ name: "needs-mason" }], files: [] })[0].includes("your decision"),
   "the needs-mason label is honoured");
 

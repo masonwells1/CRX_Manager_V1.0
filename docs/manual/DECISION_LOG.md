@@ -42,8 +42,9 @@ still blocks; `--admin` and `--auto` merges stay refused.
 **Operative rule (how it is enforced).**
 - `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` deny a merge into `main` unless
   CodeRabbit's latest verdict is APPROVED on the exact `headRefOid`, the newest run of every reported
-  check is green with `mergeStateStatus` CLEAN, and a fresh Sol proof is bound to that head and
-  GitHub's real base. `--auto` into `main` is refused outright, and every agent merge must carry
+  check is green with `mergeStateStatus` CLEAN, the head already contains GitHub's real base (the
+  compare API reports `behind_by` 0 — Sol HIGH, round 7), and a fresh Sol proof is bound to that head
+  and base. The migration landing gate applies the same containment check. `--auto` into `main` is refused outright, and every agent merge must carry
   `--match-head-commit <the head the gate checked>` so GitHub itself refuses a head that moved between
   the check and the merge (REST and connector merge routes cannot carry it and are refused).
 - `migration-apply-lib.mjs` applies the formerly hands-free-only proof set in every session and refuses

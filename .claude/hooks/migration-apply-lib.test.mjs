@@ -1517,7 +1517,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
   };
-  const gate = ({ git = {}, pr = {}, prError = null, migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
     checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
@@ -1528,7 +1528,16 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       if (key.startsWith("status --porcelain")) return "";
       throw new Error(`unexpected git ${key}`);
     },
-    runGh: () => { if (prError) throw prError; return JSON.stringify({ ...readyPr, ...pr }); },
+    runGh: (args) => {
+      if (args[0] === "api") {
+        const base = pr.baseRefOid || BASE_SHA;
+        assert.deepEqual(args, ["api", `repos/{owner}/{repo}/compare/${base}...${HEAD_SHA}`, "--jq", ".behind_by"]);
+        if (behindBy instanceof Error) throw behindBy;
+        return behindBy;
+      }
+      if (prError) throw prError;
+      return JSON.stringify({ ...readyPr, ...pr });
+    },
   });
   const refused = (verdict, fragment, message) => {
     assert.equal(verdict.ok, false, `${message} — expected a refusal`);
@@ -1572,6 +1581,11 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "uncommitted changes", "an edited-after-commit migration is refused");
   refused(gate({ prError: new Error("no pull requests found") }), "could not find or read the open pull request", "no PR is refused");
   refused(gate({ pr: { state: "MERGED" } }), "is not open", "a closed or merged PR is refused");
+  // Sol HIGH, round 7: the PR's head must already contain its base.
+  refused(gate({ behindBy: "2\n" }), "does not contain its base", "a PR head behind main is refused");
+  refused(gate({ behindBy: new Error("HTTP 502") }), "does not contain its base", "an unanswerable compare fails closed");
+  refused(gate({ behindBy: "" }), "does not contain its base", "an empty compare answer fails closed");
+  ok(gate({ behindBy: "0\n" }).ok === true, "a head that contains its base passes");
   refused(gate({ pr: { baseRefName: "develop" } }), "does not target main", "a PR into another branch is refused");
   refused(gate({ pr: { headRefOid: "c".repeat(40) } }), "is not this checkout's HEAD", "a checkout behind or ahead of the PR head is refused");
   refused(gate({ pr: { reviewDecision: "CHANGES_REQUESTED" } }), "CHANGES_REQUESTED", "an open objection is refused");

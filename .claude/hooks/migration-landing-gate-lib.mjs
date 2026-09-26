@@ -26,6 +26,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   coderabbitApprovedHead,
+  headContainsBaseOnGitHub,
   proofSearchDirs,
   proofValid,
   pullRequestChecksGreen,
@@ -43,7 +44,7 @@ function refuse(why) {
       `that carries the migration is ready to merge: CodeRabbit APPROVED its exact head, every check is ` +
       `green, and a fresh exact-SHA gpt-6-sol proof (node scripts/write-codex-push-proof.mjs) is bound to that ` +
       `head. Apply from a clean checkout of the PR's branch with the migration committed, then merge right ` +
-      `after. A destructive migration additionally needs Mason's in-chat yes.`,
+      `after. A destructive migration never applies through an agent — it is parked for Mason.`,
   };
 }
 
@@ -163,6 +164,19 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
 
   const baseSha = String(pr?.baseRefOid || "").trim();
   if (!/^[0-9a-f]{40}$/i.test(baseSha)) return refuse(`GitHub returned an unusable base for ${number} (fail closed).`);
+  // The head must already contain that base (Sol HIGH, round 7), the same rule as
+  // both merge gates: otherwise the merge that follows lands base-only commits the
+  // Sol proof never reviewed alongside this migration.
+  let headContainsBase = false;
+  try {
+    headContainsBase = headContainsBaseOnGitHub({ baseSha, headSha: head, gh });
+  } catch (error) {
+    if (OUT(error)) throw error;
+    headContainsBase = false;
+  }
+  if (!headContainsBase) {
+    return refuse(`${number}'s head ${head.slice(0, 12)} does not contain its base ${baseSha.slice(0, 12)}, or GitHub could not confirm it — merge origin/main into the branch, push, and re-run the checks and the Sol review.`);
+  }
   let proven = false;
   for (const stateDir of proofSearchDirs(dir, listWorktrees || (() => git(["worktree", "list", "--porcelain"])))) {
     try {

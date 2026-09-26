@@ -72,6 +72,13 @@ export function waitingReasons({ labels = [], files = [] }) {
   for (const file of files) {
     const name = String(file?.filename || "");
     if (!/^supabase\/migrations\/[^/]+\.sql$/i.test(name)) continue;
+    // GitHub leaves `patch` out when a diff is too large to show. An unreadable
+    // migration is not a safe one (Sol MEDIUM, round 7): flag it for Mason rather
+    // than classify missing SQL as harmless. A removed file has no SQL to add.
+    if (typeof file?.patch !== "string" && String(file?.status || "") !== "removed") {
+      reasons.push(`its database change ${path.basename(name)} could not be read from GitHub, so it could not be checked for deleting data — have an agent check it`);
+      continue;
+    }
     const added = String(file?.patch || "").split(/\r?\n/)
       .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
       .map((line) => line.slice(1))
