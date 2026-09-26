@@ -66,13 +66,13 @@ Every finder must return `executionStatus=VERIFIED` with a concrete non-empty `e
 Before the Codex finding gate, compare every candidate's files, symbols, RPCs, and lifecycle against the mission document's exclusions and current active worktrees. Collision candidates are deferred, never fixed or counted as a dry-cycle finding.
 
 ### Step 2 — CODEX FINDING-GATE (independent confirmation)
-Hand the candidate findings to a separate Codex review session (explicit `gpt-5.6-luna` at xhigh —
+Hand the candidate findings to a separate Codex review session (explicit `gpt-6-luna` at xhigh —
 the default since 2026-09-20; record the agent and effort that produced the verdict). **Always
 invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the
 `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw
 `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary
 version-proof, isolates user configuration, runs an ephemeral `codex exec --sandbox read-only` with
-the tier pinned explicitly, and closes stdin. Pass `--sol --reason "<why>"` to escalate one pass to `gpt-5.6-sol` at
+the tier pinned explicitly, and closes stdin. Pass `--sol --reason "<why>"` to escalate one pass to `gpt-6-sol` at
 high effort when Luna is plainly out of its depth. The wrapper **refuses `--sol` without `--reason`**
 and logs that reason to the trace file, so escalated spend in an unattended run is never silent;
 copy it into `REPORT.md` alongside the model and effort. The wrapper is advisory either way and

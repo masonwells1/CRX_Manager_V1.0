@@ -423,7 +423,7 @@ denies(evaluate(fixture({ autopilot: "{ not valid json" })),
 
 // ── CHECK 3: destructive content (hands-free only) ──────────────────────────
 const armed = () => JSON.stringify({ expires: iso(4 * 3600 * 1000) });
-const goodCodex = { queryHash: HASH, verdict: "clean", model: "gpt-5.6-sol", reasoning_effort: "high", timestamp: iso(0) };
+const goodCodex = { queryHash: HASH, verdict: "clean", model: "gpt-6-sol", reasoning_effort: "high", timestamp: iso(0) };
 const DESTRUCTIVE = "DROP TABLE public.customers;\n";
 const destructiveHash = createHash("sha256").update(DESTRUCTIVE).digest("hex");
 denies(
@@ -508,7 +508,7 @@ denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, verdic
   "Sol high-effort gate", "armed run refuses a non-clean Codex verdict");
 denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, queryHash: "0".repeat(64) } })),
   "Sol high-effort gate", "armed run refuses a Codex proof bound to different SQL");
-denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, model: "gpt-5.6-terra" } })),
+denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, model: "gpt-6-luna" } })),
   "Sol high-effort gate", "armed run refuses the wrong Codex model");
 denies(evaluate(fixture({ autopilot: armed(), codexProof: { ...goodCodex, reasoning_effort: "medium" } })),
   "Sol high-effort gate", "armed run refuses the wrong reasoning effort");
