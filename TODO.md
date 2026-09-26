@@ -59,7 +59,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
    label data; ~105 of 204 stored EPA reg numbers are wrong. The `/label-data-quality`
    tool (shipped) makes this data-entry. Gates the whole compliance track. A June 2026 filled
    research draft (`docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv`, removed 2026-09-26)
-   can be recovered from git history as a starting point: `git show e81853970:<that path>` (the last `main` commit before the removal).
+   can be recovered from git history as a starting point: `git show e81853970:docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv` (the last `main` commit before the removal).
 5. **Decision packets** (details in `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3).
    **Decided 2026-07-16:** due dates = Net 30 + override (build spec in
    `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`, removed 2026-09-26, in git history) · dead structures = KEEP
