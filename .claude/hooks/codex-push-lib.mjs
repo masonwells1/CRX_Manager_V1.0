@@ -2987,8 +2987,8 @@ export function pullRequestChecksGreen(pullRequest) {
 // head-bound only while main's protection sets dismiss_stale_reviews (verified
 // live 2026-09-02, and re-verify before relying on it): GitHub dismisses every
 // approval when a new commit is pushed, so APPROVED cannot be describing an
-// older head. Since 2026-09-02 the merge gates use this only to decide whether
-// to PRINT A NOTICE, never to deny — see `pullRequestReviewBlocked`.
+// older head. The merge gates no longer consult it; since 2026-09-26 they deny
+// on `coderabbitApprovedHead` instead, which reads the review objects.
 export function pullRequestApproved(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "APPROVED";
 }
@@ -3013,10 +3013,100 @@ export function pullRequestApproved(pullRequest) {
 // treating it as a block would restore exactly the deadlock this removed. The
 // fail-closed floor lives upstream instead — gateRequest() denies outright if
 // the PR's JSON cannot be fetched at all, so this predicate is never reached
-// with an unknown verdict. The green-pipeline check remains a hard deny, so
-// CI, not a review, is what gates a landing now.
+// with an unknown verdict. Since 2026-09-26 a landing is gated by BOTH the green
+// pipeline and CodeRabbit's approval of the exact head (coderabbitApprovedHead
+// below), each a hard deny; this predicate only adds the objection check.
+//
+// 2026-09-26 (Luna): the objection is ALSO read from the review objects when
+// `gh pr view --json reviews` supplied them, so it cannot hinge on the summary
+// field alone. Any reviewer whose LATEST verdict (APPROVED / CHANGES_REQUESTED /
+// DISMISSED, by `submittedAt`, else list order) is CHANGES_REQUESTED blocks.
+// A later APPROVED from the same reviewer, or Mason dismissing the review,
+// clears it — the same things that clear GitHub's own summary.
+//
+// COMMENTED reviews carry no verdict (CodeRabbit posts one next to every
+// approval, and thread replies mint empty ones), so only these states count;
+// a dismissed review reads DISMISSED.
+const REVIEW_VERDICT_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+
+// Verdict-bearing reviews, oldest first: by `submittedAt` when EVERY one has a
+// valid timestamp, otherwise entirely in the list order GitHub returns (oldest
+// first). All-or-nothing on purpose (Luna, 2026-09-26): mixing timestamp and
+// position comparisons in one sort is not transitive and can misorder.
+function verdictReviewsInOrder(reviews) {
+  const verdicts = reviews
+    .map((review, index) => ({ review, index, at: Date.parse(review?.submittedAt || "") }))
+    .filter(({ review }) => REVIEW_VERDICT_STATES.has(String(review?.state || "").toUpperCase()));
+  if (verdicts.every(({ at }) => !Number.isNaN(at))) verdicts.sort((a, b) => a.at - b.at || a.index - b.index);
+  return verdicts.map(({ review }) => review);
+}
+
 export function pullRequestReviewBlocked(pullRequest) {
-  return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
+  if (String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED") return true;
+  if (!Array.isArray(pullRequest?.reviews)) return false;
+  const latestByAuthor = new Map();
+  verdictReviewsInOrder(pullRequest.reviews).forEach((review, position) => {
+    // A review with no author login (e.g. a deleted account) is its own reviewer:
+    // grouping all of them under "" would let one's approval erase another's
+    // objection (Luna, 2026-09-26).
+    const login = String(review?.author?.login || "").trim().toLowerCase();
+    latestByAuthor.set(login || `\u0000anonymous-${position}`, review);
+  });
+  return [...latestByAuthor.values()].some((review) => String(review?.state || "").toUpperCase() === "CHANGES_REQUESTED");
+}
+
+// The approval half, restored (Mason, 2026-09-26). GitHub again requires one
+// approving review of the latest push, and on this repository only CodeRabbit
+// can supply it: masonwells1 is the only collaborator and authors every PR
+// (GitHub forbids approving your own), and GitHub Actions cannot approve. So
+// both merge gates DENY unless coderabbitai has an APPROVED review whose commit
+// is the exact head being merged.
+//
+// Read from the review objects (`gh pr view --json reviews`), never from
+// `reviewDecision`: that summary is empty whenever the server rule is off —
+// including the window in which Mason sets the approval count to 0 by hand
+// because CodeRabbit is stuck, which is exactly when an agent must not merge on
+// its own — and it cannot say whose approval it counted. A dismissed review
+// reads DISMISSED, so it never counts. A missing or truncated review list fails
+// closed. `--auto` is NOT exempt: auto-merge waits only for the server rule,
+// which is the thing that may be off.
+//
+// Why the bare `coderabbitai` login is safe to accept: `gh pr view --json
+// reviews` reports the app's bot as `coderabbitai` (no `[bot]` suffix; seen on
+// #547), and `coderabbitai` itself is an Organization account
+// (`gh api users/coderabbitai` → type Organization, 2026-09-26), which cannot
+// author a review — so no person can post one under that name. `[bot]` is the
+// REST spelling of the same app.
+//
+// Why an approval implies CodeRabbit's findings are resolved: `.coderabbit.yaml`
+// sets `request_changes_workflow: true`, under which CodeRabbit approves only
+// "when CodeRabbit's comments are resolved, the latest commit has been reviewed,
+// and no pre-merge checks are failing" (its schema's own description).
+const CODERABBIT_LOGINS = new Set(["coderabbitai", "coderabbitai[bot]"]);
+
+// CodeRabbit's LATEST verdict decides, not any approval it ever gave (Sol,
+// 2026-09-26): an APPROVED followed by a CHANGES_REQUESTED on the same head
+// must deny even when `reviewDecision` is unavailable. Verdict states and order
+// are verdictReviewsInOrder()'s.
+export function coderabbitApprovedHead(pullRequest) {
+  const head = String(pullRequest?.headRefOid || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(head) || !Array.isArray(pullRequest?.reviews)) return false;
+  const latest = verdictReviewsInOrder(pullRequest.reviews)
+    .filter((review) => CODERABBIT_LOGINS.has(String(review?.author?.login || "").trim().toLowerCase()))
+    .at(-1);
+  return Boolean(latest)
+    && String(latest.state || "").toUpperCase() === "APPROVED"
+    && String(latest?.commit?.oid || "").trim().toLowerCase() === head;
+}
+
+export function coderabbitApprovalDenial(gateName, headSha) {
+  return (
+    `${gateName}: CodeRabbit has not approved the exact head being merged (${String(headSha || "<head>").slice(0, 12)}). ` +
+    "Since 2026-09-26 a merge into main needs an undismissed APPROVED review from coderabbitai on the latest push. " +
+    "CodeRabbit reviews every non-draft push automatically and approves once its comments are resolved: fix or " +
+    "answer its findings and wait. If it was rate limited or skipped this head, post `@coderabbitai review` once. " +
+    "If CodeRabbit is down, hand the PR to Mason — only he can merge without it."
+  );
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };

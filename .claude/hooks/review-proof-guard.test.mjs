@@ -736,15 +736,16 @@ for (const payload of [
 }
 
 // Native Write/Edit are deliberately NOT denied here — there is no unlock any
-// more, so denying them would permanently strand hook maintenance. The `ask` tier
-// gates them instead. Pinned so the exemption stays a recorded choice.
+// more, so denying them would permanently strand hook maintenance. PR review is
+// their check (the `ask` prompt was removed 2026-09-26). Pinned so the exemption
+// stays a recorded choice.
 for (const payload of [
   { tool_name: "Write", tool_input: { file_path: ".claude/hooks/sql-safety.mjs", content: "x" } },
   { tool_name: "Edit", tool_input: { file_path: ".husky/pre-push" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
-  assert.equal(result.stdout, "", `native editor stays with the ask tier: ${payload.tool_name}`);
+  assert.equal(result.stdout, "", `native editor is not denied by this hook: ${payload.tool_name}`);
 }
 
 // KNOWN OVER-BLOCK, pinned deliberately rather than papered over. A dotted

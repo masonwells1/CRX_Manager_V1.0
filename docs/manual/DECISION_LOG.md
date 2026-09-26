@@ -7,6 +7,118 @@ An ADR-style ("Architecture Decision Record") running log so future agents don't
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-09-26 — Fewer permission prompts; CodeRabbit reviews every PR automatically; a Codex review on every code change
+
+**Source:** Mason, in-chat 2026-09-26: "give permissions more freely to both codex and claude … i do
+want to make sure we get an adversarial review, and we have alot of coderabbit usage now, so i want
+it used alot more often." He approved the plain-English plan with "yes".
+
+**Evidence it rested on (2026-09-12 to 09-26, desktop app logs joined to transcripts).** Mason saw
+209 Claude permission prompts and approved every one; 186 (89%) came from the `ask` tier on edits to
+guard files (`.claude/hooks/**` 125, `.codex/**` 29, the proof/review scripts 28, `scripts/check-*`
+4); 6 were real production moments (5 `gh pr merge`, 1 edge-function deploy). `ask` rules prompt in
+every mode, including `bypassPermissions`; the desktop app ignores the project `defaultMode:
+"dontAsk"` and starts sessions in `auto` from user settings. Codex runs `approval_policy = "never"`
+and put no permission prompt in front of Mason in the window.
+
+**Decision.**
+1. **Claude `ask` tier trimmed** to what Mason can meaningfully judge: edge-function deploys, Vercel
+   production deploys and deployment protection, GitHub-MCP writes, Desktop Commander / filesystem
+   MCP writers, and edits to `.claude/settings.json` / `settings.local.json` (an agent must not widen
+   its own permissions silently; those prompted 0 times). The guard-file, CI, `.husky`,
+   `package.json`, `.coderabbit.yaml`, `.codex/**` and proof-script entries are gone. In auto mode,
+   edits under protected paths (`.claude/`, `.husky/`) still go to the classifier. `gh pr merge` moves
+   to `allow`: `pr-merge-guard.mjs` is its hard gate and the 2026-06-16 standing authorization
+   already covers green, reviewed merges. **Supersedes** the `ask`-tier portion of the 2026-09-05
+   #605 outcome. Trade-off accepted by Mason: a guard edit no longer interrupts him; the automatic
+   PR reviewers below are the check instead. **Exception, Mason's choice "A" after the exact-SHA
+   `gpt-6-sol` review returned HIGH** (an uncommitted local edit to a merge guard could skip the Sol
+   proof on a risky PR, and no PR review ever sees an uncommitted edit): the ten files that decide
+   what can reach production keep an `ask` prompt — `pr-merge-guard.mjs`, `codex-push-guard.mjs`,
+   `codex-push-lib.mjs`, `migration-apply-guard.mjs`, `migration-apply-lib.mjs`,
+   `review-proof-guard.mjs`, `.codex/hooks/production-action-guard.mjs`, `.codex/hooks.json`,
+   `scripts/write-codex-push-proof.mjs`, `scripts/write-apply-proofs.mjs` — **and every repository
+   module they load** (a second Sol pass found the destructive-SQL classifier in an unprotected
+   helper): `autopilot-lib`, `codex-bot-review-lib`, `live-testdata-lib`, `migration-ordering-lib`,
+   `migration-pending-lib`, `scripts/write-apply-proofs-lib.mjs`, and Codex's
+   `codex-hook-adapter.mjs`, through which every Codex hook runs. `scripts/check-agent-guidance.mjs`
+   re-traces that import closure on every `npm run test:agent-workflows` / CI run and fails if any
+   file in it lacks its prompt. Also `.husky/**` and the private-artifact containment check the git
+   hooks run (`scripts/check-supplier-pricing-phase3-private-artifacts.mjs` and its helper), added
+   after a third Sol pass: an artifact pushed to the public repository cannot be recalled, so a
+   local edit that weakens that check acts before any review. Plus `.github/workflows/**`, added
+   after a fifth Luna round: a workflow pushed on a branch runs with a
+   write `GITHUB_TOKEN` before any review. A prompt naming one of these is something Mason can judge
+   without reading code: "did I ask for safety-gate work?" **Deliberately NOT on the list:**
+   `package.json` and the other `scripts/check-*` / `validate-*` / `verify-*` (a sixth Luna round
+   asked for them). CI runs from the pushed commit, so weakening a check only takes effect once it is
+   committed — and then it is in the PR diff that CodeRabbit must approve and the Codex GitHub App
+   reviews. The line is drawn at edits that act before review, which only the listed files do.
+2. **CodeRabbit reviews every non-draft PR automatically**, on open and on every push
+   (`auto_review.enabled: true`, `auto_incremental_review: true`, never auto-pausing), with the
+   summary kept out of the PR body so a review no longer re-queues CI. **Supersedes** the 2026-08-28
+   "frozen release candidates only" decision and the 2026-08-30 label gate: `ready-for-coderabbit`
+   is retired and its workflow now only records ignored events. A fix is re-reviewed on the same PR —
+   no fresh delivery PR. If a head is rate limited or skipped, an agent posts `@coderabbitai review`
+   once; this resolves the open 2026-09-07 question about who may post the command in favor of
+   posting. The review-quality rules (assertive profile, path instructions, pre-merge checks) and
+   "a green status row is not a review" stand. The pre-merge check becomes "an undismissed `APPROVED` review from
+   `coderabbitai[bot]` whose `commit_id` is the exact head being merged", replacing the label
+   workflow's receipt / approval / head three-SHA match, which no longer has a receipt to compare
+   (Mason confirmed this replacement explicitly after the auto-mode classifier held the edit).
+3. **Every code change gets a Codex adversarial review**: at least one `gpt-6-luna` round on any
+   diff that changes code, configuration, or agent tooling; only docs-only diffs may skip it. The
+   exact-SHA `gpt-6-sol` pass stays reserved for the risky set and stays hard-enforced at push and
+   merge. With CodeRabbit and the Codex GitHub App both automatic, every PR now gets two outside
+   reviews that no agent can forget.
+4. **Codex hooks re-trusted.** Codex silently skips any repository hook whose definition changed
+   since it was trusted. On 2026-09-26, 17 of the 24 CRX Codex hooks were skipped — every Write/Edit
+   content guard, the three MCP guards, `production-action-guard`, `review-proof-guard`,
+   `hold-latch-guard` and both routers — while Codex ran with no approvals. They were re-trusted on
+   Mason's machine (the `/hooks` action, via the app-server `config/batchWrite` call) and a probe
+   confirmed the production gate denies force-pushes and `--admin` merges again. **After any
+   `.codex/hooks.json` change, re-check trust** (`codex app-server` → `hooks/list`).
+5. The tracked `.codex/config.toml` Supabase MCP entry, dead since 2026-08-10, is `enabled = false`.
+   The 2026-08-14 write-scope decision is unchanged; Codex's live traffic uses `codex_apps/supabase`.
+6. **GitHub requires CodeRabbit's approval of the latest push again** (Mason chose "A" after the
+   `gpt-6-luna` review raised a BLOCKER: with the guard-file prompts gone, an agent could edit
+   `pr-merge-guard.mjs` locally and then merge, and that guard only warns — never blocks — when
+   CodeRabbit has not reviewed the head). The `protect-main` ruleset's pull-request rule moves to
+   `required_approving_review_count: 1` and `dismiss_stale_reviews_on_push: true`, with no bypass
+   actors, so the requirement binds every account including Mason's token that agents use, and no
+   local edit can switch it off. **Supersedes** the 2026-09-02 removal of the required approval,
+   whose cause (the label route never produced reliable approvals) is gone now that CodeRabbit
+   reviews every push. The cost Mason accepted: if CodeRabbit is down, nothing merges until it
+   recovers or Mason sets the approval count to 0 by hand (steps in `OWNER_PLAYBOOK.md`). Mason
+   changes the ruleset himself in GitHub (agents never change branch protection) **before** this
+   change merges, so this change is itself the first to need CodeRabbit's approval; verify
+   read-only with `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218`. Who can supply the
+   approval, measured 2026-09-26: `masonwells1` is the only collaborator and authors every PR
+   (GitHub forbids approving your own PR), GitHub Actions cannot approve
+   (`can_approve_pull_request_reviews: false`), and every `APPROVED` review on the last 40 closed
+   PRs came from `coderabbitai[bot]`. Both agent merge gates also DENY unless `coderabbitai` has an
+   undismissed `APPROVED` review of the exact head (`coderabbitApprovedHead()` in
+   `codex-push-lib.mjs`, not exempt for `--auto`), so agents cannot merge an unreviewed PR even in a
+   window where Mason has set the server rule to 0, and no other approver stands in for CodeRabbit.
+   (The bare `coderabbitai` login `gh` reports is safe to accept: that name is an Organization
+   account, which cannot author a review. And under `request_changes_workflow` CodeRabbit approves
+   only once its own comments are resolved. CodeRabbit's LATEST verdict on the head decides — an
+   approval it later overturns with CHANGES_REQUESTED does not count; Sol, 2026-09-26. The
+   objection check likewise reads the review objects as well as `reviewDecision`: any reviewer
+   whose latest verdict is CHANGES_REQUESTED blocks the merge.)
+   **Residual accepted:** a native edit to an enforcement file
+   (a hook, a workflow, the proof writer) takes effect in the editing session before any review,
+   and the exact-SHA Sol proof is enforced only by local hooks; GitHub's required approval is what
+   stops an unreviewed or self-weakened change from reaching `main`. Nothing local stops a Claude
+   agent from changing the ruleset through `gh api` with Mason's token except the auto-mode
+   classifier (Codex's `production-action-guard` denies unrecognized mutating `gh api` calls). A
+   seventh Luna round rated that route a BLOCKER against moving `gh pr merge` to `allow`; it was
+   answered, not fixed: a dynamically assembled `gh api` call never matched the old
+   `Bash(gh pr merge:*)` prompt either, and in auto mode it is not covered by any narrow allow rule,
+   so the classifier still reviews it. **The root cause is that agents run `gh` with Mason's admin
+   login.** The real fix — giving agents a GitHub token that cannot change rulesets or merge with
+   `--admin` — is the top follow-up, and it is Mason's to authorize (it changes credentials).
+
 ## 2026-09-25 — GPT-6 guidance: one priority order, Astra reviews plans, model IDs live in one reference
 
 **Source:** Mason's answers in the 2026-09-25 guidance-review session (PR #797): he approved the

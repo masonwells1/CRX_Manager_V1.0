@@ -12,6 +12,8 @@ import {
   ghMergeRequest,
   mcpMergeRequest,
   proofSearchDirs,
+  coderabbitApprovalDenial,
+  coderabbitApprovedHead,
   pullRequestApproved,
   pullRequestChecksGreen,
   pullRequestReviewBlocked,
@@ -168,6 +170,84 @@ ok(!pullRequestReviewBlocked({ reviewDecision: "REVIEW_REQUIRED" }), "REVIEW_REQ
 ok(!pullRequestReviewBlocked({ reviewDecision: null }), "null (no review required) does not block");
 ok(!pullRequestReviewBlocked({}), "missing field does not block — gateRequest already denied an unfetchable PR");
 ok(!pullRequestReviewBlocked(undefined), "undefined PR does not block here");
+// 2026-09-26 (Luna): the objection is also read from the review objects, so it
+// does not hinge on reviewDecision (which a rule change can leave empty).
+{
+  const r = (login, state, submittedAt) => ({ author: { login }, state, submittedAt, commit: { oid: "a".repeat(40) } });
+  ok(pullRequestReviewBlocked({ reviewDecision: "", reviews: [r("someone", "CHANGES_REQUESTED", "2026-09-26T10:00:00Z")] }), "a reviewer's standing CHANGES_REQUESTED blocks even with an empty reviewDecision");
+  ok(pullRequestReviewBlocked({ reviews: [
+    r("coderabbitai", "APPROVED", "2026-09-26T10:00:00Z"),
+    r("someone", "CHANGES_REQUESTED", "2026-09-26T10:05:00Z"),
+  ] }), "CodeRabbit's approval does not cancel ANOTHER reviewer's objection");
+  ok(!pullRequestReviewBlocked({ reviews: [
+    r("coderabbitai", "CHANGES_REQUESTED", "2026-09-26T10:00:00Z"),
+    r("coderabbitai", "APPROVED", "2026-09-26T10:05:00Z"),
+  ] }), "the same reviewer's later approval clears its own objection");
+  ok(!pullRequestReviewBlocked({ reviews: [r("someone", "DISMISSED", "2026-09-26T10:00:00Z")] }), "a dismissed objection does not block");
+  ok(pullRequestReviewBlocked({ reviews: [
+    r("someone", "CHANGES_REQUESTED", "2026-09-26T10:00:00Z"),
+    r("someone", "COMMENTED", "2026-09-26T10:05:00Z"),
+  ] }), "a later COMMENTED carries no verdict, so the objection still stands");
+  const anon = (state, submittedAt) => ({ author: null, state, submittedAt });
+  ok(pullRequestReviewBlocked({ reviews: [
+    anon("CHANGES_REQUESTED", "2026-09-26T10:00:00Z"),
+    anon("APPROVED", "2026-09-26T10:05:00Z"),
+  ] }), "two login-less reviewers are separate: one's approval does not erase the other's objection");
+  // Mixed valid/invalid timestamps fall back to list order for ALL of them.
+  ok(!coderabbitApprovedHead({ headRefOid: "a".repeat(40), reviews: [
+    r("coderabbitai", "APPROVED", "2026-09-26T10:00:00Z"),
+    r("coderabbitai", "CHANGES_REQUESTED", "not-a-date"),
+    r("coderabbitai", "APPROVED", "2026-09-26T09:00:00Z"),
+    r("coderabbitai", "CHANGES_REQUESTED", "2026-09-26T11:00:00Z"),
+  ] }), "with any invalid timestamp, list order decides (last is CHANGES_REQUESTED)");
+  ok(coderabbitApprovedHead({ headRefOid: "a".repeat(40), reviews: [
+    r("coderabbitai", "CHANGES_REQUESTED", "2026-09-26T10:00:00Z"),
+    r("coderabbitai", "APPROVED", "not-a-date"),
+  ] }), "with any invalid timestamp, list order decides (last is APPROVED)");
+}
+
+// ── coderabbitApprovedHead (Mason, 2026-09-26) ───────────────────────────────
+// Both merge gates deny unless coderabbitai APPROVED the exact head, read from
+// the review objects. Every near-miss must fail; the spelling variants must not.
+{
+  const head = "0123456789abcdef0123456789abcdef01234567";
+  const review = (login, state, oid) => ({ author: { login }, state, commit: { oid } });
+  ok(coderabbitApprovedHead({ headRefOid: head, reviews: [review("coderabbitai", "APPROVED", head)] }), "CodeRabbit approval at the head passes");
+  ok(coderabbitApprovedHead({ headRefOid: head, reviews: [review("coderabbitai[bot]", "approved", head.toUpperCase())] }), "[bot] login, lower-case state and upper-case oid are the same approval");
+  ok(coderabbitApprovedHead({ headRefOid: head, reviews: [review("coderabbitai", "COMMENTED", head), review("coderabbitai", "APPROVED", head)] }), "an approval among other reviews passes");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [review("coderabbitai", "APPROVED", "f".repeat(40))] }), "an approval of an older head fails");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [review("coderabbitai", "DISMISSED", head)] }), "a dismissed approval fails");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [review("coderabbitai", "COMMENTED", head)] }), "a COMMENTED review fails");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [review("someone-else", "APPROVED", head)] }), "an approval from anyone but CodeRabbit fails");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [] }), "no reviews fails");
+  ok(!coderabbitApprovedHead({ headRefOid: head }), "a missing review list fails closed");
+  ok(!coderabbitApprovedHead({ headRefOid: "main", reviews: [review("coderabbitai", "APPROVED", "main")] }), "a non-SHA head fails closed");
+  ok(!coderabbitApprovedHead(undefined), "undefined PR fails closed");
+  // The LATEST CodeRabbit verdict decides (Sol, 2026-09-26).
+  const at = (r, submittedAt) => ({ ...r, submittedAt });
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [
+    at(review("coderabbitai", "APPROVED", head), "2026-09-26T10:00:00Z"),
+    at(review("coderabbitai", "CHANGES_REQUESTED", head), "2026-09-26T10:05:00Z"),
+  ] }), "an approval later overturned by CHANGES_REQUESTED on the same head fails");
+  ok(coderabbitApprovedHead({ headRefOid: head, reviews: [
+    at(review("coderabbitai", "CHANGES_REQUESTED", head), "2026-09-26T10:00:00Z"),
+    at(review("coderabbitai", "APPROVED", head), "2026-09-26T10:05:00Z"),
+    at(review("coderabbitai", "COMMENTED", head), "2026-09-26T10:06:00Z"),
+  ] }), "a later approval clears an earlier objection, and a trailing COMMENTED carries no verdict");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [
+    at(review("coderabbitai", "CHANGES_REQUESTED", head), "2026-09-26T10:05:00Z"),
+    at(review("coderabbitai", "APPROVED", head), "2026-09-26T10:00:00Z"),
+  ] }), "order is by submittedAt, not list position");
+  ok(!coderabbitApprovedHead({ headRefOid: head, reviews: [
+    review("coderabbitai", "APPROVED", head),
+    review("coderabbitai", "CHANGES_REQUESTED", head),
+  ] }), "without timestamps, list order (oldest first) decides");
+  ok(coderabbitApprovedHead({ headRefOid: head, reviews: [
+    at(review("coderabbitai", "APPROVED", head), "2026-09-26T10:00:00Z"),
+    at(review("someone-else", "CHANGES_REQUESTED", head), "2026-09-26T10:05:00Z"),
+  ] }), "another reviewer's verdict does not overturn CodeRabbit's (reviewDecision still catches CHANGES_REQUESTED)");
+  ok(/PR MERGE GATE: CodeRabbit has not approved the exact head being merged \(0123456789ab\)/.test(coderabbitApprovalDenial("PR MERGE GATE", head)), "denial names the gate and the short head");
+}
 
 // ── ghApiMergeRequest ────────────────────────────────────────────────────────
 eq(ghApiMergeRequest("gh api -X PUT repos/o/r/pulls/12/merge"), { selector: "12", repo: "o/r", auto: false }, "REST merge endpoint parses");

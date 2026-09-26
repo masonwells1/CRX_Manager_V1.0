@@ -1365,6 +1365,9 @@ try {
     { __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "build" },
     { __typename: "StatusContext", state: "SUCCESS", context: "Vercel" },
   ];
+  // Since 2026-09-26 both merge gates require coderabbitai's APPROVED review of
+  // the exact head, read from the review objects.
+  const coderabbitApprovalAt = (oid) => [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid } }];
   const mainPr = {
     baseRefName: "main",
     // GitHub's CURRENT base tip. Here it equals local origin/main, the ordinary case.
@@ -1372,6 +1375,7 @@ try {
     headRefName: "feature/test",
     headRefOid: risky.sha,
     reviewDecision: "APPROVED",
+    reviews: coderabbitApprovalAt(risky.sha),
     mergeStateStatus: "CLEAN",
     statusCheckRollup: greenChecks,
   };
@@ -1568,10 +1572,11 @@ try {
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "--admin=false asks for no bypass and stands down");
-  // Mason removed main's required approval on 2026-09-02, so a MISSING approval
-  // is no longer a merge blocker. This PR is still risky, so it stays blocked on
-  // the Codex proof — the assertion is therefore that it is not blocked ON REVIEW
-  // GROUNDS, which is the part that changed.
+  // `reviewDecision` itself is not a merge predicate: since 2026-09-26 the gate
+  // reads coderabbitai's APPROVED review object at the exact head instead (this
+  // fixture carries one), so a REVIEW_REQUIRED summary alone does not deny. This
+  // PR is still risky, so it stays blocked on the Codex proof — the assertion is
+  // that it is not blocked on the summary field.
   const unapproved = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh pr merge 123 --squash" },
@@ -2011,6 +2016,40 @@ try {
   });
   assert.equal(controlAttempts > 0, true, "CONTROL: the advisory IS reached once every hard gate has passed");
   assert.equal(controlVerdict.blocked, false, "a failed advisory lookup fails OPEN — it prints a notice and allows");
+
+  // ── CodeRabbit must have approved the exact head (Mason, 2026-09-26) ──────
+  // Same clean, green, proof-backed PR as the CONTROL above, which is allowed;
+  // only the review objects vary, so each denial below is the CodeRabbit gate.
+  const mergeWithReviews = (reviews, command = "gh pr merge 123 --squash") => evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: (args) => {
+      if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable");
+      if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+      return JSON.stringify({ ...mainPr, reviews });
+    },
+  });
+  const coderabbitCases = [
+    [undefined, "no review list at all fails closed"],
+    [[], "no reviews"],
+    [coderabbitApprovalAt("a".repeat(40)), "an approval of an OLDER head"],
+    [[{ author: { login: "coderabbitai" }, state: "DISMISSED", commit: { oid: risky.sha } }], "a DISMISSED approval"],
+    [[{ author: { login: "coderabbitai" }, state: "COMMENTED", commit: { oid: risky.sha } }], "a COMMENTED review"],
+    [[{ author: { login: "someone-else" }, state: "APPROVED", commit: { oid: risky.sha } }], "an approval from anyone but CodeRabbit"],
+  ];
+  for (const [reviews, label] of coderabbitCases) {
+    const verdict = mergeWithReviews(reviews);
+    assert.equal(verdict.blocked, true, `CodeRabbit gate denies: ${label}`);
+    assert.match(String(verdict.reason), /CodeRabbit has not approved the exact head/, `…with the CodeRabbit denial: ${label}`);
+  }
+  assert.equal(mergeWithReviews([], "gh pr merge 123 --squash --auto").blocked, true, "--auto does NOT exempt a missing CodeRabbit approval");
+  assert.equal(
+    mergeWithReviews([{ author: { login: "coderabbitai[bot]" }, state: "approved", commit: { oid: risky.sha.toUpperCase() } }]).blocked,
+    false,
+    "CONTROL: the [bot] login spelling, a lower-case state and an upper-case oid are the same approval",
+  );
 
   // ── round 8 (SEC-001): a CHAINED merge must not run #1's advisory before ──
   // ── #2's hard checks ─────────────────────────────────────────────────────
@@ -2760,6 +2799,7 @@ try {
         headRefName: "feature/test",
         headRefOid: updatedHead,
         reviewDecision: "APPROVED",
+        reviews: coderabbitApprovalAt(updatedHead),
         mergeStateStatus: "CLEAN",
         statusCheckRollup: greenChecks,
       }),

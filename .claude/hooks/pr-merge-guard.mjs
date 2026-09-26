@@ -41,7 +41,8 @@ import {
   mergeRequestKey,
   proofSearchDirs,
   proofValid,
-  pullRequestApproved,
+  coderabbitApprovalDenial,
+  coderabbitApprovedHead,
   pullRequestChecksGreen,
   pullRequestReviewBlocked,
   riskyFiles,
@@ -184,12 +185,11 @@ if (requests.some((request) => request?.admin)) {
   deny(
     "PR MERGE GATE: `--admin` merges with administrator privileges, overriding branch protection. " +
     "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
-    "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
-    "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
-    "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
-    "`ready-for-coderabbit` label and let the default-branch workflow dispatch the native review once, " +
-    "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
-    "gate. If the merge is still blocked, hand the PR to Mason and say why."
+    "the diff or the deadline. Use the ordinary merge instead: a green, up-to-date candidate that " +
+    "CodeRabbit has approved at its latest push, with no `CHANGES_REQUESTED` verdict, merges " +
+    "without `--admin`. If a review did ask for changes, resolve it first — fix what it found and push; " +
+    "CodeRabbit re-reviews every push automatically. If the merge is still blocked, hand the PR to " +
+    "Mason and say why."
   );
 }
 
@@ -355,7 +355,7 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(hardGateGh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
@@ -398,18 +398,13 @@ function gateRequest(request) {
   // slow GitHub kill this hook before they ran, which does not deny. See
   // codexAdvisory() above.
 
-  // An unreviewed PR may now land, but say so out loud — the standing policy is
-  // still that CodeRabbit reviews the frozen candidate and its real findings get
-  // fixed. This is a notice, not a gate: write to stderr, then keep going.
-  if (!request.auto && !pullRequestApproved(pr)) {
-    process.stderr.write(
-      `PR MERGE NOTICE: reviewDecision=${String(pr.reviewDecision || "").toUpperCase() || "<none>"} — merging ` +
-      "without a current approval, which main no longer requires (Mason, 2026-09-02). If CodeRabbit has " +
-      "not reviewed this candidate, apply the `ready-for-coderabbit` label — the default-branch " +
-      "workflow revalidates this exact head and dispatches the native review once. Do not post " +
-      "`@coderabbitai review` by hand; that routes around the label gate. Read the review and fix " +
-      "what it finds first.\n"
-    );
+  // ── CodeRabbit must have approved the exact head (Mason, 2026-09-26) ──────
+  // Until today this was a stderr notice. It is a hard deny again, and it is
+  // NOT exempt for --auto: see coderabbitApprovedHead() for why the review
+  // objects are read instead of reviewDecision, and why a queued auto-merge
+  // cannot lean on the server rule.
+  if (!coderabbitApprovedHead(pr)) {
+    deny(coderabbitApprovalDenial("PR MERGE GATE", pr.headRefOid));
   }
 
   // ── green-pipeline requirement ─────────────────────────────────────────────

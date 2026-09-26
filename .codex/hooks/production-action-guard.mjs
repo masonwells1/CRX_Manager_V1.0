@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  coderabbitApprovalDenial,
+  coderabbitApprovedHead,
   contentIsRisky,
   createHardGateBudget,
   extractPatchDestinations,
@@ -1116,7 +1118,7 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
   // will actually land on. Without it the gate falls back to local origin/main,
   // which can be stale (Codex P1, 2026-07-25).
-  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest");
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup,autoMergeRequest");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   // baseRefOid is required only for main-bound merges; gatePullRequestMerge
@@ -1196,9 +1198,9 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (pullRequestReviewBlocked(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: GitHub reports reviewDecision=CHANGES_REQUESTED — a reviewer has open " +
-      "objections on this pull request. Mason removed main's required-approval rule on 2026-09-02, which " +
-      "did not authorize merging over a review that asked for changes. Fix every real finding and push it; " +
-      "a genuine nitpick may be dismissed with a one-line reason in the thread. Merge only after that."
+      "objections on this pull request. Never merge over a review that asked for changes. Fix every real " +
+      "finding and push it; a genuine nitpick may be dismissed with a one-line reason in the thread. Merge " +
+      "only after that."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
@@ -1215,6 +1217,14 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     runGit,
   });
   if (mainVerdict.blocked) return mainVerdict;
+
+  // CodeRabbit must have approved the exact head (Mason, 2026-09-26) — mirror of
+  // pr-merge-guard.mjs. Last of the hard denials so the base/proof gates above
+  // keep reporting their own, more specific reasons first. Not exempt for
+  // --auto; see coderabbitApprovedHead() in codex-push-lib.mjs.
+  if (!coderabbitApprovedHead(pullRequest)) {
+    return denied(coderabbitApprovalDenial("CODEX PRODUCTION GATE", pullRequest.headRefOid));
+  }
 
   // ALLOW point for THIS merge. Every hard denial above — objection, green
   // pipeline, risky-diff classification and the exact-SHA proof — has had its

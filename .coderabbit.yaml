@@ -24,15 +24,12 @@ reviews:
   # switch that gives the `mode: error` checks below any force at all: per
   # CodeRabbit's docs, an error-mode check only holds a PR when this is enabled.
   #
-  # Mason approved the hard final-review gate on 2026-08-28. GitHub now requires
-  # one approval, dismisses stale approvals after a new commit, requires approval
-  # from someone other than the last pusher, and requires the branch to be up to
-  # date. Since 2026-09-01 those rules are NO LONGER enforced for administrators:
-  # Mason has a manual override for a stuck review (see DECISION_LOG). CodeRabbit
-  # remains the normal merge-unlock path, and agents are barred from the override
-  # by the merge guards, but this file should not claim admins are bound.
-  # CodeRabbit's formal approval is therefore the normal merge-unlock path; the
-  # existing required build/deployment contexts remain separate and unchanged.
+  # Since 2026-09-26 (Mason's decision) the `protect-main` ruleset requires one
+  # approving review of the latest push, dismisses stale approvals on push, and
+  # has no bypass actors. With automatic review on every push, CodeRabbit's
+  # formal approval is how a PR becomes mergeable, and GitHub - not a local
+  # hook - enforces it. The required build/deployment contexts remain separate.
+  # If CodeRabbit is down or stuck, only Mason changes the ruleset.
   request_changes_workflow: true
   high_level_summary: true
   poem: false
@@ -78,20 +75,26 @@ reviews:
   # reviewed today. The exclusion work, and the repository-walking test that
   # enforces this rule, are parked in PR #441.
 
+  # Automatic review of every PR, on open and on every push. Mason's call,
+  # 2026-09-26, reversing the 2026-08-28 "frozen candidates only" rationing:
+  # the review allowance is no longer the constraint, and the label-dispatch
+  # route that rationing needed jammed repeatedly and left PRs for Mason to
+  # merge by hand. Every PR now gets an outside review no agent can forget.
+  # Drafts stay unreviewed, so opening a draft is how work-in-progress opts out.
+  # See DECISION_LOG 2026-09-26.
   auto_review:
-    # Do not spend a review on PR creation or work-in-progress pushes. Once the
-    # candidate is frozen, checks are green, and the separate Codex review is
-    # clean, apply `ready-for-coderabbit`. The trusted GitHub workflow validates
-    # that exact head, then adds the separate provider label below. Keeping the
-    # intent and provider labels separate prevents a review before validation.
-    enabled: false
-    auto_incremental_review: false
-    labels:
-      - coderabbit-review-dispatch
+    enabled: true
+    auto_incremental_review: true
+    # 0 = never pause. The default (5) silently stops reviewing a PR after five
+    # reviewed pushes, which is exactly when a long fix loop most needs one.
+    auto_pause_after_reviewed_commits: 0
     drafts: false
-    # Normal dispatch uses the trusted workflow. GitHub label managers can also
-    # attach this label; its presence alone never proves authorization.
     description_keyword: ""
+
+  # Put the summary in CodeRabbit's walkthrough comment, not the PR body. A
+  # body edit fires ci.yml's `edited` trigger and re-queues the required checks
+  # after every review, which made green PRs briefly unmergeable.
+  high_level_summary_in_walkthrough: true
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in
   # AGENTS.md so CodeRabbit flags the exact mistakes that have bitten this

@@ -332,6 +332,59 @@ for (const permission of mustAsk) {
   record(ask.has(permission), `${permission} requires approval`);
 }
 
+// Mason's choice "A" (2026-09-26, DECISION_LOG): the files that decide what can
+// reach production keep an `ask` prompt, because an uncommitted local edit to one
+// of them acts before any PR review can see it. That must include every
+// repository module those gate files LOAD (Sol, 2026-09-26: the migration gate's
+// destructive-SQL classifier lived in an unprotected helper). Trace the closure
+// from the gate roots and require Edit + Write ask rules for every file in it, so
+// a new helper import cannot silently arrive without its prompt.
+const PRODUCTION_GATE_ROOTS = [
+  ".claude/hooks/pr-merge-guard.mjs",
+  ".claude/hooks/codex-push-guard.mjs",
+  ".claude/hooks/codex-push-lib.mjs",
+  ".claude/hooks/migration-apply-guard.mjs",
+  ".claude/hooks/migration-apply-lib.mjs",
+  ".claude/hooks/review-proof-guard.mjs",
+  ".codex/hooks/production-action-guard.mjs",
+  ".codex/hooks/codex-hook-adapter.mjs",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/write-apply-proofs.mjs",
+  // The private-artifact containment check every local git hook runs (Sol,
+  // 2026-09-26): an artifact pushed to the public repository cannot be recalled,
+  // so a local edit that weakens it acts before any review could catch it.
+  "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+];
+// Static imports, re-exports, literal dynamic imports, and literal relative
+// script paths (child scripts a gate launches).
+const GATE_IMPORT_RE = /(?:import\s[^'"]*?from\s*|export\s[^'"]*?from\s*|import\s*\(\s*|import\s*)["'](\.{1,2}\/[^"']+)["']/g;
+const GATE_SCRIPT_PATH_RE = /["'](\.{1,2}\/[^"']+\.(?:mjs|cjs|js))["']/g;
+const gateClosure = new Set();
+const gateQueue = [...PRODUCTION_GATE_ROOTS];
+while (gateQueue.length) {
+  const relative = gateQueue.shift();
+  if (gateClosure.has(relative)) continue;
+  gateClosure.add(relative);
+  const text = readChecked(relative);
+  for (const pattern of [GATE_IMPORT_RE, GATE_SCRIPT_PATH_RE]) {
+    for (const match of text.matchAll(pattern)) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), match[1]));
+      if (!target.startsWith("..") && /\.(mjs|cjs|js)$/.test(target)) gateQueue.push(target);
+    }
+  }
+}
+const unpromptedGateFiles = [...gateClosure]
+  .filter((relative) => !ask.has(`Edit(${relative})`) || !ask.has(`Write(${relative})`))
+  .sort();
+record(
+  unpromptedGateFiles.length === 0,
+  `every production-gate file and module it loads keeps an Edit/Write ask prompt (${gateClosure.size} files)`,
+  unpromptedGateFiles.join(", "),
+);
+record(ask.has("Edit(.github/workflows/**)") && ask.has("Write(.github/workflows/**)"), "branch-run CI workflows keep an Edit/Write ask prompt");
+record(ask.has("Edit(.codex/hooks.json)") && ask.has("Write(.codex/hooks.json)"), "the Codex hook manifest keeps an Edit/Write ask prompt");
+record(ask.has("Edit(.husky/**)") && ask.has("Write(.husky/**)"), "local git hooks (which run the private-artifact containment check) keep an Edit/Write ask prompt");
+
 const allHooks = Object.values(codexHooks.hooks || {})
   .flatMap((entries) => entries)
   .flatMap((entry) => entry.hooks || [])

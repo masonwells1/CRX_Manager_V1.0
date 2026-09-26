@@ -527,35 +527,27 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
-freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge with
+resolve CodeRabbit's automatic review → merge with
 `--match-head-commit <reviewed-head-sha>`**. Direct pushes to
 `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (standing policy, automation updated 2026-08-30):** automatic reviews are disabled.
-Finish the Codex review first, bring the branch current and green, freeze the release-candidate
-commit, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch workflow
-rechecks the exact head and PR/check state, records `coderabbit-review-requested`, then adds
-`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in. It waits up to six minutes
-for an authenticated formal review of that exact commit. A skipped status or empty reply artifact
-does not count. A timeout or uncertain dispatch fails while preserving dedupe labels; never clear
-them blindly to retry. After observing the actual review, re-apply `ready-for-coderabbit` to
-reconcile without another request. See `docs/reference/coderabbit-native-review.md` for setup and
-recovery. Read the review and fix any real issue before merging; nitpicks may be
-dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
-labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
-Codex-worthy, a newly frozen and recorded SHA, and a fresh delivery PR before the
-ready-label trigger. Normal delivery verifies the original opened head/base for
-the entire PR lifetime; close the previous PR with a `Replaced by #N` comment (closing keeps its
-branch, comments and findings; never leave it open "as the record"). The provider skipped
-same-PR incremental review with this configuration. Never use
+**CodeRabbit (standing policy, automation updated 2026-09-26):** CodeRabbit reviews every non-draft
+PR automatically, when it opens and again on every push; no label or command is needed. The
+`ready-for-coderabbit` label route is retired — do not apply it. Read the review and fix any real
+issue before merging; nitpicks may be dismissed with a one-line reason. A fix or base update that
+changes the commit is re-reviewed on the same PR, and requires restarted checks and a refreshed
+exact-HEAD Codex proof when the corrected diff is risky. A skipped status or empty reply artifact
+does not count as a review; if the head was rate limited or skipped, post `@coderabbitai review`
+once and wait. Never use
 `@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
-complete reread. An approving GitHub review is **NOT** required to merge: Mason removed
-`required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A
+complete reread. GitHub requires one approving review of the latest push to merge (since
+2026-09-26, `protect-main` ruleset; CodeRabbit's automatic approval meets it). A
 `CHANGES_REQUESTED` verdict still blocks, and both agent merge gates refuse to merge over one.
 Immediately before merge, verify live `main` protection still requires the branch current and
-every required check green, and confirm CodeRabbit actually reviewed the frozen candidate — a
-green status row is not review proof. When CodeRabbit HAS approved, its `commit_id` must equal
-the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
+every required check green, and confirm CodeRabbit actually reviewed the head being merged — a
+green status row is not review proof. It must be an `APPROVED` review from `coderabbitai[bot]`
+whose `commit_id` equals the PR's final `headRefOid` and that has not been dismissed; a `COMMENTED`
+review is not enough. The Codex proof below remains an additional hard gate
 for risky money/RLS/migration diffs. Both run — neither replaces the other.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /

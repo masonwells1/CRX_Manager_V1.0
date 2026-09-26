@@ -1,5 +1,11 @@
 # CodeRabbit native review requests
 
+> **Retired 2026-09-26.** CodeRabbit now reviews every non-draft PR automatically, on open and on
+> every push (`.coderabbit.yaml` › `auto_review`; `docs/manual/DECISION_LOG.md`, 2026-09-26). Do not
+> apply `ready-for-coderabbit`. The workflow described below stays installed but only records
+> ignored events when no label is applied. This page is kept as history and for any PR that still
+> carries the old labels.
+
 The operator applies `ready-for-coderabbit` after the candidate is frozen,
 current, green and independently reviewed. Complete and freeze the candidate
 before opening its delivery PR. The privileged `pull_request_target`
