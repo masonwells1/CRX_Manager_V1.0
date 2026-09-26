@@ -343,10 +343,14 @@ export const RpcErrorCodes = {
   // lost response plus any edited field manufactures a duplicate service.
   IDEMPOTENCY_CROSS_OP_KEY_REUSE: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE',
   // Raised by every intent-bound mutating RPC: a missing or unusable key, a key
-  // held by another actor, and a key reused for a different request. Pages
-  // normally classify these through src/lib/idempotency.ts
-  // (isDefinitiveRpcRejection / getIdempotencyBindingRejection) rather than by
-  // token, so these constants exist for the cases that need the name.
+  // held by another actor, and a key reused for a different request. Most RPCs
+  // raise these BARE, and pages classify them through src/lib/idempotency.ts
+  // (isDefinitiveRpcRejection / getIdempotencyBindingRejection), which match the
+  // token by EXACT equality. soft_delete_customer_document is the exception: it
+  // raises IDEMPOTENCY_INTENT_MISMATCH and IDEMPOTENCY_RESULT_INVALID with a
+  // human suffix ("TOKEN: text"), which those exact-match helpers do NOT
+  // recognise. Its callers must classify with hasRpcCode / rpcCodeDetail below,
+  // which accept the suffixed form.
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
   IDEMPOTENCY_ACTOR_MISMATCH: 'IDEMPOTENCY_ACTOR_MISMATCH',
   IDEMPOTENCY_INTENT_MISMATCH: 'IDEMPOTENCY_INTENT_MISMATCH',

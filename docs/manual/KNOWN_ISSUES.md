@@ -101,9 +101,11 @@ customer-document rows when this was found, so nobody has hit it. The fix is the
 migration-history row 936), which applies only after `20260914100700`, `20260914100800` and
 `20260914100900`, and with Mason's approval. The page change that calls it merges only after that
 apply. The `gpt-5.6-sol` gate returned CLEAN on two earlier heads of the candidate (`1789c72b3`,
-`8069cd45a`); those proofs are void because the signature changed after them, so the gate has not
-run on the current head: the Codex CLI hit its usage limit and
-reports a retry date of 2026-09-26. An independent Claude Opus round, `rls-security-reviewer` and
+`8069cd45a`); those proofs are void because the signature changed after them. Its 2026-09-26 run
+on `f351c4a20` returned BLOCKERS that were both stale-base artifacts (that head predated #794 and
+#796 on `main`, so their hook and GPT-6 routing files read as reversions; the branch touches
+neither, and the RPC itself drew no blocker). The branch has since merged `main`, and the gate
+(`gpt-6-sol` since #796) must pass on the final head. An independent Claude Opus round, `rls-security-reviewer` and
 `migration-drift-reviewer` all came back with no BLOCKER and no HIGH, which is supporting evidence,
 not that gate.
 

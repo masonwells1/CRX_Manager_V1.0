@@ -191,8 +191,9 @@ function assertFixturePathsSurviveParkedShapeCheck(parkedSql, label) {
   const samples = Object.entries(DOC).map(([fixtureLabel, id]) =>
     docStoragePath(fixtureLabel === 'other' ? CUSTOMER_OTHER : CUSTOMER_MINE, id, `${fixtureLabel}.pdf`));
   samples.push(docStoragePath(CUSTOMER_OTHER, MUTANT_DOC, 'mutant.pdf'));
-  // The chain's own shape, standing in for the uuids it generates at run time.
-  samples.push(docStoragePath(CUSTOMER_MINE, MISSING_DOC, 'SMOKE-mine.pdf'));
+  // The chain's own paths, rebuilt from the literals it really inserts.
+  const chainSql = readFileSync(SMOKE_CHAIN, 'utf8');
+  samples.push(...chainStoragePaths(chainSql));
   for (const p of samples) {
     assert.ok(shape.test(p), `fixture storage_path "${p}" violates ${label}'s path-shape constraint`);
   }
@@ -222,15 +223,44 @@ function assertFixturePathsSurviveParkedShapeCheck(parkedSql, label) {
       `PostgreSQL and this JavaScript check disagree about "${path}" under ${label}'s regex: PostgreSQL says ${pgVerdicts[i]}, JS says ${expected}. The JS guard is not evidence about the database constraint.`,
     );
   });
-  // The chain builds its paths in SQL, so hold its COMPOSITION here: customer,
-  // '/', the document uuid, '-', then the safe name.
-  const chainSql = readFileSync(SMOKE_CHAIN, 'utf8');
-  for (const composed of [/v_customer \|\| '\/' \|\| v_doc \|\| '-/, /v_other_customer \|\| '\/' \|\| v_other_doc \|\| '-/]) {
-    assert.ok(
-      composed.test(chainSql),
-      `${path.basename(SMOKE_CHAIN)} no longer composes storage_path as <customer>/<document uuid>-<safe name>, so it will violate ${label}`,
-    );
-  }
+  // The extractor must be able to CATCH the regression it exists for: put the
+  // [SMOKE] marker back into the chain's first path and it must fail the shape.
+  const mutatedChain = chainSql.replace(/(\|\|\s*')-/, '$1-[SMOKE]');
+  assert.notEqual(mutatedChain, chainSql, 'could not build the [SMOKE]-in-path mutation of the chain');
+  assert.ok(
+    chainStoragePaths(mutatedChain).some((p) => !shape.test(p)),
+    `a [SMOKE] marker restored into ${path.basename(SMOKE_CHAIN)}'s storage_path would still pass ${label}'s shape check here`,
+  );
+}
+/**
+ * The storage paths the registered chain inserts, rebuilt from the chain's own
+ * SQL: each `<customer var> || '/' || <document var> || '<literal>'`, with fixed
+ * uuids standing in for the ones it generates at run time.
+ *
+ * Reading the literal itself - never a copy of today's safe name - is the
+ * point. A hard-coded sample stays green if someone restores the [SMOKE] marker
+ * into the path, right up until 20260914100700 applies and its CHECK rejects
+ * the chain (adversarial review MED-3, 2026-09-24).
+ */
+function chainStoragePaths(chainSql) {
+  const inserts = chainSql.match(/INSERT\s+INTO\s+public\.customer_documents\b[^;]*;/gi) ?? [];
+  assert.equal(inserts.length, 1, `${path.basename(SMOKE_CHAIN)} must insert its document rows in exactly one statement; this extractor reads that one`);
+  const rows = inserts[0].match(/^\s*\(v_\w+,/gm) ?? [];
+  const composed = [...inserts[0].matchAll(/\b(v_\w+)\s*\|\|\s*'\/'\s*\|\|\s*(v_\w+)\s*\|\|\s*'((?:[^']|'')*)'/g)];
+  assert.equal(
+    composed.length, rows.length,
+    `${path.basename(SMOKE_CHAIN)} inserts ${rows.length} document row(s) but only ${composed.length} storage_path value(s) are composed as <customer> || '/' || <document> || '<name>'; a path built any other way escapes the shape check`,
+  );
+  assert.deepEqual(
+    composed.map((m) => `${m[1]}/${m[2]}`).sort(),
+    ['v_customer/v_doc', 'v_other_customer/v_other_doc'],
+    `${path.basename(SMOKE_CHAIN)} no longer composes storage_path from its customer and document variables`,
+  );
+  return composed.map((m) => {
+    const suffix = m[3].replaceAll("''", "'");
+    assert.ok(suffix.startsWith('-'), `${path.basename(SMOKE_CHAIN)} storage_path suffix "${suffix}" must start with '-' after the document uuid`);
+    return docStoragePath(m[1] === 'v_other_customer' ? CUSTOMER_OTHER : CUSTOMER_MINE, MISSING_DOC, suffix.slice(1));
+  });
 }
 function selfTestSkipSoundness() {
   const mustTrip = [
@@ -259,8 +289,92 @@ function selfTestSkipSoundness() {
     assert.ok(!touchesCustomerDocumentSurface(sql), `skip-soundness check is too broad: ${sql}`);
   }
 }
+/**
+ * The OTHER table this function writes: its receipt is a direct INSERT into
+ * public.idempotency_keys. A skipped parked file that changes THAT table's
+ * triggers, policies, row security, ownership or grants, or redefines the
+ * shared intent helper, can change the receipt INSERT as surely as a
+ * customer_documents change can change the UPDATE. The customer_documents
+ * check alone missed 20260914100800's BEFORE INSERT trigger there
+ * (adversarial review MED-2, 2026-09-24).
+ *
+ * Returns every such change. The caller fails closed on anything it cannot
+ * account for; a trigger is accounted for only by installing it here and
+ * running the proof through it.
+ */
+const RECEIPT_TABLE = String.raw`(?:"?public"?\s*\.\s*)?"?idempotency_keys"?`;
+function receiptSurfaceChanges(sql) {
+  const kinds = [
+    ['trigger', String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+"?(\w+)"?[^;]*?\bON\s+${RECEIPT_TABLE}[^;]*;`],
+    ['drop-trigger', String.raw`DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?"?(\w+)"?\s+ON\s+${RECEIPT_TABLE}[^;]*;`],
+    ['policy', String.raw`(?:CREATE|ALTER|DROP)\s+POLICY[^;]*\bON\s+${RECEIPT_TABLE}[^;]*;`],
+    ['acl', String.raw`(?:GRANT|REVOKE)\b[^;]*\bON\s+(?:TABLE\s+)?${RECEIPT_TABLE}[^;]*;`],
+    ['table', String.raw`ALTER\s+TABLE[^;]*\b${RECEIPT_TABLE}[^;]*;`],
+    ['helper', String.raw`FUNCTION\s+(?:"?public"?\s*\.\s*)?"?check_idempotency_intent"?\s*\(`],
+  ];
+  const changes = [];
+  for (const [kind, pattern] of kinds) {
+    for (const m of sql.matchAll(new RegExp(pattern, 'gis'))) changes.push({ kind, name: m[1] ?? null, text: m[0] });
+  }
+  return changes;
+}
+/** Only a REVOKE from browser roles is harmless: the receipt INSERT runs as the owner. */
+function isBrowserRoleRevoke(text) {
+  const m = /^REVOKE\b[\s\S]*\bFROM\s+([^;]+);$/i.exec(text.trim());
+  if (!m) return false;
+  return m[1].split(',').map((r) => r.trim().replace(/^"|"$/g, '').toLowerCase())
+    .every((r) => ['public', 'anon', 'authenticated'].includes(r));
+}
+/**
+ * Pull a parked receipt trigger and its function out of the parked file,
+ * verbatim, so the proof can run THROUGH it. Production installs it before
+ * this candidate may apply, so this is the schema the candidate really meets.
+ */
+function extractReceiptTrigger(parkedSql, change, label) {
+  const fn = /EXECUTE\s+(?:FUNCTION|PROCEDURE)\s+((?:"?public"?\s*\.\s*)?"?\w+"?)\s*\(/i.exec(change.text);
+  assert.ok(fn, `${label}: could not read the function trigger ${change.name} executes`);
+  const fnName = fn[1].replace(/\s+/g, '');
+  const escaped = fnName.replace(/[.$"]/g, (c) => `\\${c}`);
+  const start = parkedSql.search(new RegExp(String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+${escaped}\s*\(`, 'i'));
+  assert.ok(start >= 0, `${label}: trigger ${change.name} executes ${fnName}, which this file does not define; install it or re-think the skip`);
+  const tag = /\$([A-Za-z_]*)\$/.exec(parkedSql.slice(start));
+  assert.ok(tag, `${label}: ${fnName} has no dollar-quoted body`);
+  const bodyEnd = parkedSql.indexOf(tag[0], start + tag.index + tag[0].length);
+  assert.ok(bodyEnd > 0, `${label}: ${fnName} body is unterminated`);
+  const end = parkedSql.indexOf(';', bodyEnd + tag[0].length);
+  assert.ok(end > 0, `${label}: ${fnName} definition is unterminated`);
+  return { label, name: change.name, sql: `${parkedSql.slice(start, end + 1)}\n${change.text}` };
+}
+function selfTestReceiptSurface() {
+  const cases = [
+    ['CREATE TRIGGER t BEFORE INSERT ON public.idempotency_keys FOR EACH ROW EXECUTE FUNCTION public.f();', 'trigger'],
+    ['CREATE TRIGGER "t" BEFORE INSERT ON "public"."idempotency_keys" FOR EACH ROW EXECUTE FUNCTION f();', 'trigger'],
+    ['DROP TRIGGER IF EXISTS t ON idempotency_keys;', 'drop-trigger'],
+    ['CREATE POLICY p ON public.idempotency_keys FOR INSERT WITH CHECK (false);', 'policy'],
+    ['REVOKE INSERT ON TABLE public.idempotency_keys FROM postgres;', 'acl'],
+    ['ALTER TABLE public.idempotency_keys FORCE ROW LEVEL SECURITY;', 'table'],
+    ['CREATE OR REPLACE FUNCTION public.check_idempotency_intent(p text) RETURNS jsonb AS $$ SELECT NULL $$ LANGUAGE sql;', 'helper'],
+  ];
+  for (const [sql, kind] of cases) {
+    assert.ok(receiptSurfaceChanges(sql).some((c) => c.kind === kind), `receipt-surface check missed (${kind}): ${sql}`);
+  }
+  const mustPass = [
+    'CREATE TRIGGER t BEFORE INSERT ON public.customer_facts FOR EACH ROW EXECUTE FUNCTION f();',
+    "SELECT has_table_privilege('anon', 'public.idempotency_keys', 'INSERT');",
+    'LOCK TABLE public.idempotency_keys IN ACCESS EXCLUSIVE MODE;',
+  ];
+  for (const sql of mustPass) {
+    assert.deepEqual(receiptSurfaceChanges(sql), [], `receipt-surface check is too broad: ${sql}`);
+  }
+  assert.ok(isBrowserRoleRevoke('REVOKE INSERT, UPDATE ON TABLE public.idempotency_keys FROM PUBLIC, anon, authenticated;'));
+  assert.ok(!isBrowserRoleRevoke('REVOKE INSERT ON TABLE public.idempotency_keys FROM PUBLIC, postgres;'));
+  assert.ok(!isBrowserRoleRevoke('GRANT INSERT ON TABLE public.idempotency_keys TO anon;'));
+}
+// Filled by selected(): parked receipt triggers the proof must run through.
+const PARKED_RECEIPT_TRIGGERS = [];
 function selected() {
   selfTestSkipSoundness();
+  selfTestReceiptSurface();
   const r = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], { cwd: ROOT, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(r.stderr);
   const all = r.stdout.split(/\r?\n/).filter((x) => x.startsWith('supabase/migrations/')).map((x) => path.join(ROOT, x));
@@ -272,6 +386,16 @@ function selected() {
     if (!OPTIONAL_PARKED.has(name)) assert.ok(skipped.some((f) => path.basename(f) === name), `${name} must be in the replay plan (re-check the PARKED list against the live ledger)`);
   }
   for (const file of skipped) {
+    const label = path.basename(file);
+    const fileSql = readFileSync(file, 'utf8').replaceAll('\r\n', '\n');
+    const receipt = receiptSurfaceChanges(fileSql);
+    const created = new Set(receipt.filter((c) => c.kind === 'trigger').map((c) => c.name));
+    for (const change of receipt) {
+      if (change.kind === 'trigger') { PARKED_RECEIPT_TRIGGERS.push(extractReceiptTrigger(fileSql, change, label)); continue; }
+      if (change.kind === 'drop-trigger' && created.has(change.name)) continue; // DROP IF EXISTS + CREATE idiom
+      if (change.kind === 'acl' && isBrowserRoleRevoke(change.text)) continue;
+      assert.fail(`${label} changes the receipt table this function writes (${change.kind}): ${change.text.slice(0, 200)} Replay it or re-think the skip.`);
+    }
     if (OPTIONAL_PARKED.has(path.basename(file))) {
       // Skipping it is only sound while it leaves this table's row policies,
       // triggers, ownership, forced-RLS setting and grants alone. Match the
@@ -486,6 +610,10 @@ async function main() {
   assert.ok(adminDirect.ok && adminDirect.last === DOC.adminBefore, `admin direct UPDATE should work before the fix:\n${adminDirect.error}`);
   console.log('[prover] BEFORE: assigned rep soft-delete refused by RLS (with and without RETURNING); admin succeeds');
 
+  // 1b. The parked receipt triggers production will have installed first.
+  for (const trigger of PARKED_RECEIPT_TRIGGERS) psql(trigger.sql);
+  console.log(`[prover] installed ${PARKED_RECEIPT_TRIGGERS.length} parked receipt trigger(s) verbatim: ${PARKED_RECEIPT_TRIGGERS.map((t) => `${t.name} (${t.label})`).join(', ') || 'none'}`);
+
   // 2. Apply.
   stageSql(CANDIDATE, 'candidate.sql');
   const applied = apply('candidate.sql', true);
@@ -504,6 +632,15 @@ async function main() {
     `${REP}|true`,
     'receipt is not bound to the rep',
   );
+  // The receipt above went through every parked receipt trigger: prove each is
+  // really installed and enabled, or that pass proves nothing about them.
+  for (const trigger of PARKED_RECEIPT_TRIGGERS) {
+    assert.equal(
+      scalar(`SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.idempotency_keys'::regclass AND tgname = '${trigger.name}' AND tgenabled <> 'D';`),
+      '1',
+      `parked receipt trigger ${trigger.name} is not installed and enabled, so the FIX step did not run through it`,
+    );
+  }
   console.log('[prover] FIX: assigned rep removed the document; deleted_by = rep; receipt bound to the rep');
 
   // 4. Replay semantics.
