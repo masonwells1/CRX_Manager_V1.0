@@ -320,15 +320,18 @@ Before deploying any changes to production, run through this checklist:
 - [ ] Production build works (`npm run build` then `npm run preview`)
 - [ ] No console errors in the browser (press F12 to check)
 
-### ✅ Manual Testing (locally — there is no staging environment)
+### ✅ Manual Testing (read-only — there is no staging environment)
+
+The local app talks to the one live database, so these checks must not create, change or delete
+any business record (signing in and out is fine). Creating test customers, orders or other records is a live-data change: it needs Mason's
+explicit OK first, `[E2E]`-tagged fixtures, and a planned cleanup (`AGENTS.md` › Safety and
+Protected Delivery). Until staging exists, prove write paths with automated tests and the
+rolled-back smoke chains instead.
 
 - [ ] Test login/logout functionality
-- [ ] Create a test customer
-- [ ] Create a test order
+- [ ] Open existing customers, orders and invoices and check they display correctly
 - [ ] Test search and filter features
 - [ ] Test on mobile (resize your browser window)
-- [ ] Check that data saves correctly
-- [ ] Verify email notifications work (if applicable)
 
 ### ✅ Code Review
 

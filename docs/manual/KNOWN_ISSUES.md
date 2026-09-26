@@ -435,6 +435,22 @@ changed on 2026-09-04 is that it is now written down instead of only being known
 
 ---
 
+## OPEN 2026-09-26 — quote, order and rebate-claim numbers still take their year from the UTC clock
+
+`20260908140000` and `20260914100100` moved the `next_*_number` generators to the America/Chicago
+year. Three generators were not included, and the live catalog (read-only, 2026-09-26) confirms
+they still read `current_date` on the UTC server:
+
+- `generate_quote_number()` and `generate_order_number()` — `20260209200000_tier1_audit_fixes.sql:133-150`
+- `create_rebate_claim` — `v_year` from `current_date`, `20260513000000_rebate_claim_atomic_rpcs.sql:106`
+
+**Effect:** a quote, order or rebate claim created between 6 pm and midnight Chicago time on
+December 31 is numbered with the next year (for example `Q-2027-…` on the evening of 2026-12-31).
+The fix is a small migration re-emitting the three bodies with the Chicago year; it needs the
+normal migration review and Mason's apply approval. Found by the Codex GitHub App on PR #809.
+
+---
+
 ## OPEN 2026-09-04 — other paths still stamp `invoices.season` from the UTC clock
 
 Surfaced by `migration-drift-reviewer` (M8) and `rls-security-reviewer` (M5) while reviewing

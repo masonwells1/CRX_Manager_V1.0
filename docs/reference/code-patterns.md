@@ -1,7 +1,7 @@
 # Code Patterns & AI Dev Reference
 
 ## Number Formats
-All numbers are generated server-side. The year is the America/Chicago calendar year (`20260908140000`, `20260914100100`), and each generator serializes callers with an advisory lock or a counter-row lock. Never build a number in the browser from a count query.
+All numbers are generated server-side. The `next_*_number` generators use the America/Chicago calendar year (`20260908140000`, `20260914100100`). Three older generators still take the year from the server's UTC clock (verified against the live catalog 2026-09-26): `generate_quote_number()`, `generate_order_number()` and `create_rebate_claim`. A quote, order or rebate claim created between 6 pm and midnight Chicago time on December 31 therefore gets next year's number — see `docs/manual/KNOWN_ISSUES.md`. Each generator serializes callers with an advisory lock, a counter-row lock, or a database sequence. Never build a number in the browser from a count query.
 - Invoice: `{PREFIX}-{YYYY}-{sequential 4-digit}` via `next_invoice_number(p_invoice_type)`. Prefix by type: `CS` chemical_sale, `MC` misc_charge, `CM` credit_memo, `INV` everything else (field application is the default). Each prefix has its own sequence.
 - Return: `RMA-{YYYY}-{sequential 4-digit}` via `next_return_number()`
 - Rebate claim: `RC-{YYYY}-{sequential 4-digit}` from the per-year `rebate_claim_counters` row inside `create_rebate_claim`
