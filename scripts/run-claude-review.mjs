@@ -194,7 +194,7 @@ function usage() {
     "  --topic <text>        Short label for the review",
     "  --prompt-file <path>  Extra prompt/context file to append",
     "  --output <path>       Output file (default .claude/session-state/claude-review-latest.txt)",
-    "  --model <alias>       Claude model alias/id (default claude-opus-5)",
+    "  --model <alias>       Claude model alias/id (default opus, the newest Opus)",
     "  --effort <level>      low|medium|high|xhigh|max (default high)",
     "  --timeout-ms <ms>     Hard timeout; timeout is BLOCKED (default 900000)",
     "  --dry-run             Print the prompt instead of calling Claude",
@@ -209,7 +209,7 @@ export function parseReviewArgs(argv) {
     topic: "claude-review",
     output: null,
     promptFile: null,
-    model: "claude-opus-5",
+    model: "opus",
     effort: "high",
     timeoutMs: 900_000,
     dryRun: false,
@@ -502,7 +502,7 @@ export function buildClaudeReviewPrompt({
 export function buildClaudeCommandArgs({
   outputFormat = "json",
   permissionMode = "dontAsk",
-  model = "claude-opus-5",
+  model = "opus",
   effort = "high",
 } = {}) {
   return [

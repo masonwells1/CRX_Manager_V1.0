@@ -64,9 +64,9 @@ const COMPACT_REANCHOR =
   "explain in plain English.";
 
 const SESSION_ONBOARDING =
-  "You are starting a new session on the CRX Manager project. Silently read AGENTS.md (the " +
-  "shared contract) and CLAUDE.md (Claude-only routing), then load only the workflow and reference " +
-  "documents that AGENTS.md routes for the current task. Briefly confirm context is loaded. " +
+  "You are starting a new session on the CRX Manager project. AGENTS.md (the shared contract) and " +
+  "CLAUDE.md (Claude-only routing) are already in context; do not re-read AGENTS.md or CLAUDE.md. " +
+  "Load only the workflow and reference documents that AGENTS.md routes for the current task. " +
   "CRITICAL CONTEXT: Mason cannot read code or safely review a diff. Own routine technical choices, " +
   "and explain outcomes and risk in plain English. Before multi-file work or work touching data, money, " +
   "security, or a live system, get his approval after a short plan; then continue routine implementation " +

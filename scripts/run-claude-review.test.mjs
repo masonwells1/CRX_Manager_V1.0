@@ -173,7 +173,7 @@ const commandArgs = buildClaudeCommandArgs();
 assert.deepEqual(commandArgs, [
   "-p",
   "--model",
-  "claude-opus-5",
+  "opus",
   "--effort",
   "high",
   "--output-format",

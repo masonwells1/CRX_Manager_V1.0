@@ -22,15 +22,13 @@ Read first:
 
 ## Mode Selection
 
-Ask Mason one concise question if the mode is unclear:
+If the mode is unclear, default to **per-change** and say so to Mason in one line; do not stop to ask.
 
-`Should I run this as a per-change review, a foundation audit, or both?`
-
-Default to **per-change** when there are current branch or working-tree changes. Use **foundation** only when Mason asks whether the app is broadly safe to build on or asks for whole-app workflow review.
+Use **per-change** when there are current branch or working-tree changes. Use **foundation** only when Mason asks whether the app is broadly safe to build on or asks for whole-app workflow review.
 
 ## Hard Safety Gates
 
-- Do not push.
+- Do not push. The gauntlet never lands code itself; landing a reviewed change follows `.claude/commands/ship.md`.
 - Do not deploy.
 - Do not apply live migrations.
 - Do not delete data.
@@ -78,13 +76,13 @@ The remedy for a stale branch is to **rebase/refresh it onto `main`** (or re-poi
 
 ### Step 1: Pick Scope
 
-Choose exactly one:
+Choose one per run:
 
 - `--base origin/main` (after `git fetch origin`) for a branch review before push — never bare `main`; a stale local main distorts the diff (see Step 0).
 - `--uncommitted` for staged, unstaged, and untracked working-tree changes.
 - `--commit <sha>` for one commit.
 
-If the branch has both committed and uncommitted work and Mason did not specify scope, ask one concise scope question before running Codex.
+If the branch has both committed and uncommitted work and Mason did not specify scope, run two passes, `--base origin/main` then `--uncommitted`, and say so in one line; do not stop to ask.
 
 ### Step 2: Evidence Gates
 

@@ -7,7 +7,7 @@
  *   codex-build.mjs : Codex WRITES code in the worktree → Claude reviews + gates.
  *
  * Role split for the loop (see docs/loops/workflow-waves-loop-2026-07.md):
- *   Claude (Opus 4.8) = orchestrator/advisor: grounds each unit, writes the build
+ *   Claude (Opus) = orchestrator/advisor: grounds each unit, writes the build
  *     spec, reviews Codex's diff, runs the guard-equivalent checks + review
  *     subagents, and is the ONLY actor that commits / pushes / applies migrations.
  *   Codex (gpt-6-luna) = builder: edits the working tree per the spec, self-checks
