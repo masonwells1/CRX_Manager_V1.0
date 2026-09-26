@@ -37,12 +37,16 @@ comment that emails him.
    logins/roles waits for him. Enforced by `.claude/hooks/migration-access-lib.mjs`
    (`accessChangeCheck`), which the apply guard runs right after the destructive check. Measured on
    the last 60 real migrations: 38 would apply by themselves, 22 wait for him (10 destructive, the
-   rest access changes to existing objects or the storage schema). One stated residual, told to
-   Mason: a function the migration REPLACES (`CREATE OR REPLACE`) counts as created by it, so
-   re-stating its grants to `authenticated`/`service_role`/`postgres` is routine even though the
-   classifier cannot see what the function's grants were before — counting it as existing would
-   send 47 of 60 migrations to him instead of 22. The two reviewers and the Sol apply proof still
-   read every grant.
+   rest access changes to existing objects or the storage schema). A function or view the migration
+   REPLACES is not treated as new (Sol round 10): its access just before the migration is rebuilt
+   from the earlier migration files — Supabase's live default grants, then every GRANT/REVOKE, DROP
+   and rename in order — and the migration waits for Mason if any role ends it with access it did
+   not have before, including a DROP + CREATE that silently hands a locked function Supabase's
+   defaults again. Where the history cannot say (dynamic SQL, look-alike overloads, a rename, no
+   history at all as in the daily summary), it waits for him. Re-measured with this model: still
+   38 routine and 22 his; a real locked-down helper replaced and granted to `authenticated` waits.
+   Known limit: the `metabase_ro` reporting role's default read was set outside the migrations,
+   so an object older than that default is assumed to have it.
 
 **What this supersedes.** The parts of the **2026-06-16 standing push policy** that limited
 unattended landing, the **2026-07-13 hands-free migration policy** (its proof gate now applies in

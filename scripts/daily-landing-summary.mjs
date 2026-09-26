@@ -113,6 +113,8 @@ export function waitingReasons({ labels = [], files = [] }) {
     // Permission changes are his too (2026-09-26). The patch shows only this
     // PR's added lines, so for an EDITED file the check may miss objects the
     // file created earlier — that errs toward listing it, never toward hiding it.
+    // No migration history is passed either, so a grant on a REPLACED object
+    // counts as unknown and is listed (Sol HIGH #2, round 10).
     let access;
     try { access = accessChangeCheck(added); } catch { access = { changesAccess: true, reason: "could not be classified" }; }
     if (access.changesAccess) {

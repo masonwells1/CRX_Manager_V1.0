@@ -28,7 +28,16 @@
 // comments are removed quote-aware. When in doubt it answers "Mason's": a false
 // positive parks a migration for him, a false negative changes production access
 // with nobody watching.
+//
+// A REPLACED object is not a new one (Sol HIGH #2, round 10). CREATE OR REPLACE
+// keeps an existing object's grants, and DROP + CREATE hands it Supabase's
+// defaults again, so for anything that already existed the question is whether
+// any role ends the migration with access it did not have before. That earlier
+// access is rebuilt from the migration history (see priorFromHistory); without
+// the history it is unknown, which counts as Mason's.
 
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { stripCommentsQuoteAware, stripFunctionBodiesOnly } from "./live-testdata-lib.mjs";
 
 const IDENT = String.raw`(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)`;
@@ -213,7 +222,458 @@ function grantees(list) {
   return list.split(",").map((role) => role.trim().replace(/^group\s+/i, "").replace(/^"|"$/g, "").toLowerCase()).filter(Boolean);
 }
 
-export function accessChangeCheck(sql) {
+// ── PRIOR ACCESS OF A REPLACED OBJECT (Sol HIGH #2, round 10) ────────────────
+//
+// Each object's access is a map of "role|privilege" → true / false / null, where
+// null means "cannot be worked out". Only these roles are modelled; a GRANT to any
+// other role is already Mason's.
+const TABLE_PRIVILEGES = ["select", "insert", "update", "delete", "truncate", "references", "trigger", "maintain"];
+const SEQUENCE_PRIVILEGES = ["usage", "select", "update"];
+const KIND_PRIVILEGES = { function: ["execute"], table: TABLE_PRIVILEGES, sequence: SEQUENCE_PRIVILEGES };
+const MODELLED_ROLES = ["public", "anon", "authenticated", "service_role", "postgres", "metabase_ro"];
+// What a NEW object in `public` gets, read from live pg_default_acl on
+// 2026-09-26, plus the built-in PUBLIC EXECUTE on functions (a per-schema default
+// adds to it, it does not replace it). "table" covers views too. `metabase_ro`'s
+// default read was set outside the migrations at an unknown date, so an object
+// older than it is modelled as having that read — the one known way this model
+// can overstate earlier access.
+const DEFAULT_GRANTS = {
+  function: { public: ["execute"], anon: ["execute"], authenticated: ["execute"], service_role: ["execute"], postgres: ["execute"] },
+  table: { postgres: TABLE_PRIVILEGES, authenticated: TABLE_PRIVILEGES, service_role: TABLE_PRIVILEGES, anon: ["select", "maintain"], metabase_ro: ["select"] },
+  sequence: { postgres: SEQUENCE_PRIVILEGES, anon: SEQUENCE_PRIVILEGES, authenticated: SEQUENCE_PRIVILEGES, service_role: SEQUENCE_PRIVILEGES },
+};
+// The one ALTER DEFAULT PRIVILEGES in the history that the defaults above already
+// absorb: it removed anon's table writes, and the same file revoked them from
+// every existing table, so objects older than it converge on today's defaults.
+// Any OTHER one means objects created before it started from defaults this
+// model does not know.
+const ABSORBED_DEFAULT_PRIVILEGES_FILE = "20260526151856_execute_full_codebase_ultra_review.sql";
+const DYNAMIC_SQL_RE = /\bexecute\b(?!\s+(?:on|function|procedure)\b)(?!\s*,)/i;
+// Cheap raw-text test for history files that must be read even when they never
+// name the object: schema-wide grants, grants in dynamic SQL, default privileges.
+const HISTORY_ALWAYS_RE = /\bin\s+schema\b|['$]\s*(?:grant|revoke)\b|\bdefault\s+privileges\b/i;
+
+const slot = (role, privilege) => `${role}|${privilege}`;
+
+function freshState(kind, fill) {
+  const state = new Map();
+  for (const role of MODELLED_ROLES) {
+    for (const privilege of KIND_PRIVILEGES[kind]) {
+      state.set(slot(role, privilege), fill === "unknown" ? null : (DEFAULT_GRANTS[kind][role] || []).includes(privilege));
+    }
+  }
+  return state;
+}
+
+// A role holds a privilege if it or PUBLIC does.
+function effective(state, role, privilege) {
+  const own = state.get(slot(role, privilege));
+  if (role === "public") return own;
+  const everyone = state.get(slot("public", privilege));
+  if (own === true || everyone === true) return true;
+  if (own === false && everyone === false) return false;
+  return null;
+}
+
+// Split on commas outside parentheses.
+function topLevelItems(list) {
+  const items = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of list) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === "," && depth === 0) { items.push(current); current = ""; continue; }
+    current += ch;
+  }
+  items.push(current);
+  return items.map((item) => item.trim()).filter(Boolean);
+}
+
+const TYPE_ALIASES = {
+  int: "integer", int4: "integer", int8: "bigint", int2: "smallint", bool: "boolean", float8: "double precision",
+  float4: "real", varchar: "character varying", timestamptz: "timestamp with time zone", decimal: "numeric", char: "character",
+};
+const TYPE_WORDS = new Set(["double", "character", "char", "varchar", "timestamp", "timestamptz", "time", "bit", "interval",
+  "national", "numeric", "decimal", "int", "integer", "int2", "int4", "int8", "bigint", "smallint", "text", "uuid", "boolean",
+  "bool", "jsonb", "json", "date", "real", "float", "float4", "float8", "setof", "bytea", "inet", "anyelement", "record"]);
+
+// The input TYPES of a parameter list, normalised enough to tell two overloads
+// with the same number of arguments apart. A normalisation miss only makes two
+// spellings of one signature look like two overloads, which reads as "unknown".
+function signature(list) {
+  if (list === null) return null;
+  const types = [];
+  for (const raw of topLevelItems(list)) {
+    let param = raw.replace(/\s+(?:default\b|=)[\s\S]*$/i, "").replace(/"/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+    const mode = /^(in|out|inout|variadic)\s+/.exec(param);
+    if (mode?.[1] === "out") continue;
+    if (mode) param = param.slice(mode[0].length);
+    const tokens = param.split(" ");
+    if (tokens.length > 1 && !TYPE_WORDS.has(tokens[0]) && !tokens[0].includes(".")) tokens.shift();
+    const type = tokens.join(" ").replace(/\s*\([^)]*\)/g, "").replace(/^public\./, "");
+    const array = /(\[\])+$/.exec(type)?.[0] || "";
+    const base = type.slice(0, type.length - array.length);
+    types.push((TYPE_ALIASES[base] || base) + array);
+  }
+  return types.join(",");
+}
+
+// `name[(args)][, name[(args)]...]` → [{key, arity}] and whatever follows, or null.
+function nameList(body) {
+  const targets = [];
+  let i = 0;
+  const nameRe = new RegExp(String.raw`^\s*(${QNAME})\s*`, "i");
+  while (i < body.length) {
+    const m = nameRe.exec(body.slice(i));
+    if (!m) return null;
+    i += m[0].length;
+    let arity;
+    if (body[i] === "(") {
+      const list = parenBody(body, i);
+      if (list === null) return null;
+      arity = inputArity(list);
+      i += list.length + 2;
+    }
+    targets.push({ key: objectKey(m[1]), arity });
+    const comma = body.slice(i).match(/^\s*,/);
+    if (!comma) break;
+    i += comma[0].length;
+  }
+  return { targets, rest: body.slice(i).trim() };
+}
+
+function privilegeList(head) {
+  const privileges = [];
+  for (const item of topLevelItems(head)) {
+    const m = /^([a-z][a-z ]*?)\s*(\([^)]*\))?$/i.exec(item);
+    if (!m) return null;
+    const name = m[1].toLowerCase().replace(/\s+/g, " ");
+    privileges.push({ name: name === "all privileges" ? "all" : name, columns: Boolean(m[2]) });
+  }
+  return privileges.length ? privileges : null;
+}
+
+// One statement → the event this model cares about, or null.
+const CREATE_FUNCTION_RE = new RegExp(String.raw`^create\s+(or\s+replace\s+)?(?:function|procedure)\s+(${QNAME})\s*\(`, "i");
+const CREATE_TABLE_RE = new RegExp(String.raw`^create\s+(?:(?:global|local)\s+)?(unlogged\s+|temp(?:orary)?\s+)?table\s+(if\s+not\s+exists\s+)?(${QNAME})`, "i");
+const CREATE_RELATION_RE = new RegExp(String.raw`^create\s+(or\s+replace\s+)?(temp(?:orary)?\s+)?(?:recursive\s+)?((?:materialized\s+)?view|sequence)\s+(if\s+not\s+exists\s+)?(${QNAME})`, "i");
+const DROP_RE = /^drop\s+(function|procedure|routine|table|(?:materialized\s+)?view|sequence)\s+(?:if\s+exists\s+)?(.*)$/i;
+const ALTER_NAME_RE = new RegExp(String.raw`^alter\s+(function|procedure|routine|table|(?:materialized\s+)?view|sequence)\s+(?:if\s+exists\s+)?(${QNAME})\s*`, "i");
+const eventKind = (word) => (/^(?:function|procedure|routine)$/i.test(word) ? "function" : /^sequence$/i.test(word) ? "sequence" : "table");
+
+function privilegeEvent(statement) {
+  const privilege = PRIVILEGE_STATEMENT_RE.exec(statement);
+  if (!privilege) return null;
+  const verb = privilege[1].toLowerCase();
+  const body = privilege[2];
+  const onMatch = /\bon\b(.*?)\b(to|from)\b(.*)$/i.exec(body);
+  if (!onMatch) return null;
+  const head = body.slice(0, onMatch.index).trim();
+  // REVOKE GRANT OPTION FOR ... leaves the privilege itself in place.
+  if (/^(?:grant|admin|inherit|set)\s+option\s+for\b/i.test(head)) return null;
+  const roles = grantees(onMatch[3]
+    .replace(/\bwith\s+(?:grant|admin)\s+option\b.*$/i, "")
+    .replace(/\bgranted\s+by\b.*$/i, "")
+    .replace(/\b(?:cascade|restrict)\s*$/i, ""));
+  const event = { type: "privilege", verb, privileges: privilegeList(head), roles, certain: true };
+  const wide = /^\s*all\s+(tables|sequences|functions|procedures|routines)\s+in\s+schema\s+(.+?)\s*$/i.exec(onMatch[1]);
+  if (wide) {
+    if (!wide[2].split(",").map((schema) => objectKey(schema)).includes("public")) return null;
+    return { ...event, schemaWide: /^tables$/i.test(wide[1]) ? "table" : /^sequences$/i.test(wide[1]) ? "sequence" : "function" };
+  }
+  const targets = privilegeTargets(onMatch[1]);
+  return targets ? { ...event, targets } : null;
+}
+
+function statementEvent(statement) {
+  let m;
+  if ((m = CREATE_FUNCTION_RE.exec(statement))) {
+    const list = parenBody(statement, m.index + m[0].length - 1);
+    return { type: "create", kind: "function", key: objectKey(m[2]), arity: inputArity(list), sig: signature(list), orReplace: Boolean(m[1]) };
+  }
+  if ((m = CREATE_TABLE_RE.exec(statement))) {
+    if (/^temp/i.test(m[1] || "")) return null;
+    return { type: "create", kind: "table", key: objectKey(m[3]), orReplace: false, ifNotExists: Boolean(m[2]) };
+  }
+  if ((m = CREATE_RELATION_RE.exec(statement))) {
+    if (m[2]) return null;
+    return { type: "create", kind: eventKind(m[3]), key: objectKey(m[5]), orReplace: Boolean(m[1]), ifNotExists: Boolean(m[4]) };
+  }
+  if ((m = DROP_RE.exec(statement))) {
+    const list = nameList(m[2]);
+    if (!list) return null;
+    return { type: "drop", kind: eventKind(m[1]), targets: list.targets, cascade: /\bcascade\b/i.test(list.rest) };
+  }
+  if ((m = ALTER_NAME_RE.exec(statement))) {
+    let rest = statement.slice(m[0].length);
+    let arity;
+    if (rest.startsWith("(")) {
+      const list = parenBody(statement, m[0].length);
+      if (list === null) return null;
+      arity = inputArity(list);
+      rest = statement.slice(m[0].length + list.length + 2);
+    }
+    const from = { key: objectKey(m[2]), arity };
+    const schema = from.key.includes(".") ? from.key.split(".")[0] : "";
+    const bare = from.key.split(".").pop();
+    const rename = new RegExp(String.raw`^\s*rename\s+to\s+(${IDENT})\s*$`, "i").exec(rest);
+    if (rename) return { type: "rename", kind: eventKind(m[1]), from, to: objectKey(schema ? `${schema}.${rename[1]}` : rename[1]) };
+    const move = new RegExp(String.raw`^\s*set\s+schema\s+(${IDENT})\s*$`, "i").exec(rest);
+    if (move) return { type: "rename", kind: eventKind(m[1]), from, to: objectKey(`${move[1]}.${bare}`) };
+  }
+  return privilegeEvent(statement);
+}
+
+// 0 = not this object, 1 = this object, 2 = possibly this object.
+function sameObject(obj, kind, target) {
+  if (target.key !== obj.key || (kind === "function") !== (obj.kind === "function")) return 0;
+  if (obj.kind !== "function" || target.arity === undefined) return 1;
+  if (target.arity === null) return 2;
+  return target.arity === obj.arity ? 1 : 0;
+}
+
+function applyPrivilege(obj, event, certain, touched) {
+  const kindPrivileges = KIND_PRIVILEGES[obj.kind];
+  const listed = event.privileges
+    ? event.privileges.flatMap((p) => (p.name === "all" ? kindPrivileges.map((name) => ({ name, columns: p.columns })) : [p]))
+      .filter((p) => kindPrivileges.includes(p.name))
+    : kindPrivileges.map((name) => ({ name, columns: false }));
+  const roles = event.roles ? event.roles.filter((role) => MODELLED_ROLES.includes(role)) : MODELLED_ROLES;
+  for (const role of roles) {
+    for (const { name, columns } of listed) {
+      const key = slot(role, name);
+      const current = obj.state.get(key);
+      let next;
+      if (event.verb === "grant") {
+        // A column grant opens part of the object: count it as "maybe".
+        next = certain && !columns ? true : current === true ? true : null;
+      } else {
+        if (columns) continue; // a column revoke leaves the object-level privilege alone
+        next = certain ? false : current === false ? false : null;
+      }
+      obj.state.set(key, next);
+      touched?.add(key);
+    }
+  }
+}
+
+function touchAll(obj, touched) {
+  if (touched) for (const key of obj.state.keys()) touched.add(key);
+}
+
+// Advance one tracked object by one event. `ctx.fill` is what a fresh create
+// starts from; `ctx.cascadeSeen` means an earlier DROP ... CASCADE in the same
+// file may have removed the object behind a later CREATE OR REPLACE.
+function step(obj, event, ctx) {
+  if (!event) return;
+  if (event.type === "drop" && event.cascade) ctx.cascadeSeen = true;
+  if (event.type === "create") {
+    if (!sameObject(obj, event.kind, event)) return;
+    // exists === null ("maybe") is treated as present: a replace then keeps the
+    // unknown access rather than inventing defaults.
+    const present = obj.exists !== false;
+    if (obj.kind === "function" && present && event.sig && obj.sig && event.sig !== obj.sig) {
+      // Same name and argument count, different types: a second overload that
+      // this model cannot keep apart from the first.
+      obj.ambiguous = true;
+      return;
+    }
+    if (present && (event.ifNotExists || (event.orReplace && !ctx.cascadeSeen))) return;
+    if (present && event.orReplace) {
+      // It may or may not have been dropped by the cascade: keep only what the
+      // old access and a fresh object's defaults agree on.
+      const fresh = freshState(obj.kind, ctx.fill);
+      for (const [key, value] of obj.state) obj.state.set(key, value === fresh.get(key) ? value : null);
+      touchAll(obj, ctx.touched);
+      return;
+    }
+    obj.exists = true;
+    obj.sig = event.sig || null;
+    obj.state = freshState(obj.kind, ctx.fill);
+    touchAll(obj, ctx.touched);
+    return;
+  }
+  if (event.type === "drop") {
+    if (event.targets.some((target) => sameObject(obj, event.kind, target) === 1)) {
+      obj.exists = false;
+      obj.sig = null;
+      obj.state = null;
+    } else if (obj.exists !== false && event.targets.some((target) => sameObject(obj, event.kind, target) === 2)) {
+      obj.exists = null;
+      obj.state = freshState(obj.kind, "unknown");
+      touchAll(obj, ctx.touched);
+    }
+    return;
+  }
+  if (event.type === "rename") {
+    if (sameObject(obj, event.kind, event.from)) {
+      obj.exists = false;
+      obj.sig = null;
+      obj.state = null;
+    } else if (event.to === obj.key && (event.kind === "function") === (obj.kind === "function")) {
+      // Something else now answers to this name, with access this model did not follow.
+      obj.exists = true;
+      obj.sig = null;
+      obj.state = freshState(obj.kind, "unknown");
+      touchAll(obj, ctx.touched);
+    }
+    return;
+  }
+  if (event.type === "privilege" && obj.exists !== false) {
+    if (event.schemaWide) {
+      if (event.schemaWide === obj.kind) applyPrivilege(obj, event, event.certain, ctx.touched);
+      return;
+    }
+    // Dynamic SQL names no object: it may have reached any of them.
+    if (!event.targets) {
+      applyPrivilege(obj, event, false, ctx.touched);
+      return;
+    }
+    const match = Math.max(0, ...event.targets.map((target) => sameObject(obj, target.kind, target)));
+    if (match) applyPrivilege(obj, event, event.certain && match === 1, ctx.touched);
+  }
+}
+
+// GRANT/REVOKE text inside string literals of a file that runs dynamic SQL.
+// Each counts as "maybe" for every object that exists at the end of that file.
+function dynamicPrivilegeEvents(text) {
+  const events = [];
+  const re = new RegExp(String.raw`(?:'|\$[A-Za-z_]*\$)\s*(grant|revoke)\b([^'$]*)`, "gi");
+  for (const m of text.matchAll(re)) {
+    const rest = m[2];
+    // Prose such as 'REVOKE verification failed' is not a statement.
+    if (rest.trim() && !new RegExp(String.raw`^\s*(?:${PRIVILEGE}|%[sIL])(?![A-Za-z0-9_])`, "i").test(rest)) continue;
+    const to = /\b(?:to|from)\s+(.+)$/i.exec(rest);
+    let roles = null;
+    if (to && !/%/.test(to[1])) {
+      roles = grantees(to[1].replace(/\b(?:cascade|restrict)\s*$/i, "").replace(/\bwith\s+grant\s+option\b.*$/i, ""));
+      if (!roles.length) roles = null;
+    }
+    events.push({ type: "privilege", verb: m[1].toLowerCase(), privileges: null, roles, certain: false });
+  }
+  return events;
+}
+
+function parseHistoryFile(text) {
+  let stripped;
+  try {
+    stripped = stripCommentsQuoteAware(stripFunctionBodiesOnly(text), { intoDollarBodies: true });
+  } catch {
+    return { error: true };
+  }
+  const statements = splitStatements(blankStringLiterals(stripped));
+  const dynamic = statements.some((statement) => DYNAMIC_SQL_RE.test(statement) && !/^(?:grant|revoke)\b/i.test(statement));
+  return {
+    events: statements.map(statementEvent).filter(Boolean),
+    dynamicEvents: dynamic ? dynamicPrivilegeEvents(stripped) : [],
+    defaultPrivileges: statements.some((statement) => /\balter\s+default\s+privileges\b/i.test(statement)),
+  };
+}
+
+const bareName = (key) => key.split(".").pop().toLowerCase();
+
+// Rebuild each object's access as of just before this migration, walking the
+// earlier migration files in order. Only files that name one of the objects are
+// parsed, plus the few that change access without naming anything; the apply
+// hook runs inside a 15-second budget and a killed hook ALLOWS.
+function priorFromHistory(objects, history) {
+  const tracked = objects.map((obj) => ({ ...obj, exists: false, state: null, sig: null, ambiguous: false }));
+  const names = [...new Set(tracked.map((obj) => bareName(obj.key)))];
+  const files = [];
+  history.forEach((file, index) => {
+    const lower = String(file.text || "").toLowerCase();
+    const named = names.filter((name) => lower.includes(name));
+    if (!named.length && !HISTORY_ALWAYS_RE.test(lower)) return;
+    files.push({ index, name: file.name, named, ...parseHistoryFile(String(file.text || "")) });
+  });
+  const lastDefaultChange = Math.max(-1, ...files
+    .filter((file) => file.defaultPrivileges && path.basename(String(file.name)) !== ABSORBED_DEFAULT_PRIVILEGES_FILE)
+    .map((file) => file.index));
+  for (const file of files) {
+    if (file.error) {
+      // Unreadable: whatever it did to these objects is unknown.
+      for (const obj of tracked) {
+        if (file.named.includes(bareName(obj.key))) obj.exists = null;
+        if (obj.exists !== false) obj.state = freshState(obj.kind, "unknown");
+      }
+      continue;
+    }
+    const ctx = { fill: file.index <= lastDefaultChange ? "unknown" : "defaults", cascadeSeen: false, touched: null };
+    for (const event of file.events) for (const obj of tracked) step(obj, event, ctx);
+    for (const event of file.dynamicEvents) for (const obj of tracked) step(obj, event, ctx);
+  }
+  return tracked.map((obj) => (obj.ambiguous
+    ? { exists: null, state: freshState(obj.kind, "unknown") }
+    : { exists: obj.exists, state: obj.state || (obj.exists === false ? null : freshState(obj.kind, "unknown")) }));
+}
+
+const ROLE_LABELS = { public: "PUBLIC (everyone, logged-out visitors included)", anon: "anon (logged-out visitors)" };
+
+// The first role that ends this migration with access to an object that existed
+// before it, where that access was not already there.
+function replacedObjectWidening(statements, history) {
+  const events = statements.map(statementEvent);
+  const candidates = [];
+  events.forEach((event, index) => {
+    if (event?.type !== "create") return;
+    if (candidates.some((c) => c.kind === event.kind && c.key === event.key && c.arity === event.arity)) return;
+    candidates.push({ kind: event.kind, key: event.key, arity: event.arity, firstCreate: index });
+  });
+  if (!candidates.length) return null;
+  const prior = Array.isArray(history) ? priorFromHistory(candidates, history) : null;
+  for (const [n, candidate] of candidates.entries()) {
+    let pre;
+    if (candidate.kind === "function" && candidate.arity === null) {
+      pre = { exists: null, state: freshState(candidate.kind, "unknown") };
+    } else if (prior) {
+      pre = prior[n];
+    } else {
+      // No history: a replace, or a re-create after a drop in this file, may be
+      // an existing object whose earlier access nobody can check here.
+      const create = events[candidate.firstCreate];
+      const droppedFirst = events.slice(0, candidate.firstCreate).some((event) =>
+        event?.type === "drop" && event.targets.some((target) => sameObject(candidate, event.kind, target)));
+      pre = create.orReplace || droppedFirst ? { exists: null, state: freshState(candidate.kind, "unknown") } : { exists: false, state: null };
+    }
+    if (pre.exists === false) continue; // brand new: Mason's rule makes its lock-down routine
+    const obj = { ...candidate, exists: true, sig: null, ambiguous: false, state: new Map(pre.state) };
+    const ctx = { fill: "defaults", cascadeSeen: false, touched: new Set() };
+    for (const event of events) step(obj, event, ctx);
+    if (obj.ambiguous) obj.state = freshState(obj.kind, "unknown");
+    for (const privilege of KIND_PRIVILEGES[obj.kind]) {
+      for (const role of MODELLED_ROLES) {
+        // A role is in question when its own access changed, or PUBLIC's changed
+        // to anything but "no" (a revoke from PUBLIC widens nobody).
+        const viaPublic = ctx.touched.has(slot("public", privilege)) && obj.state?.get(slot("public", privilege)) !== false;
+        if (!ctx.touched.has(slot(role, privilege)) && !viaPublic) continue;
+        const after = obj.exists === false ? false : effective(obj.state, role, privilege);
+        const before = effective(pre.state, role, privilege);
+        if (after === false || before === true) continue;
+        const who = ROLE_LABELS[role] || role;
+        const what = `${privilege.toUpperCase()} on ${obj.key}`;
+        if (before === false) return `it gives ${who} ${what}, which it did not have before (the object already existed)`;
+        return `it gives ${who} ${what}, an existing object whose earlier access ${prior ? "the migration history cannot confirm" : "cannot be checked without the migration history"}`;
+      }
+    }
+  }
+  return null;
+}
+
+// Every migration file in `dir` that sorts before `currentName`, oldest first,
+// as [{name, text}] — the history accessChangeCheck() rebuilds earlier access from.
+export function readMigrationHistory(dir, currentName) {
+  const current = `${path.basename(String(currentName || "")).replace(/\.sql$/i, "")}.sql`;
+  return readdirSync(dir)
+    .filter((name) => /\.sql$/i.test(name) && name < current)
+    .sort()
+    .map((name) => ({ name, text: readFileSync(path.join(dir, name), "utf8") }));
+}
+
+// `history`: the earlier migration files from readMigrationHistory(). Leave it
+// out when there is none (the daily summary sees only a PR's added lines); any
+// grant on an object that may already exist then counts as Mason's.
+export function accessChangeCheck(sql, { history } = {}) {
   let text;
   try {
     text = stripCommentsQuoteAware(stripFunctionBodiesOnly(String(sql || "")), { intoDollarBodies: true });
@@ -294,5 +754,7 @@ export function accessChangeCheck(sql) {
     const existing = targets.find((target) => !isCreatedHere(target, created));
     if (existing) return hit(`it ${verb === "grant" ? "grants" : "revokes"} access on ${existing.key}, which this migration did not create`);
   }
+  const widened = replacedObjectWidening(statements, history);
+  if (widened) return hit(widened);
   return { changesAccess: false };
 }

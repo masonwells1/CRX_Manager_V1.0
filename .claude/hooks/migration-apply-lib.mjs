@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { accessChangeCheck } from "./migration-access-lib.mjs";
+import { accessChangeCheck, readMigrationHistory } from "./migration-access-lib.mjs";
 import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
@@ -432,6 +432,7 @@ export function evaluateMigrationApply({
   // A throw is a refusal, never a pass — the same rule the ordering and Codex
   // gates already follow. An unknown provenance state is exactly when not to
   // transmit.
+  let migrationSourceFile = null; // the validated file; its directory holds the history the access check reads
   {
     let source;
     try {
@@ -475,6 +476,7 @@ export function evaluateMigrationApply({
         `body under a canonical-looking name. If it is parked or rejected, it is not meant to ship: check ` +
         `docs/manual/DECISION_LOG.md and docs/manual/KNOWN_ISSUES.md before doing anything else.`);
     }
+    migrationSourceFile = source.file;
   }
 
   // ORDERING PREFLIGHT (2026-08-08). Refuse a migration that is OLDER than one
@@ -868,8 +870,15 @@ export function evaluateMigrationApply({
     // on objects this migration creates apply by themselves; anything that
     // widens access or changes access that already exists does not.
     // Fail CLOSED: a classifier error counts as an access change.
+    // A REPLACED object's earlier access is rebuilt from the migration files that
+    // sort before this one (Sol HIGH #2, round 10). If they cannot be read, the
+    // check runs without history, and a grant on an object that may already
+    // exist then waits for Mason.
+    let history;
+    try { history = migrationSourceFile ? readMigrationHistory(path.dirname(migrationSourceFile), path.basename(migrationSourceFile)) : undefined; }
+    catch { history = undefined; }
     let access;
-    try { access = accessChangeCheck(migQuery); }
+    try { access = accessChangeCheck(migQuery, { history }); }
     catch (e) { access = { changesAccess: true, reason: `access-check error (${e && e.message ? e.message : e}) — failing closed` }; }
     if (access.changesAccess) {
       return block(
