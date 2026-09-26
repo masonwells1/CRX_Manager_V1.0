@@ -38,7 +38,7 @@ Use this when reviewing a branch, commit, or uncommitted work before push.
 6. Fix confirmed BLOCKER and HIGH issues.
 7. Add one prevention action for every confirmed BLOCKER and HIGH bug.
 8. Re-run the same Codex review scope until the verdict is `SHIP` or `SHIP-WITH-FOLLOWUPS`.
-9. Stop and report the verdict. Do not push, deploy, or apply production changes without Mason's explicit approval.
+9. Stop and report the verdict. The gauntlet does not push, deploy, or apply production changes; landing follows `.claude/commands/ship.md` and the hard gates in `AGENTS.md`.
 
 ### Foundation Audit Mode
 
@@ -105,7 +105,7 @@ When a confirmed finding belongs to one of these classes, route it to the gate (
 ## Safety Rules
 
 - Mason should not have to say `/codex-gauntlet`; plain-English review/ship/push/merge/safety wording is enough.
-- Never push or deploy from the gauntlet without Mason's explicit approval.
+- Never push or deploy from the gauntlet; landing follows `.claude/commands/ship.md`.
 - Never apply live migrations from the gauntlet without Mason's explicit approval.
 - Never delete data.
 - Never commit `.env` files or expose secret keys.

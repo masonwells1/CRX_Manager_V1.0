@@ -2059,7 +2059,7 @@ can double-apply. Codex (2026-09-01) added that the reorder is necessary but not
 repair too. Open PR #535's `fingerprintIntentPayload` solves a different problem and does not touch
 these call sites. **Fix shape:** reorder every post-RPC reset after `assertRpcResult`, repair the
 click-level reset, tests for transport failure / failure envelope / lost-response replay / success /
-changed intent. Money path → exact-SHA `gpt-5.6-sol` proof, then CodeRabbit.
+changed intent. Money path → exact-SHA `gpt-6-sol` proof, then CodeRabbit.
 
 ## RESOLVED 2026-09-04 (migration `20260903160000` APPLIED LIVE as ledger version `20260904023121`; code merged in PR #583, squash `3a6d52fc7`) — F2
 
@@ -2234,7 +2234,7 @@ three careful passes.
 **What actually protects this path** (do not treat the hook as load-bearing) — and it differs by residual:
 
 - **For the novel-lexical and non-hooked tool-path gaps** (rows 5 and 6
-  above): the exact-SHA `gpt-5.6-sol` proof on migration diffs and the CodeRabbit final review are the
+  above): the exact-SHA `gpt-6-sol` proof on migration diffs and the CodeRabbit final review are the
   controls that always apply. The post-apply sweep predicates are a **partial, conditional** control here,
   not a third guaranteed one, and the condition must be stated rather than implied. They consider such a
   routine at all only because it carries no `ACTOR_MISMATCH` token — but they then fire only on their own
