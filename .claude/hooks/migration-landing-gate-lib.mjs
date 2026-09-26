@@ -56,6 +56,12 @@ export function evaluateLandingGate({
   // source resolver found in another checkout — ride on this PR's approvals.
   queryHash,
   now = Date.now(),
+  // Wall-clock deadline for EVERY git/gh call below (Sol HIGH, 2026-09-26). The
+  // PreToolUse hook is killed at 15 seconds and a killed hook ALLOWS, so each call
+  // is capped by the time left and the gate refuses — while it can still say so —
+  // once too little remains. Callers with no hook timeout get a minute.
+  deadlineMs,
+  clock = () => Date.now(),
   runGit,
   runGh,
   listWorktrees,
@@ -65,13 +71,35 @@ export function evaluateLandingGate({
   if (!/^[0-9a-f]{64}$/i.test(String(queryHash || ""))) {
     return refuse("the SQL being applied has no content hash to bind to the reviewed commit (fail closed).");
   }
+  const deadline = Number.isFinite(deadlineMs) ? deadlineMs : clock() + 60_000;
+  const RESERVE_MS = 500;
+  const MIN_CALL_MS = 1_000;
+  const left = () => deadline - clock() - RESERVE_MS;
+  const OUT_OF_TIME = "ran out of time before every PR check finished; a hook cut off mid-check would ALLOW, so this refuses (fail closed). Retry, or apply through scripts/apply-migration-file.mjs, which has no hook time limit.";
   // Raw output: `git show` content must not be trimmed before it is hashed.
-  const git = runGit || ((args) => execFileSync("git", args, {
-    cwd: dir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
+  const rawGit = runGit || ((args) => execFileSync("git", args, {
+    cwd: dir, encoding: "utf8", timeout: Math.min(10_000, left()), stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
   }));
-  const gh = runGh || ((args) => execFileSync("gh", args, {
-    cwd: dir, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024,
+  const rawGh = runGh || ((args) => execFileSync("gh", args, {
+    cwd: dir, encoding: "utf8", timeout: Math.min(15_000, left()), stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024,
   }));
+  class OutOfTime extends Error {}
+  const timed = (call) => (args) => {
+    if (left() < MIN_CALL_MS) throw new OutOfTime(OUT_OF_TIME);
+    return call(args);
+  };
+  const git = timed(rawGit);
+  const gh = timed(rawGh);
+  try {
+    return evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees });
+  } catch (error) {
+    if (error instanceof OutOfTime) return refuse(OUT_OF_TIME);
+    return refuse(`the check itself failed (${error?.message || error}); fail closed.`);
+  }
+}
+
+function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
+  const OUT = (error) => error?.constructor?.name === "OutOfTime";
 
   const stem = path.basename(String(migName || "")).replace(/\.sql$/i, "");
   if (!stem) return refuse("the migration name is missing (fail closed).");
@@ -83,6 +111,7 @@ export function evaluateLandingGate({
     head = String(git(["rev-parse", "HEAD"])).trim();
     branch = String(git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
   } catch (error) {
+    if (OUT(error)) throw error;
     return refuse(`could not read this checkout's HEAD (${error?.message || error}).`);
   }
   if (!/^[0-9a-f]{40}$/i.test(head)) return refuse("this checkout's HEAD is not a commit.");
@@ -93,7 +122,8 @@ export function evaluateLandingGate({
   let committed;
   try {
     committed = git(["show", `HEAD:${rel}`]);
-  } catch {
+  } catch (error) {
+    if (OUT(error)) throw error;
     return refuse(`${rel} is not committed at HEAD ${head.slice(0, 12)}, so the SQL cannot be the reviewed SQL.`);
   }
   // The same normalization scripts/apply-migration-file.mjs applies before hashing
@@ -106,6 +136,7 @@ export function evaluateLandingGate({
   try {
     dirty = String(git(["status", "--porcelain", "--untracked-files=all", "--", rel])).trim();
   } catch (error) {
+    if (OUT(error)) throw error;
     return refuse(`could not confirm ${rel} is unchanged since HEAD (${error?.message || error}).`);
   }
   if (dirty) return refuse(`${rel} has uncommitted changes, so the SQL being applied is not the reviewed commit.`);
@@ -115,6 +146,7 @@ export function evaluateLandingGate({
     pr = JSON.parse(gh(["pr", "view", branch, "--json",
       "number,state,baseRefName,baseRefOid,headRefOid,mergeStateStatus,reviewDecision,reviews,statusCheckRollup"]));
   } catch (error) {
+    if (OUT(error)) throw error;
     return refuse(`could not find or read the open pull request for branch "${branch}" (${error?.message || error}).`);
   }
   const number = pr?.number ? `#${pr.number}` : "the pull request";

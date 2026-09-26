@@ -1553,6 +1553,27 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "not byte-identical", "SQL that differs from the reviewed commit is refused");
   refused(gate({ queryHash: "0".repeat(64) }), "not byte-identical", "a transmitted hash that matches nothing is refused");
   refused(gate({ queryHash: null }), "no content hash", "a missing transmitted hash fails closed");
+  // Sol HIGH, round 3: the whole gate runs inside a deadline and refuses — while
+  // it can still speak — instead of being killed mid-check (a killed hook ALLOWS).
+  {
+    let t = 1_000_000;
+    const slow = evaluateLandingGate({
+      checkoutDir: gateDir, migName: MIG, queryHash: HASH, listWorktrees: () => "",
+      deadlineMs: t + 15_000, clock: () => t,
+      runGit: (args) => {
+        const key = args.join(" ");
+        if (key === "rev-parse HEAD") return HEAD_SHA;
+        if (key === "rev-parse --abbrev-ref HEAD") return "claude/feature";
+        if (key.startsWith("show HEAD:")) return SQL;
+        if (key.startsWith("status --porcelain")) { t += 14_000; return ""; } // a slow git
+        throw new Error(`unexpected git ${key}`);
+      },
+      runGh: () => { throw new Error("gh must never be called once the budget is spent"); },
+    });
+    refused(slow, "ran out of time", "a slow step exhausts the budget and the NEXT call is refused, not started");
+    const none = evaluateLandingGate({ checkoutDir: gateDir, migName: MIG, queryHash: HASH, deadlineMs: Date.now() + 200 });
+    refused(none, "ran out of time", "with the real runners, a deadline already too close refuses before any call");
+  }
   ok(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: SQL.replace(/\n/g, "\r\n") } }).ok === true,
     "CRLF in the committed blob is normalized the same way the apply script normalizes the file");
   refused(gate({ git: { [`status --porcelain --untracked-files=all -- supabase/migrations/${MIG}.sql`]: " M supabase/migrations/x.sql" } }),

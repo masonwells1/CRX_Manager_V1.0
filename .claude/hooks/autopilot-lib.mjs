@@ -250,8 +250,8 @@ const DENY_PATH_RE = /(^|[\\/])\.env(\.|$)/i;
 // command shapes through to those guards:
 //
 //   git push [-u|--set-upstream] origin [HEAD:]<work-branch>
-//   gh pr merge <number> [--squash|--merge|--rebase|--delete-branch|
-//                         --match-head-commit <40-hex sha>]...
+//   gh pr merge <number> [--squash|--merge|--rebase|--delete-branch]...
+//               --match-head-commit <40-hex sha>   (required, exactly once)
 //
 // An ALLOWLIST of whole-command shapes, not a narrowed deny pattern. The deny set
 // above is untouched and still catches every other spelling — force, delete,
@@ -267,8 +267,12 @@ const HWS = String.raw`[^\S\r\n]`;
 const SAFE_PUSH_RE = new RegExp(
   String.raw`^${HWS}*git${HWS}+push(?:${HWS}+(?:-u|--set-upstream))?${HWS}+origin${HWS}+(?:HEAD:)?(?:refs/heads/)?([A-Za-z0-9][A-Za-z0-9._/-]{0,200})${HWS}*$`,
 );
+// The merge shape MUST carry exactly one `--match-head-commit <40-hex sha>`: it
+// binds the merge to the head the merge gate checked, so a push racing the merge
+// is refused by GitHub (Sol HIGH, 2026-09-26). pr-merge-guard additionally
+// requires that sha to equal the PR's current head.
 const SAFE_MERGE_RE = new RegExp(
-  String.raw`^${HWS}*gh${HWS}+pr${HWS}+merge${HWS}+[1-9][0-9]{0,6}(?:${HWS}+(?:--squash|--merge|--rebase|--delete-branch|--match-head-commit${HWS}+[0-9a-f]{40}))*${HWS}*$`,
+  String.raw`^${HWS}*gh${HWS}+pr${HWS}+merge${HWS}+[1-9][0-9]{0,6}(?:${HWS}+(?:--squash|--merge|--rebase|--delete-branch))*${HWS}+--match-head-commit${HWS}+[0-9a-f]{40}(?:${HWS}+(?:--squash|--merge|--rebase|--delete-branch))*${HWS}*$`,
 );
 const PROTECTED_BRANCH_RE = /^(?:main|master|production)$/i;
 

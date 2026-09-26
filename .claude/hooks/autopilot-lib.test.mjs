@@ -42,7 +42,10 @@ eq(autopilotDecision("Bash", { command: "supabase functions deploy process-docum
 // Mason's autonomous-landing rule (2026-09-26): the plain merge shape passes on to
 // pr-merge-guard, which enforces the rule. Every other spelling still denies —
 // see the landing-allowlist block at the end of this file.
-eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "allow", "plain gh pr merge passes on to pr-merge-guard");
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a" }), "allow",
+  "a head-pinned gh pr merge passes on to pr-merge-guard");
+eq(autopilotDecision("Bash", { command: "gh pr merge 42 --squash" }), "deny",
+  "an UNPINNED gh pr merge stays denied (Sol HIGH, 2026-09-26: a racing push could merge unreviewed)");
 eq(autopilotDecision("mcp__github__push_files", {}), "deny", "GitHub MCP push_files denied");
 eq(autopilotDecision("mcp__github__merge_pull_request", {}), "deny", "GitHub MCP merge PR denied");
 eq(autopilotDecision("mcp__github__create_or_update_file", {}), "deny", "GitHub MCP file write denied");
@@ -564,10 +567,9 @@ for (const command of [
   "git push --set-upstream origin HEAD:claude/autonomous-landing",
   "git push origin refs/heads/fix/field-invoice-season",
   "  git push origin feature/x  ",
-  "gh pr merge 812 --squash",
-  "gh pr merge 812 --squash --delete-branch",
   "gh pr merge 812 --squash --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a",
-  "gh pr merge 812 --rebase",
+  "gh pr merge 812 --squash --delete-branch --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a",
+  "gh pr merge 812 --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a --rebase",
 ]) {
   eq(autopilotDecision("Bash", { command }), "allow", `landing shape passes on to its guard: ${command}`);
 }
@@ -610,7 +612,13 @@ for (const command of [
   "git push origin feature/../main",
   "git push origin feature.lock",
   "git push origin feature/",
-  // merges: every flag outside the shape
+  // merges: an unpinned merge, a bad pin, a doubled pin, and every flag outside the shape
+  "gh pr merge 812 --squash",
+  "gh pr merge 812 --squash --delete-branch",
+  "gh pr merge 812 --rebase",
+  "gh pr merge 812 --squash --match-head-commit 890b41dcb233",
+  "gh pr merge 812 --squash --match-head-commit=890b41dcb233ad8c3f45c6dd9d3e14d38388135a",
+  "gh pr merge 812 --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a --match-head-commit 0000000000000000000000000000000000000000",
   "gh pr merge 812 --squash --admin",
   "gh pr merge 812 --admin",
   "gh pr merge 812 --squash --auto",
@@ -629,7 +637,8 @@ for (const command of [
 ]) {
   eq(autopilotDecision("Bash", { command }), "deny", `outside the landing shape stays denied: ${JSON.stringify(command)}`);
 }
-ok(isArmedLandingCommand("gh pr merge 812 --squash") && !isArmedLandingCommand("gh pr merge 812 --admin"),
+ok(isArmedLandingCommand("gh pr merge 812 --squash --match-head-commit 890b41dcb233ad8c3f45c6dd9d3e14d38388135a")
+  && !isArmedLandingCommand("gh pr merge 812 --squash") && !isArmedLandingCommand("gh pr merge 812 --admin"),
   "the exported predicate agrees with the decision");
 
 console.log(`autopilot-lib: ${pass} assertions passed`);

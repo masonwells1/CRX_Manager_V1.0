@@ -407,6 +407,21 @@ function gateRequest(request) {
   // pushed in the meantime would merge with no exact-head proof and no CodeRabbit
   // review of it (Codex round-4). With the proof now required for every merge,
   // auto-merge is never allowed into main.
+  //
+  // The same race exists for an IMMEDIATE merge: everything below is checked
+  // against the head this gate read, and a push landing before GitHub executes
+  // the merge would be merged unreviewed. `--match-head-commit <that head>` makes
+  // GitHub itself refuse a moved head, so every agent merge must carry it, equal
+  // to the head checked here (Sol HIGH, 2026-09-26). Merge routes that cannot
+  // carry it — the REST endpoint and connector tools — are therefore denied.
+  if (String(request.matchHeadCommit || "").toLowerCase() !== String(pr.headRefOid || "").toLowerCase()) {
+    deny(
+      `PR MERGE GATE: an agent merge into main must pin the exact head this gate checked — add ` +
+      `\`--match-head-commit ${pr.headRefOid}\` to \`gh pr merge\` (got ${request.matchHeadCommit ? `\`${String(request.matchHeadCommit).slice(0, 12)}\`` : "none"}). ` +
+      "Without it, a commit pushed between this check and GitHub's merge would land unreviewed. The REST " +
+      "merge endpoint and connector merge tools cannot carry the pin; use `gh pr merge`."
+    );
+  }
   if (request.auto) {
     deny(
       "PR MERGE GATE: `--auto` is not allowed into main — auto-merge lands the PR later, after this gate " +

@@ -43,15 +43,19 @@ still blocks; `--admin` and `--auto` merges stay refused.
 - `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` deny a merge into `main` unless
   CodeRabbit's latest verdict is APPROVED on the exact `headRefOid`, the newest run of every reported
   check is green with `mergeStateStatus` CLEAN, and a fresh Sol proof is bound to that head and
-  GitHub's real base. `--auto` into `main` is refused outright.
+  GitHub's real base. `--auto` into `main` is refused outright, and every agent merge must carry
+  `--match-head-commit <the head the gate checked>` so GitHub itself refuses a head that moved between
+  the check and the merge (REST and connector merge routes cannot carry it and are refused).
 - `migration-apply-lib.mjs` applies the formerly hands-free-only proof set in every session and refuses
   destructive SQL for agents everywhere. The one door for a destructive migration is Mason's in-chat
   yes, then `scripts/apply-migration-file.mjs ... --mason-approved-destructive` in an UNARMED session,
   with every proof still required; an armed run refuses it regardless. The flag is self-attested — the
   same trust the in-chat OK always carried — so it is a deliberate speed bump, not proof.
 - Armed autopilot lets exactly two whole-command shapes through to those guards — a plain
-  `git push origin <work-branch>` and a plain `gh pr merge <n> [--squash|…]` — and still denies every
-  other push or merge spelling.
+  `git push origin <work-branch>` and `gh pr merge <n> [--squash|…] --match-head-commit <sha>` — and
+  still denies every other push or merge spelling.
+- The landing gate runs inside the hook's time budget and refuses before a slow GitHub could let the
+  15-second hook be killed (a killed hook allows).
 - The CodeRabbit lifecycle workflow waits out running checks instead of failing, no longer restarts CI
   with a PR-description summary, releases its provider label once a review lands, and lets a fix on the
   SAME PR earn one follow-up review (candidate epochs). See `docs/reference/coderabbit-native-review.md`.

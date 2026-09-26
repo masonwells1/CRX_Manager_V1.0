@@ -1204,6 +1204,17 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   // An agent merges into main only when CodeRabbit APPROVED the exact head, the
   // newest run of every check is green, and a fresh exact-SHA Sol proof exists.
   // `--auto` would land commits pushed after this gate ran, so it is refused.
+  // An immediate merge has the same race, closed by `--match-head-commit` equal
+  // to the head checked here, which makes GitHub refuse a moved head (Sol HIGH,
+  // 2026-09-26). Routes that cannot carry it — REST and connector merges — deny.
+  if (String(request.matchHeadCommit || "").toLowerCase() !== String(pullRequest.headRefOid || "").toLowerCase()) {
+    return denied(
+      `CODEX PRODUCTION GATE: an agent merge into main must pin the exact head this gate checked — add ` +
+      `\`--match-head-commit ${pullRequest.headRefOid}\` to \`gh pr merge\`. Without it, a commit pushed between ` +
+      "this check and GitHub's merge would land unreviewed. The REST merge endpoint and connector merge tools " +
+      "cannot carry the pin; use `gh pr merge`."
+    );
+  }
   if (request.auto) {
     return denied(
       "CODEX PRODUCTION GATE: `--auto` is not allowed into main — auto-merge lands the PR after this gate has " +

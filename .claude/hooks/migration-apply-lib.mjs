@@ -329,7 +329,10 @@ export function evaluateMigrationApply({
   masonApprovedDestructive = false,
   // The pull-request half of the autonomous-landing rule — see
   // migration-landing-gate-lib.mjs. Injection point for tests only; both real
-  // callers leave it unset and get the real gate.
+  // callers leave it unset and get the real gate. `landingDeadlineMs` is the
+  // wall-clock deadline for its git/gh calls: the PreToolUse hook passes one inside
+  // its 15-second budget; the apply script has no hook timeout and leaves it unset.
+  landingDeadlineMs,
   landingGate,
 } = {}) {
   const stateDir = path.join(projectDir, ".claude", "session-state");
@@ -1051,7 +1054,9 @@ export function evaluateMigrationApply({
     // passed", and fail closed on anything unexpected.
     let landing;
     try {
-      landing = (landingGate || evaluateLandingGate)({ checkoutDir: hookCwd, migName, queryHash: currentHash, now, listWorktrees });
+      landing = (landingGate || evaluateLandingGate)({
+        checkoutDir: hookCwd, migName, queryHash: currentHash, now, listWorktrees, deadlineMs: landingDeadlineMs,
+      });
     } catch (error) {
       landing = { ok: false, reason: `MIGRATION LANDING GATE: the check itself failed (${error?.message || error}); fail closed.` };
     }

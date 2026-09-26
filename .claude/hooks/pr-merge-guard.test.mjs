@@ -275,6 +275,15 @@ ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
   lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
   { ...lifecycle("", null, null), status: "QUEUED", conclusion: null },
 ] }), "a queued rerun with no start time still blocks over an older success");
+// Sol MED, round 3: a repeated StatusContext has no trustworthy order, so the
+// WORSE state wins — in either list order.
+for (const order of [["SUCCESS", "FAILURE"], ["FAILURE", "SUCCESS"], ["SUCCESS", "PENDING"]]) {
+  ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: order.map((state) => ({ __typename: "StatusContext", context: "Vercel", state })) }),
+    `a repeated status context with ${order.join(" then ")} is not green`);
+}
+ok(pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  { __typename: "StatusContext", context: "Vercel", state: "SUCCESS" }, { __typename: "StatusContext", context: "Vercel", state: "SUCCESS" },
+] }), "a repeated all-success status context is still green");
 ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
   { ...lifecycle("", null, null), status: "WAITING", conclusion: null },
   lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
@@ -525,6 +534,23 @@ eq((gateRequestSource.match(/advisoryQueue\.push\(request\)/g) || []).length, 1,
   "exactly one allow point, and it sits behind the proof scan");
 ok(gateRequestSource.indexOf("advisoryQueue.push(request)") > gateRequestSource.indexOf("proofValid(data, headSha"),
   "the single allow point comes after the exact-head Sol proof validated");
+
+// ── every agent merge pins the checked head (Sol HIGH, 2026-09-26) ───────────
+// A push landing between this gate's checks and GitHub's merge would otherwise
+// be merged unreviewed; `--match-head-commit` makes GitHub refuse a moved head.
+const SHA = "890b41dcb233ad8c3f45c6dd9d3e14d38388135a";
+eq(ghMergeRequest(`gh pr merge 42 --squash --match-head-commit ${SHA}`)?.matchHeadCommit, SHA, "the pin is read (spaced)");
+eq(ghMergeRequest(`gh pr merge 42 --match-head-commit=${SHA} --squash`)?.matchHeadCommit, SHA, "the pin is read (=)");
+eq(ghMergeRequest(`gh pr merge 42 --match-head-commit aaaa --match-head-commit ${SHA}`)?.matchHeadCommit, SHA,
+  "gh keeps the LAST value, and so does the parser");
+eq(ghMergeRequest(`gh pr merge 42 --body --match-head-commit --squash`)?.matchHeadCommit, undefined,
+  "a pin spelled inside another option's VALUE is data, not a pin");
+eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, admin: false },
+  "an unpinned merge keeps its exact old shape (no pin field)");
+ok(/String\(request\.matchHeadCommit[^)]*\)\.toLowerCase\(\)\s*!==\s*String\(pr\.headRefOid[^)]*\)\.toLowerCase\(\)\)\s*\{\s*deny\(/.test(gateRequestSource),
+  "gateRequest denies any merge whose pin is missing or differs from the head it checked");
+ok(gateRequestSource.indexOf("request.matchHeadCommit") < gateRequestSource.indexOf("advisoryQueue.push(request)"),
+  "the pin is checked before the allow point");
 
 // ── the two 2026-09-08 Codex sol findings, pinned at their call sites ─────────
 // Both are wiring, not parsing: the shared helpers are exercised behaviourally in

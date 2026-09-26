@@ -345,8 +345,9 @@ try {
     reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: ordinary.sha }, submittedAt: "2026-09-26T12:00:00Z" }],
     statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "build" }],
   });
+  const ordinaryPinned = `gh pr merge 5 --squash --match-head-commit ${ordinary.sha}`;
   const ordinaryMerge = evaluateProductionAction({
-    toolName: "PowerShell", toolInput: { command: "gh pr merge 5 --squash" }, repoDir: ordinary.repo,
+    toolName: "PowerShell", toolInput: { command: ordinaryPinned }, repoDir: ordinary.repo,
     nowMs: Date.now(), runGh: () => ordinaryPrJson,
   });
   assert.equal(ordinaryMerge.blocked, true, "a non-risky PR merge into main still needs the Sol proof");
@@ -356,9 +357,21 @@ try {
     head_sha: ordinary.sha, base_sha: ordinary.base, timestamp: new Date().toISOString(),
   });
   assert.equal(evaluateProductionAction({
-    toolName: "PowerShell", toolInput: { command: "gh pr merge 5 --squash" }, repoDir: ordinary.repo,
+    toolName: "PowerShell", toolInput: { command: ordinaryPinned }, repoDir: ordinary.repo,
     nowMs: Date.now(), runGh: () => ordinaryPrJson,
   }).blocked, false, "...and merges once the exact-SHA Sol proof exists");
+  // Sol HIGH, round 3: the same merge-ready PR without the head pin is refused —
+  // a push racing the merge would otherwise land unreviewed.
+  const unpinned = evaluateProductionAction({
+    toolName: "PowerShell", toolInput: { command: "gh pr merge 5 --squash" }, repoDir: ordinary.repo,
+    nowMs: Date.now(), runGh: () => ordinaryPrJson,
+  });
+  assert.equal(unpinned.blocked, true, "an unpinned merge of a merge-ready PR is refused");
+  assert.match(unpinned.reason, /--match-head-commit/, "and the denial names the pin");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell", toolInput: { command: `gh pr merge 5 --squash --match-head-commit ${"0".repeat(40)}` }, repoDir: ordinary.repo,
+    nowMs: Date.now(), runGh: () => ordinaryPrJson,
+  }).blocked, true, "a pin to a different head is refused");
 
   // ── codex-bot-review-lib is guard-critical: it is IMPORTED at startup ──────
   // Codex HIGH on PR #563's own exact-head review: the module was reachable by
@@ -1402,6 +1415,11 @@ try {
     statusCheckRollup: greenChecks,
   };
   const mainPrJson = JSON.stringify(mainPr);
+  // Sol HIGH, 2026-09-26: every agent merge must pin the head the gate checked.
+  // Merges below that test some OTHER condition carry the correct pin, so their
+  // verdict still comes from that condition; sections with another fixture head
+  // reassign it.
+  let PIN = ` --match-head-commit ${risky.sha}`;
   const featurePrJson = JSON.stringify({ baseRefName: "develop", headRefName: "feature/test", headRefOid: risky.sha });
   assert.equal(pullRequestChecksGreen(mainPr), true, "clean PR with completed passing checks is green");
   assert.equal(pullRequestChecksGreen({ ...mainPr, mergeStateStatus: "BLOCKED" }), false, "blocked merge state is not green");
@@ -1418,7 +1436,7 @@ try {
   unlinkSync(proofPath(risky.repo));
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -1426,7 +1444,7 @@ try {
   writeProof(risky.repo, valid);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -1437,7 +1455,7 @@ try {
   // valid Sol proof), so each denial is caused by the one thing it removes.
   const noCodeRabbit = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviews: [] }),
@@ -1446,14 +1464,14 @@ try {
   assert.match(noCodeRabbit.reason, /CodeRabbit has not APPROVED this exact head/, "and the denial says why");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] }),
   }).blocked, true, "an approval of an OLDER commit does not cover the head");
   const autoMerge = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    toolInput: { command: `gh pr merge 123 --squash --auto${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -1462,7 +1480,7 @@ try {
   assert.match(autoMerge.reason, /--auto/, "and the denial names the flag");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, statusCheckRollup: [
@@ -1557,7 +1575,7 @@ try {
   // reach the normal gate and be allowed, or this fix is an over-block.
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash --body 'ships the thing'" },
+    toolInput: { command: `gh pr merge 123 --squash --body 'ships the thing'${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -1569,14 +1587,14 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, false, "gh API merge route uses the same green-CI and proof gate");
-  assert.equal(evaluateProductionAction({
+  }).blocked, true, "the gh API merge route is still gated — and, since it carries no head pin, refused on a merge-ready PR (Sol HIGH, 2026-09-26)");
+  assert.match(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api -X PUT https://api.github.com/repos/crop/crx/pulls/123/merge -f merge_method=squash" },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, false, "full-URL gh API merge route uses the same gate");
+  }).reason, /--match-head-commit/, "the full-URL gh API merge route reaches the same gate and is refused for the missing pin");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: "gh api graphql -f query='mutation{mergePullRequest(input:{pullRequestId:\"PR_1\"}){pullRequest{id}}}'" },
@@ -1589,7 +1607,7 @@ try {
   }).blocked, true, "unrecognized mutating gh API calls are denied");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({
@@ -1600,14 +1618,14 @@ try {
   }).blocked, true, "gh PR merge denies when GitHub checks are not green");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: '"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --squash' },
+    toolInput: { command: `"C:\\Program Files\\GitHub CLI\\gh.exe" pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
   }).blocked, false, "full Windows GitHub CLI paths are gated too");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     runGh: () => featurePrJson,
   }).blocked, false, "gh PR merge to a non-production base is allowed");
@@ -1631,7 +1649,7 @@ try {
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --admin=false --squash" },
+    toolInput: { command: `gh pr merge 123 --admin=false --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -1642,7 +1660,7 @@ try {
   // GROUNDS, which is the part that changed.
   const unapproved = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "REVIEW_REQUIRED" }),
@@ -1654,7 +1672,7 @@ try {
   );
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
@@ -2045,7 +2063,7 @@ try {
   };
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: hangingAdvisoryGh,
@@ -2072,7 +2090,7 @@ try {
   };
   const controlVerdict = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: controlGh,
@@ -2104,7 +2122,7 @@ try {
   };
   const chainedVerdict = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash && gh pr merge 456 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN} && gh pr merge 456 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: chainedGh,
@@ -2129,7 +2147,7 @@ try {
   };
   const chainedControlVerdict = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash && gh pr merge 456 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN} && gh pr merge 456 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: chainedControlGh,
@@ -2159,7 +2177,10 @@ try {
     toolName: "PowerShell",
     // Two readings: the quote-aware one, and the naive one that splits on the
     // `&` inside the body. Both resolve to selector 123, admin false.
-    toolInput: { command: "gh pr merge 123 --body 'note&more' --squash" },
+    // The pin goes BEFORE the free-text body: the naive reading cuts at the `&`,
+    // and a pin after it would be lost from that reading (which then — safely —
+    // refuses as unpinned).
+    toolInput: { command: `gh pr merge 123 --squash${PIN} --body 'note&more'` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: dedupeGh,
@@ -2190,7 +2211,7 @@ try {
   // nothing ALLOWS — so enough slow-but-successful calls turned every denial
   // still to come into an allow. A virtual clock stands in for the slow GitHub:
   // a real sleep would make this suite as slow as the attack it models.
-  const threeMerges = "gh pr merge 123 --squash && gh pr merge 456 --squash && gh pr merge 789 --squash";
+  const threeMerges = `gh pr merge 123 --squash${PIN} && gh pr merge 456 --squash${PIN} && gh pr merge 789 --squash${PIN}`;
   const budgetRun = (msPerGhCall) => {
     let virtualNow = 1_000_000;
     const resolved = [];
@@ -2253,9 +2274,11 @@ try {
   };
   for (const [command, pattern, label] of [
     [`gh api -H X-Test:value${BS} -X DELETE repos/o/r/branches/main/protection`, /./, "an escaped-space `-X DELETE`"],
-    [`gh pr merge 123 --body x${BS} --admin --squash`, /--admin/, "an escaped-space `--admin`"],
+    // The pin sits before the body so the POSIX reading stays a fully green,
+    // pinned merge and only the PowerShell reading's --admin can deny it.
+    [`gh pr merge 123${PIN} --body x${BS} --admin --squash`, /--admin/, "an escaped-space `--admin`"],
     [`gh api --template ${BS}"x" -X DELETE repos/o/r/git/refs/heads/feature`, /./, "a backslash-quote `-X DELETE`"],
-    [`gh pr merge 123 --body ${BS}"foo" --admin --squash`, /--admin/, "a backslash-quote `--admin`"],
+    [`gh pr merge 123${PIN} --body ${BS}"foo" --admin --squash`, /--admin/, "a backslash-quote `--admin`"],
   ]) {
     const verdict = evaluateProductionAction({
       toolName: "PowerShell",
@@ -2325,19 +2348,24 @@ try {
     nowMs: now,
     runGh: standingThreadGh,
   });
-  assert.equal(connectorStanding.blocked, true, "an unresolved Codex App thread on the exact head denies a CONNECTOR merge, not only a shell one");
-  assert.match(String(connectorStanding.reason), /unresolved comment/, "…with the App-review denial, not some other gate");
+  assert.equal(connectorStanding.blocked, true, "a CONNECTOR merge is denied, not only a shell one");
+  // Since 2026-09-26 (Sol HIGH) the connector route cannot carry the head pin, so
+  // it is refused before the advisory is even consulted — a stricter outcome than
+  // the App-review denial it used to reach.
+  assert.match(String(connectorStanding.reason), /--match-head-commit/, "…because the connector cannot pin the checked head");
   const shellStanding = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: standingThreadGh,
   });
   assert.equal(shellStanding.blocked, true, "PARITY: the same standing thread denies the shell route");
   assert.match(String(shellStanding.reason), /unresolved comment/, "…with the same denial");
-  // And the connector route still ALLOWS when the App has nothing standing —
-  // the fix must add the check, not turn the route into a deny.
+  // The connector route used to ALLOW a clean, green, proof-backed merge. Since
+  // 2026-09-26 it cannot carry the head pin, so even that merge is refused and
+  // agents merge through `gh pr merge --match-head-commit`. The fail-open advisory
+  // CONTROL is kept on the shell route below.
   const connectorClean = evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
@@ -2345,7 +2373,14 @@ try {
     nowMs: now,
     runGh: controlGh,
   });
-  assert.equal(connectorClean.blocked, false, "CONTROL: a clean, green, proof-backed connector merge with a failed (fail-open) advisory is still allowed");
+  assert.equal(connectorClean.blocked, true, "a clean, green, proof-backed CONNECTOR merge is refused: it cannot pin the head");
+  assert.equal(evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: controlGh,
+  }).blocked, false, "CONTROL: the same clean, green, proof-backed merge with a failed (fail-open) advisory is allowed on the pinned shell route");
   // --auto MUST NOT exempt an active objection (Codex High finding, PR #559).
   // Every other gate exempts auto because GitHub holds the merge until its own
   // requirements are met; the requirement that covered this one was the required
@@ -2353,7 +2388,7 @@ try {
   // auto-merge over CHANGES_REQUESTED, so the guard has to be the one to refuse.
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash --auto" },
+    toolInput: { command: `gh pr merge 123 --squash --auto${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: "CHANGES_REQUESTED" }),
@@ -2364,7 +2399,7 @@ try {
   // floor lives upstream instead: an unresolvable PR is denied before this point.
   const noVerdict = evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviewDecision: undefined }),
@@ -2458,7 +2493,7 @@ try {
   // denial — otherwise the blanket rule would swallow the approved path.
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
-    toolInput: { command: "gh pr merge 123 --squash" },
+    toolInput: { command: `gh pr merge 123 --squash${PIN}` },
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
@@ -2469,7 +2504,7 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, false, "GitHub MCP PR merge uses the same valid proof gate");
+  }).blocked, true, "a GitHub MCP PR merge reaches the gate and is refused: the tool cannot pin the head (Sol HIGH, 2026-09-26)");
   assert.equal(evaluateProductionAction({
     toolName: "mcp__github__merge_pull_request",
     toolInput: { owner: "crop", repo: "crx", pull_number: 123 },
@@ -2487,7 +2522,7 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: (args) => { sawSelector = args.join(" "); return mainPrJson; },
-  }).blocked, false, "Codex-app merge input spelling is recognized and gated");
+  }).blocked, true, "Codex-app merge input spelling is recognized and gated (and refused since 2026-09-26: it cannot pin the head)");
   assert.match(sawSelector, /\b123\b/, "guard verifies the exact requested PR number");
   assert.match(sawSelector, /crop\/crx/, "guard verifies against the exact requested repo");
   assert.equal(evaluateProductionAction({
@@ -2762,6 +2797,7 @@ try {
     const githubBase = git(stale.repo, ["rev-parse", "HEAD"]);
     git(stale.repo, ["switch", "feature/test"]);
     assert.notEqual(githubBase, stale.base, "fixture must model a genuinely moved base");
+    PIN = ` --match-head-commit ${stale.sha}`; // this fixture's head
 
     const prAt = (baseRefOid) => JSON.stringify({
       baseRefName: "main",
@@ -2775,7 +2811,7 @@ try {
     });
     const mergeWith = (json) => evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: "gh pr merge 123 --squash" },
+      toolInput: { command: `gh pr merge 123 --squash${PIN}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: () => json,
@@ -2818,9 +2854,10 @@ try {
     git(stale.repo, ["merge", "--no-edit", "-q", githubBase]);
     const updatedHead = git(stale.repo, ["rev-parse", "HEAD"]);
     writeProof(stale.repo, { ...valid, head_sha: updatedHead, base_sha: githubBase });
+    PIN = ` --match-head-commit ${updatedHead}`;
     const upToDate = evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: "gh pr merge 123 --squash" },
+      toolInput: { command: `gh pr merge 123 --squash${PIN}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: () => JSON.stringify({
@@ -2840,6 +2877,7 @@ try {
       "base-bound proof on a head that contains the base clears the merge gate"
     );
     console.log(`TRANSCRIPT BASEOID: head updated to contain base -> blocked=${upToDate.blocked}`);
+    PIN = ` --match-head-commit ${stale.sha}`; // the cases below use the original head again
 
     // A base GitHub reports but the checkout does not have must fail closed with
     // actionable guidance, not an opaque git error or a silent pass.
@@ -2874,7 +2912,7 @@ try {
     const ghCalls = [];
     evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: "gh pr merge 123 --squash" },
+      toolInput: { command: `gh pr merge 123 --squash${PIN}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: (args) => { ghCalls.push(args.join(" ")); return prAt(githubBase); },
@@ -2900,9 +2938,10 @@ try {
     // Use the up-to-date head so this reaches the proof requirement rather than
     // stopping at the ancestry gate.
     unlinkSync(proofPath(stale.repo));
+    PIN = ` --match-head-commit ${updatedHead}`;
     const guidance = String(evaluateProductionAction({
       toolName: "PowerShell",
-      toolInput: { command: "gh pr merge 123 --squash" },
+      toolInput: { command: `gh pr merge 123 --squash${PIN}` },
       repoDir: stale.repo,
       nowMs: now,
       runGh: () => JSON.stringify({

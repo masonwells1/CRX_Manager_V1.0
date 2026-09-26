@@ -2495,6 +2495,7 @@ export function ghMergeRequest(command) {
   let repo = "";
   let auto = false;
   let admin = false;
+  let matchHeadCommit = null;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (isValue[index]) continue;
@@ -2508,6 +2509,10 @@ export function ghMergeRequest(command) {
     const stripped = word;
     const lower = stripped.toLowerCase();
     if (lower.startsWith("--repo=")) { repo = stripped.slice("--repo=".length); continue; }
+    // `--match-head-commit` pins the merge to the head the gate checked: GitHub
+    // refuses the merge if the PR head moved in between (Sol HIGH, 2026-09-26).
+    // gh keeps the LAST value, so the last one read wins here too.
+    if (lower.startsWith("--match-head-commit=")) { matchHeadCommit = stripped.slice("--match-head-commit=".length); continue; }
     // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
     // immediately. Classifying it as auto exempted it from the green-pipeline
     // check and (since 2026-09-01) the approval check too — an exemption that is
@@ -2543,6 +2548,7 @@ export function ghMergeRequest(command) {
       // has to read it — advancing the index here as well would step past the
       // word AFTER the value.
       if (lower === "--repo") repo = words[index + 1] || "";
+      if (lower === "--match-head-commit") matchHeadCommit = words[index + 1] || "";
       continue;
     }
     const cluster = ghMergeShortCluster(stripped);
@@ -2557,7 +2563,8 @@ export function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
-  return { selector, repo, auto, admin };
+  // Present only when given, so every existing reading keeps its exact shape.
+  return matchHeadCommit === null ? { selector, repo, auto, admin } : { selector, repo, auto, admin, matchHeadCommit };
 }
 
 // gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`
@@ -2992,6 +2999,15 @@ export function newestCheckRollup(checks) {
       return Number.isFinite(ms) ? ms : -Infinity;
     });
     const held = newest.get(key);
+    // A StatusContext is already GitHub's latest state for its context, so a
+    // repeated one is an anomaly with no trustworthy order (its time fields are
+    // often absent). The WORSE state wins there — an older success must never
+    // hide a newer failure by list order (Sol MED, 2026-09-26).
+    if (held && check?.__typename === "StatusContext") {
+      const failing = (entry) => String(entry?.state || "").toUpperCase() !== "SUCCESS";
+      if (failing(check) && !failing(held.check)) newest.set(key, { check, stamp });
+      return;
+    }
     if (!held || stamp[0] > held.stamp[0] || (stamp[0] === held.stamp[0] && stamp[1] >= held.stamp[1])) {
       newest.set(key, { check, stamp });
     }

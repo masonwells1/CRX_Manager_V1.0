@@ -18,8 +18,10 @@
 > `main` unless CodeRabbit's latest verdict (`gh pr view --json reviews`) is APPROVED on the exact `headRefOid`
 > (`coderabbitApprovedHead`), the NEWEST run of every reported check is green with `mergeStateStatus` CLEAN
 > (`newestCheckRollup` — an older failed run no longer outvotes a later green one), and a fresh `gpt-6-sol`/`high`
-> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones. `--auto` into `main` is
-> refused outright; `--admin` and `CHANGES_REQUESTED` still are. (2) `migration-apply-lib.mjs` applies its former
+> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones. Every agent merge must
+> carry `--match-head-commit <the head the gate checked>` (put it before any free-text `--body`), so GitHub refuses a
+> head that moved in between; REST and connector merges cannot carry it and are refused. `--auto` into `main` is
+> refused outright; `--admin` and `CHANGES_REQUESTED` still are. A repeated StatusContext counts its WORSE state. (2) `migration-apply-lib.mjs` applies its former
 > hands-free-only proof set (content binding, both reviewer names, fresh content-bound Sol proof) in EVERY session,
 > and refuses DESTRUCTIVE SQL for agents in every session; the only door is Mason's in-chat yes plus
 > `scripts/apply-migration-file.mjs --mason-approved-destructive` in an UNARMED session (armed runs refuse it
@@ -29,8 +31,9 @@
 > has CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof — so no migration reaches
 > production before its PR's final reviews. A fixture with no real PR therefore always ends at that refusal. (3) `autopilot-lib.mjs` lets exactly two whole-command shapes through to those guards
 > while armed — `git push [-u] origin [HEAD:]<work-branch>` and `gh pr merge <n> [--squash|--merge|--rebase|
-> --delete-branch|--match-head-commit <sha>]` (`isArmedLandingCommand`) — and keeps denying every other push or merge
-> spelling. (4) The CodeRabbit lifecycle workflow waits out running checks, releases its provider label after
+> --delete-branch] --match-head-commit <40-hex sha>` with the pin required exactly once (`isArmedLandingCommand`) — and
+> keeps denying every other push or merge spelling. The landing gate also runs inside the migration hook's 15-second
+> budget (`landingDeadlineMs`) and refuses rather than be killed mid-check. (4) The CodeRabbit lifecycle workflow waits out running checks, releases its provider label after
 > delivery, and records candidate epochs so a fix on the same PR earns one follow-up review
 > (`docs/reference/coderabbit-native-review.md`). (5) `.github/workflows/daily-landing-summary.yml` posts Mason a
 > read-only daily summary. See `docs/manual/DECISION_LOG.md`, 2026-09-26.
