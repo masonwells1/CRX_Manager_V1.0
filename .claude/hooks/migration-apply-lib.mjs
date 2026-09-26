@@ -1051,7 +1051,7 @@ export function evaluateMigrationApply({
     // passed", and fail closed on anything unexpected.
     let landing;
     try {
-      landing = (landingGate || evaluateLandingGate)({ checkoutDir: hookCwd, migName, now, listWorktrees });
+      landing = (landingGate || evaluateLandingGate)({ checkoutDir: hookCwd, migName, queryHash: currentHash, now, listWorktrees });
     } catch (error) {
       landing = { ok: false, reason: `MIGRATION LANDING GATE: the check itself failed (${error?.message || error}); fail closed.` };
     }

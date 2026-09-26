@@ -21,6 +21,7 @@
 // imported, never re-derived.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -49,6 +50,11 @@ function refuse(why) {
 export function evaluateLandingGate({
   checkoutDir,
   migName,
+  // sha256 of the EXACT SQL being transmitted. The committed migration at the
+  // PR's head must hash to the same value (Sol HIGH, round 2): checking only that
+  // a same-named file is committed let different SQL — e.g. a same-named file the
+  // source resolver found in another checkout — ride on this PR's approvals.
+  queryHash,
   now = Date.now(),
   runGit,
   runGh,
@@ -56,9 +62,13 @@ export function evaluateLandingGate({
 } = {}) {
   const dir = String(checkoutDir || "");
   if (!dir) return refuse("the checkout the apply runs from is unknown (fail closed).");
+  if (!/^[0-9a-f]{64}$/i.test(String(queryHash || ""))) {
+    return refuse("the SQL being applied has no content hash to bind to the reviewed commit (fail closed).");
+  }
+  // Raw output: `git show` content must not be trimmed before it is hashed.
   const git = runGit || ((args) => execFileSync("git", args, {
-    cwd: dir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
-  }).trim());
+    cwd: dir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
+  }));
   const gh = runGh || ((args) => execFileSync("gh", args, {
     cwd: dir, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 16 * 1024 * 1024,
   }));
@@ -80,10 +90,17 @@ export function evaluateLandingGate({
     return refuse(`the apply runs from ${!branch || branch === "HEAD" ? "a detached HEAD" : `"${branch}"`}, not from the pull request's own branch.`);
   }
 
+  let committed;
   try {
-    git(["cat-file", "-e", `HEAD:${rel}`]);
+    committed = git(["show", `HEAD:${rel}`]);
   } catch {
     return refuse(`${rel} is not committed at HEAD ${head.slice(0, 12)}, so the SQL cannot be the reviewed SQL.`);
+  }
+  // The same normalization scripts/apply-migration-file.mjs applies before hashing
+  // and transmitting (CRLF → LF), so equal bytes on disk always compare equal.
+  const committedHash = createHash("sha256").update(String(committed).replace(/\r\n/g, "\n")).digest("hex");
+  if (committedHash !== String(queryHash).toLowerCase()) {
+    return refuse(`the SQL being applied is not byte-identical to ${rel} in the reviewed commit ${head.slice(0, 12)} (committed ${committedHash.slice(0, 12)}, transmitted ${String(queryHash).slice(0, 12)}).`);
   }
   let dirty;
   try {

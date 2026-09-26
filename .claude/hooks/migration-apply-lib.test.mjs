@@ -1525,14 +1525,14 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
   };
-  const gate = ({ git = {}, pr = {}, prError = null, migName = MIG } = {}) => evaluateLandingGate({
-    checkoutDir: gateDir, migName, listWorktrees: () => "",
+  const gate = ({ git = {}, pr = {}, prError = null, migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+    checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
       if (key in git) { if (git[key] instanceof Error) throw git[key]; return git[key]; }
-      if (key === "rev-parse HEAD") return HEAD_SHA;
-      if (key === "rev-parse --abbrev-ref HEAD") return "claude/feature";
-      if (key.startsWith("cat-file -e HEAD:")) return "";
+      if (key === "rev-parse HEAD") return `${HEAD_SHA}\n`;
+      if (key === "rev-parse --abbrev-ref HEAD") return "claude/feature\n";
+      if (key.startsWith("show HEAD:")) return SQL;
       if (key.startsWith("status --porcelain")) return "";
       throw new Error(`unexpected git ${key}`);
     },
@@ -1546,7 +1546,15 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   ok(gate().ok === true, "a ready PR — committed file, head matches, CodeRabbit APPROVED, green, fresh Sol proof — passes");
   refused(gate({ git: { "rev-parse --abbrev-ref HEAD": "main" } }), "not from the pull request's own branch", "applying from main is refused");
   refused(gate({ git: { "rev-parse --abbrev-ref HEAD": "HEAD" } }), "detached HEAD", "a detached checkout is refused");
-  refused(gate({ git: { [`cat-file -e HEAD:supabase/migrations/${MIG}.sql`]: new Error("missing") } }), "is not committed at HEAD", "an uncommitted migration is refused");
+  refused(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: new Error("missing") } }), "is not committed at HEAD", "an uncommitted migration is refused");
+  // Sol HIGH, round 2: a committed same-named file is not enough — the SQL being
+  // transmitted must be byte-identical to it.
+  refused(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: `${SQL}-- different SQL\n` } }),
+    "not byte-identical", "SQL that differs from the reviewed commit is refused");
+  refused(gate({ queryHash: "0".repeat(64) }), "not byte-identical", "a transmitted hash that matches nothing is refused");
+  refused(gate({ queryHash: null }), "no content hash", "a missing transmitted hash fails closed");
+  ok(gate({ git: { [`show HEAD:supabase/migrations/${MIG}.sql`]: SQL.replace(/\n/g, "\r\n") } }).ok === true,
+    "CRLF in the committed blob is normalized the same way the apply script normalizes the file");
   refused(gate({ git: { [`status --porcelain --untracked-files=all -- supabase/migrations/${MIG}.sql`]: " M supabase/migrations/x.sql" } }),
     "uncommitted changes", "an edited-after-commit migration is refused");
   refused(gate({ prError: new Error("no pull requests found") }), "could not find or read the open pull request", "no PR is refused");
