@@ -14,9 +14,16 @@
 // WHERE "APPLIED" COMES FROM — stated plainly because it is the weak point. This
 // job holds no database credential (adding one is a secrets decision, which stays
 // Mason's), so it cannot read the live migration ledger. It reports applies as
-// the agents RECORDED them: every shipped change adds a docs/changelog.d/ entry,
-// and an entry that says a migration was "applied live" is listed as an apply.
-// The summary says so in its footer rather than presenting it as a database read.
+// they were RECORDED, and only as an explicit record line of its own:
+//     Applied live: <migration_name>
+// posted from Mason's account (which the agents' gh uses) as a comment on a pull
+// request merged in the window, or written in a docs/changelog.d/ entry. Prose
+// is never read as a record (Sol MEDIUM, round 8): real change notes say "was
+// applied live" and "has not been applied to production" in the same breath.
+// The agent posts the comment AFTER the merge, because the apply happens after
+// the final reviews, and editing the PR then would move its approved head. The
+// summary says all this in its footer rather than presenting it as a database
+// read.
 //
 // Usage:
 //   node scripts/daily-landing-summary.mjs                # print the last 24 hours
@@ -48,6 +55,14 @@ export function plainText(value, max = 140) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+// A migration file name, shown intact inside a code span. plainText() strips
+// underscores, which mangles every migration name, so names are instead
+// admitted only if they are plain letters, digits, underscores and a dot.
+export function migrationName(name) {
+  const text = String(name ?? "");
+  return /^[A-Za-z0-9_.-]{1,120}$/.test(text) ? `\`${text}\`` : plainText(text, 100);
+}
+
 // Heading of a changelog.d entry: the first "## ..." line, minus the date prefix.
 export function changelogHeading(markdown) {
   const line = String(markdown || "").split(/\r?\n/).find((candidate) => /^##\s+/.test(candidate));
@@ -55,8 +70,13 @@ export function changelogHeading(markdown) {
   return line.replace(/^##\s+/, "").replace(/^\d{4}-\d{2}-\d{2}\s*[-—–:]\s*/, "").trim() || null;
 }
 
-export function recordsLiveApply(markdown) {
-  return /\bappl(?:y|ied)\s+(?:it\s+)?live\b|\bapplied\s+to\s+(?:live\s+)?production\b/i.test(String(markdown || ""));
+// The migration names in explicit `Applied live: <migration_name>` record lines —
+// at the start of a line (optionally bulleted or bold), naming a real migration
+// stem (14-digit version + name). Anything else, including "not applied live",
+// "Applied live: none" or a mid-sentence mention, is not a record.
+export function applyRecords(markdown) {
+  const RECORD = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Applied live:(?:\*\*)?[ \t]*`?(\d{14}_[A-Za-z0-9_]+?)(?:\.sql)?`?[ \t]*$/gim;
+  return [...String(markdown || "").matchAll(RECORD)].map((match) => match[1]);
 }
 
 // Which open pull requests need Mason, and why. `files` entries are the REST
@@ -92,9 +112,26 @@ export function waitingReasons({ labels = [], files = [] }) {
   return reasons;
 }
 
+// Every apply record in the window, de-duplicated by migration name: comments by
+// Mason's account on the merged PRs, then changelog entries. A stranger's
+// comment on a public repo never counts.
+export function collectApplies({ merged = [], changes = [] }) {
+  const seen = new Map();
+  for (const pr of merged) {
+    for (const comment of pr.comments || []) {
+      if (String(comment?.author?.login || "").toLowerCase() !== MASON) continue;
+      for (const name of applyRecords(comment?.body)) if (!seen.has(name)) seen.set(name, `#${pr.number}`);
+    }
+  }
+  for (const change of changes) {
+    for (const name of change.applied || []) if (!seen.has(name)) seen.set(name, "change note");
+  }
+  return [...seen].map(([name, source]) => ({ name, source }));
+}
+
 export function buildSummary({ now, hours, merged, changes, landedMigrations, waiting }) {
   const day = new Date(now).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric", year: "numeric" });
-  const applied = changes.filter((change) => change.appliedLive);
+  const applied = collectApplies({ merged, changes });
   const lines = [
     `@${MASON} — here is what happened in CRX Manager in the last ${hours} hours (${day}).`,
     "",
@@ -105,12 +142,12 @@ export function buildSummary({ now, hours, merged, changes, landedMigrations, wa
     "",
     `**Database changes applied: ${applied.length}**`,
     ...(applied.length
-      ? applied.map((change) => `- ${plainText(change.heading)}`)
+      ? applied.map((apply) => `- ${migrationName(apply.name)} (${apply.source})`)
       : ["- None recorded."]),
   ];
   if (landedMigrations.length) {
     lines.push("", "New database change files that reached the main branch (applied or waiting to be applied):",
-      ...landedMigrations.map((name) => `- ${plainText(name, 100)}`));
+      ...landedMigrations.map((name) => `- ${migrationName(name)}`));
   }
   lines.push("", `**Waiting on you: ${waiting.length}**`);
   if (waiting.length) {
@@ -118,16 +155,16 @@ export function buildSummary({ now, hours, merged, changes, landedMigrations, wa
   } else {
     lines.push("- Nothing needs you today.");
   }
-  const other = changes.filter((change) => !change.appliedLive);
-  if (other.length) {
-    lines.push("", "Other changes recorded in this window:", ...other.slice(0, 20).map((change) => `- ${plainText(change.heading)}`));
-    if (other.length > 20) lines.push(`- …and ${other.length - 20} more.`);
+  if (changes.length) {
+    lines.push("", "Changes recorded in this window:", ...changes.slice(0, 20).map((change) => `- ${plainText(change.heading)}`));
+    if (changes.length > 20) lines.push(`- …and ${changes.length - 20} more.`);
   }
   lines.push("",
-    "_How this is put together: merges come straight from GitHub. \"Applied\" lists the database changes the " +
-    "agents recorded as applied live in their change notes; this job has no database access, so it cannot " +
-    "double-check the live database itself. What stays yours: database changes that delete data, Edge " +
-    "Function deploys, and anything about secrets, logins, billing or permissions._");
+    "_How this is put together: merges come straight from GitHub. \"Applied\" lists only the explicit " +
+    "\"Applied live: <database change>\" records the agents post on a merged pull request (or write in a change " +
+    "note) after applying one; this job has no database access, so it cannot double-check the live database " +
+    "itself. What stays yours: database changes that delete data, Edge Function deploys, and anything about " +
+    "secrets, logins, billing or permissions._");
   return lines.join("\n");
 }
 
@@ -148,7 +185,7 @@ function main() {
   const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 
   const merged = JSON.parse(gh(["pr", "list", "--repo", repo, "--state", "merged", "--limit", "200",
-    "--search", `merged:>=${since.toISOString().slice(0, 10)}`, "--json", "number,title,mergedAt"]))
+    "--search", `merged:>=${since.toISOString().slice(0, 10)}`, "--json", "number,title,mergedAt,comments"]))
     .filter((pr) => Date.parse(pr.mergedAt) >= since.getTime())
     .sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt));
 
@@ -159,7 +196,7 @@ function main() {
       let text;
       try { text = readFileSync(path.join(root, file), "utf8"); } catch { return []; }
       const heading = changelogHeading(text);
-      return heading ? [{ heading, appliedLive: recordsLiveApply(text) }] : [];
+      return heading ? [{ heading, applied: applyRecords(text) }] : [];
     });
   const landedMigrations = [...new Set(added("supabase/migrations"))].filter((file) => file.endsWith(".sql")).map((file) => path.basename(file));
 
