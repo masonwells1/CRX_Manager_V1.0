@@ -1006,8 +1006,9 @@ const PUSH_VALUE_SHORTS = "o";
 //
 // Modelled by SHAPE, exactly like `ghMergeShortCluster` and `ghApiShortCluster`
 // below, so this is the same walk rather than a fourth hand-rolled one. Returns
-// where the value-taking letter sat, its value, and whether that value was
-// ATTACHED — an attached value consumes nothing further.
+// where the value-taking letter sat and whether its value was ATTACHED — an
+// attached value consumes nothing further. The value itself is not returned:
+// no caller reads it, and for a detached value it lives in the next word anyway.
 function pushShortCluster(word) {
   if (!/^-[A-Za-z0-9]/.test(word) || word.startsWith("--")) return null;
   for (let index = 1; index < word.length; index += 1) {
@@ -1020,7 +1021,7 @@ function pushShortCluster(word) {
     if (!/[A-Za-z0-9]/.test(letter)) return null;
     if (!PUSH_VALUE_SHORTS.includes(letter)) continue;
     // The rest of the word is this option's value; empty means the NEXT word is.
-    return { letter, index, value: word.slice(index + 1).replace(/^=/, ""), attached: index + 1 < word.length };
+    return { index, attached: index + 1 < word.length };
   }
   return null;
 }
@@ -1119,9 +1120,12 @@ export function unknownPushOptions(cmd) {
         continue;
       }
       // Only the letters BEFORE a value-taking one are flags; everything after it
-      // is `-o`'s value, which may be any text at all (`-oci.skip`).
+      // is `-o`'s value, which may be any text at all (`-oci.skip`). With no
+      // value-taking letter, scan the WHOLE word — `=` included — because git
+      // refuses a boolean short carrying `=` (``unknown switch `='`` on `-q=o`),
+      // so the guard must report it too rather than read only the `-q` before it.
       const cluster = pushShortCluster(token);
-      for (const ch of cluster ? token.slice(1, cluster.index) : bare.slice(1)) {
+      for (const ch of cluster ? token.slice(1, cluster.index) : token.slice(1)) {
         if (!PUSH_SHORT_OPTS_KNOWN.has(ch)) unknown.push(`-${ch}`);
       }
       if (cluster && !cluster.attached) i += 1;

@@ -1820,6 +1820,12 @@ assert.deepEqual(unknownPushOptions("git push -oci.skip origin main"), [],
   "an arbitrary attached push-option value is not a pile of unknown shorts");
 assert.deepEqual(unknownPushOptions("git push -Zo ci.skip origin main"), ["-Z"],
   "an unknown short BEFORE -o is still reported");
+// Git refuses a boolean short carrying `=` (``unknown switch `='``, measured on
+// `-q=o`); the guard reports the same switch instead of reading only `-q`.
+assert.deepEqual(unknownPushOptions(`git push -q=o ${CRX_URL} HEAD:main`), ["-="],
+  "a boolean short carrying = is an unknown switch, as git says");
+assert.deepEqual(unknownPushOptions("git push -o=ci.skip origin main"), [],
+  "-o=<value> is still an attached value, not an unknown =");
 // And the backstop: the option list is no longer trusted to be complete, so
 // anything unrecognised makes the walk — and therefore the destination — void.
 assert.deepEqual(unknownPushOptions("git push --some-future-option x origin main"), ["--some-future-option"]);
