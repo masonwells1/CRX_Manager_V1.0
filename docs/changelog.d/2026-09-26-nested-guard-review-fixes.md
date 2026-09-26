@@ -20,6 +20,11 @@ against a merge-ready fixture (approved, clean, green, valid Sol proof).
   (`commandFedToInterpreter`, all three guards). `iex -Command:'…'` is now unwrapped.
 - **MED — run-time text in a nested shell.** `bash -c '$0 pr merge 1 --admin' gh` is refused
   (`expandNestedCommands(...).computed`, all three guards).
+- **HIGH — a program NAME built at run time** (found while checking round 2's code-reading note):
+  `bash -c 'g$1 pr merge 1 --admin' x h`, `${P}h …`, `$P …`, `` `echo g`h … ``, `& $p …` never spell gh or
+  git, so both Claude guards allowed all of them and the Codex guard allowed the backtick form. They are
+  now refused when the inner command's program word itself is built at run time; a variable in an
+  argument (`echo $HOME`, `ForEach-Object { $_.Name }`) still passes.
 - **MED — PowerShell en/em dash parameters** (`pwsh –EncodedCommand …`) are read as `-`.
 - **MED — over-blocks.** A bare word after `pwsh` is a command only when pwsh is the program
   (`which -a pwsh gh git node` passes). The gh-alias check skips fragments the naive reading cut out of

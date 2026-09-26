@@ -3146,6 +3146,27 @@ function finishNested(inner, text) {
 // PR #795).
 const RUNTIME_TEXT_RE = /[$`]/;
 
+// Does any command in `text` get its PROGRAM NAME at run time? `g$1 pr merge …`,
+// `${P}h …`, `$P …`, `` `echo g`h … ``, `& $p …` never spell gh or git, so the
+// gh/git test above cannot see them and both Claude guards allowed every one
+// (found testing round 2 of the independent review of PR #795). A variable in
+// an ARGUMENT (`echo $HOME`, `ForEach-Object { $_.Name }`) is not this case.
+function programBuiltAtRuntime(text) {
+  for (const segment of splitCommandSegments(text)) {
+    const words = splitShellWordsRaw(segment);
+    let index = 0;
+    while (index < words.length &&
+      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]) || COMMAND_WRAPPERS.has(words[index].toLowerCase()))) {
+      index += 1;
+    }
+    // A word with whitespace in it is a quoted STRING (the quote-keeping reading
+    // of `pwsh -Command "… { $_.Name }"`), not a program name.
+    const program = words[index] ?? "";
+    if (RUNTIME_TEXT_RE.test(program) && !/\s/.test(shellArgvWord(program))) return true;
+  }
+  return false;
+}
+
 // Every nested command, at any depth, that could reach a merge/push/GitHub gate.
 // `tooDeep` means the nesting went past what the guard is willing to unwrap; the
 // callers refuse such a command rather than inspect part of it.
@@ -3157,9 +3178,9 @@ const RUNTIME_TEXT_RE = /[$`]/;
 // GIT_CONFIG redirect).
 //
 // `computed` is true when a shell or evaluator (not a mere `{ }`/`( )` block)
-// is handed text it will expand at run time, and the command mentions gh or
-// git anywhere. The guard cannot read what that text becomes, so callers
-// refuse it.
+// is handed text it will expand at run time, and either the command mentions
+// gh or git anywhere or the inner command's program name is itself built at
+// run time. The guard cannot read what that text becomes, so callers refuse it.
 export function expandNestedCommands(command, { grouping = true } = {}) {
   const outer = String(command || "");
   const found = [];
@@ -3171,7 +3192,10 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
     const next = [];
     for (const text of frontier) {
       for (const entry of nestedCommandsOneLevel(text, { grouping })) {
-        if (!entry.grouped && outerMentionsGhOrGit && RUNTIME_TEXT_RE.test(entry.text)) computed = true;
+        if (!entry.grouped && RUNTIME_TEXT_RE.test(entry.text) &&
+            (outerMentionsGhOrGit || programBuiltAtRuntime(entry.text))) {
+          computed = true;
+        }
         if (seen.has(entry.text)) continue;
         seen.add(entry.text);
         if (depth > NESTED_MAX_DEPTH || seen.size > NESTED_MAX_COMMANDS + 1) {

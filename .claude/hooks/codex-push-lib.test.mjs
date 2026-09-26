@@ -3334,6 +3334,21 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   assert.equal(expandNestedCommands("bash -c '$0 pr merge 123 --admin' gh").computed, true, "a $0 program name is run-time text");
   assert.equal(expandNestedCommands("bash -c \"git push origin $BRANCH\"").computed, true, "so is a $VAR in a nested git command");
   assert.equal(expandNestedCommands('pwsh -Command "Get-ChildItem | % { $_.Name }"').computed, false, "without gh or git it is not refused");
+  // A program NAME built at run time never spells gh or git (round 2 of the review).
+  for (const command of [
+    "bash -c 'g$1 pr merge 123 --admin' x h",
+    "bash -c '${P}h pr merge 123 --admin'",
+    "bash -c '$P pr merge 123 --admin'",
+    "sh -c '`echo g`h pr merge 123 --admin'",
+    "bash -c 'gi$1 push origin HEAD:main --force' x t",
+    'pwsh -Command "& $p pr merge 123 --admin"',
+    "bash -c 'FOO=1 $P pr merge 1'",
+  ]) {
+    assert.equal(expandNestedCommands(command).computed, true, `a run-time program name is refused: ${command}`);
+  }
+  for (const command of ["bash -c 'echo $HOME'", 'pwsh -NoProfile -Command "Get-ChildItem | ForEach-Object { $_.Name }"']) {
+    assert.equal(expandNestedCommands(command).computed, false, `a variable in an argument is not: ${command}`);
+  }
   assert.equal(expandNestedCommands("gh pr view $(git branch --show-current)").computed, false, "a plain substitution is the outer command's, not a nested shell's");
   // Over-blocks the review found: a bare word after pwsh is a command only when pwsh is the program.
   assert.deepEqual(inner("which -a pwsh gh git node"), [], "pwsh as an argument runs nothing");
