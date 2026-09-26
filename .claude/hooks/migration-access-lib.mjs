@@ -266,7 +266,12 @@ export function accessChangeCheck(sql) {
     if (policy) {
       if (!created.tables.has(objectKey(policy[1]))) return hit(`it adds an access policy to the existing table ${objectKey(policy[1])}`);
       const to = /\bto\s+(.+?)(?:\s+(?:using|with\s+check)\b|$)/i.exec(policy[2]);
-      if (to && grantees(to[1]).some((role) => role === "anon" || role === "public")) return hit("it adds a policy for anonymous or PUBLIC access");
+      // No TO clause means TO PUBLIC (Sol HIGH, round 10), so the roles must be
+      // named, and only the routine ones.
+      if (!to) return hit("it adds a policy with no TO clause, which PostgreSQL applies to PUBLIC");
+      const policyRoles = grantees(to[1]);
+      if (policyRoles.some((role) => role === "anon" || role === "public")) return hit("it adds a policy for anonymous or PUBLIC access");
+      if (policyRoles.some((role) => !ROUTINE_GRANTEES.has(role))) return hit(`it adds a policy for the role(s) ${policyRoles.filter((role) => !ROUTINE_GRANTEES.has(role)).join(", ")}`);
       continue;
     }
 

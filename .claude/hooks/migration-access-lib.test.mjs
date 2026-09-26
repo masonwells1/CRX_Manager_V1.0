@@ -72,6 +72,9 @@ masons("GRANT service_role TO authenticated;", "role membership", "granting a ro
 masons("REVOKE authenticated FROM some_user;", "role membership", "revoking role membership");
 masons(`${NEW_TABLE}\nCREATE POLICY p ON public.customers FOR SELECT TO authenticated USING (true);`, "existing table", "a policy on an existing table");
 masons(`${NEW_TABLE}\nCREATE POLICY p ON public.widgets FOR SELECT TO anon USING (true);`, "anonymous or PUBLIC", "a new table's policy aimed at anon");
+// Sol HIGH, round 10: no TO clause means TO PUBLIC.
+masons(`${NEW_TABLE}\nCREATE POLICY p ON public.widgets FOR SELECT USING (true);`, "no TO clause", "a new table's policy with no TO clause");
+masons(`${NEW_TABLE}\nCREATE POLICY p ON public.widgets FOR SELECT TO reporting USING (true);`, "reporting", "a new table's policy for another role");
 masons("ALTER POLICY p ON public.customers USING (true);", "existing access policy", "ALTER POLICY");
 masons("DROP POLICY IF EXISTS p ON public.customers;", "existing access policy", "DROP POLICY");
 masons("ALTER TABLE public.customers DISABLE ROW LEVEL SECURITY;", "row-level security", "disabling RLS");
