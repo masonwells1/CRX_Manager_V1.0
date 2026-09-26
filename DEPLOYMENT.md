@@ -18,7 +18,9 @@ page summarises it and does not replace it.
   click (see [Rollback](#rollback)).
 - **Database changes and Edge Functions do not deploy with the merge.** A migration is applied to
   the live database, and an Edge Function is deployed, as separate steps — each needs Mason's
-  explicit approval in the current conversation (see `AGENTS.md` › Safety and Protected Delivery).
+  explicit approval in the current conversation (see `AGENTS.md` › Safety and Protected Delivery). The
+  only exception is a non-destructive migration in a hands-free run Mason pre-authorized with an
+  armed autopilot flag and a fresh proof and Codex verdict; it never covers an Edge Function deploy.
 
 ## Before you open the pull request
 

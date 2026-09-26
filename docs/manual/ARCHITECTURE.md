@@ -277,8 +277,9 @@ Quote --> Order --> Delivery / Blend Ticket / Job --> Invoice --> Payment / Cred
   job, linked by `invoice_group_id`, each with its own balance and AR
   trail. See the "Field Application Workflow" section of
   `docs/workflows/QUOTE_TO_DELIVERY.md` for the split-billing pricing modes.
-- **Payment / Credit memo** (`allocation_sets`, `prepay_credits`) — allocated
-  to specific invoices via `allocate_payment`; invoices remain the single source
+- **Payment / Credit memo** (`allocation_sets`, `prepay_credits`) — payments are
+  allocated to specific invoices via `allocate_payment`; prepay credits are applied through
+  `apply_prepay_to_invoice` (bulk apply is disabled); invoices remain the single source
   of truth for AR balance. The older `payments` table is a dead legacy table with
   no writers (see `docs/manual/CURRENT_STATE.md`).
 

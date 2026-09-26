@@ -611,9 +611,10 @@ gates `Edit`/`Write`, with `review-proof-guard.mjs` covering shell/MCP writes. S
 (later the same day) "guarded-surface lock is DELETED" entry above.** Retained for the evidence of
 why the lock failed.
 
-**Supersedes item 3 of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier").
-That entry's protected set and its `Edit`/`Write` `ask` rules are replaced by a deterministic
-PreToolUse lock; do not restore them.
+[Historical — void: this paragraph described the lock's plan. The lock never reached `main`, so the
+2026-08-25 `ask` tier was never replaced and is the control that applies today.] **Supersedes item 3
+of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier"). That entry's protected
+set and its `Edit`/`Write` `ask` rules are replaced by a deterministic PreToolUse lock; do not restore them.
 
 Mason asked to stop being prompted for approval on file edits. Investigating that produced three
 findings, in order, and the third is the one that mattered:
@@ -3228,7 +3229,8 @@ for CodeRabbit to the `protect-main` ruleset once its exact check name is confir
 (Source: AGENTS.md "Standing CodeRabbit review policy"; PR #160 landed the CRX config; FarmRx
 config commit 943e5688.) [Update 2026-09-26: that follow-up is reversed, not open — on 2026-09-02
 Mason chose to keep CodeRabbit running but stop letting it block a merge, and the ruleset carries no
-CodeRabbit check. Automatic reviews were turned off on 2026-08-28 (frozen candidates only). The
+CodeRabbit check. That removed the GitHub approval/check requirement only: the landing path in
+`.claude/commands/ship.md` Step 8 still requires the `ready-for-coderabbit` review of the frozen head. Automatic reviews were turned off on 2026-08-28 (frozen candidates only). The
 "Standing CodeRabbit review policy" section no longer exists in `AGENTS.md`.]
 
 ## 2026-07-17 — SETTLED: save_customer edits are assigned-rep-or-admin only (no office-manager carve-out)

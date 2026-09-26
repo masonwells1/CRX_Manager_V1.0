@@ -74,7 +74,9 @@ Test every feature as each role:
 - Bulk imports with invalid data
 - PDF generation with very long product names
 - Delivery for cancelled order
-- Quick delivery when inventory is insufficient — since `20260706130000` (warn-not-block) `create_quick_delivery()` proceeds, allows negative stock, flags the ledger row `requires_review = true`, and notifies admins; test the warning and flag, not a refusal
+- Quick delivery when inventory is insufficient — since `20260706130000` (warn-not-block) `create_quick_delivery()` proceeds, allows negative stock, flags the ledger row `requires_review = true`, and notifies admins; test the warning and flag, not a refusal. **Run this only against a disposable
+  database or inside a rolled-back transaction — never against production**, where it leaves real
+  negative stock and sends real admin alerts
 - Invoice posting in closed accounting period — `post_invoice()` calls `check_period_open()`, raises error
 - Quote acceptance releases inventory holds (deactivates without restoring qty)
 - Quote decline/expiry releases inventory holds (deactivates them; `quantity_available` is unchanged, because holds never deducted it)

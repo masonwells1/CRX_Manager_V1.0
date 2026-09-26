@@ -66,14 +66,14 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 | NEVER allow editing delivery items once in_progress or beyond | Items are only editable while status = 'scheduled'. Once started, items are locked. |
 | NEVER create a chemical-sale invoice without its order | Chemical-sale invoices link to their order via `order_id`. Field-application, blend-ticket and job invoices are separate paths that have no order (`order_id` is nullable) — see `docs/workflows/QUOTE_TO_DELIVERY.md`. |
 | NEVER bypass `check_period_open()` | Closed periods prevent backdated transactions. Bypassing corrupts financials. |
-| NEVER allow non-admin access to month-end, commissions, or settings | These are admin-only features. |
+| NEVER allow non-admin access to month-end, commissions, or settings | These are admin-only features. (Live exception, recorded in `RLS_SECURITY_GUIDE.md`: `comm_select` lets a sales rep read only their own commission rows. Widening or removing that is Mason's call.) |
 | NEVER skip a status transition step | Every lifecycle has defined transitions (see QUOTE_TO_DELIVERY.md). |
 
 ### Code Quality
 | Rule | Consequence of breaking |
 |------|------------------------|
 | NEVER remove the pre-commit hook | Removes the safety net that catches errors before commits |
-| NEVER commit with `--no-verify` | Bypasses the pre-commit ledger guard, private-artifact containment, the staged SQL/frontend validators, and the conditional agent-parity and dependency checks (lint, typecheck, tests and build run in pre-push and CI) |
+| NEVER commit with `--no-verify` | Bypasses the pre-commit ledger guard, private-artifact containment, the staged SQL/frontend validators, and the conditional agent-parity and dependency checks (typecheck and build run in pre-push; lint and tests run in CI) |
 | NEVER use destructive recovery such as `git reset --hard`, broad discard-all commands, or recursive force-delete without Mason's exact request after the risk is explained | Can permanently erase unrelated or another session's work |
 | NEVER commit agent-surface changes or a new migration without a ledger update in the same commit | The pre-commit ledger guard (`scripts/check-ledger-update.mjs`, 2026-07-13) blocks commits that stage `.claude/{commands,skills,hooks,workflows,agents}/`, `.claude/settings.json`, any `.codex/` file, `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, `.husky/`, guard scripts, or a new `supabase/migrations/*.sql` file with no ledger update. PREFERRED: add `docs/changelog.d/<YYYY-MM-DD>-<slug>.md` — a NEW dated file of your own, since two sessions never write the same path and it cannot conflict. The guard requires it be ADDED (not modified, deleted or renamed) and to carry a `## <YYYY-MM-DD> - <what changed>` heading with detail beneath it. Also accepted: `docs/CHANGELOG.md` / `docs/manual/*.md` / `docs/reference/agent-guardrails.md` / `docs/reference/migration-history.md` / `docs/loops/` — policy changes must leave a written record Mason can find |
 | NEVER add `@ts-ignore` or `any` types | Hides bugs that TypeScript would catch |

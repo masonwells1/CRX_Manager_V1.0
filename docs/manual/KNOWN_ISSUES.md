@@ -1289,7 +1289,9 @@ from an agent; the guards can only refuse the *commands* that would use it.
 **What is in place.** Both merge gates deny `gh pr merge --admin` outright, verify
 `reviewDecision === "APPROVED"` directly rather than inferring it (**corrected 2026-09-26:** no
 approving review has been required since 2026-09-02 — `.claude/hooks/pr-merge-guard.mjs` refuses
-`CHANGES_REQUESTED` and requires `mergeStateStatus` CLEAN with every check green), and deny the
+`CHANGES_REQUESTED` and requires `mergeStateStatus` CLEAN with every check green; the landing path
+in `.claude/commands/ship.md` Step 8 still requires the `ready-for-coderabbit` review of the frozen
+head before merge — only the GitHub *approval* requirement was removed), and deny the
 `/pulls/<n>/merge` REST endpoint and the `mergePullRequest` GraphQL mutation by destination
 regardless of transport. That closes every route found so far, and it is an honest-mistake net —
 **not a security boundary.** A command shape nobody has thought of, or an indirection that never
@@ -1393,8 +1395,8 @@ PostgreSQL's own parser (`libpg_query`) rather than more regexes; that removes t
 but still does not solve the naming-scope limit.
 
 **Related open work.** **(Update 2026-09-26: PR #449 was CLOSED unmerged, so its 19 fixes would have to
-be re-derived on current `main`.)** PR #449 is parked with the 19 closed bypasses and 23 open review findings; it is worth
-landing after one clean review round, as an improvement to a capped control rather than a resumed programme.
+be re-derived on current `main`; do not try to land or review #449 itself.)** When it closed it held 19 closed bypasses and
+23 open review findings; any re-derivation is an improvement to a capped control, not a resumed programme.
 A third, unpushed regex attempt exists locally at `codex/actor-binding-guard-recut-20260831` (no PR) and
 duplicates one of #449's fixes — delete it rather than continuing it.
 

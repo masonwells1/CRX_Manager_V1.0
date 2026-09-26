@@ -35,8 +35,9 @@ ships or quarterly, whichever comes first.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-22), and migration
   `20260914100700` (which removes every browser Storage policy on the bucket) applied 2026-09-26.
-  Its preflight refuses to run if the bucket holds any object, so no signed link minted under the
-  old policies can exist. Still open: sales reps cannot remove a document; PR #800 carries a parked
+  Its preflight refuses to run if the bucket holds any object, so no stored document could be served
+  by a link minted under the old policies. It does not rule out a signed upload token minted just
+  before the apply, which would stay valid until it expired. Still open: sales reps cannot remove a document; PR #800 carries a parked
   fix migration that needs Mason's apply approval (details in the PR description).
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
   hours. On 2026-09-26 the one open PR that carries an owner decision is #800 (above).
