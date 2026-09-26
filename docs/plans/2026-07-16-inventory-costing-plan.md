@@ -1,7 +1,14 @@
 # True Inventory Costing (On-Hand Average Purchase Cost) — Scoped Plan
 
+> **STATUS 2026-09-26 — PARKED, never built; waiting on Mason's go to schedule.** Its parking gate is met:
+> supplier-pricing Phase 1a and 1b are in the live ledger (`20260717042803`, `20260718225511`), as are
+> Phase 2 (`20260722015019`) and Phase 3 Stage C (`20260729213733`). `inventory`, `inventory_transactions`
+> and `receiving_records` still carry no cost columns (schema registry, 2026-09-20). Tracked in `TODO.md` §3.
+> The companion plan below (`2026-07-16-supplier-pricing-and-variants-plan.md`) shipped and was removed on
+> 2026-09-26; it remains in git history.
+
 **Date:** 2026-07-16
-**Status:** SCOPED — **PARKED until supplier-pricing Phases 1a/1b ship and stabilize.** No implementation authorized yet.
+**Status (original):** SCOPED — **PARKED until supplier-pricing Phases 1a/1b ship and stabilize.** No implementation authorized yet.
 **Branch:** `claude/supplier-pricing-strategy-9c6129`
 **Advisors:** Claude (grounding + synthesis) + Codex gpt-5.6 "Sol 5.6" at extra-high reasoning (design partner; its five disagreements are folded in)
 **Companion plan:** `docs/plans/2026-07-16-supplier-pricing-and-variants-plan.md` (rev 5, in build)

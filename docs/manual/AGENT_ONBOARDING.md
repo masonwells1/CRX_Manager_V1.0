@@ -1,6 +1,6 @@
 # Agent Onboarding — How Not to Fail Here
 
-**Last verified: 2026-09-04**
+**Last verified: 2026-09-26**
 **Update triggers: when a new recurring failure class is identified or the guard system changes.**
 
 You are a new coding agent starting your first session in CRX Manager. This file is the front door. It assumes you've already read the short shared contract in `AGENTS.md` and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
@@ -55,7 +55,7 @@ These are distilled from roughly 90 fix commits over about 20 days of this proje
 
 These are not code bugs — they're *how an agent convinced itself something was done when it wasn't.* Each has a concrete countermeasure baked into the guard system, not just a reminder.
 
-- **Claiming done without running it.** The Stop hook (`stop-verify.mjs`) will block "done" on any session that changed code unless the transcript shows a real `PROOF —` block or an actual preview/fetch/`execute_sql` run. "Tests pass" is not accepted proof. Countermeasure: before you say a change is complete, write a line in the form `PROOF — Ran: … · Saw: … · Not verified: …` describing exactly what you executed and what you observed.
+- **Claiming done without running it.** The Stop hook (`stop-verify.mjs`) blocks "done" on a session that changed code unless the transcript shows a real `PROOF —` block or an actual preview/fetch/`execute_sql` run. It is a nudge, not a wall: it blocks at most twice per change-set and then fails open, so the discipline is yours. "Tests pass" is not accepted proof. Countermeasure: before you say a change is complete, write a line in the form `PROOF — Ran: … · Saw: … · Not verified: …` describing exactly what you executed and what you observed.
 
 - **Trusting a handoff or summary over live state.** A prior session's summary, a stale doc, or another agent's claim of "this is already fixed/shipped" is often wrong or outdated. Countermeasure: verify the actual code and the live database yourself before acting on any handoff claim — read the function body, query the live table, don't take the word of a prior note.
 
@@ -86,8 +86,8 @@ If a guard blocks you, the correct response is to **fix the underlying problem t
 | Situation | Entry point | What it does NOT cover |
 |---|---|---|
 | Wrote or changed a **migration** | `/migration-review` | Produces the apply-guard proof for that migration; doesn't review unrelated frontend changes or push the migration live itself |
-| Any **SQL / RLS / money / edge-fn** change, before push | `codex-review` | A real Codex verdict *this session* — not a stale/queued one; doesn't replace the migration-review proof for `apply_migration` |
-| A **substantive feature** end to end | `/ship` pipeline | Includes the review fan-out; under the standing 2026-06-16 policy it may auto-push regular code once fully green. It stops before an edge-function deploy or data deletion (always), and before a live migration apply in interactive sessions — in a Mason-pre-authorized hands-free run with autopilot armed, a migration may apply via the proof gate (2026-07-13 policy; destructive migrations still stop) |
+| Any **SQL / RLS / money / edge-fn** change, before push | `codex-review` | Two tiers, defined in `AGENTS.md` (model IDs in `docs/reference/codex-model-tuning.md`): **Luna** rounds iterate until clean; risky money, inventory, auth, RLS, migration, or permission work then needs one fresh **Sol** review of the exact final SHA, run last (any later commit voids it). A clean Luna round is not the Sol proof, and a Luna round must never go through the proof wrapper. Neither replaces the migration-review proof for `apply_migration` |
+| A **substantive feature** end to end | `/ship` pipeline | Includes the review fan-out; under the standing 2026-06-16 policy it may land regular code through the protected PR path in `AGENTS.md` once fully green. It stops before an edge-function deploy, data deletion, and every other `AGENTS.md` hard gate (always), and before a live migration apply in interactive sessions — in a Mason-pre-authorized hands-free run with autopilot armed, a migration may apply via the proof gate (2026-07-13 policy; destructive migrations still stop) |
 | "**Is the whole app healthy?**" | `/audit` or `spot-check-prod` (live) | A point-in-time health read; doesn't fix anything it finds, and doesn't substitute for reviewing your specific change |
 | Broad **foundation safety** sweep | `codex-gauntlet` (foundation mode) / `review-workflow` | Wide and read-only; not scoped to your one change, so still run a focused review on what you actually touched |
 | **Two-model reconciliation** (Claude vs Codex disagree, or you want both) | `agent-pair-review` | Compares notes between models; doesn't apply fixes itself |

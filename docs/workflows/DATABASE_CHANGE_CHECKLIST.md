@@ -50,13 +50,18 @@ CREATE TABLE IF NOT EXISTS public.my_new_table (
 -- 2. RLS enabled (MANDATORY — no exceptions)
 ALTER TABLE public.my_new_table ENABLE ROW LEVEL SECURITY;
 
--- 3. RLS policies (at minimum: SELECT for authenticated users)
+-- 3. RLS policies (at minimum: SELECT for active signed-in users)
+--    "All authenticated" means an ACTIVE profile, never USING (true) — a
+--    deactivated profile is still authenticated (convention since
+--    20260727174657_broad_reads_require_active_profile.sql). Use a role helper
+--    such as (select public.is_admin()) when only some roles may read.
 DROP POLICY IF EXISTS "my_new_table_select" ON public.my_new_table;
 CREATE POLICY "my_new_table_select" ON public.my_new_table
   FOR SELECT TO authenticated
-  USING (true);  -- adjust based on role requirements
+  USING ((SELECT public.is_active_profile()));
 
--- 4. Updated_at trigger
+-- 4. Updated_at trigger (drop-then-create keeps the file re-runnable)
+DROP TRIGGER IF EXISTS set_updated_at ON public.my_new_table;
 CREATE TRIGGER set_updated_at
   BEFORE UPDATE ON public.my_new_table
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
@@ -104,6 +109,28 @@ CREATE INDEX IF NOT EXISTS ...
 
 ---
 
+## Step 2b: CHECK Constraint & Function Safety (CRITICAL)
+
+> These rules were added after 40+ bugs were caused by migration drift in March 2026.
+
+### If your migration touches a CHECK constraint:
+1. **BEFORE writing SQL**, query the existing constraint values
+2. Your new CHECK MUST include ALL existing values plus any new ones
+3. Never assume you know all the values — other migrations may have added values you don't know about
+
+### If your migration creates or modifies a function:
+1. Check if overloads exist: query `pg_proc` for the function name — should return exactly 1 row
+2. If overloads exist (>1 row), you must DROP all overloads and recreate a single version
+3. Every `SECURITY DEFINER` function must include `SET search_path = public, pg_temp`
+4. Every mutating RPC must accept and enforce `p_idempotency_key text DEFAULT NULL` (`AGENTS.md` hard rule; see `docs/reference/sql-canonical-patterns.md`)
+
+### If your migration rewrites a trigger function:
+1. Search ALL migrations for previous versions of the trigger function
+2. Read the LATEST version to understand what logic exists
+3. Your rewrite must preserve all critical logic from previous versions
+
+---
+
 ## Step 3: Review, THEN Apply the Migration
 
 > **Do NOT paste migration SQL into the Supabase Dashboard SQL Editor.** That path skips
@@ -117,13 +144,19 @@ The only sanctioned way to apply a migration to the live database:
 
 1. Run `/migration-review` on the migration file. It dispatches the security/drift
    reviewers and, if clean, stamps the apply-guard proof for this exact file content.
-2. For SQL/RLS/money changes, a real Codex verdict this session is also required
-   (the `/migration-review` flow handles this; the apply-guard checks it).
+2. For SQL/RLS/money changes, a fresh independent `gpt-6-sol` high-effort Codex review of
+   this exact migration content is also required — the Sol gate in `AGENTS.md`; a clean
+   Luna round does not count (the `/migration-review` flow mints it; the apply-guard checks it).
 3. Get authorization: in an ordinary interactive session, Mason's explicit in-chat OK.
    In a Mason-pre-authorized hands-free run with autopilot armed, the proof gate itself
    is the authorization (settled 2026-07-13) — destructive migrations are never autonomous.
-4. Apply via the Supabase MCP `apply_migration` tool (the apply-guard hook verifies the
-   proof and policy before the call is allowed through).
+4. Apply through the gated file-bytes caller: dry run with
+   `node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql` (transmits nothing),
+   then the same command with `--confirm`. It asks the same rule book as the apply-guard hook
+   (`.claude/hooks/migration-apply-lib.mjs`) and transmits only on "allow"; see
+   `docs/reference/agent-guardrails.md`. The Supabase MCP `apply_migration` tool goes through
+   the same gate, but the current tool sends only `{name, query}` with no `project_id`, so the
+   gate's exact-project check refuses it — do not try to work around that.
 5. If the apply fails, do NOT retry variations against live — fix the migration file,
    re-run `/migration-review`, and apply again through the same gate.
 6. After a successful schema change, run the `regen-schema-registry` workflow against
@@ -201,35 +234,13 @@ If `typecheck` fails, it usually means you forgot to update `src/types/index.ts`
 
 ---
 
-## Step 2b: CHECK Constraint & Function Safety (CRITICAL)
-
-> These rules were added after 40+ bugs were caused by migration drift in March 2026.
-
-### If your migration touches a CHECK constraint:
-1. **BEFORE writing SQL**, query the existing constraint values
-2. Your new CHECK MUST include ALL existing values plus any new ones
-3. Never assume you know all the values — other migrations may have added values you don't know about
-
-### If your migration creates or modifies a function:
-1. Check if overloads exist: query `pg_proc` for the function name — should return exactly 1 row
-2. If overloads exist (>1 row), you must DROP all overloads and recreate a single version
-3. Every `SECURITY DEFINER` function must include `SET search_path = public, pg_temp`
-4. Every mutating RPC should accept `p_idempotency_key text DEFAULT NULL`
-
-### If your migration rewrites a trigger function:
-1. Search ALL migrations for previous versions of the trigger function
-2. Read the LATEST version to understand what logic exists
-3. Your rewrite must preserve all critical logic from previous versions
-
----
-
 ## Quick Reference: Adding a Column
 
 The most common database change. Here's the minimal checklist:
 
 1. Create migration file: `supabase/migrations/YYYYMMDDHHMMSS_add_column_name.sql`
 2. SQL: `ALTER TABLE public.table_name ADD COLUMN IF NOT EXISTS column_name TYPE DEFAULT value;`
-3. Apply through `/migration-review` → `apply_migration` (see Step 3 above — never the Dashboard SQL Editor)
+3. Apply through `/migration-review` → `scripts/apply-migration-file.mjs` (see Step 3 above — never the Dashboard SQL Editor)
 4. Update interface in `src/types/index.ts`
 5. Update components that use this table
 6. Run `npm run typecheck` and `npm run build`
@@ -252,8 +263,6 @@ Every "transactional" migration runner — including `apply_migration` on the Su
 ```
 ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 ```
-
-For this project there are three valid application paths, listed in order of preference:
 
 **There is currently NO autonomous live path for a CONCURRENTLY migration — it parks for Mason.**
 Every route is hard-blocked by design (verified 2026-07-16, Codex review):

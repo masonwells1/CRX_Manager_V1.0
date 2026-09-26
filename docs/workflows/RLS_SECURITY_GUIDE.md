@@ -16,30 +16,25 @@ Live `profiles_role_check` is
 `CHECK (role = ANY (ARRAY['admin','sales_rep','driver','applicator','entity_recipient']))` — **5**
 permitted values, read from live `pg_constraint` on 2026-08-19 UTC.
 
-An earlier revision of this file said "The 3 Roles" and listed four; this PR corrected it to four
-and *still* did not read the constraint. Four is what RLS uses: no policy in `public` references
-`entity_recipient` (`pg_policies` matching it: **0**), but 2 live profiles carry that value, so a
-reader filtering on "the four roles" would silently drop them.
+Four is what RLS uses: no policy in `public` references `entity_recipient` (`pg_policies`
+matching it: **0**), but 2 live profiles carry that value, so a reader filtering on "the four
+roles" would silently drop them.
 
 All five, with the four **app roles** — the ones every policy below branches on — first:
 
 | Role | Who | Access level |
 |------|-----|-------------|
 | `admin` | Mason and other administrators | Full access to everything |
-| `sales_rep` | Sales representatives | Access to own customers, quotes, orders. No access to month-end, commissions, settings. |
+| `sales_rep` | Sales representatives | Access to own customers, quotes, orders. No access to month-end or settings; reads only their own commission rows (`comm_select`: `recipient_user_id = (SELECT auth.uid())`). |
 | `driver` | Delivery drivers | Access to own assigned deliveries. Can confirm, complete, upload photos, report issues. |
 | `applicator` | Chemical applicators | Access to own assigned jobs. Can record applied info. |
 | `entity_recipient` | 2 live rows | **Permitted by the CHECK constraint but referenced by no policy.** Such a profile is treated as none of the four above: it fails `is_admin()`, `is_sales_rep()`, `is_driver()` and `is_applicator()`, so it sees only what a plain active profile sees. |
-
-(The `applicator` row used to sit outside this table, after a prose line, so it
-rendered as loose text rather than a fourth row — and the heading said three.
-There are four **app roles**; the fifth stored value is the row added below them.)
 
 ---
 
 ## Helper Functions
 
-These SQL functions check the current user's role. They are `SECURITY DEFINER` and `STABLE`, meaning they run with elevated privileges and are cached per-query.
+These SQL functions check the current user's role. They are `SECURITY DEFINER` and `STABLE`, meaning they run with elevated privileges and are cached per-query. Each also requires the caller's profile to be active (`is_active = true`).
 
 ```sql
 is_admin()       -- Returns TRUE if current user has role = 'admin'
@@ -49,14 +44,31 @@ is_applicator()  -- Returns TRUE if current user has role = 'applicator'
 ```
 
 ### How they work
-Each function queries the `profiles` table for the current user's role:
+Each function queries the `profiles` table for the current user's role. The live `is_admin()`
+(latest body: `20260714185631_harden_is_admin_search_path.sql`) is:
 ```sql
-CREATE OR REPLACE FUNCTION is_admin() RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM profiles WHERE id = (select auth.uid()) AND role = 'admin'
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+STABLE
+AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1
+      FROM public.profiles
+     WHERE id = (SELECT auth.uid())
+       AND role = 'admin'
+       AND is_active = true
   );
-$$ LANGUAGE sql SECURITY DEFINER STABLE;
+END;
+$$;
 ```
+Copy that shape: a pinned `search_path` and the `is_active = true` check are both required.
+`20260728233459_revoke_anon_execute_rls_role_helpers.sql` also revoked `EXECUTE` on `is_admin()`,
+`is_driver()` and `is_applicator()` from `anon`, so a new helper should grant `EXECUTE` deliberately
+(see `is_active_profile()` in `20260727174657_broad_reads_require_active_profile.sql`).
 
 ---
 
@@ -116,12 +128,8 @@ Used on: `cost_history`. Re-read against live on 2026-08-19 UTC: that is the onl
 *read* among the tables this line used to name. `cycle_counts`, `cycle_count_items`,
 `rebate_programs` and `rebate_claims` all read as `is_admin() OR is_sales_rep()`.
 
-Stated carefully, because an earlier revision of this paragraph claimed the matrix below "has
-always said" so and that the section therefore "contradicted its own file". It did not. On
-`origin/main` those matrix rows read `| cycle_counts | Admin | Admin | Admin | Admin |` and the
-same for `rebate_programs` and `rebate_claims` — the matrix **agreed** with the stale prose, and
-both were wrong together. This PR corrects both. `cycle_count_items` is not carried in this file's
-matrix at all; its row lives in `docs/reference/database-schema.md`. Their *writes*
+`cycle_count_items` is not carried in this file's matrix at all; its row lives in
+`docs/reference/database-schema.md`. Their *writes*
 are mostly admin-only but not uniformly: `rebate_claims` INSERT is `is_admin() OR
 is_sales_rep()`, and the three `cycle_count_items` write policies are `is_admin() AND EXISTS
 (… cycle_counts.status = 'in_progress')`, so even an admin cannot edit a closed count.
@@ -164,11 +172,8 @@ INSERT/UPDATE/DELETE through an `EXISTS` on the parent quote's `created_by`.
 the ownership half, so anyone copying it would have written a policy narrower than the one actually
 deployed.
 
-The matrix row below now reads `Admin / Sales Rep` for SELECT, marking only INSERT and UPDATE
-`(own)`. An earlier revision of this paragraph said the pattern "contradicted" that row — it did
-not. On `origin/main` the row read `| quotes | Admin / Sales Rep (own) | … |` with `(own)` on
-the SELECT cell too, agreeing with the stale example. The disagreement is something this PR
-created by fixing the row; both halves are corrected here.
+The matrix row below reads `Admin / Sales Rep` for SELECT, marking only INSERT and UPDATE
+`(own)`.
 
 ### Pattern 4: Admin + Sales Rep + Driver (for deliveries)
 ```sql
@@ -423,7 +428,7 @@ const result = assertRpcResult<ReturnType>(data, 'my_function');
 - [ ] Every table has at least a SELECT policy
 - [ ] Use `(select auth.uid())` not bare `auth.uid()` in all policies
 - [ ] Use `DROP POLICY IF EXISTS` before `CREATE POLICY` for idempotency
-- [ ] Test as all roles: admin, sales_rep, driver
+- [ ] Test as all 4 app roles: admin, sales_rep, driver, applicator
 - [ ] Use `checkMutationResult()` after every `.update()` and `.delete()`
 - [ ] Use `assertRpcResult()` for SECURITY DEFINER RPCs
 - [ ] Never remove existing RLS policies — add new ones or modify in a new migration

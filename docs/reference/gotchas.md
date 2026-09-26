@@ -23,7 +23,7 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | Singular relationship joins return arrays | Cast with `as unknown as Type[]` rather than expecting a single object |
 | Supabase returns `null` for missing columns; React props expect `undefined` | Use `?? undefined` when passing through |
 | PostGIS RPCs need `SET search_path = public, extensions` | Without `extensions`, geometry functions are not found |
-| Every SECURITY DEFINER function MUST `SET search_path = public, pg_temp` | Hard rule — not optional. Empty `''` search_path is a 2026-05 finding pattern (PR-12). pg_temp prevents temp-table hijacking. |
+| Every SECURITY DEFINER function normally MUST `SET search_path = public, pg_temp` | Hard rule (`AGENTS.md`). An empty `''` search_path was a 2026-05 finding pattern (PR-12); the only allowed alternative is the documented fully schema-qualified empty-path exception, used only with its proof (`docs/manual/DECISION_LOG.md`; see `docs/workflows/SAFE_DEVELOPMENT_RULES.md`). pg_temp prevents temp-table hijacking. |
 | A deferred trigger does not inherit the caller RPC's `SECURITY DEFINER` context | `DEFERRABLE INITIALLY DEFERRED` triggers run after the RPC returns, commonly at commit. If the trigger function must read an RPC-owned/RLS-denied table, the trigger function itself needs `SECURITY DEFINER`, a fixed `search_path`, revoked direct execution, and a proof that forces the deferred trigger to fire after the public RPC returns. A rollback-only smoke that never runs `SET CONSTRAINTS ... IMMEDIATE` cannot prove this path. |
 | Browser and PostgreSQL text folding are different runtime boundaries | Never compare a browser-computed Unicode digest with a PostgreSQL digest as a correctness gate. Derive the durable cross-device claim in PostgreSQL only; browser-normalized keys may be used for local retry hints and per-user idempotency, but not as the final uniqueness boundary. Lock and require an empty claim table before changing the durable server algorithm; otherwise old and new hashes can represent the same document. |
 | `payments.amount` is `numeric` dollars, NOT `bigint` cents | RPCs convert: `(p_amount_cents / 100.0)::numeric(12,2)` |
@@ -32,7 +32,7 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | `customers.farm_name` (NOT `name`) | The `customers` table has no `name` column. Edge Functions selecting `name` get PostgREST 42703. Always log query errors to surface schema drift (PR-03). |
 | `idempotency_keys` columns: `idempotency_key`, `operation`, `result` | NOT `key`/`entity_type`/`entity_id`/`result_id` — bug has been re-introduced 3+ times |
 | `idempotency_keys.result` is `jsonb` | Do NOT cast to `::text` when inserting — pass `jsonb_build_object(...)` directly |
-| `invoices.balance_cents` is a GENERATED column | NEVER UPDATE it directly — update the components (`subtotal_cents`, `tax_cents`, `total_paid_cents`) |
+| `invoices.balance_cents` is a GENERATED column | NEVER UPDATE it directly — it is `total_amount_cents − paid_amount_cents − prepay_applied_cents − write_off_cents`, then `+ credit_applied_cents` for a credit memo or `− credit_applied_cents` otherwise; change those components through the owning RPCs |
 | `vendor_bills.balance_cents` is GENERATED ALWAYS (PR-04) | Same rule — `record_vendor_payment` writes only `paid_cents`/`status`. Pre-2026-05-10 it was plain `bigint` and could drift. |
 | `orders.total_paid` / `orders.balance_due` were DROPPED | AR is derived from `invoices.balance_cents` |
 | `create_direct_order` returns `{ order_id }` (NOT `{ id }`) | Destructure correctly |
@@ -40,13 +40,13 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | `returns.requested_by` (NOT `created_by`) | And status starts at `'requested'` (NOT `'pending'`) |
 | `return_items.order_item_id` (NOT `delivery_item_id`) | Returns are linked to order lines, not delivery lines |
 | `invoice_items.extended_cents` (NOT `line_total_cents`) | Naming inconsistency from early schema |
-| `financial_audit_log.entity_type` allows: `invoice`, `payment`, `vendor_bill`, `vendor_payment`, `purchase_order`, `write_off` | The CHECK constraint was AR-only until PR-04 (2026-05-10) — adding new entity types means expanding the CHECK. Same for `operation_type`. |
+| `financial_audit_log.entity_type` is a CHECK-constrained list | The CHECK was AR-only until PR-04 (2026-05-10) and has grown since; read the current values from `.claude/schema-registry.json` → `check_constraints["financial_audit_log.entity_type"]` (same for `operation_type`). Adding a new entity type means expanding the CHECK with every existing value kept. |
 
 ---
 
 ## Canonical idempotency pattern (PR-02, 2026-05-09)
 
-Five mutating RPCs were silently re-executing on network retries because they used a broken replay check (`(v_existing->>'status') = 'completed'`) that never matched the saved jsonb shape. The canonical pattern below is the only correct one — substitute `'<rpc_name>'` for the function name.
+Five mutating RPCs were silently re-executing on network retries because they used a broken replay check (`(v_existing->>'status') = 'completed'`) that never matched the saved jsonb shape. The helper pattern below replaced that broken check — substitute `'<rpc_name>'` for the function name. Newer money and inventory RPCs use an intent-bound variant instead: `check_idempotency_intent(p_idempotency_key, '<op>', actor, request_fingerprint)`, which also compares the actor and request and raises `IDEMPOTENCY_KEY_REQUIRED` when no key is sent (example: `receive_po_items` in `20260831233000_bind_section9_replays_to_intent.sql`). Read the latest body of the RPC you are changing before choosing.
 
 ```sql
 DECLARE
@@ -79,7 +79,7 @@ END;
 - TS callers MUST wrap with `assertRpcResult<T>(data, 'rpc_name')` (`local-rules/require-assert-rpc-result` ESLint rule enforces it).
 - TS error detection: `hasRpcCode(err, RpcErrorCodes.X)` from `src/lib/db.ts` — never substring-match (a user-supplied note containing `'BILL_VOIDED'` would false-positive).
 
-The `idempotency-body-check.mjs` PreToolUse hook blocks RPCs that declare `p_idempotency_key` but don't reference `idempotency_keys` in the body. Add `-- idempotency-body-check: exempt` at file top to opt out (only when using the helper-function indirection above — never for raw inline lookups).
+The `idempotency-body-check.mjs` PreToolUse hook blocks RPCs that declare `p_idempotency_key` but do not wire both halves of one pattern — the `check_idempotency`/`save_idempotency` helpers above, or a direct `idempotency_keys` lookup plus insert — and it requires the lookup to be scoped by `operation`. Normal helper use needs no exemption marker. Reserve the file-level `-- idempotency-body-check: exempt` marker for a wrapper that genuinely delegates idempotency or SQL the hook cannot parse; it disables the check for the whole file, so review every function in it by hand (`docs/reference/sql-canonical-patterns.md`).
 
 ---
 
@@ -117,8 +117,8 @@ The AP RPC trio (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bil
 |------|--------|
 | Every `<Route>` first segment must have a `PAGE_PERMISSIONS` entry OR be in `EXEMPT_ROUTE_SEGMENTS` | `pagePermissions.test.ts` enforces by greppping App.tsx routes. ProtectedRoute fails-closed (logs + redirect) when `getPageKeyFromPath()` returns null on a non-exempt path. Adding a Route without an entry now fails CI. |
 | `parseDollarsToCents` PRESERVES leading minus | Pre-PR-15 it stripped them, turning `-50` discount into `+5000` cent ADD. Use `parseDollarsToCentsPositive()` for fields that must reject negatives (default callers don't need to switch). |
-| Edge Functions throw at startup if `ALLOWED_ORIGIN` is unset (and not localhost) | PR-16 removed silent fallback to `https://croprxsolutions.app`. Functions requiring the secret: create-user, process-blend-ticket, process-document, send-email (`seed-admin` — one of the original 5 — was deleted 2026-06-16 as a security cleanup; it no longer exists, verified against `supabase/functions/` 2026-07-13). reset-user-password uses a separate hard-coded array pattern; setup-blend-tickets-storage still exists on disk and is still dead code (delete pending — verified 2026-07-13). |
-| `logActivity({performedBy})` requires `profile.id` (no empty-string fallback) | PR-20 patched 8 handlers: WriteOffModal, FinanceChargePreviewModal, MonthEndClose, Deliveries, InvoiceDetail. If `profile` is null, handler returns early with toast. QuoteBuilder's compliance check is the one useEffect-gated callsite (still gates on `profile?.id`). |
+| Edge Functions throw at startup if `ALLOWED_ORIGIN` is unset (and not localhost) | PR-16 removed silent fallback to `https://croprxsolutions.app`. Every function in `supabase/functions/` (create-user, customer-document-files, epa-lookup, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage) imports `../_shared/cors.ts`, which throws when the secret is unset, so all of them need it. (`seed-admin` was deleted 2026-06-16 as a security cleanup.) |
+| `logActivity({performedBy})` requires `profile.id` (no empty-string fallback) | PR-20 patched the handlers in WriteOffModal, FinanceChargePreviewModal, MonthEndClose, Deliveries and InvoiceDetail. If `profile` is null, handler returns early with toast. QuoteBuilder's compliance check is the one useEffect-gated callsite (still gates on `profile?.id`). |
 | General Invoice Detail rewrites preserve `invoice_items.order_item_id` — **fixed live 2026-09-01** | `20260827041500` applied live on 2026-09-01 (ledger `version` `20260901184530`). It wraps `_save_invoice_scoped_impl` with server-side identity validation and restoration of line id, order lineage, historical cost, creation order, and delivery provenance. **The former restriction is lifted:** editing generated delivery/order invoices in the general editor no longer drops the source field, so the void/recreate workaround is no longer required. Before this applied, live rewrites rebuilt line items without `order_item_id`, so a later return refunded revenue while reversing zero COGS. |
 
 ---
@@ -136,7 +136,7 @@ Customers over credit limit no longer block quick deliveries. Per Q4 (Option C):
 
 ## Tables WITHOUT `updated_at`
 
-Setting `updated_at = now()` in an UPDATE on these tables will crash the RPC. The pre-commit hook blocks this, but here's the full list for reference:
+Setting `updated_at = now()` in an UPDATE on a table without the column will crash the RPC. The authoritative list is `.claude/schema-registry.json` → `tables_without_updated_at`, which the `sql-safety` PreToolUse hook reads; the pre-commit `scripts/validate-sql.sh` carries its own older, shorter list (as of 2026-03-16). The list below is only a sample of common ones — check the registry, not this list:
 
 `payments`, `write_offs`, `delivery_items`, `order_items`, `quote_items`, `return_items`, `purchase_order_items`, `commissions`, `finance_charges`, `prepay_applications`, `cycle_counts`, `cycle_count_items`, `activity_feed`, `financial_audit_log`, `idempotency_keys`, `receiving_records`, `inventory_transactions`, `invoice_line_allocations`, `order_line_allocations`, `invoice_shares`, `order_shares`, `commission_payment_items`, `blend_ticket_products`, `blend_ticket_images`, `blend_ticket_to_order_items`, `blend_recipe_items`, `delivery_photos`, `receiving_photos`, `email_log`, `ar_reminder_tracking`, `rup_sales_records`, `vendor_payments`, `cost_history`
 
@@ -314,24 +314,12 @@ Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate
 CodeRabbit review was submitted. Say so rather than treating green as clean. This matters more
 since 2026-09-02, not less: Mason removed the required approving review from `main`, so a
 misleading green CodeRabbit status is no longer backstopped by a missing approval keeping the PR
-blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Since
-2026-08-30 the normal trigger
-is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
-accidental duplicate. Native attempts retain a trusted head/base receipt even after a reset.
-For pending or uncertain delivery, preserve requested/dispatch state and check the actual formal
-review. After late delivery, reapply `ready-for-coderabbit` to reconcile the existing request;
-do not remove and re-add the provider label. A retained same-head attempt cannot be retried as
-unspent merely by clearing labels: use a fresh candidate after verifying earlier delivery, or
-open a fresh PR and close the old one with a `Replaced by #N` comment (closing keeps its
-ambiguous out-of-band evidence; do not leave it open). Only the workflow's verified cleanup
-before any provider call permits a same-head retry. Follow
-`docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
-confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
-`CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
-*does* exist, require the native receipt's head SHA, that authenticated `APPROVED` review's `commit_id`, and
-the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
-the expected base; native delivery validates both head and base commits. The generic Actions-authored marker is dedupe evidence, not an
-independent trust identity.
+blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Never
+merge from the ordinary check row alone — confirm CodeRabbit actually reviewed the frozen candidate,
+and never merge over a `CHANGES_REQUESTED` verdict. The label-triggered review procedure (the
+`ready-for-coderabbit` trigger, dedupe labels, receipts, and the `Replaced by #N` fresh-PR rule)
+lives in `.claude/commands/ship.md` Step 8 and `docs/reference/coderabbit-native-review.md`; follow
+those rather than a copy here.
 
 ---
 

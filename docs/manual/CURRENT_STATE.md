@@ -1,549 +1,200 @@
 # CRX Manager — Current State
 
-**Superseded 2026-09-06 header, kept for provenance — every boundary and counter claim in the next
-two paragraphs is superseded by the 2026-09-08 capture that follows them; do not number a migration
-off it.** It was last verified 2026-09-06 for the migration ledger (read-only ledger read against project
-`rhyzpcqhnizqbxphqdkr`); schema shape re-read 2026-09-05 by the live-introspection regeneration of
-`.claude/schema-registry.json` merged as PR #601.** The registry regeneration that was outstanding
-here is **DONE**, and the note that it was "being reconciled by open PRs #601 and #602" is
-superseded: #601 merged, and #602 was closed as a byte-identical duplicate of it. The registry is
-stamped `generated_at 2026-09-05` and carries `migrations_high_water` `20260904152221`. All five
-migrations previously listed here as unread by the registry are captured by that refresh —
-`20260903150100_ledger_backed_commission_history` (ledger version `20260903202611`), F2's
-`20260903160000_gate_number_generators_active_profile_role` (`20260904023121`),
-`20260903230000_commission_report_snapshot_contract` (`20260904040643`),
-`20260904160000_invoice_date_fallbacks_chicago` (`20260904130047`), and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`).
-
-**The name-ordered high-water now UNDER-REPORTS by one file, and this is the important fact on this
-page.** A name-ordered query still returns **`20260904180000_invoice_season_follows_invoice_date`**,
-but the newest applied authored file is really **`20260904185900_refuse_null_job_field_acres`**,
-merged as `719faac73` (PR #606) and applied live on 2026-09-05 as ledger version `20260905185938`.
-It was registered under the bare name `refuse_null_job_field_acres`, with **no 14-digit prefix**, so
-name ordering cannot see it. At that read a new migration had to be numbered above the then-TRUE
-high-water `20260904185900` (since superseded — see the 2026-09-08 capture below). Identity confirmed on 2026-09-06 rather than inferred: live `save_job` is one
-overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
-the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
-carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-21 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1008 rows / 1001 distinct names, `max(version)` `20260921141901`). Four
-commission-cohort files applied live on 2026-09-21 between 14:14 and 14:19 UTC —
-`20260914100100_next_invoice_number_year_chicago` (`20260921141423`),
-`20260914100200_commission_history_report_replay_guard` (`20260921141451`),
-`20260914100300_refuse_stale_commission_payment_recipient` (`20260921141740`) and
-`20260914100400_enforce_commission_payment_business_date` (`20260921141901`) — so the effective
-ordering high-water is now `20260914100400`; `20260914100500`, `100600`, `100800` and `100900` are
-still not applied, and the 2026-09-20 figures below are superseded by this read. The schema
-registry has not been regenerated since those four applies. **Update, read-only ledger read 2026-09-22
-UTC:** `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`) and
-`20260914100600_latest_commission_recipient_label` (`20260922020038`) have since applied, so the
-effective ordering high-water is now `20260914100600`; `20260914100700` (the customer-document
-candidate), `20260914100800` and `20260914100900` are not applied.** Carried forward from the 2026-09-20
-read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
-applies that morning, the `20260908140000` six-generator year fix (issue #617) under
-`20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
-`20260920052149`; schema shape last re-read 2026-09-20 by the live-introspection regeneration
-of `.claude/schema-registry.json`, through ledger version `20260920052149`.** That rebuild left all
-eight schema-shape sections byte-identical to the registry it replaced — 11 generated columns, 38
-status enums, 94 tables without `updated_at`, 119 parsed CHECK IN-lists, 221 skipped constraints,
-160 column entries, 7 sequences — so the shape itself has not drifted; the only changes were the
-applied boundary (`20260915033227` to `20260920052149`) and that morning's two applies joining the
-applied-migration name list. The registry's applied migration list also still includes the
-routine-only `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied row's effective stamp:
-**`20260911120000_bind_adjust_inventory_receipt_to_intent`** (row 930, ledger version
-`20260920052149`, applied live 2026-09-20 via #664; verified live read-only 2026-09-20, 1004 ledger
-rows). A candidate must now sort above the `20260911120000` name-stamp.
-
-**Superseded boundary — row 927's 09-15 apply.** Until the 09-20 applies the high-water was
-**`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
-`20260915033227`, applied live 2026-09-15 via PR #691; verified live read-only 2026-09-17, 1002
-ledger rows).
-
-**Superseded boundary — PR #646's row 923.** Until the 09-15 apply the high-water was
-**`20260908120000_close_pr535_live_gaps`** (row 923, ledger version `20260909023300`, applied live
-2026-09-08; verified live 2026-09-08, 1001 ledger rows). It replaced
-`20260906120000_preview_field_app_season_follows_invoice_date` (ledger version `20260908045843`,
-applied earlier the same day), which in turn replaced `20260905185938_refuse_null_job_field_acres`
-(#606, applied live 2026-09-05 under a bare ledger name, so its stamp was synthesized from its
-version). While it held, a candidate had to sort above the `20260908120000` name-stamp.
-Re-read read-only 2026-09-11: unchanged —
-1001 ledger rows / 994 distinct names, `max(version)` `20260909023300`, same high-water. That row is still applied and still byte-exact; it is
-simply no longer the newest apply.
-
-**Superseded boundary — the 09-08 pre-apply row.** Before row 923 it was **`20260906120000_preview_field_app_season_follows_invoice_date`** (ledger version `20260908045843`,
-applied live 2026-09-08; verified live 2026-09-08, 1000 ledger rows / 993 distinct names). It
-replaced `20260905185938_refuse_null_job_field_acres` (#606, applied live 2026-09-05 under a bare
-ledger name, so its stamp was synthesized from its version), which held the boundary until then.
-A candidate then had to sort above the `20260906120000` name-stamp, not above the 09-05 row.
-(Point-in-time, like every capture here: a read-only re-read on 2026-09-11 found the ledger had moved
-again — 1001 rows / 994 distinct names, `max(version)` `20260909023300`, prefixed high-water
-`20260908120000_close_pr535_live_gaps`, the PR #535 gap-closer whose file and ledger record are owned
-by open PR #646. A read-only re-read on 2026-09-14 found the same figures, and confirmed that none of the
-seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`, `20260911120000`, or
-`bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded twice:
-`20260908130000` applied live 2026-09-15 under ledger version `20260915033227`, and
-`20260911120000_bind_adjust_inventory_receipt_to_intent` applied live 2026-09-20 under ledger version
-`20260920052149`, which now holds the boundary. A read-only re-read on 2026-09-20 found 1004 ledger
-rows immediately after that apply.)
-
-**Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and was applied live on 2026-09-15 (see below).
-
-Six local commission follow-ups (`20260914100200` through `20260914100900`, with no `20260905200500` file) are not applied. The
-six-file set was restamped together on 2026-09-05 evening and again on 2026-09-14 (from
-`20260905200000`..`20260905210000`, to sort above the applied `20260908120000_close_pr535_live_gaps`),
-preserving its order each time; both times the set had sorted below a newly applied row and the
-ordering guard would have refused it.
-A seventh local follow-up, the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent`
-(formerly `20260908130800`, restamped with the set on 2026-09-14 so it sorts between `20260914100600`
-and the `20260914100900` repair), is also not applied. It is not independently apply-ready: its
-first-apply prerequisite is the parked Chicago-date candidate `20260914100500` (formerly
-`20260905200400`), which must apply first. This correction applies none of them.
-They harden snapshot replay, refuse a payment batch if its recipient became stale before posting,
-park an America/Chicago payout business-date guard, pair commission source-date inheritance with
-Chicago-based source document dates, make balance-report recipient labels follow the latest
-earned-state observation at the requested cutoff (including paid-only rows), and — last in the
-ordered plan on purpose — append corrected labels for 34 un-settled opening commission snapshots.
-That label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 to run last,
-then restamped again with the rest of the set on 2026-09-05 and 2026-09-14; on PR #638's branch it
-briefly sat at `20260908130000` and then `20260908130900`, a name that no longer exists) sorts after
-the `20260914100800` transfer wrapper so the repair remains last. It refuses to run
-once any commission payment has been posted; running it last means such a refusal stops nothing
-else, whereas at its old position it would have halted the payout guard and the date fixes behind
-it. The unified date candidate at `20260914100500` (formerly `20260905200400`) closes the September 30 boundary atomically:
-it drains old writers, then replaces both commission helpers and all four source-document writers
-in one migration transaction. A transaction-local marker plus three owner-only compatibility
-triggers rejects any cached pre-cutover body when it reaches its first affected DML, requiring the
-caller to retry on the new body; ordinary direct and unrelated writes remain unchanged.
-`20260905200500` was superseded before apply and is not a file.
-None changes an existing immutable ledger row. Refresh
-`.claude/schema-registry.json` only after a reviewed live apply.
-The registry regeneration once listed here as outstanding is **DONE**: PR #601 merged it and #602 was closed as a byte-identical duplicate, so the "being reconciled by open PRs #601 and #602" note is superseded. The registry is stamped `generated_at 2026-09-05` and carries `migrations_high_water` `20260904152221`.
-
-Read ordering from the authored NAME, not from `version` — the two diverge, and
-`.claude/schema-registry.json`'s `migrations_high_water` holds a **version**, so a "greater than
-high-water" rule compared against it silently skips files authored `20260831*` and `20260903*` alike
-— the `version` stamps run ahead of the authored names in both ranges. The NAME is also the
-durable way to state this boundary: it is what the ordering guard compares, and it changes far less
-often than the counters.
-
-For provenance, the 2026-09-06 read observed **999 ledger rows** (992 distinct names) and
-`max(version)` **`20260905185938`**. The 2026-09-05 read saw 998 rows / 991 names / `max(version)`
-`20260904152221`, unchanged from 2026-09-04 — so the counters can sit still across a day and then
-move, and here they moved while the name-ordered boundary did NOT, which is the reverse of the usual
-warning and exactly why the unprefixed row above is easy to miss.
-**Both are a point-in-time observation, not a standing fact.** Every apply by
-any lane moves them, so re-read live before relying on either; a stale count here is expected drift,
-not evidence that something went wrong, and it should not be re-pinned on every apply.
-For provenance, the **superseded 2026-09-05 afternoon read before #606 applied** observed **998
-ledger rows** (991 distinct names — the difference is duplicate names, from `count(distinct name)`,
-not truncation) and `max(version)` **`20260904152221`**. The evening read after #606 was the later
-999-row boundary capture, now superseded by the 1,000-row 2026-09-08 capture stated above. **All counts and `max(version)` values are point-in-time
-observations, not standing facts.** Every apply by any lane moves them, so re-read live before
-relying on either; a stale count here is expected drift, not evidence that something went wrong,
-and it should not be re-pinned on every apply.
-Worth noting alongside: those counters sat unchanged from the 2026-09-04 reading through the 2026-09-05 afternoon one, so the counters can stand still across a day while the boundary NAME does not.
-
-**F2 number-generator gate is APPLIED LIVE and merged** at effective ledger version
-`20260904023121`. This refresh verified all eight generator security/grant shapes; the F2 entry in
-`docs/manual/KNOWN_ISSUES.md` carries the detailed matrix.
-
-**Disk-vs-live drift — live-ledger read 2026-09-08, file ownership updated 2026-09-11. PRs #535 AND #592 ARE RECONCILED; PR #599's file landed on `main` 2026-09-11 (`791bc3d86`).** The two dates are separate on purpose: the ledger observation is the 09-08 read, the 09-11 date is a later merge.
-PR #535 merged on 2026-09-08 and restored its six already-live migration files to `main`:
-`20260831160000_harden_receiving_reversal_and_ap_reporting`,
-`20260831161000_require_cumulative_po_bill_confirmation`,
-`20260831162000_fail_closed_historical_commission_balance`,
-`20260831212415_guard_cycle_count_completion_revision`,
-`20260831233000_bind_section9_replays_to_intent`, and
-`20260831235900_serialize_gauntlet_write_boundaries`. The last known file gap as of 2026-09-08,
-`20260904180000_invoice_season_follows_invoice_date` (applied live), closed when PR #599 merged on
-2026-09-11 (`791bc3d86`) and put that file on `main`. The two commission-history
-source files formerly missing from `main`,
-`20260903150100_ledger_backed_commission_history` and
-`20260903230000_commission_report_snapshot_contract`, were reconciled when PR #592 merged on
-2026-09-08. That PR also carried two NOT-YET-APPLIED files originally named
-`20260905020000_commission_history_report_replay_guard` and
-`20260905020100_repair_commission_history_label_snapshots` (both since renumbered again: after the
-2026-09-14 restamp the commission candidates are exactly `20260914100200`, `20260914100300`,
-`20260914100400`, `20260914100500` and `20260914100600`, with no `20260905200500` file; the intent
-wrapper is `20260914100800` (formerly `20260908130800`) and the repair remains last at
-`20260914100900`). All of them sort above the applied high-water
-`20260908120000_close_pr535_live_gaps`; none is applied.
-
-**Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
-called `20260904185900` a pending "#582 candidate" sitting above the live high-water. Every clause of
-that is now stale:
-
-- `20260904185900_refuse_null_job_field_acres` does **not** belong to PR #582. It was added to `main`
-  by **PR #606** (`719faac73`, "fix(jobs): guard server-side field acreage"), it re-emits `save_job`,
-  and it is **already applied live** under ledger version `20260905185938`.
-- PR #582's own migration is `20260903150000_job_chemicals_persist_driver`, applied live under ledger
-  version `20260903153402`.
-**The ordering boundary is unchanged by this correction**, and it is stated at the top of this page,
-not here: `20260905185938` is a **version**, not an authored name, so it is not the number a new
-migration must exceed. The authored-name high-water remains **`20260904185900`** — that row is
-registered under the bare name `refuse_null_job_field_acres` with no 14-digit prefix, which is why a
-name-ordered query cannot see it. Compare authored names to authored names; a "greater than
-high-water" rule pointed at a version silently skips files. PR #592's restamped `20260905020000` and
-`20260905020100` therefore sort correctly ABOVE the authored-name boundary and need no restamping on
-this account.
-
-The #606 candidate, the field-acreage guard first tracked as #582 (`20260904185900` on disk), was
-applied live on 2026-09-05 as ledger version `20260905185938` under the bare name
-`refuse_null_job_field_acres` — that row was the ordering high-water from 2026-09-05 until
-`20260906120000_preview_field_app_season_follows_invoice_date` applied on 2026-09-08 (the capture at
-the top of this file), which is why the commission set had to move above it. The disk file still carries its authored stamp; row 916 of
-`docs/reference/migration-history.md` records that name mismatch for the #606 lane to reconcile.
-
-PR #599's merge on 2026-09-11 closed that file gap, but the rule stands: `main` can lag production,
-so any migration whose safety argument rests on "the live body equals the last committed body" must verify against
-**live**, not against disk. The `20260904185900` save-job migration pinned the 2026-09-03 F06
-post-apply `pg_proc.prosrc` body and rechecked that exact pre-image at apply time rather than inferring
-it from migration filenames alone; it has since been applied, so live `save_job` is now at ITS body
-md5 `8acf34542105a90212ddb0a5e7c5d272`, not F06's.
-
-A second local candidate, `20260908130000_bind_create_inventory_hold_receipt_to_intent` (originally on
-`claude/inventory-idempotency-key-reset-888161`, history row 927), merged to main as PR #691, was
-**APPLIED LIVE on 2026-09-15 at 03:32Z** (ledger version `20260915033227`) with Mason's explicit in-chat
-approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply read-only checks confirmed the
-SECURITY DEFINER wrapper (authenticated-only), the private impl with no client EXECUTE, and the enabled
-`guard_create_inventory_hold_insert_20260913` trigger. The exposure look-back (due by 2026-09-18, run 2026-09-15 right after the apply) found that all 29
-holds ever created (newest 2026-04-28) were made by staff who are active admins today, and the
-`created_by` foreign key rules out a persisted hold with a missing profile. It cannot show whether the
-NULL `p_force` path (which skipped the free-stock check even for an admin) or the inactive-profile path
-was ever exercised: `p_force` is not stored, and profile state is read as of today. The rest of this paragraph is the pre-apply record. Its stamp is authored above PR #592's pending `20260905*` files, and
-deliberately clear of `20260905210000`, which PR #592 occupies with
-`20260905210000_repair_commission_history_label_snapshots.sql` (two migration files sharing one
-timestamp would have undefined apply order). (Since 2026-09-14 those pending files are restamped
-`20260914100100`..`20260914100600`, and the repair is `20260914100900_repair_commission_history_label_snapshots.sql`,
-which still sorts after this file.) Its safety argument pins the `create_inventory_hold` body by `prosrc`
-sha256 (`3c86421e…`, the body the checked-in 2026-07-27 production dump carries) and fails closed at
-apply time if the installed body differs. **Mason authorized a read-only live check on 2026-09-06 and
-every preflight condition was met**: exactly one `create_inventory_hold` overload, owner `postgres`,
-`plpgsql`, SECURITY DEFINER, `proconfig = {search_path=public, pg_temp}`, the full argument list with
-defaults equal to the pinned string, `md5(prosrc) = 30ae56a0e1ee3b472abe5c95508b43fc` — the same
-4,046-character body whose sha256 is the pinned `3c86421e…` (md5 recomputed locally from the
-2026-07-27 dump for comparison, because the live-data guard's read-only allowlist has no
-`digest()`); the private impl name absent; `check_idempotency_intent`, `extensions.digest` and
-`pg_catalog.trim_scale` installed; both receipt-binding columns present; EXECUTE on the hold RPC
-held by `authenticated` and `service_role` and not `anon`; `check_idempotency_intent` executable by
-none of the three; and **zero** unexpired `create_inventory_hold` receipts of any kind, so
-`PREFLIGHT_LEGACY_RECEIPTS` would not fire at that moment. The pre-existing
-`section9_bind_idempotency_receipt_20260826` BEFORE INSERT trigger returns `NEW` unchanged for
-operations outside its AP/receiving list, so it does not touch hold receipts. No live write was made.
-See `docs/manual/KNOWN_ISSUES.md` (OPEN 2026-09-05, manual-hold same-key race).
-
-**F06 (`20260903150000_job_chemicals_persist_driver`) IS APPLIED LIVE — ledger version
-`20260903153402`.** PR #582 merged at 13:57:41Z (merge commit `a753c0318`) and put the migration
-file, the `save_job` re-emission (marker `chem_unit_invariant_v3`) and its client changes on `main`;
-the live apply followed separately and is now confirmed. Verified independently against production
-on 2026-09-03: `job_chemicals.driver` exists as nullable `text`, and `save_job` was at md5
-`18d08d5f40aea91fe13ac3e5a686c549` — the candidate body, which replaced the 20260820120000 body
-(`227ab7b6bc2023724adf6952a221d2a8`) — with exactly one overload, so no duplicate function was
-created. **That md5 is now historical:** `20260904185900_refuse_null_job_field_acres` applied live on
-2026-09-05 and replaced it with `8acf34542105a90212ddb0a5e7c5d272` (still one overload). F06's
-earlier 990-row / `20260903025854` / `20260831212415` ledger figures were superseded by the 993-row
-F06 capture, then the 998-row capture, then the 999-row capture, and now the 2026-09-08 1000-row
-capture at the top of this file.
-
-**The sequencing lesson outlives the fact.** For the window between that merge and that apply, this
-file correctly recorded F06 as merged but NOT applied: `main` carried the migration while production
-had no `driver` column. That window exists for every migration, so **a merge is not an apply** —
-confirm each against live separately rather than inferring one from the other. Earlier revisions of
-this section stated the not-applied half; they were right when written and are now superseded.
-
-This header supersedes the 2026-09-01 ledger figures below; its non-ledger observations still stand.
-
-**Superseded 2026-09-01 (post return-credit chain) header, kept for provenance — its 986-row /
-`20260827041500` / `20260901184530` figures must not be used as the current ordering boundary.**
-Schema shape comes from the live introspection that regenerated
-`.claude/schema-registry.json` after the chain closed — columns, CHECK constraints, generated
-columns, sequences and NOT NULL sets for all 157 public tables. It does **not** include a fresh
-read of individual routine bodies or their grants beyond the functions this chain touched, which
-were verified separately and are recorded below; the superseded 2026-08-27 11:43:53 UTC capture
-remains the last full routine-body reading.
-
-The now-superseded read-only ledger capture after the six-file return-credit chain on 2026-09-01
-records **986 ledger rows**, with `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`
-as the latest applied authored name at that time; the then-current effective ordering name high-water was
-**`20260827041500`**, and live `max(version)` is **`20260901184530`**. Read ordering from the authored
-NAME, not from `version` — the two diverge.
-
-The 980-row reading below was taken earlier the same day, **before** that chain applied, and is
-superseded. It is retained because its non-ledger observations still stand:
-
-> A read-only `list_migrations` on 2026-09-01 records **980 ledger rows**, with
-> `20260826222000_correct_ap_aging_due_date_buckets` as the latest applied authored name; the
-> effective ordering name high-water is therefore **`20260826222000`**, and live `max(version)` is
-> **`20260901045346`**.
-The earlier 978-row / `20260826220000` / `migrations_high_water` `20260827113443` reading is
-superseded (see the Section 9 paragraph below for the two applies that moved it). The
-live-introspection registry records `quote_versions.restore_trusted_at`, so the quote-version trust
-migration is **applied live** and its schema marker exists. The schema-shape evidence is still the
-2026-08-27 capture and does not include a fresh post-apply read of the five routine bodies or their
-grants; the 2026-08-26 pre-apply fingerprint paragraph is superseded, not promoted into post-apply
-proof.
-
-**PR #535 gauntlet chain — all six migrations APPLIED LIVE 2026-09-03.** `20260831160000`, `20260831161000`, `20260831162000` and `20260831212415` applied as ledger versions `20260903023935`, `20260903024550`, `20260903025249` and `20260903025854`; `20260831233000` and `20260831235900` applied as `20260903124710` and `20260903124741`. Live ledger **at that point: 992 rows** — the 2026-09-03 14:01 UTC pre-F06 boundary, superseded by the 993-row 15:34 UTC capture above and not to be used as the current figure. Each went through the full migration-apply gate with Mason's explicit in-chat approval and clean Codex drift + RLS reviews. Post-apply verification against the live catalog: `update_vendor_bill` is a single 9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; `cycle_counts.item_revision` exists; `trg_bump_cycle_count_item_revision` is present on `cycle_count_items` and its body carries the `CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN` guard. **The frontend half of PR #535 HAS now merged** (commit `914a6d36a`, on `origin/main`), superseding the earlier note here that it had not. `src/pages/CycleCounts.tsx` sends `p_expected_item_revision` at both completion call sites (`:589-594` and `:778-783`), each gated to fail closed when the revision is not a number, and `src/lib/db.ts:174` maps the refusal code to a plain-English reload instruction. That is what made row 923 (`20260908120000_close_pr535_live_gaps`, applied live 2026-09-08) safe to apply: it turns an omitted revision into a hard refusal, and no deployed caller omits it.
-
-The prior header readings are retained as provenance: 977 rows / `20260826205935` / authored
-high-water `20260826150000` after the COMMENT-only apply, and before that 976 rows /
-`20260825142708` / authored high-water `20260820120000`. They are historical and must not be used
-as the current ordering boundary.
-
-The PR #361 return-credit function/schema surface was also re-read from a fresh live schema dump on
-2026-08-27. That separate read supports its candidate preconditions; it does not replace the newer
-980-row ledger capture above.
-
-All four migrations of the draw-down chain are applied live: the cutover barrier (ledger version
-`20260824185408`) and, later on 2026-08-24 with Mason's explicit in-chat approval, the tier split
-(`20260825025241`), the allocated-line-cents lifecycle carry (`20260825033106`), and the receipt
-intent binding (`20260825034622`). The authoritative rollout record — per-migration SHA-256 pins,
-proofs, and postflight — is the block at the top of `docs/reference/migration-history.md`; the
-matching issue entries are in `docs/manual/KNOWN_ISSUES.md`.
-
-**Commission history is live from the first complete post-cutover Chicago day.** Migration
-`20260903150100_ledger_backed_commission_history` applied on 2026-09-03 as live ledger version
-`20260903202611`, after the first candidate was rejected for backdating mutable current state. It adds
-`commission_payments.voided_at`/`voided_by`, `commissions.cancelled_at` plus immutable
-`cancelled_amount_cents`, one immutable cutover record, an append-only earned-state ledger, and a
-signed posted/voided settlement ledger. The aggregate and detail reports read only those immutable
-events, including paid-only negative balances after a later cancellation or soft delete. Exact
-cutoffs begin on the first complete Chicago day after the real database cutover; every earlier date
-fails closed because pre-cutover earned-state versions do not exist. The cutover is
-`2026-09-03T20:26:11.402245Z`, so the first supported Chicago date is `2026-09-04`; the partial apply
-day correctly refuses instead of returning a number. Reports shows both the recipient balance summary
-and the payment-by-payment commission detail, and caps shared future-ending presets at Chicago-today
-before calling either RPC. New and revised commissions must
-carry an `order_date`, and payout creation now rejects negative items or a payment date before
-the commission's order date. Canonical zero-dollar commissions remain settleable; the report
-counts them pending until a signed post event exists and returns them to pending after void. The two existing zero-dollar
-cancellations enter the opening observation as excluded legacy states. Postflight confirmed 35 opening
-events (33 baseline and 2 legacy excluded), zero settlement events, the reviewed function fingerprints,
-RLS/ACLs, and all required triggers. No live `[E2E]` fixtures were created; source merge remains separate.
-
-**The 976th row is not part of the draw-down chain.** `20260820120000_save_job_enforce_chem_unit_invariant_and_derive_totals`
-(history row 891) applied live on 2026-08-25 as ledger version `20260825142708`, after the
-draw-down rollout closed. Its full apply record — approval, proofs, postflight — is carried by
-history row 891 and the `KNOWN_ISSUES.md` entry, both landed by PR #475 from the session that ran
-it. This document states only the ledger fact and defers to those.
-
-**The tracked registry was refreshed from live on 2026-09-01, twice.** `.claude/schema-registry.json`
-records `migrations_high_water` `20260901184530`, 157 tables, 322 CHECK constraints, and 979 distinct
-applied migration names (986 ledger rows, 979 distinct — the difference is duplicate names, verified
-by `count(distinct name)`, not truncation). The first refresh was required mid-chain: migration
-`20260827041100` creates `return_items.restocked_quantity`, and the 2026-08-31 snapshot predated that
-apply, so the drift reviewer correctly refused a column check it could not perform. **That first
-refresh ran before the final migration applied, so it stopped at `20260901183717` and omitted
-`20260827041500` — a stale registry contradicting this document's own live-apply record.** The
-exact-head `gpt-5.6-sol` review of the follow-up branch caught it; the registry was regenerated from
-live after the chain closed.
-The earlier note that this branch's registry stayed at `20260825142708` and that its refresh belonged
-to a separate product-data worktree is superseded.
-
-**Booking draws are RESUMED** — Mason released the pause in chat on 2026-08-25. The decision, the
-evidence it rests on, and what was explicitly *not* proven are recorded in
-`docs/manual/DECISION_LOG.md` (2026-08-25 entry).
-
-What was observed before the release: zero unexpired and zero unbound `draw_down_quote` receipts on
-a read-only live postflight (2026-08-25); production root returning HTTP 200 (2026-08-25); and Mason
-opening the production Quote Builder initial screen (`Q-2026-2062`) on 2026-08-25, which rendered
-normally with no visible error and with no customer, item, preview, save, or submission made. That
-last item is **reachability and UI-render evidence only — it is not a booking-draw transaction and
-not an end-to-end draw allocation proof.** No end-to-end production draw has been observed since the
-rollout; Mason resumed knowing that, and manufacturing the proof by submitting a real quote or order
-was ruled out. Do not re-impose the pause on the strength of that gap alone — only on new evidence
-of an actual defect.
-
-**This pass re-read the ledger and the registry stamp only.** It does not re-certify any other
-figure in this document; every section below keeps its own older date. In particular, any statement
-below that migration `20260820120000` (history row 891, the `save_job` chemical-unit invariant) is
-parked, written-but-not-applied, or awaiting approval is **superseded by the ledger read above** —
-it applied live on 2026-08-25. Those older lines are left in place as provenance and were not
-individually rewritten in this pass.
-
-**SUPERSEDED 2026-09-01 — the chain is APPLIED. Kept for provenance only; do not act on it.** The
-2026-08-31 deferral below was reopened by Mason in-chat on 2026-09-01 and all six migrations were
-applied live in order. See the next paragraph for the current state.
-
-> **OWNER DECISION 2026-08-31 — DEFERRED, DO NOT APPLY NOW.** Keep the six-file return-credit chain
-> `20260827041000` through `20260827041500` unapplied until Mason explicitly reopens its production
-> rollout in a future conversation. The source files remain unchanged under `supabase/migrations/`;
-> their presence in the repository is not authorization to apply them. A future rollout must rerun
-> the then-current safety gates. If a newer migration has overtaken these timestamps, restamp all six
-> above the current high-water, update every pinned chain reference/hash, and re-review the restamped
-> artifacts before pushing/applying them in order. The rejected `20260827223000` ledger-order trigger
-> is not part of this deferred queue.
-
-**PR #361 return-credit chain — APPLIED LIVE 2026-09-01.** All six migrations
-(`20260827041000` through `20260827041500`) are in the live ledger on `rhyzpcqhnizqbxphqdkr`,
-applied in order with Mason's in-chat approval. Each passed a migration-apply-guard proof (both
-reviewer charters CLEAN from `gpt-5.6-sol`/high) and was verified afterward by read-only live query,
-not by the apply exit code. The proofs record that both charters ran against the exact migration
-bytes; they do not establish that the evidence those reviewers received was complete, so the
-independent live verification is what carries the weight here. The `aa_crx_block_return_credit_during_cogs_cutover` barrier installed by
-the first migration was removed by the last (verified: trigger `0`, function `0`), so return-credit
-issuance is open again. `20260826220000_quote_version_restore_trust_boundary` was already applied
-(ledger `version` `20260827113443`) before the chain, so nothing was wedged. Live ledger: 986 rows,
-`max(version)` `20260901184530`. Per-migration versions and the B7 reconciliation (no rename needed —
-every live `name` matches its authored basename) are in `docs/reference/migration-history.md`.
-The rejected `20260827223000` ledger-order trigger was never part of this chain and remains unapplied.
-Production still has zero credited returns and zero credit memos, so the previously latent defect was
-repaired before it could produce a wrong number.
-
-**Superseded pre-apply description, kept for provenance — every line below describes the PRE-APPLY state and is no longer true:**
-
-> The candidate migrations
-> `20260827041000_align_recognized_invoice_report_statuses` and
-> `20260827041100_rebuild_return_credit_cogs_reversal`, plus the follow-up
-> `20260827041200_exclude_return_credits_from_delivery_invoice_gate` and the delivery-surface alignment
-> `20260827041300_align_return_credit_delivery_surfaces`, plus the order-level alignment
-> `20260827041400_align_return_credit_order_invoice_gates`, and the generated-invoice lineage/cutover finish
-> `20260827041500_preserve_generated_invoice_lineage_and_finish_cutover`, are absent from the live ledger. Production has
-> zero credited returns, zero returns linked to credit invoices, and zero recognized return-credit
-> memos, so the defect is real but latent. Current live return-credit issuance still creates a
-> header-only credit, while the P&L and monthly reports use different recognized invoice-status sets.
-> The first candidate aligns invoice-basis P&L, monthly, and customer year-end reporting on
-> `posted`/`overdue`/`paid` and restricts year-end customer financial data to admins or the assigned
-> sales rep, including through the batch wrapper.
-
-The second candidate writes immutable credit cost-lot lines, bounds reversal to COGS previously
-recognized from the source sale, serializes source/credit lifecycle changes, and protects normal
-void, batch-void, and unapply cleanup. Per Mason's 2026-08-26 decision, an issued return credit uses
-the season for the current America/Chicago business date so prior customer year-end summaries never restate. A late return can therefore
-show negative product usage in the current season when the original purchase belongs to an earlier
-season; that is the accepted simplicity tradeoff. A 2026-08-27 read-only production check found one
-open restock row, exactly the pinned legacy `15 ea` RMA that converts to `37.5 Gal`, and zero unhandled
-warehouse-unit mismatches. A fresh read-only live-schema clone in disposable PostgreSQL passed the
-paid/overdue/posted multi-cost chain, current-season boundary, fractional-cent allocation, concurrency
-and lifecycle mutants. The third candidate prevents the order-linked credit
-memo from suppressing either a later delivery's automatic draft invoice or the manual recovery path
-for a completed unbilled delivery. The fourth keeps the dashboard action queue and the void/cancel
-warning paths on that same active-sales-invoice definition and makes the complete-delivery gate ignore
-soft-deleted invoices. The fifth aligns both order-level invoice creators with that same active,
-non-deleted, non-credit definition. The sixth preserves immutable source-line IDs and historical cost
-when a generated invoice is edited, then removes the temporary cutover barrier only after postflight.
-The latest recorded disposable-schema run counted 56 load-bearing predicates and ended in
-`SMOKE_PASS_ROLLBACK` with zero residue,
-including an ordinary non-credit invoice hard-delete proof so the new trigger cannot silently cancel
-unrelated deletes and a real completion proof that preserves return-credit tote provenance.
-Apply all six files in order only through the repository's guarded migration runner or the Supabase
-migration operation, never through the ad-hoc SQL channel.
-The sixth file closes the former Invoice Detail lineage prerequisite in `KNOWN_ISSUES.md`; merge still
-does not activate any candidate migration, and live apply remains a separate explicit-approval gate.
-After an approved live apply, regenerate the schema registry and Supabase-derived type artifacts from
-live, then verify they contain nullable `invoice_items.return_credit_cogs_cents bigint` and
-`invoice_items.return_credit_source_item_id uuid` before closeout.
-
-**Section 9 remediation is APPLIED LIVE. Re-verified read-only 2026-09-01; supersedes the
-2026-08-26/08-31 "not live" readings below-dated here.** Both Section 9 migrations —
-`20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard` and
-`20260826222000_correct_ap_aging_due_date_buckets` — were applied live on 2026-09-01 under Mason's
-explicit in-chat approval, through the full apply gate (ordering, destructive-content, reviewer proof
-and Codex gate). A read-only `list_migrations` on 2026-09-01 returns **980 ledger rows** with those two
-names as the newest entries, making the effective ordering name high-water
-**`20260826222000`**; `max(version)` is `20260901045346` (the ledger's version column carries the
-apply-time stamp, not the authored name — read ordering from the NAME).
-
-**Ordering figures in the paragraph above are superseded by the return-credit chain later the same
-day** (986 rows, high-water `20260827041500`, `max(version)` `20260901184530` — see the header).
-The Section 9 applies themselves are unaffected; only the row count and high-water moved.
-
-Post-apply catalog read, 2026-09-01: `get_ap_aging` has exactly **one** overload taking
-`p_as_of_date`, returning the five-bucket due-date contract (`current_amount`, `days_1_30`,
-`days_31_60`, `days_61_90`, `over_90`, plus `total_outstanding`/`bill_count`), `SECURITY DEFINER`
-with `search_path=public, pg_temp` intact; `get_ap_dashboard_summary` takes `p_idempotency_key` and
-its body keys on `due_date` rather than a rolling bill-date window. The prior claims that these
-remained the four-column bill-date and rolling-30-day implementations are superseded and were the
-2026-08-26 read. The cutover-preflight observation of zero active unbound Section 9 idempotency
-receipts is still the 2026-08-26 read and has not been repeated. This was a limited read-only
-catalog/ledger check; it does not restamp unrelated operational claims below.
-
-**Superseded 2026-08-22 header, kept for provenance — was last verified 2026-08-22 UTC for the ledger only** — a read-only re-read returning 971 rows, high-water `20260816174353`, 345 of 971 names timestamp-prefixed, every figure **unchanged** from the previous pass; that pass also read the four live `job_chemicals` rows while measuring the blast radius of parked migration `20260820120000` (history row 891), which is written and proven but **not applied**. The `quote_versions` write surface, the return-idempotency helper contract, and the section 2 counts were last read live **2026-08-19 UTC** and are carried forward on that reading, not re-verified since. **The live ledger has 971 rows.** Its highest `version` is `20260816174353`, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`, which is also the highest *timestamp-prefixed* `name` — so both orderings agree on the same row. (Only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is
-part of the stored ledger name); `docs/reference/migration-history.md` uses the 14-digit definition and this file now matches it. A plain `max(name)` returns the slug `year_end_summary`, so the ordering claim is about the prefixed subset.) That migration (**CRX-SEC-1**, history row 886) is the security fix that closes the client-writable path into `public.quote_versions`. Its apply *time* — 2026-08-16 17:43:53 UTC — is **read off the version stamp, not observed**: `supabase_migrations.schema_migrations` has no timestamp column (`version, statements, name, created_by, idempotency_key, rollback`), so the clock time is inference from Supabase's version-assignment convention, while the *fact* of the apply is the ledger row itself. Five documents were stale about it, in three different ways, and only **two** of them called it unapplied outright: history row 886 (`LOCAL CANDIDATE — NOT APPLIED`) and the RLS matrix in `docs/reference/database-schema.md` (`LOCAL ONLY pending apply`). The matrix in `docs/workflows/RLS_SECURITY_GUIDE.md` was stale a third way — it described the pre-fix write model with no pending marker at all, so nothing in it said "unapplied" to notice. This document and `KNOWN_ISSUES.md` were stale by omission, carrying no entry for the fix at all behind a ledger high-water nine applies out of date. (Each of those five statements is checkable against `origin/main` at `699f5c61`.) They were **not** found together, which is the point. A doc pass on 2026-08-18 found three (this document, `KNOWN_ISSUES.md`, history row 886); adversarial review then found a fourth (**the RLS Policy Matrix in `docs/reference/database-schema.md`**); CodeRabbit then found a fifth (**the matrix in `docs/workflows/RLS_SECURITY_GUIDE.md`**). Each pass corrected what it was pointed at and missed the next one, which is why the whole of both matrices was eventually reconciled in one sweep rather than row by row. All five are corrected in PR #420; this paragraph corrects this document. Post-apply live proof: `quote_versions` carries exactly one policy, `qversions_select`, and `has_table_privilege` for `authenticated` returns INSERT/UPDATE/DELETE **false**, SELECT true. Stated precisely, because an earlier draft of this line said "`authenticated` holds SELECT only" and that is **wrong**: `pg_class.relacl` is `{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`, so `authenticated` holds SELECT **plus MAINTAIN** and `anon` holds **MAINTAIN** (not nothing). MAINTAIN carries no read or write of rows — it permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK — and the migration retains it deliberately, so the security conclusion is unchanged; the earlier wording was wrong because it was taken from `information_schema.role_table_grants`, which does not report MAINTAIN at all. `metabase_ro` also holds SELECT but has no policy and does not bypass RLS, so it reads zero rows. The migration immediately before it, `20260813070000_pin_return_idempotency_helper_contract` (ledger `20260813011751`), is assertion-only — it changes no table, function body or business row — and its contract still holds live: `check_idempotency_intent` has exactly one public overload, is `postgres`-owned `SECURITY DEFINER` on `search_path=public, pg_temp`, with no anon/authenticated/service_role EXECUTE. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, so the registry matches this ledger high-water and was **not** re-derived in this pass. The section 2 operational counts below were re-read live in this same session and are restamped. The date on them moved from 2026-08-18 to 2026-08-19 **without a second read**: it is the same moment relabelled from local time to UTC, which is the convention every stamp in this file uses and which section 2 was already using.
-
-**Superseded 2026-08-17 header, kept for provenance — ledger re-read only.** The live ledger has **971 rows** and ends at **`20260816174353`**, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`. Nine migrations landed between the previous stamp and this one, applied by concurrent sessions: `20260812010000_blend_ticket_order_header_runtime_assert`, `20260812011000_restore_quote_version_whole_cent_money`, `20260812115235_snapshot_cost_reporting`, `20260812115236_quote_items_cost_at_quote_snapshot`, `20260812115237_enforce_below_cost_admin_approval`, `20260812115238_repair_historical_order_line_cents`, `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`.
-
-**Scope of this pass.** It re-read the live ledger only, to correct a high-water this document was stating wrongly. It did **not** re-verify the narrative below, and it did **not** refresh the schema registry — the registry is still stamped to the 962-row high-water and is now nine migrations behind. Treat every substantive claim in this document as carrying its own older date, not this one. The paragraph that follows is the 2026-08-12 evidence, retained verbatim.
- **Corrected by the 2026-08-19 read above:** the registry was regenerated from live introspection on 2026-08-16 and records the same `20260816174353` high-water, so it was not nine migrations behind.
-
-
-**Superseded 2026-08-12 header, kept for provenance:** the ledger then had 962 rows and ended at `20260812003315`, carrying submitted migration name `20260811230423_log_customer_sales_rep_assignment`. It re-emits the approved Customer 360 assignment RPC to advance `customers.updated_at` and write one customer-scoped activity row in the same atomic transaction. Live catalog proof found one overload, `SECURITY DEFINER`, `search_path=public, pg_temp`, `postgres` ownership, no PUBLIC/anon EXECUTE, and authenticated/service access; the active-admin, target-lock, exact-set, audit-count, and payload-bound replay guards are present in the stored body. The schema registry was genuinely refreshed from all six live introspection queries through this 962-row high-water. No table, column, enum, generated column, function signature, or public-function-name count changed, so generated Supabase types and the 566-name `pg_proc` fixture remain structurally current and only their verification stamp advances. Team Board deployment details below remain current. (That paragraph's closing claim that the operational counts were a 2026-07-18 snapshot is superseded — see the 2026-08-18 header above and the restamped table in section 2.)
-
-**Wave A — six migrations are PARKED DRAFTS (STAGED), NOT APPLIED.** As of PR #393 (2026-08-13) the six Wave A files live at `scripts/.staging-migrations/20260813010000`–`20260813060000` — moved **out** of `supabase/migrations/` so nothing can replay them. Their `20260813` stamps are **no longer forward of live**: live now carries ledger name stamps `20260813070000` and `20260813080000` (re-read 2026-08-18), both ahead of the whole parked `20260813010000`–`20260813060000` range, so the Phase 2 governed apply must restamp all six against the then-current high-water before applying (content is what the sha256 pins bind; the stamps are expected to change). They are **not applied**; no statement in this document describes state they created. Each is pinned byte-for-byte by a SQL sha256 in `docs/reference/migration-history.md` rows 872–877. They apply only through the Phase 2 governed apply pipeline with fresh proofs; the older `20260811…` copies on branch `claude/wave-a-money` are superseded.
-
-**2026-08-10 live re-read, second read — the source gap it reported is now CLOSED.** That read recorded live ledger high-water **`20260810235207`**, **958 ledger rows / 951 distinct names**; an earlier read the same day, taken right after this session's three applies, showed `20260810155629` / 957 rows, a fourth migration having landed live from a concurrent session in between. Of the earlier `20260810` rows, `20260810000427` is the version Supabase assigned to merged file `20260809230500_single_canonical_line_profit.sql` (history row 862). That read also flagged two live rows as having no file in `origin/main`: `20260810025159_backfill_stale_line_profit` and `20260810235207` / name `20260810183629_reconcile_pending_commission_snapshots`, the latter having existed nowhere in git at all despite already having mutated real commission money — it was recovered byte-for-byte from `supabase_migrations.schema_migrations.statements` on 2026-08-10 (live md5 `b14d3dd7f8c5aa8fecd0549886d8bbb3`). **Both files are now present on `origin/main`, verified by `git ls-tree` on 2026-08-11**, so `supabase/migrations/` is once again a complete reconstruction source for that date. Full per-column conformance figures and the recovery detail are in `docs/manual/KNOWN_ISSUES.md` under the same date.
-
-**2026-08-10 — three whole-cent migrations APPLIED LIVE.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`) fix the commission-basis defect, round `quotes.total_cost` and the `quote_items` line money, and add whole-cent CHECK constraints to the 7 already-clean money columns. All three first executed end-to-end against a throwaway PostgreSQL 17 with every post-condition passing and mutation-tested to fail closed, then applied to live on Mason's explicit in-chat approval, in order, each behind its own freshly minted migration-apply-guard proof with both required reviewers clean. Supabase assigned ledger versions `20260810152935`, `20260810154721`, `20260810155629`. Post-apply live reads confirm the new function fingerprints and exactly 7 validated `*_whole_cents_chk` constraints, with the 5 deferred columns still unconstrained. (**Superseded as live state:** a read-only re-check on 2026-08-19 UTC  finds **8** validated `*_whole_cents_chk` constraints and **4** deferred columns. `20260812115238_repair_historical_order_line_cents` repaired `order_items.total_price` and constrained it on 2026-08-12. The corrected lists are in `docs/manual/DECISION_LOG.md`.) **No live row was modified.** The schema registry was then rebuilt from live introspection. This is also the disposition of CodeRabbit's "use bigint cents" Major finding on PR #354: closed **won't-fix with a hard guard substituted**, rationale in `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`.
-
-**Team Board delegation — both migrations APPLIED LIVE 2026-08-09.** The database half of the delegation fix is fully live across two migrations: `20260809130108` added `complete_team_note`, which authorizes the creator, current assignee, or an active admin through an actor-bound idempotent SECURITY DEFINER path, plus the assignment trigger that creates `task_assigned` notifications while suppressing self-assignment and inactive recipients; `20260810010308` then closed the inactive-actor path found by review, requiring an active profile in both the `tnotes_insert` policy and the trigger itself while leaving `tnotes_update` unchanged. Live catalog/grant checks, all 26 standing invariant predicates, and a genuine schema-registry refresh passed for the first migration, and the second was verified live after apply (policy shape, SECURITY DEFINER, pinned search_path, trigger attached and enabled, anon/authenticated EXECUTE denied on the trigger function). Behavior was proven by rollback-only probes against live: an active non-admin assignee completed a note they did not create, an unrelated employee was refused, a real deactivated profile was refused at the RLS layer, and with RLS bypassed the trigger's own guard raised `PROFILE_INACTIVE`. The compatible frontend shipped in PR #351, **merged 2026-08-10 (merge commit `8dcb82fb`)**, and its production deployment is live — delegated completion is reachable from the browser. The registered rollback-only chain smoke remains pending external execution because the Codex production guard refuses its intentional transaction-local writes.
-
-**2026-08-09 live re-read.** An earlier read the same day recorded live ledger high-water at **`20260809130108`** with 946 ledger rows — exactly one row above the 2026-08-07 high-water — and noted that migration as applied from a concurrent session with no file in this repository. PR #351 lands that file and its follow-up, so the gap is closed; see `docs/reference/migration-history.md` rows 863 and 864.
-
-**2026-08-09 later the same day — the five foundation-ultra-review migrations are now APPLIED LIVE.** History rows 857–861, re-issued forward as `20260809170500`–`20260809170900`, applied one at a time between 20:32 and 20:54 UTC. Each went through its own freshly minted migration-apply-guard proof with both required reviewers clean, followed by a live post-apply read. Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order, and the schema registry was regenerated from live introspection to match. None of the five altered a table, column, constraint, or enum — every schema-shape section of the registry came back byte-identical. `20260809170900` applied against a review finding that `docs/manual/KNOWN_ISSUES.md` had recorded as blocking; that entry now carries the full account and the decision still owed to Mason. The commented-out fractional-cent repair inside `20260809170800` was **not** run — the 49 pre-existing fractional rows are untouched.
-
-**2026-08-11 post-deploy closeout, carried in from `origin/main`.** At that closeout read, the live ledger high-water was `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version), 958 ledger rows — the pending-commission-snapshot reconciliation that closed out the stale line-profit backfill. The header above supersedes those figures; they are kept here as the state that closeout observed. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the unrelated money-workstream migration that landed after the Team Board migrations. The database half of Team Board delegation is fully live: `20260809130108` added the actor-bound `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` added the active-profile insert and trigger guards while leaving `tnotes_update` unchanged. Live catalog/grant checks passed, the full registered business chain reached exact `SMOKE_PASS_ROLLBACK`, and the schema registry was genuinely regenerated from live through the current high-water. The compatible frontend was carried by PR #351, **merged 2026-08-10 (merge commit `8dcb82fb`)**. Closeout PR #372 merged as `261d10bd` on 2026-08-11; its Vercel production deployment completed successfully, and `/team-board` returned HTTP 200 with the app shell. Operational counts below were then the separately dated 2026-07-18 snapshot; that is **superseded** — section 2 was re-read live and restamped 2026-08-18 (see the header above).
-
-**2026-08-08 addendum (carried forward):** the money-loop correction below and the `payments` row in the counts table were re-verified live on 2026-08-08 and are dated inline. No other line in this document was re-checked on 2026-08-08.
-
-**2026-08-07 verification detail:** (post-apply). Live ledger high-water was then `20260807220323` (`log_customer_fact_rpc`). The two 2026-08-07 parked migrations are now APPLIED LIVE: `20260807215532_profile_role_lock_covers_insert` (profiles role-lock trigger now BEFORE INSERT OR UPDATE, non-admin logged-in inserts blocked with PROFILE_INSERT_LOCK) and `20260807220323_log_customer_fact_rpc` (`log_customer_fact` live: anon denied, authenticated granted, single overload). The Section 4 bulk-order-import lifecycle hardening is live through seven migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, and commission-safe; every imported line uses one locked bigint-cent Product cost snapshot, retains whole-cent profit, and commission profit is reread from the trigger-canonical order header. Canonical pre-reservation Net Position shortages are returned to the browser and recorded in activity. Post-apply catalog/grant checks, rollback proof, all 21 standing invariant predicates, and a genuine live schema-registry refresh passed. The earlier idempotency, statement disclosure, and historical AR report protections remain live as documented below. Operational counts below were then the separately dated 2026-07-18 snapshot; that is **superseded** — section 2 was re-read live and restamped 2026-08-18 (see the header above).
-
-**2026-08-09 ledger/count re-read:** the live ledger high-water and the entire section 2 counts table were re-read from the live database on 2026-08-09 and are dated inline. The 2026-08-07 feature/postflight detail below and the deployment log were **not** re-checked in that historical pass.
-
-**2026-08-09 live re-read.** At the time of that read, live ledger high-water was **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`), 946 ledger rows — exactly one row above the 2026-08-07 high-water. Its disk migration and history entry are now reconciled on PR #351.
-
-**2026-08-09 later the same day — the five foundation-ultra-review migrations are now APPLIED LIVE.** History rows 857–861, re-issued forward as `20260809170500`–`20260809170900`, applied one at a time between 20:32 and 20:54 UTC. Each went through its own freshly minted migration-apply-guard proof with both required reviewers clean, followed by a live post-apply read. Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order, so **live high-water is now `20260809205423`** and the schema registry was regenerated from live introspection to match. None of the five altered a table, column, constraint, or enum — every schema-shape section of the registry came back byte-identical. `20260809170900` applied against a review finding that `docs/manual/KNOWN_ISSUES.md` had recorded as blocking; that entry now carries the full account and the decision still owed to Mason. The commented-out fractional-cent repair inside `20260809170800` was **not** run — the 49 pre-existing fractional rows are untouched.
-
-**2026-08-07 verification detail:** (post-apply). Live ledger high-water was `20260807220323` (`log_customer_fact_rpc`) as of that date. The two 2026-08-07 parked migrations are now APPLIED LIVE: `20260807215532_profile_role_lock_covers_insert` (profiles role-lock trigger now BEFORE INSERT OR UPDATE, non-admin logged-in inserts blocked with PROFILE_INSERT_LOCK) and `20260807220323_log_customer_fact_rpc` (`log_customer_fact` live: anon denied, authenticated granted, single overload). The Section 4 bulk-order-import lifecycle hardening is live through seven migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, and commission-safe; every imported line uses one locked bigint-cent Product cost snapshot, retains whole-cent profit, and commission profit is reread from the trigger-canonical order header. Canonical pre-reservation Net Position shortages are returned to the browser and recorded in activity. Post-apply catalog/grant checks, rollback proof, all 21 standing invariant predicates, and a genuine live schema-registry refresh passed. The earlier idempotency, statement disclosure, and historical AR report protections remain live as documented below. Operational counts below were then the separately dated 2026-07-18 snapshot; that is **superseded** — section 2 was re-read live and restamped 2026-08-18 (see the header above).
-**Update triggers:** refresh when a major feature ships or quarterly, whichever first.
-
-**Quote/customer row-version rollout is live:** PR #290 deployed the compatible frontend first, then `20260730201230_quote_customer_row_version_guard` applied under Supabase-assigned ledger/disk version `20260730235031`. Live catalog, trigger, overload, ownership, fixed-search-path, grant, and child-table ACL checks passed. Four rollback-only behavior chains reached exact `SMOKE_PASS_ROLLBACK`, zero fixture rows remained, all 21 standing invariant predicates had zero unallowlisted findings, and the schema registry was refreshed through the subsequent AP high-water. Cached pre-migration bundles fail closed until refreshed; no rollout toggle is required.
-
-## Open-PR landing queue (point-in-time, 2026-09-13)
-
-Running record for `docs/plans/2026-09-11-open-pr-backlog-plan.md`. The approved plan is frozen in
-that file; this block is the live queue state and is updated through normal PRs by the fleet
-orchestrator session (the coordinator). Owners are as reported by the coordinator on 2026-09-12
-14:45Z; PR states were read from GitHub on 2026-09-13. Like every capture on this page it ages
-immediately: re-read GitHub before acting on a row.
-
-| PR | Plan disposition | Owner (session, worktree) | State on 2026-09-13 |
-|---|---|---|---|
-| #599 | FINISH (outcome A) | owner session archived after landing | MERGED 2026-09-11 as `791bc3d86`; per the coordinator, the live-site check on 2026-09-12 showed all three invoice screens pre-filling the Chicago date |
-| #650 | FINISH (docs) | coordinator | MERGED 2026-09-11 as `df92df406` |
-| #638 | FINISH | `local_736a899d`, worktree `pr638-merge-handoff-4bdc81` | open, review round running |
-| #646 | FINISH | `local_ca18f288`, worktree `cycle-count-migration-be7fc1` | open, review round running |
-| #624 | FINISH (source-only merge) | `local_1bb7cec9`, worktree `inventory-idempotency-key-reset-888161` | open |
-| #630 | FINISH | `local_45e768d6`, worktree `usage-review-optimization-46d351` | open, fix not started |
-| #631 | FINISH, last in queue | BLOCKED until the coordinator assigns an owner | open |
-| #651 | plan + baseline documentation | efficiency-review session, worktree `guard-denial-baseline-0911` | open, in review |
-| #612, #647, #605, #544, #635 | PARK (plan section 3) | custody per section 3 | open |
-| #634 | CLOSE | none | closed 2026-09-11 |
-| #626 | CLOSE after #630 lands | none | open |
-| #449 | CLOSE once Mason accepts the retirement sentence (plan section 4) | none | CLOSED 2026-09-12 14:05Z; the closing comment records Mason's explicit direction under plan section 4 |
-
-Open coordinator decisions (carried from the plan's section 8, 2026-09-11):
-
-- KNOWN_ISSUES owner for the 2026-09-18 exposure assessment (suggested: the #624 lane, reassignable).
-- Landing order: the coordinator is to confirm the plan's section 2 order (#638, then #646, then #624;
-  the section 2 order stands and is not reopened here) and name who renumbers ledger row 924.
-
-Follow-ups discovered during execution (2026-09-11, moved here verbatim on 2026-09-13):
-
-- PRODUCT (not guard, not frozen): expired pending-request records leave a locked dialog that cannot be closed and reopens on every visit once the 23-hour safe-retry window passes. Pre-existing on main for Inventory Receive, QuickReceive, ReceivingHub, NewVendorBill; #624 extends it to Adjust and Hold. Interim: the staff recovery procedure in INVENTORY_RULES (ships with #624). Fix: an admin "verified, clear this request" control. Owner: unassigned; coordinator to assign a session and a queue slot. Recorded in KNOWN_ISSUES by the #624 lane.
-- #612: PARKED by Mason's own answer in the #612 lane's chat (~02:10Z). Lane closed; head f415258e0; two codex-connector threads answered in prose and left open for the 09-25 resume.
-- #624 sequencing: #599 first, then #624 with its docs batch (staff procedure, KNOWN_ISSUES owner + 09-18 date, compatibility note, stale-line fix, PR description) in ONE push, one review slot (14:22Z earliest), SOURCE-ONLY merge. Pending Mason's answer in the #624 lane's chat.
+**Last verified:** 2026-09-26 for the migration ledger only (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1011 rows / 1004 distinct names, `max(version)` `20260926163005`). Every
+other section keeps its own date; nothing below was re-certified by that read.
+**Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
+ships or quarterly, whichever comes first.
+
+## Current state at a glance (2026-09-26)
+
+- **Effective ordering high-water: `20260914100700_customer_document_bytes_server_only`** (ledger
+  version `20260926163005`, applied live 2026-09-26). The effective ordering high-water is the
+  newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
+  under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
+  guard compares, so a new migration must sort above it. Re-read live before numbering one; this
+  line goes stale on the next apply. The full boundary history is in
+  `docs/reference/migration-history.md`.
+- **Applied since 2026-09-20 (authored name → ledger version):** `20260914100100_next_invoice_number_year_chicago`
+  (`20260921141423`), `20260914100200_commission_history_report_replay_guard` (`20260921141451`),
+  `20260914100300_refuse_stale_commission_payment_recipient` (`20260921141740`),
+  `20260914100400_enforce_commission_payment_business_date` (`20260921141901`),
+  `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`),
+  `20260914100600_latest_commission_recipient_label` (`20260922020038`), and
+  `20260914100700_customer_document_bytes_server_only` (`20260926163005`).
+- **Written but NOT applied (parked on `main`):** `20260914100800_bind_transfer_invoice_intent` and
+  `20260914100900_repair_commission_history_label_snapshots`. Applying either goes through the
+  `AGENTS.md` live-migration approval gate. While they wait on `main`, the pending-migration guard holds any later-stamped file
+  behind them.
+- **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
+  `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
+  a **version**, so a "greater than high-water" rule compared against it silently skips files.
+- **Schema registry:** `.claude/schema-registry.json` is stamped `generated_at` `2026-09-20` with
+  `migrations_high_water` `20260920052149`, so it does **not** yet record the seven applies above.
+  Open PR #799 regenerates it from live.
+- **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
+  2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-22), and migration
+  `20260914100700` (which removes every browser Storage policy on the bucket) applied 2026-09-26.
+  Its preflight refuses to run if the bucket holds any object, so no signed link minted under the
+  old policies can exist. Still open: sales reps cannot remove a document; PR #800 carries a parked
+  fix migration that needs Mason's apply approval (details in the PR description).
+- **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
+  hours. On 2026-09-26 the one open PR that carries an owner decision is #800 (above).
+
+## Migration and rollout record (condensed, point-in-time)
+
+Every figure here was true when observed and is kept because this page is its only plain-English
+home. Per-migration pins, proofs and postflight live in `docs/reference/migration-history.md` and
+`docs/manual/KNOWN_ISSUES.md`; those win on any conflict.
+
+**How the ordering boundary moved (September 2026).** `refuse_null_job_field_acres` (authored
+`20260904185900`, PR #606) applied 2026-09-05 under a bare ledger name with no 14-digit prefix
+(ledger `20260905185938`), so a name-ordered query could not see it; the ordering guard synthesizes
+`<version>_<name>` for such a row. History row 916 records the mismatch and was reconciled on
+2026-09-07. The boundary then moved to `20260906120000_preview_field_app_season_follows_invoice_date`
+(ledger `20260908045843`, 2026-09-08), `20260908120000_close_pr535_live_gaps` (row 923, ledger
+`20260909023300`, 2026-09-08), `20260908130000_bind_create_inventory_hold_receipt_to_intent`
+(row 927, ledger `20260915033227`, 2026-09-15, PR #691), `20260911120000_bind_adjust_inventory_receipt_to_intent`
+(row 930, ledger `20260920052149`, 2026-09-20; landed on `main` by PR #739 — #664, which first
+carried the file, closed unmerged — and the `20260908140000_number_generators_year_chicago` six-generator year fix for issue #617 applied
+just before it under `20260920051333`), `20260914100400` (2026-09-21), `20260914100600`
+(2026-09-22) and `20260914100700` (2026-09-26). Counters such as row counts and `max(version)`
+move with every apply by any lane; a stale count is expected drift, not evidence of a problem.
+
+**The 2026-09-14 commission cohort.** The set was restamped together on 2026-09-05 and again on
+2026-09-14 (from `20260905200000`..`20260905210000`) to sort above newly applied rows, preserving
+its order; `20260905200500` was superseded before apply and is not a file. In order the files:
+move the invoice-number year to Chicago time; harden commission snapshot replay; refuse a payment
+batch whose recipient went stale before posting; enforce an America/Chicago payout business date;
+make commission source dates follow the Chicago business day (`20260914100500`, which drains old
+writers, replaces both commission helpers and all four source-document writers in one transaction,
+and uses a transaction-local marker plus three owner-only compatibility triggers so a cached
+pre-cutover body is refused and retried); and make balance-report recipient labels follow the
+latest earned-state observation at the requested cutoff, including paid-only rows. `100100`
+through `100600` are applied. The two still parked:
+- `20260914100800_bind_transfer_invoice_intent` (formerly `20260908130800`) is the transfer intent
+  wrapper. Its first-apply prerequisite, `20260914100500`, is now satisfied.
+- `20260914100900_repair_commission_history_label_snapshots` (renumbered from `20260905020100`, and
+  briefly `20260908130900` on PR #638's closed branch) appends corrected labels for 34 un-settled
+  opening commission snapshots. It is last on purpose: it refuses to run once any commission payment
+  has been posted, and running last means that refusal stops nothing else.
+
+**`20260908130000` hold-receipt binding (applied 2026-09-15).** Applied with Mason's explicit
+in-chat approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply checks confirmed the
+authenticated-only SECURITY DEFINER wrapper, the private impl with no client EXECUTE, and the
+enabled `guard_create_inventory_hold_insert_20260913` trigger. The exposure look-back (run
+2026-09-15) found all 29 holds ever created (newest 2026-04-28) were made by staff who are active
+admins today; it cannot show whether the NULL `p_force` path or the inactive-profile path was ever
+used, because `p_force` is not stored and profile state is read as of today. The related
+manual-hold same-key race is `RESOLVED 2026-09-15` in `docs/manual/KNOWN_ISSUES.md`; the
+pre-apply preflight detail is history row 927.
+
+**A merge is not an apply.** `main` can lag production and production can lag `main`: F06
+(`20260903150000_job_chemicals_persist_driver`, PR #582) sat merged-but-unapplied until it applied
+under `20260903153402`. Confirm each against live separately, and any migration whose safety
+argument rests on "the live body equals the last committed body" must verify against live. Live
+`save_job` is one overload at body md5 `8acf34542105a90212ddb0a5e7c5d272`, the body of
+`20260904185900_refuse_null_job_field_acres` (it replaced F06's `18d08d5f40aea91fe13ac3e5a686c549`).
+
+**Disk-vs-live file gaps are closed.** PR #535 (merged 2026-09-08) restored its six already-live
+`20260831*` files; PR #592 (2026-09-08) restored `20260903150100_ledger_backed_commission_history`
+and `20260903230000_commission_report_snapshot_contract`; PR #599 (2026-09-11, `791bc3d86`) put
+`20260904180000_invoice_season_follows_invoice_date` on `main`.
+
+**Earlier applies still worth knowing:**
+- **F2 number-generator gate** — applied, ledger `20260904023121`; the F2 entry in `KNOWN_ISSUES.md`
+  carries the eight-generator security/grant matrix.
+- **Commission history is live from the first complete post-cutover Chicago day.**
+  `20260903150100_ledger_backed_commission_history` applied 2026-09-03 (ledger `20260903202611`),
+  after a first candidate was rejected for backdating mutable current state. It adds
+  `commission_payments.voided_at`/`voided_by`, `commissions.cancelled_at` plus immutable
+  `cancelled_amount_cents`, one immutable cutover record, an append-only earned-state ledger, and a
+  signed posted/voided settlement ledger. Reports read only those immutable events, including
+  paid-only negative balances after a later cancellation or soft delete. The cutover is
+  `2026-09-03T20:26:11.402245Z`, so the first supported Chicago date is `2026-09-04`; earlier dates
+  (and the partial apply day) fail closed. Reports shows the recipient balance summary and the
+  payment-by-payment detail, capping future-ending presets at Chicago-today. New and revised
+  commissions must carry an `order_date`; payouts reject negative items or a payment date before the
+  order date. Zero-dollar commissions stay settleable and count as pending until a signed post
+  event exists. Postflight: 35 opening events (33 baseline, 2 legacy-excluded zero-dollar
+  cancellations), zero settlement events.
+- **PR #535 gauntlet chain** — six migrations applied 2026-09-03 (`20260831160000`,
+  `…161000`, `…162000`, `…212415`, `…233000`, `…235900`). `update_vendor_bill` is a single
+  9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; the cycle-count
+  revision guard (`CYCLE_COUNT_ITEM_REPARENT_FORBIDDEN`) is live, and the frontend half merged as
+  `914a6d36a`, so `src/pages/CycleCounts.tsx` always sends `p_expected_item_revision`. That is what
+  made row 923 safe to apply.
+- **PR #361 return-credit chain** — all six (`20260827041000`..`20260827041500`) applied 2026-09-01
+  in order with Mason's approval, each behind a migration-apply-guard proof and verified by
+  read-only live query. The temporary `aa_crx_block_return_credit_during_cogs_cutover` barrier was
+  removed by the last file, so return-credit issuance is open. Per Mason's 2026-08-26 decision an
+  issued return credit uses the season of the current America/Chicago business date, so prior
+  year-end summaries never restate (a late return can show negative usage in the current season).
+  Production then had zero credited returns and zero credit memos. The rejected `20260827223000`
+  ledger-order trigger was never part of the chain and remains unapplied.
+- **Section 9 remediation** — `20260826221000_bind_section9_ap_receiving_intent_and_month_dashboard`
+  and `20260826222000_correct_ap_aging_due_date_buckets` applied 2026-09-01. `get_ap_aging` is one
+  overload taking `p_as_of_date` with the five-bucket due-date contract; `get_ap_dashboard_summary`
+  takes `p_idempotency_key` and keys on `due_date`.
+- **Draw-down chain** — all four migrations applied 2026-08-24; the rollout record is in
+  `docs/reference/migration-history.md`. **Booking draws are RESUMED:** Mason released the pause in
+  chat on 2026-08-25 (`docs/manual/DECISION_LOG.md`, 2026-08-25). No end-to-end production draw had
+  been observed at release; Mason resumed knowing that. Do not re-impose the pause on that gap
+  alone — only on new evidence of an actual defect.
+- **`20260820120000` save-job chemical-unit invariant** (history row 891) applied 2026-08-25
+  (ledger `20260825142708`); any document still calling it parked is out of date.
+- **CRX-SEC-1 `20260813080000_lock_quote_versions_writes_to_rpc`** (row 886) applied 2026-08-16
+  (ledger `20260816174353`). `quote_versions` has one policy, `qversions_select`; `authenticated`
+  holds SELECT plus MAINTAIN and `anon` holds MAINTAIN only (MAINTAIN reads and writes no rows), so
+  browser roles cannot write it; `metabase_ro` holds SELECT but has no policy, so it reads zero rows. The assertion-only `20260813070000_pin_return_idempotency_helper_contract`
+  keeps `check_idempotency_intent` a single `postgres`-owned SECURITY DEFINER overload with no
+  anon/authenticated/service_role EXECUTE.
+- **Wave A** — six drafts `20260813010000`..`20260813060000` are PARKED under
+  `scripts/.staging-migrations/`, NOT applied, and must be restamped above the then-current
+  high-water before any governed apply (sha256 pins: history rows 872–877).
+- **2026-08-10** — `20260810183629_reconcile_pending_commission_snapshots` (ledger `20260810235207`)
+  had been applied with no file in git; it was recovered byte-for-byte from the ledger and is on
+  `main`. Three whole-cent migrations (rows 868–870) applied with Mason's approval; a 2026-08-19
+  re-check found 8 validated `*_whole_cents_chk` constraints and 4 deferred columns
+  (`DECISION_LOG.md`). No live row was modified; CodeRabbit's "use bigint cents" finding on PR #354
+  was closed won't-fix with a hard guard substituted
+  (`docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`).
+- **2026-08-09** — the five foundation-ultra-review migrations (rows 857–861,
+  `20260809170500`..`20260809170900`) applied; `20260809170900` applied against a finding
+  `KNOWN_ISSUES.md` had recorded as blocking (full account there), and the commented-out
+  fractional-cent repair inside `20260809170800` was not run.
+- **Team Board delegation** — `20260809130108` and `20260810010308` are live, the rollback-only
+  chain smoke reached exact `SMOKE_PASS_ROLLBACK` (2026-08-11 closeout), and the frontend merged in
+  PR #351. See "Recent production deployments" below.
+- **2026-08-07** — `20260807215532_profile_role_lock_covers_insert` and
+  `20260807220323_log_customer_fact_rpc` applied; Section 4 bulk-order-import hardening is live (see
+  the 2026-08-05 deployment entry below).
+
+## Open-PR landing queue
+
+The 2026-09-11 backlog plan (`docs/plans/2026-09-11-open-pr-backlog-plan.md`) and its queue are
+finished; its guard-policy window ran to 2026-09-25. Of its rows, #599, #630, #646 and #651 merged; #624, #626,
+#634, #635, #638, #647, #449 and #544 closed (#635 was replaced by the merged #764, and #544 by
+issue #747). #605, #612 and #631 are still open. Its follow-up about locked
+pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff recovery steps are in
+`docs/workflows/INVENTORY_RULES.md`. For the live list, run `gh pr list --state open`.
 
 ## Recent production deployments
 
-- **2026-08-11 verification (Team Board delegation fully live and deployed):** Team Board delegation is live across two migrations. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed completion RPC — which admits the creator, current assignee, or an active admin — plus the assignment trigger that notifies active assignees and avoids self-notifications. Review then found the trigger lacked an active-actor gate, closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in both the `tnotes_insert` policy and the trigger itself. The full rollback-only chain passed against live with exact `SMOKE_PASS_ROLLBACK`, covering assignee completion, outsider and inactive-actor denials, replay/mismatch behavior, assignment notifications, and grants. The schema registry is refreshed through live high-water `20260810235207`. The UI caller and notification deep-link changes were carried by PR #351 (merge commit `8dcb82fb`), and closeout PR #372 merged as `261d10bd`; Vercel reported the production deployment successful and `/team-board` returned HTTP 200 with the app shell.
+- **2026-09-22 → 2026-09-26 (customer documents served only through the server):** the
+  `customer-document-files` Edge Function was deployed live as v1 on 2026-09-22 UTC with Mason's
+  in-chat approval (ACTIVE; signed-out calls refused; preflight answers the production origin); the
+  Documents tab that calls it merged in PR #764 (`d0be12d53`, 2026-09-22); and migration
+  `20260914100700_customer_document_bytes_server_only` applied 2026-09-26 (ledger
+  `20260926163005`). See "Current state at a glance" above.
+
+- **2026-08-11 verification (Team Board delegation fully live and deployed):** Team Board delegation is live across two migrations. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed completion RPC — which admits the creator, current assignee, or an active admin — plus the assignment trigger that notifies active assignees and avoids self-notifications. Review then found the trigger lacked an active-actor gate, closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in both the `tnotes_insert` policy and the trigger itself. The full rollback-only chain passed against live with exact `SMOKE_PASS_ROLLBACK`, covering assignee completion, outsider and inactive-actor denials, replay/mismatch behavior, assignment notifications, and grants. The schema registry was then refreshed through the live high-water of that day, `20260810235207`. The UI caller and notification deep-link changes were carried by PR #351 (merge commit `8dcb82fb`), and closeout PR #372 merged as `261d10bd`; Vercel reported the production deployment successful and `/team-board` returned HTTP 200 with the app shell.
 
 - **2026-08-05:** Section 4 bulk-order-import lifecycle hardening is live through `20260806023048_surface_bulk_import_inventory_warnings`. The import RPC creates confirmed orders only, reserves inventory through the normal prebook/ledger model, returns canonical Net Position warnings, records order activity, binds retries to the original actor/payload, rejects non-finite values, locks Product cost into one bigint-cent immutable snapshot, keeps line profit whole-cent, and creates commissions from trigger-canonical stored profit. Live catalog and grants, an active-sales-rep rollback smoke with false caller cost, fractional lines, changed-intent replay, and forced shortage, zero fixture residue, all 21 invariant predicates, and a genuine schema-registry refresh passed.
 
 - **2026-07-30:** AP period-close boundary hardening is live via `20260731001654_ap_period_close_boundary_hardening`. `record_vendor_payment`, `void_vendor_payment`, and `void_vendor_bill` now serialize with close using the established date semantics. Authenticated users have SELECT-only access to `accounting_periods`; close/reopen remain the governed mutation path. Sol-high review, six concurrency schedules, live catalog proof, rollback smoke, and zero-remnant checks passed. This is AP-only; 26 other live period-check callers remain outside the protocol.
 
-- **2026-07-30:** Quote and Customer optimistic concurrency is live via `20260730235031_quote_customer_row_version_guard` (submitted as `20260730201230`). Whole-record saves, version snapshots, restores, and conversion reject stale tokens under the parent lock; browser roles cannot write Quote/Customer child collections directly. Postflight catalog/ACL checks, four rollback-only behavior chains, zero-residue checks, and all 21 live invariant predicates passed.
+- **2026-07-30:** Quote and Customer optimistic concurrency is live via `20260730235031_quote_customer_row_version_guard` (submitted as `20260730201230`). Whole-record saves, version snapshots, restores, and conversion reject stale tokens under the parent lock; browser roles cannot write Quote/Customer child collections directly. Postflight catalog/ACL checks, four rollback-only behavior chains, zero-residue checks, and all 21 live invariant predicates passed. PR #290 deployed the compatible frontend first; cached pre-migration bundles fail closed until refreshed, and no rollout toggle is required.
 
 - **2026-07-30:** Accounting-period close write serialization is live via `20260730114102_vendor_bill_period_close_lock`. The post-apply catalog, ACL, and whole-month-constraint checks passed; the rollback-only business chain reached its expected `SMOKE_PASS_ROLLBACK` terminal. Residual hardening remains: direct authenticated-admin writes to `accounting_periods`, existing vendor-bill completeness at close, and the broader non-vendor-bill writer race.
 
@@ -589,7 +240,8 @@ below.
 
 Read-only counts against the live database (project `rhyzpcqhnizqbxphqdkr`),
 **re-read 2026-08-19 UTC** by direct read-only query (the previous stamp was
-2026-08-09). These age immediately — re-run before relying on them.
+2026-08-09). This is August data and has not been re-read since; these counts age
+immediately — re-run before relying on them.
 
 | Table | Count | Notes |
 |---|---|---|
@@ -712,12 +364,10 @@ The three headline items:
 - **OCR REI/PHI extraction** (re-entry interval / pre-harvest interval from
   label images) — deferred; flagged as a safety trap if done carelessly.
 
-Also in flight, 2026-09-21: the customer-document byte boundary (PR #635's successor). The
-`customer-document-files` Edge Function was **deployed live as v1 on 2026-09-22 UTC** with Mason's
-in-chat approval (ACTIVE; signed-out calls refused; preflight answers the production origin), and migration
-`20260914100700_customer_document_bytes_server_only.sql` is **not applied**. Until both are live,
-live Storage still lets a document's uploader, and admins, sign download links that outlive the
-document's removal. Live holds no customer documents yet. Order and detail: `KNOWN_ISSUES.md`.
+No longer in flight: the customer-document byte boundary is complete (Edge Function v1 live
+2026-09-22, frontend merged in PR #764 on 2026-09-22, migration `20260914100700` applied
+2026-09-26). The one open follow-up, letting sales reps remove a document, is parked in open
+PR #800.
 
 ## 5. Environment facts
 
@@ -725,9 +375,12 @@ document's removal. Live holds no customer documents yet. Order and detail: `KNO
 - **Supabase project:** `rhyzpcqhnizqbxphqdkr`
 - **Deploy model:** a **merge to `main`** deploys production on Vercel
   automatically — there is no separate deploy step. Since the `protect-main`
-  ruleset landed (2026-07-14) nobody can push to `main` directly, so landing
-  work means: push a branch, open a PR, let the checks pass, read and resolve
-  CodeRabbit's review, then merge. The merge is the deploy.
+  ruleset landed (2026-07-14) nobody can push to `main` directly. Landing
+  follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
+  branch, the Codex review tier the change needs (plus the final exact-SHA Sol
+  review for risky work), PR, required checks, resolved agent findings, a
+  resolved CodeRabbit review of the frozen head, then an exact-head merge. The
+  merge is the deploy.
 - **Supabase plan:** FREE — no point-in-time recovery (PITR). The weekly
   in-database backup plus the off-site weekly GitHub Action dump are the
   only recovery mechanisms.

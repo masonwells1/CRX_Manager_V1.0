@@ -1,6 +1,10 @@
 # Product Data Model — Orchestration
 
-**Date:** 2026-08-19 · **Status:** design, not yet started
+> **Model IDs changed after this was written (noted 2026-09-26).** Codex routing moved to the GPT-6 class
+> on 2026-09-23 (PR #796). Read every `gpt-5.6-sol` below as `gpt-6-sol`, and take exact model IDs and
+> efforts from `docs/reference/codex-model-tuning.md`, which is authoritative.
+
+**Date:** 2026-08-19 · **Status:** design, not yet started (still true 2026-09-26 — no work package built)
 **Companion to:** `2026-08-19-product-data-model-BUILD-PLAN.md` (what gets built) and
 `…-COVERAGE.md` (the scoresheet). This file is *how the work is driven*.
 

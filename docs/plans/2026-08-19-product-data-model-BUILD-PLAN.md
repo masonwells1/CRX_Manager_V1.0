@@ -1,9 +1,17 @@
 # Product Data Model — Build Plan and Handoff Contract
 
+> **STATUS 2026-09-26 — ACTIVE plan, build not started.** Every work package on the ledger
+> (`docs/loops/product-data-model-ledger.md`) is still ⬜ not started, and no product-data migration exists.
+> This plan is on `main` (PRs #429, #435 and #498 merged 2026-08-19 → 2026-08-27). The header's
+> "Revision 2" is out of date: the body was revised again after Sol's review (PR #435) and by the
+> 2026-08-26 amendment (PR #498), whose own revision notes are the latest word. Codex routing moved to
+> the GPT-6 class on 2026-09-23 (PR #796): read every `gpt-5.6-sol` below as `gpt-6-sol`, and take exact
+> model IDs and efforts from `docs/reference/codex-model-tuning.md`.
+
 **Date:** 2026-08-19 · **Revision 2** (folds in the Fable adversarial review, 26 findings, and
 two owner decisions taken 2026-08-19)
-**Branch:** `claude/product-data-storage-58ba26` — local commits only, nothing pushed
-**Intended executor:** Codex **`sol`** (`gpt-5.6-sol`, high reasoning effort)
+**Branch (original):** `claude/product-data-storage-58ba26` — now merged to `main` (see status above)
+**Intended executor:** Codex **`sol`** (`gpt-5.6-sol` when written; now `gpt-6-sol`)
 **Reviewer of record:** Claude **Opus 5** — per-package gate plus a final coverage audit
 **Design source of truth:** `docs/plans/2026-08-18-product-data-model-MASTER-RECORD.md`
 (43 issues, every decision, and why) and `…-PRD.md` (numbered requirements + acceptance)

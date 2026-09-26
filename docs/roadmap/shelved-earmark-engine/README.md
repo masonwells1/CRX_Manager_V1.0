@@ -1,9 +1,15 @@
 # Shelved: booking-prepay EARMARK engine (#6b) — 2026-06-14
 
-**Status:** SHELVED for a dedicated redesign in the next few days (Mason's call, 2026-06-14).
-These three migration files are NOT in `supabase/migrations/` and are NOT part of the
+**Status (checked 2026-09-26):** still SHELVED (Mason's call, 2026-06-14). The redesign was
+first planned for "the next few days" but has not been scheduled; it is parked in `TODO.md` §3
+("Earmark engine") and must not be applied as-is. None of these three migrations is in the live
+ledger. These three migration files are NOT in `supabase/migrations/` and were NOT part of the
 G5 go-live batch. They are preserved here verbatim as the starting point for the
 proper "reserved prepay pool" redesign.
+
+Since then, prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) was
+hard-disabled live by `20260620200000_prepay_bulk_apply_block_guard.sql`
+(`PREPAY_BULK_APPLY_DISABLED`). This redesign is the stated real fix for that too.
 
 ## What was shelved
 - `20260613240000_booking_prepay_earmark_and_apply.sql` — `set_prepay_credit_booking`
@@ -13,6 +19,13 @@ proper "reserved prepay pool" redesign.
   trigger that fires `apply_booking_prepay` when a draw invoice posts.
 - `20260613280000_aggregate_prepay_reserve_earmarked.sql` — `apply_remaining_prepayments`
   rewrite that reserved earmarked credits from the legacy aggregate spend path.
+
+Also here: the two rolled-back smoke proofs for this engine, moved from `docs/roadmap/smoke/` on
+2026-09-26 so they stay with the code they test. Both are written against the June G5 apply order
+and must be re-checked against the redesign before use.
+- `06b-booking-prepay-apply.sql` — proves `set_prepay_credit_booking` + `apply_booking_prepay`
+  (for `20260613240000`).
+- `06bB-auto-apply-on-post.sql` — proves the auto-apply-on-post trigger (for `20260613250000`).
 
 The matching **frontend** was also removed from the branch: the PrepaymentManager
 "Assign to booking" earmark control and the OrderDetail "Apply booking prepay" button.
@@ -43,7 +56,7 @@ the legacy aggregate path nor the generic apply path can ever touch booking-rese
 funds. That needs guards inside `apply_prepay_to_invoice` (the single most-used billing
 function) and a coherent reserved-vs-spendable model, which warrants its own design pass.
 
-## Redesign sketch (for the next-few-days effort)
+## Redesign sketch (not yet scheduled)
 - Add a `customers.prepay_reserved_cents` (or per-credit "reserved" flag) so earmarked
   funds are subtracted from the spendable pool at earmark time, atomically.
 - Make `apply_prepay_to_invoice` reject an earmarked credit unless the target invoice is
@@ -58,7 +71,9 @@ function) and a coherent reserved-vs-spendable model, which warrants its own des
 `20260613230000_prepay_booking_link_and_settlement.sql` (the `prepay_credits.quote_id`
 link column + `get_booking_settlement` read RPC) and
 `20260613260000_open_booking_rollover.sql` (the `get_open_booking_rollover` read RPC)
-**remain in the go-live batch**. They are read-only and safe; their prepay columns simply
+**were applied live on 2026-06-14** and are on disk under their live versions:
+`supabase/migrations/20260614151115_prepay_booking_link_and_settlement.sql` and
+`supabase/migrations/20260614151613_open_booking_rollover.sql`. They are read-only and safe; their prepay columns simply
 read 0 until the engine returns (nothing sets `quote_id` while the engine is shelved), and
 the UI auto-hides the prepay sub-rows while they are 0. The booked/drawn/remaining
 reporting they provide is useful on its own.

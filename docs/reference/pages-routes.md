@@ -1,10 +1,11 @@
-# Pages & Routes Reference (80 pages, 88 routes)
+# Pages & Routes Reference (80 pages, 95 routes)
 
-> Counts verified 2026-07-13 against `src/App.tsx` (`lazy(` call count = pages) and this table's own row count (routes); `npm run check:docs` (`scripts/check-doc-drift.mjs`) enforces both numbers stay in sync with the codebase on every run.
+> Rebuilt 2026-09-26 from the `src/App.tsx` router. The page count is the number of `lazy(` imports in `src/App.tsx` (it includes the `JobDetailRoute` wrapper and the dev-only `DesignPreview`). The route count is the number of rows in this table, which lists every router path except `login`, `forgot-password`, `reset-password`, and the `*` catch-all. `npm run check:docs` (`scripts/check-doc-drift.mjs`) compares the page count with `src/App.tsx`, but compares the route count only with this table's own rows: nothing checks that each row matches a real route, so rebuild the table from `src/App.tsx` whenever routes change. Redirect rows are routes kept for old bookmarks and render no page of their own. Role gates come from `ProtectedRoute allowedRoles` in `src/App.tsx` and the page registry in `src/lib/pagePermissions.ts`.
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | Dashboard | KPIs, today's jobs, recent activity |
+| `/` | RoleLanding (redirect) | Role-based landing with no page of its own (`src/components/auth/RoleLanding.tsx`): drivers go to `/my-route`, applicators to `/field`, admin/sales to `/office-cockpit` (Today); anyone denied their landing page falls back to `/team-board` |
+| `/dashboard` | Dashboard | KPI overview ("Overview (KPI Dashboard)" in the page registry, admin/sales_rep): KPIs, today's jobs, recent activity |
 | `/getting-started` | GettingStarted | Role-aware workflow guide (admin/sales: Quote→Order→Deliver stepper; driver: Dashboard→Deliver stepper) |
 | `/products` | Products | Product catalog with search/filter, bulk import |
 | `/supplier-pricing` | SupplierPricing | Admin-only supplier-evidence workspace (locked down 2026-07-20, migration 20260720203000): protected per-supplier .xlsx quote sheets, manual staging and approval, comparable-cost review, Product/supplier links, and reviewed vendor aliases. Optional source PDFs are retained for audit and are never parsed. |
@@ -19,9 +20,9 @@
 | `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
 | `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice, auto-emails customer on order confirmed |
 | `/inventory` | InventoryPage | Inventory levels, vendor-grouped reorder alerts, transaction ledger, batch adjust, cost valuation columns |
-| `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery + load sheet PDF (~900 lines) |
+| `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery + load sheet PDF. Roles: admin/sales_rep/driver |
 | `/deliveries/new` | NewDelivery | Create delivery from order |
-| `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context, auto-emails customer on completion (~1350 lines) |
+| `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context, auto-emails customer on completion. Roles: admin/sales_rep/driver |
 | `/delivery-remainders` | DeliveryRemainders | Pending remainder items across all customers |
 | `/my-route` | FieldRoute | **Field Mode** driver/applicator workspace — today's route of stops (deliveries + jobs) in a task-first mobile flow. Roles: admin/sales_rep/driver. Added 2026-06-14 (PR #80/#81) |
 | `/my-route/:id` | FieldStop | **Field Mode** single route-stop detail — complete a delivery or job from the field (signature, photos, quantities). Roles: admin/sales_rep/driver |
@@ -29,25 +30,26 @@
 | `/blend-tickets/:id` | BlendTicketDetail | Ticket review, approve/reject, create application record |
 | `/purchase-orders` | PurchaseOrders | PO list with status filters |
 | `/purchase-orders/new` | NewPurchaseOrder | Create PO from vendor catalog |
-| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail with two-step receive modal + receiving history (~823 lines) |
-| `/receiving` | ReceivingLog | Receiving dashboard with summary cards, filters, searchable log |
-| `/receiving/quick` | QuickReceive | 3-step wizard: vendor+products -> auto-match to oldest open POs -> confirm |
+| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail with two-step receive modal + receiving history |
+| `/receiving` | Receiving | Admin/sales. One inbound-inventory page with three tabs (`?tab=hub`, `quick`, `log`): **Hub** (`ReceivingHubPanel`: open PO lines grouped by product across vendors, a commitment snapshot from `get_inventory_position`, inline full-receipt Receive via `receive_po_items`), **Quick Receive** (`QuickReceivePanel`: 3-step wizard, vendor+products -> auto-match to oldest open POs -> confirm), **Log** (`ReceivingLogPanel`: summary cards, filters, searchable receiving log) |
+| `/receiving/quick` | Redirect -> `/receiving?tab=quick` | Admin/sales. Old bookmark; the Quick Receive wizard is now a tab of `/receiving` |
 | `/jobs` | Jobs | Job list with date/status/customer filters |
-| `/jobs/:id` | JobDetail | Full job editor: fields on map, chemicals, vehicle/applicator, complete, transfer to invoice |
-| `/vehicles` | Vehicles | Vehicle CRUD (ground/air), capacity, registration |
-| `/vehicles/:id` | VehicleDetail | Single vehicle edit form |
-| `/application-records` | ApplicationRecords | Read-only list of all chemical applications (from jobs + blend tickets) |
+| `/jobs/:id` | JobDetailRoute -> JobDetail | Roles: admin/sales_rep/applicator. The `JobDetailRoute` wrapper keys `JobDetail` by job id so switching jobs remounts the page. Full job editor: fields on map, chemicals, vehicle/applicator, complete, transfer to invoice |
+| `/vehicles` | Vehicles | Admin-only. Vehicle CRUD (ground/air), capacity, registration |
+| `/vehicles/:id` | VehicleDetail | Admin-only. Single vehicle edit form |
+| `/application-records` | ApplicationRecords | Read-only list of all chemical applications (from jobs + blend tickets). Roles: admin/sales_rep/applicator |
 | `/invoices` | Invoices | Invoice list (unposted/posted), batch print, batch void, quick delivery filter |
 | `/invoices/:id` | InvoiceDetail | Invoice detail, post/unpost, print PDF, write-off |
 | `/payments` | PaymentAllocation | Unified payment entry — allocate checks to invoices, remainder becomes prepay |
-| `/ar-aging` | ARaging | AR aging report, generate finance charges, Send AR Reminders (admin), Email Batch Statements (PDF attachment) |
+| `/ar-aging` | ARaging | Admin-only. AR aging report, generate finance charges, Send AR Reminders (admin), Email Batch Statements (PDF attachment) |
 | `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
 | `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |
 | `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |
-| `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, Split Check entry (bucket-labeled), auto-apply or allocate to workspace |
-| `/prepay-workspace` | PrepayWorkspace | Admin-only. Split-panel allocator: left=prepay buckets by check#, right=unpaid invoices. Two-phase commit via `batch_apply_prepayments()` |
+| `/prepay` | Prepay | Admin-only. One prepay page with two tabs (`?tab=workspace`, `manager`): **Workspace** (`PrepayWorkspacePanel`: split-panel allocator, left = prepay buckets by check #, right = unpaid invoices; two-phase commit via `batch_apply_prepayments()`) and **Manager** (`PrepaymentManagerPanel`: prepay balances, Split Check entry (bucket-labeled), auto-apply or allocate to the workspace) |
+| `/prepayments` | Redirect -> `/prepay` (Manager tab) | Admin-only. Old bookmark (`LegacyTabRedirect`) |
+| `/prepay-workspace` | Redirect -> `/prepay` (Workspace tab) | Admin-only. Old bookmark (`LegacyTabRedirect`) |
 | `/financial-dashboard` | FinancialDashboard | Admin-only. Financial KPIs: AR aging, revenue, payments, prepay balances, finance charges. Powered by `financial_dashboard_summary()` RPC |
-| `/payment-history` | PaymentHistory | Full payment history with per-invoice allocation breakdown |
+| `/payment-history` | PaymentHistory | Admin-only. Full payment history with per-invoice allocation breakdown |
 | `/accounts-payable` | AccountsPayable | Admin-only. AP Dashboard: total owed, due this week/month, overdue, aging buckets, vendor breakdown |
 | `/accounts-payable/bills` | VendorBills | Admin-only. Vendor bill list with status filtering (unpaid/partially paid/paid/overdue), search |
 | `/accounts-payable/bills/new` | NewVendorBill | Admin-only. Create vendor bill (manual or linked to PO), auto-calculate due date from payment terms |
@@ -59,36 +61,41 @@
 | `/field-profitability` | FieldProfitability | Field-level profitability report (X4/E4/T10): margin per acre by field/customer/season from posted field-app invoices via read-only RPC `get_field_profitability`; "(unassigned field)" bucket for job-transferred invoices without location rows. Roles: admin/sales_rep. Added 2026-07-21 |
 | `/fields/:id` | FieldSetup | Field CRUD with two-panel layout and satellite map with polygon drawing |
 | `/recipes` | BlendRecipes | Reusable blend recipe management, create job from recipe |
-| `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
+| `/cycle-counts` | CycleCounts | Admin-only. Inventory cycle counting with variance tracking |
 | `/returns` | Returns | Returns/RMA workflow (request -> approve -> receive -> credit) |
 | `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
 | `/crop-programs` | CropPrograms | Seasonal crop program management |
 | `/compliance` | Compliance | Applicator license tracking, RUP product list, RUP Sales Register (auto-generated from invoices, filterable, CSV export) |
-| `/lot-trace` | LotTrace | **B1 Lot Capture & Trace** — recall/compliance lookup: enter a lot number → every application that used it (product, field(s), date, customer, applicator, record #, invoice, source). Admin/sales. UI ships in this branch; the `get_lot_application_trace` RPC is pending the B1 migration apply. |
-| `/rebates` | Rebates | Manufacturer rebate programs and claim management |
-| `/team-board` | TeamBoard | Team communication hub: notes/todos/announcements with entity linking (delivery, order, customer, job, PO, quote), today's deliveries bulletin (role-aware), yesterday's recap, photo attachments, comments, activity log, search/filter, real-time. 8 sub-components in `src/components/team/` |
-| `/notifications` | Notifications | User notification center |
+| `/lot-trace` | LotTrace | **B1 Lot Capture & Trace** — recall/compliance lookup: enter a lot number → every application that used it (product, field(s), date, customer, applicator, record #, invoice, source). Admin/sales. The `get_lot_application_trace` RPC is live (B1 migration `20260622170000`, applied 2026-06-23). |
+| `/rebates` | Rebates | Admin-only. Manufacturer rebate programs and claim management |
+| `/team-board` | TeamBoard | Team communication hub: notes/todos/announcements with entity linking (delivery, order, customer, job, PO, quote), today's deliveries bulletin (role-aware), yesterday's recap, photo attachments, comments, activity log, search/filter, real-time. Sub-components live in `src/components/team/`. All authenticated roles |
+| `/notifications` | Notifications | User notification center. All authenticated roles |
 | `/settings` | SettingsPage | Admin only: company settings, user management |
-| `/dispatch` | DispatchBoard | Map-based dispatch view for job scheduling with applicator assignment |
+| `/dispatch` | DispatchBoard | Map-based dispatch view for job scheduling with applicator assignment. Roles: admin/sales_rep/applicator |
 | `/fields/:id/dashboard` | FieldDashboard | Read-only field profile: overview (season stats, activity), applications (history table with weather), billing (splits visualization), details (FSA, legal desc, notes) |
 | `/application-services` | ApplicationServices | Admin: CRUD for application service pricing (vehicle-linked fees like Hagie Y-Drop, Rogator, etc.) |
 | `/application-services/:id` | ApplicationServiceDetail | Admin: Create/edit service with customer rate overrides |
 | `/program-tracker` | ProgramTracker | Program completion dashboard: planned vs actual acres per customer per season with progress bars |
 | `/invoices/field-app/new` | FieldApplicationInvoice | New field application invoice with multi-location select, auto-figuring chemicals and customer shares |
 | `/invoices/field-app/:id` | FieldApplicationInvoice | Edit existing field application invoice |
-| `/integrity-report` | IntegrityReport | Admin-only. Read-only data integrity dashboard. Runs `runReconciliationChecks()` from `src/lib/reconciliation.ts` and shows pass/fail per check (order totals, inventory ledger, invoice payments via invoice_line_allocations, balance formula, commission splits, quote hold parity, delivery-invoice parity, prebooked inventory, return credit linkage, customer AR consistency). Discrepancy table per failed check with re-run button. Sprint F #4. |
-| `/integrity-cleanup` | IntegrityCleanup | Admin-only. Action-driven cleanup tooling for the three production-data issue classes flagged by the deep audit: (1) negative inventory rows — per-row reset form calling `reconcile_negative_inventory` RPC with mandatory reason; (2) over-received PO items — read-only listing for review; (3) completed deliveries without invoices — per-row "Create draft invoice" button calling `create_invoice_for_unbilled_delivery` RPC. Sprint G3 + G4 (Phase 22). |
+| `/integrity` | Integrity | Admin-only. One data-integrity page with two tabs (`?tab=report`, `cleanup`); each tab is described in its redirect row below |
+| `/integrity-report` | Redirect -> `/integrity` (Report tab) | Admin-only. Old bookmark (`LegacyTabRedirect`). The **Report** tab (`IntegrityReportPanel`) is a read-only data integrity dashboard. It runs `runReconciliationChecks()` from `src/lib/reconciliation.ts` and shows pass/fail per check (order totals, inventory ledger, invoice payments via invoice_line_allocations, balance formula, commission splits, quote hold parity, delivery-invoice parity, prebooked inventory, return credit linkage, customer AR consistency). Discrepancy table per failed check with re-run button. Sprint F #4. |
+| `/integrity-cleanup` | Redirect -> `/integrity` (Cleanup tab) | Admin-only. Old bookmark (`LegacyTabRedirect`). The **Cleanup** tab (`IntegrityCleanupPanel`) is action-driven cleanup tooling for the three production-data issue classes flagged by the deep audit: (1) negative inventory rows — per-row reset form calling `reconcile_negative_inventory` RPC with mandatory reason; (2) over-received PO items — read-only listing for review; (3) completed deliveries without invoices — per-row "Create draft invoice" button calling `create_invoice_for_unbilled_delivery` RPC. Sprint G3 + G4 (Phase 22). |
 | `/to-ship` | ToShip | Admin/sales. Operations command center: To-Ship by Product/Customer + Low-Stock/reorder + Deliveries (overdue/unassigned) + Inbound POs, all from frontend queries. Schedule/Reorder act-buttons deep-link into the trusted create flows. (UI overhaul v1) |
-| `/receiving-hub` | ReceivingHub | Admin/sales. Open PO lines grouped by product across vendors (ordered/received/remaining + arrival) + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from `get_inventory_position`. Inline full-receipt "Receive" (reuses `receive_po_items`). (UI overhaul v2) |
+| `/receiving-hub` | Redirect -> `/receiving?tab=hub` | Admin/sales. Old bookmark; the Receiving Hub (open PO lines by product with ordered/received/remaining + arrival, and the On Floor/Hold/Order/Spoken-For/Net commitment snapshot) is now the Hub tab of `/receiving` |
 | `/accounts-receivable` | AccountsReceivable | **Admin-only.** One AR workspace: tabs for Aging / Payment History / Prepayments / Customer Ledger + a Net Money Position card (total owed via `get_ar_aging` minus unused `prepay_credits`). `/payments` (PaymentAllocation) stays SEPARATE (admin+sales). (UI overhaul v2) |
-| `/field-invoices` | FieldInvoices | Admin/sales. Field-application invoices area (as-applied billing); list + entry into the field-app invoice editor. |
+| `/field-invoices` | FieldInvoices | Admin/sales. Field-application invoices area (as-applied billing) with five tabs (`?tab=`): **Unbilled** (`unbilled`: applied-but-unbilled field work awaiting an invoice), **Drafts** (`drafts`: unposted field invoices), **Posted** (`posted`), **By Customer** (`customer`: combined Customer Invoice Summary of unposted chem sales + unposted field-app), **All Invoices** (`all`: the original all-status list with CSV/report actions) |
+| `/field-invoices/:id` | InvoiceDetail (`routeArea="field"`) | Admin/sales. Field-invoice detail: the generic invoice editor under the field-invoices permission (job-built quantity invoices and posted field invoices) |
 | `/split-billing/new` | FieldAppSplitInvoiceEditor | Per-line split-billing editor (flag-gated: per_line_split_billing_enabled; renders a not-enabled notice when OFF). Roles: admin/sales_rep. Added 2026-07-20 (inherited from main merge) |
 | `/split-billing/:id` | FieldAppSplitInvoiceEditor | Edit an existing per-line split-billing set (same flag gate) |
-| `/field-invoices/unposted` | FieldInvoicesUnposted | Admin/sales. Field-app parity #22 — dedicated "Unposted" working tray for field invoices (static path, precedes `:id`). |
-| `/field-invoices/posted` | FieldInvoicesPosted | Admin/sales. Field-app parity #23 — dedicated "Posted" committed field-invoice list (static path, precedes `:id`). |
-| `/field-invoices/summary` | CustomerInvoiceSummary | Admin/sales. Field-app parity #34 — combined Customer Invoice Summary (unposted chem sales + unposted field-app). |
-| `/field-invoices/unbilled` | UnbilledApplications | Admin/sales. Applied-but-unbilled field work awaiting an invoice (reconciliation worklist). |
+| `/field-invoices/unposted` | Redirect -> `/field-invoices?tab=drafts` | Admin/sales. Old bookmark |
+| `/field-invoices/posted` | Redirect -> `/field-invoices?tab=posted` | Admin/sales. Old bookmark |
+| `/field-invoices/summary` | Redirect -> `/field-invoices?tab=customer` | Admin/sales. Old bookmark |
+| `/field-invoices/unbilled` | Redirect -> `/field-invoices?tab=unbilled` | Admin/sales. Old bookmark |
 | `/office-cockpit` | OfficeCockpit | Admin/sales. §3 Beyond-Parity exception dashboard: 7 live tiles (unbilled jobs, ready-to-post field-app invoices, watchdog flags, upcoming jobs 7-day, expiring licenses/certs 30-day, overdue field-app AR, deferred inventory shortfalls). One screen replaces the run-seven-reports ritual. |
+| `/watchdog` | WatchdogExceptions | Admin/sales. Standing list of active (non-dismissed) watchdog flags across jobs/invoices, grouped by type, with a one-tap dismiss and a "Refresh flags" button that re-runs the server-side detection sweep. Advisory only |
+| `/label-review` | LabelReview | Admin-only. Label-data backfill review queue: create label drafts, accept/edit/reject each per product, and view a label coverage report. Nothing is applied to a product without an explicit accept/edit |
+| `/label-data-quality` | LabelDataQuality | Admin-only. In-app EPA registration-number check with inline fixes, plus bulk EPA signal-word apply (shipped 2026-07-10) |
 | `/offline-work-review` | OfflineWorkReview | Admin/sales audited queue for resolving permanent offline delivery/job receipts without rerunning or deleting business work. |
 | `/field` | FieldView | Admin/sales/applicator. Field-app parity #38 — phone/mobile applicator field view (read-only "my jobs" cards). |
 | `/design-preview` | DesignPreview | **Dev/preview only** (hostname-gated, never on croprxsolutions.app): shared-component visual gallery for the design system. |

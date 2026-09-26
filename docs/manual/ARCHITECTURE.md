@@ -1,6 +1,6 @@
 # CRX Manager — Architecture Overview
 
-**Last verified:** 2026-07-13
+**Last verified:** 2026-09-26 (Edge Function list, deploy path, and payment tables re-checked against the repository; the rest carries its 2026-07-13 reading)
 
 **Update triggers:** update this file when a new subsystem or major data
 flow is added (e.g. a new pipeline stage), a Supabase edge function is added
@@ -42,12 +42,12 @@ way you'd explain something to a smart non-technical business partner.
  │  Browser / phone (PWA — installable, works offline-ish)     │
  │  React 18 + TypeScript + Vite + Tailwind CSS                │
  └───────────────────────────┬───────────────────────────────────┘
-                              │  git push to `main`
+                              │  PR merged into protected `main`
                               ▼
  ┌─────────────────────────────────────────────────────────────┐
- │  Vercel — hosts the built static app + auto-deploys on push  │
- │  Push to `main` = a production deploy. There is no staging   │
- │  environment; a merged PR to main goes live.                  │
+ │  Vercel — hosts the built static app + auto-deploys on merge │
+ │  A PR merge to `main` = a production deploy. There is no     │
+ │  staging environment; direct pushes to main are blocked.      │
  └───────────────────────────┬───────────────────────────────────┘
                               │  HTTPS (Supabase JS client)
                               ▼
@@ -55,7 +55,7 @@ way you'd explain something to a smart non-technical business partner.
  │  Supabase (project rhyzpcqhnizqbxphqdkr)                     │
  │  ┌───────────────┐  ┌────────────────┐  ┌──────────────────┐ │
  │  │ Postgres       │  │ Edge Functions │  │ pg_cron          │ │
- │  │ + RLS policies │  │ (Deno, 7 fns)  │  │ (scheduled jobs) │ │
+ │  │ + RLS policies │  │ (Deno, 8 fns)  │  │ (scheduled jobs) │ │
  │  │ + RPCs/triggers│  └────────────────┘  └──────────────────┘ │
  │  └───────────────┘                                            │
  └─────────────────────────────────────────────────────────────┘
@@ -65,9 +65,10 @@ way you'd explain something to a smart non-technical business partner.
   CSS. Packaged as a PWA (Progressive Web App — an installable, app-like
   website) via `vite-plugin-pwa` (see `vite.config.ts`). Error/performance
   monitoring via Sentry.
-- **Hosting/deploy**: Vercel. **Pushing to `main` deploys to production** —
-  there is no separate staging step. See `docs/workflows/SAFE_DEVELOPMENT_RULES.md`
-  and `AGENTS.md` for the approval gate this requires.
+- **Hosting/deploy**: Vercel. **Merging a pull request into `main` deploys to
+  production** — there is no separate staging step. Since 2026-07-14 `main` is
+  protected, so nobody can push to it directly; see the protected delivery path in
+  `AGENTS.md` and `.claude/commands/ship.md`.
 - **Backend**: Supabase, which bundles a Postgres database, authentication,
   file storage, "Edge Functions" (small serverless Deno programs — see §6),
   and `pg_cron` (a Postgres extension that runs SQL on a schedule — see §7).
@@ -183,7 +184,7 @@ enums, and generated columns that hooks and reviewer agents check against.
   (`20260718190000`) denies direct pricing/history writes from app roles. Product-page,
   Products-list, and worksheet edits remain available because they use the
   governed preview/apply RPC path. Bulk Product Import remains a pricing-free CSV
-  Product-details creator. Production `process-document` v19 rejects supplier
+  Product-details creator. The deployed `process-document` rejects supplier
   price sheets and price-bearing Product lists before OCR; JWT verification is
   enabled, so the permanent supplier-pricing OCR retirement is live.
 
@@ -199,15 +200,15 @@ Current functions, one line each:
 | Function | Purpose |
 |---|---|
 | `create-user` | Admin-only: provisions a new staff login (auth user + profile row) using the service-role key. |
-| `customer-document-files` | The only byte path for customer documents: issues single-path upload tokens, and streams downloads after re-checking the document row (removed documents, and any path not in the server-issued shape, are refused). Admins reach every customer, sales reps only their assigned ones. Deployed live as v1 on 2026-09-22 UTC with Mason's approval; the page that calls it ships with PR #635's successor. |
+| `customer-document-files` | The only byte path for customer documents: issues single-path upload tokens, and streams downloads after re-checking the document row (removed documents, and any path not in the server-issued shape, are refused). Admins reach every customer, sales reps only their assigned ones. Deployed live as v1 on 2026-09-22 UTC with Mason's approval; the customer Documents tab calls it (merged in PR #764, 2026-09-22), and migration `20260914100700` (applied 2026-09-26) removed every browser Storage policy on the bucket. |
 | `epa-lookup` | Looks up an EPA pesticide registration number against the public EPA registry and normalizes/caches the result (added 2026-07 for label data quality). |
 | `process-blend-ticket` | OCR/text parsing of a photographed blend ticket into structured fields (date, customer, driver, acres, rate, etc.). |
-| `process-document` | Parses supported invoices, POs, customer lists, and quote lists into structured import data. Production v19 fails closed on supplier price-list/product-list requests before OCR, with JWT verification enabled. |
+| `process-document` | Parses supported invoices, POs, customer lists, and quote lists into structured import data. In production it fails closed on supplier price-list/product-list requests before OCR, with JWT verification enabled. |
 | `reset-user-password` | Admin-triggered password reset for another user (service-role privileged action, not self-service). |
 | `send-email` | Sends transactional email; hardened to an allowlist of email types per role and validates the recipient server-side rather than trusting the caller's `to` address. |
 | `setup-blend-tickets-storage` | One-time/idempotent setup of the storage bucket blend-ticket photos are uploaded into. |
 
-All seven share `supabase/functions/_shared/` helpers: `cors.ts` (shared
+All eight share `supabase/functions/_shared/` helpers: `cors.ts` (shared
 CORS — Cross-Origin Resource Sharing — header config), `sentry.ts`
 (`captureEdgeException`), and `auth.ts`'s `requireActiveProfile` for
 consistent caller authentication.
@@ -276,9 +277,10 @@ Quote --> Order --> Delivery / Blend Ticket / Job --> Invoice --> Payment / Cred
   job, linked by `invoice_group_id`, each with its own balance and AR
   trail. See the "Field Application Workflow" section of
   `docs/workflows/QUOTE_TO_DELIVERY.md` for the split-billing pricing modes.
-- **Payment / Credit memo** (`payments`, `allocation_sets`,
-  `prepay_credits`) — allocated to specific invoices via `allocate_payment`;
-  invoices remain the single source of truth for AR balance.
+- **Payment / Credit memo** (`allocation_sets`, `prepay_credits`) — allocated
+  to specific invoices via `allocate_payment`; invoices remain the single source
+  of truth for AR balance. The older `payments` table is a dead legacy table with
+  no writers (see `docs/manual/CURRENT_STATE.md`).
 
 **Two-acre model & field mapping**: fields are captured as GPS polygons
 (draw-on-map or shapefile import). The app distinguishes a field's

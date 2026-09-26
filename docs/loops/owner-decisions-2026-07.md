@@ -1,8 +1,11 @@
 # Owner Decisions — Structure-Fix Wave (2026-07)
 
-**For:** Mason · **From:** the structure-fix loop · **Status:** decisions needed before the matching code is applied.
-These six packets each need a business call (not a coding call). Nothing here is applied yet. Where a fix is
-already drafted-and-parked (Wave A), the packet notes it. Live counts pulled 2026-07-02.
+**For:** Mason · **From:** the structure-fix loop · **Status (corrected 2026-09-26):** packets 4, 5 and 6 are
+settled (packet 4's due-date terms shipped 2026-07-21 in PRs #195 and #197); packet 3 is partly done; packets 1
+(vendor/manufacturer merges) and 2 (category remap), plus packet 3's true-junk deletes, still need your call.
+The current open list is `TODO.md` §1 item 5; the outcomes are recorded just below.
+These six packets each need a business call (not a coding call). The packet bodies below are the original
+2026-07-02 write-up. Live counts were pulled 2026-07-02 and are not refreshed.
 
 > **Outcomes recorded 2026-07-16 (Mason, in-chat):**
 > - **Packet 3 (junk deletes): PARTIAL.** Keep test entities for E2E/Playwright use, un-commingled —

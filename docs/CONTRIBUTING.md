@@ -11,7 +11,9 @@ contains Claude-only routing.
 
 E2E tests are staging-only. They sign in with a staging test account and
 seed/teardown shared `[E2E]`-prefixed fixtures. Production is categorically
-rejected; there is no override.
+rejected; there is no override. No staging Supabase project exists yet
+(creating one is an open owner action in `TODO.md`), so the suite cannot run
+today.
 
 ### Required env vars
 
@@ -65,14 +67,35 @@ when possible. For unique entities (e.g. concurrency tests), use
 
 ## Pre-commit checks
 
-The pre-commit hook runs:
+The git hooks live in the tracked `.husky/` folder; `npm install` points git at
+it (`scripts/install-git-hooks.mjs`). They are deliberately fast, so the heavy
+proof runs in CI.
 
-1. `scripts/validate-sql.sh` — blocks SQL with wrong idempotency columns,
-   `pg_get_functiondef()`, etc.
-2. `scripts/validate-frontend.sh` — blocks direct `@sentry/react` imports.
-3. `npm run lint` — ESLint, must have 0 errors.
-4. `npm run build` — TypeScript + Vite production build.
-5. `npm run test` — full vitest suite.
+The **pre-commit** hook runs:
+
+1. `scripts/check-ledger-update.mjs` — a policy or guard change must stage its
+   changelog, decision, or reference update.
+2. `scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit` —
+   private-artifact containment (checks untracked and modified files too).
+3. `scripts/validate-sql.sh` — on staged migrations; blocks SQL with wrong
+   idempotency columns, `pg_get_functiondef()`, etc.
+4. `scripts/validate-frontend.sh` — on staged frontend files; blocks direct
+   `@sentry/react` imports and warns on a missing `checkMutationResult()` or
+   `.toFixed(2)` on money.
+5. `scripts/check-agent-workflows.mjs` — only when agent hooks, commands,
+   skills, settings, `AGENTS.md`, or `CLAUDE.md` are staged.
+6. `scripts/verify-deps.mjs` — only when `package.json`, `package-lock.json`,
+   or `.nvmrc` is staged.
+
+The **pre-push** hook runs private-artifact containment again (over every
+outgoing commit), `npm run typecheck`, and `npm run build`, then refreshes the
+optional local Graphify map.
+
+Neither hook runs ESLint or the unit tests. **CI** (`lint-typecheck-test` in
+`.github/workflows/ci.yml`) runs lint, typecheck, the Vitest suite with
+coverage, the build, and the documentation check on every pull request that
+changes code; run `npm run lint` and `npm test` yourself before pushing if you
+want the answer early.
 
 If a hook fails, fix the underlying issue. NEVER use `--no-verify`.
 

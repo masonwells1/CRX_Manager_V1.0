@@ -1,284 +1,169 @@
 # Deployment Guide
 
-This guide explains how to deploy your application to production.
+How CRX Manager reaches production, what CI checks, which secrets the Edge Functions need, and how
+to roll back. The step-by-step landing procedure agents follow is `.claude/commands/ship.md`; this
+page summarises it and does not replace it.
 
-## Prerequisites
+## How a change reaches production
 
-Before deploying, ensure:
-- ✅ All unit tests pass (`npm test`)
-- ✅ All E2E tests pass (`npm run test:e2e`)
-- ✅ Production build works (`npm run build`)
-- ✅ Changes tested on staging environment
-- ✅ Supabase production database is ready
-- ✅ All migrations are applied
+- **Production** is the Vercel deployment at [croprxsolutions.app](https://croprxsolutions.app),
+  backed by the one live Supabase project (`rhyzpcqhnizqbxphqdkr`). There is **no staging
+  environment** — no staging Supabase project and no staging branch (creating one is an open owner
+  action in `TODO.md`).
+- **`main` is protected.** Nobody pushes to it directly; GitHub refuses the push.
+- **Landing = branch → pull request → required CI checks → review → merge.** Agents follow
+  `.claude/commands/ship.md` for the exact order, the review gates, and the merge command.
+- **The merge deploys.** When a pull request merges into `main`, Vercel builds and deploys the site
+  automatically. Vercel keeps every earlier deployment, so a bad deploy can be rolled back with one
+  click (see [Rollback](#rollback)).
+- **Database changes and Edge Functions do not deploy with the merge.** A migration is applied to
+  the live database, and an Edge Function is deployed, as separate steps — each needs Mason's
+  explicit approval in the current conversation (see `AGENTS.md` › Safety and Protected Delivery).
 
-## Deployment
+## Before you open the pull request
 
-### Vercel (Current Deployment)
+Run the same core checks CI runs, locally:
 
-#### Initial Setup
-
-1. **Create Vercel Account**
-   - Go to https://vercel.com
-   - Sign up with GitHub
-
-2. **Import Project**
-   - Click "Add New Project"
-   - Select your repository
-   - Click "Import"
-
-3. **Configure Project**
-   ```
-   Framework Preset: Vite
-   Build Command: npm run build
-   Output Directory: dist
-   Install Command: npm install
-   ```
-
-4. **Environment Variables**
-   - Click "Environment Variables"
-   - Add:
-     - `VITE_SUPABASE_URL`
-     - `VITE_SUPABASE_ANON_KEY`
-   - Select "Production, Preview, and Development"
-
-5. **Deploy**
-   - Click "Deploy"
-   - Wait for deployment to complete
-
-#### Continuous Deployment
-
-Automatic deployment on every push to main branch.
-
-#### Custom Domain
-
-1. Go to "Settings" → "Domains"
-2. Add your domain
-3. Configure DNS as instructed
-4. SSL is automatic
-
----
-
-## Environment Setup
-
-### Production Environment Variables
-
-Your production `.env` should contain:
-
-```env
-VITE_SUPABASE_URL=https://your-production-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-production-anon-key
-VITE_MAPBOX_TOKEN=pk.your-mapbox-token
-VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+npm run check:docs
 ```
 
-**Security Notes:**
-- ✅ The anon key is safe to expose in the browser
-- ✅ Database security is handled by Row Level Security (RLS)
-- ❌ Never commit `.env` to git
-- ❌ Never expose service_role key in the browser
+The git hooks also help: pre-commit runs fast checks on staged files, and pre-push runs private-artifact
+containment, `npm run typecheck`, and `npm run build`. Neither hook runs lint or the unit tests —
+CI does.
 
-### Staging vs Production
-
-| Environment | Purpose | Database | URL |
-|------------|---------|----------|-----|
-| **Local** | Development | Local Supabase | localhost:5173 |
-| **Staging** | Pre-release testing | Staging Supabase | Vercel preview deployments |
-| **Production** | Live application | Production Supabase | croprxsolutions.app |
+There is no browser (E2E) test gate today: the Playwright suite only runs against a staging project,
+which does not exist yet. See [TESTING.md](./TESTING.md#running-e2e-tests).
 
 ---
 
-## Pre-Deployment Checklist
+## Vercel configuration
 
-### Code Quality
-- [ ] All TypeScript errors fixed (`npm run typecheck`)
-- [ ] Linter passes (`npm run lint`)
-- [ ] No console.log statements in production code
-- [ ] All TODO comments addressed
+- Framework preset: **Vite**. Build command `npm run build`, output directory `dist`.
+- `vercel.json` sets only the single-page-app rewrite (every path serves `index.html`) and the
+  security headers (Content-Security-Policy, HSTS, `X-Frame-Options`, and others). It does not
+  override the install or build commands.
+- The custom domain `croprxsolutions.app` is attached in the Vercel project settings. Changing
+  domains is an owner decision (`AGENTS.md`).
 
-### Testing
-- [ ] All unit tests pass (`npm test`)
-- [ ] All E2E tests pass (`npm run test:e2e`)
-- [ ] Manual testing completed on staging
-- [ ] Mobile responsiveness verified
-- [ ] Cross-browser testing done (Chrome, Firefox, Safari)
+### Frontend environment variables
 
-### Database
-- [ ] All migrations applied to production
-- [ ] RLS policies tested and verified
-- [ ] Database backups enabled
-- [ ] Performance indexes created
+Set in the Vercel project settings, and in your local `.env` (see `.env.example`):
 
-### Security
-- [ ] Environment variables configured correctly
-- [ ] No secrets in codebase
-- [ ] CORS settings correct
-- [ ] Authentication working
-- [ ] Authorization/permissions tested
-- [ ] Supabase Edge Function secrets set (see below)
+| Variable | Required? | Purpose |
+|---|---|---|
+| `VITE_SUPABASE_URL` | Required | The Supabase project URL |
+| `VITE_SUPABASE_ANON_KEY` | Required | The public (anon) key — safe in the browser; data is protected by Row Level Security |
+| `VITE_MAPBOX_TOKEN` | Optional | Enables the map and field-boundary features |
+| `VITE_SENTRY_DSN` | Optional | Enables browser error reporting to Sentry |
 
-### Supabase Edge Function Secrets
+**Security notes:**
+- Only `VITE_`-prefixed variables reach the app, and everything they hold is visible to anyone
+  using the site — never put a secret in one.
+- The `service_role` key must never appear in `.env`, in `src/`, or in Vercel. It exists only
+  inside Edge Functions, where Supabase provides it.
+- Never commit `.env` (it is git-ignored).
 
-Seven JWT-protected Edge Functions were active in production when verified on 2026-08-09:
-`create-user`, `setup-blend-tickets-storage`, `process-blend-ticket`, `process-document`,
-`send-email`, `reset-user-password`, and `epa-lookup`. An eighth, `customer-document-files`, was
-deployed as v1 on 2026-09-22 UTC; it must stay deployed before migration
-`20260914100700_customer_document_bytes_server_only.sql` is applied, and it needs only
-`ALLOWED_ORIGIN` plus the platform-provided Supabase keys. The function-specific secrets below must be
-present wherever the corresponding function uses them.
+---
 
-That migration refuses to apply (`PREFLIGHT_OBJECTS`) if the `customer-documents` bucket holds any
-file, because a browser could have signed a link to it under the old policies. The bucket was empty
-with zero document rows on 2026-09-21, so apply the migration right after the merge that ships the
-function-based Documents tab, before anyone uploads. If it refuses anyway, stop: list each object
-and its `customer_documents` row, and let Mason decide per file. Never empty the bucket blindly to
-get past the check.
+## Supabase Edge Functions
 
-| Secret | Purpose | How to set |
-|--------|---------|------------|
-| `ALLOWED_ORIGIN` | CORS origin for Edge Function responses. Must exactly match `https://croprxsolutions.app` (no trailing slash). | `npx supabase secrets set ALLOWED_ORIGIN=https://croprxsolutions.app --project-ref rhyzpcqhnizqbxphqdkr` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Needed by `create-user` to create auth users. Already set by default on hosted Supabase. | Auto-provisioned; verify in Dashboard → Settings → Edge Functions → Environment Variables. |
-| `GOOGLE_VISION_API_KEY` | Used by `process-blend-ticket` for OCR. | `npx supabase secrets set GOOGLE_VISION_API_KEY=<key> --project-ref <ref>` |
+Each folder under `supabase/functions/` (except `_shared/`, which is a helper library) is one
+function; that folder list is the authoritative inventory. Today there are eight: `create-user`,
+`customer-document-files`, `epa-lookup`, `process-blend-ticket`, `process-document`,
+`reset-user-password`, `send-email`, and `setup-blend-tickets-storage`. `customer-document-files`
+was first deployed as v1 on 2026-09-22 UTC, and migration
+`20260914100700_customer_document_bytes_server_only` (which makes customer-document bytes reachable
+only through that function) was applied live on 2026-09-26; keep the function deployed.
+
+Deploying or redeploying a function is a live change that needs Mason's explicit OK; use the
+`deploy-edge-function` workflow, which runs the pre-flight checks and a post-deploy smoke test.
+
+### Edge Function secrets
+
+Names only — never write a secret value into this repository. Setting or changing a secret needs
+Mason's explicit OK.
+
+| Secret | Used by | Notes |
+|---|---|---|
+| `ALLOWED_ORIGIN` | All eight (through `_shared/cors.ts`) | CORS origin. Must be exactly `https://croprxsolutions.app` (no trailing slash). If it is missing, every function fails at start-up. |
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | All eight | Provided automatically by hosted Supabase; nothing to set. |
+| `GOOGLE_VISION_API_KEY` | `process-blend-ticket`, `process-document` | OCR for blend tickets and uploaded documents. |
+| `RESEND_API_KEY` | `send-email` | Without it, each send is recorded as failed in `email_log` and returns an error. |
+| `FROM_EMAIL` | `send-email` | Optional sender address; the function falls back to a built-in `croprxsolutions.app` address. |
+| `SENTRY_DSN` | All eight (through `_shared/sentry.ts`) | Optional. Without it, errors are logged as `SENTRY_MISCONFIG` instead of being reported to Sentry. |
+| `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` | All eight (through `_shared/sentry.ts`) | Optional labels on Sentry events (environment defaults to `production`). |
+
+To set one (after approval): `npx supabase secrets set <NAME>=<value> --project-ref rhyzpcqhnizqbxphqdkr`.
 
 **Verification steps:**
-1. Run `npx supabase secrets list --project-ref <ref>` to confirm all secrets are set.
-2. After deploying, test each Edge Function from the frontend to confirm CORS headers are correct.
-3. If you see `403` or `CORS` errors in the browser console, double-check `ALLOWED_ORIGIN` matches the exact origin (including protocol, no trailing slash).
-
-### Performance
-- [ ] Build size reasonable (`npm run build` check output)
-- [ ] Images optimized
-- [ ] No large dependencies
-- [ ] Lazy loading implemented where needed
+1. Run `npx supabase secrets list --project-ref rhyzpcqhnizqbxphqdkr` to confirm the names are set
+   (it shows names and digests, not values).
+2. After a deploy, exercise each changed function from the app and confirm it responds.
+3. If the browser console shows `403` or `CORS` errors, check that `ALLOWED_ORIGIN` matches the
+   exact origin (protocol included, no trailing slash).
 
 ---
 
-## Deployment Process
+## After the merge deploys
 
-### Step-by-Step Production Deployment
-
-1. **Test Everything Locally**
-   ```bash
-   npm run build
-   npm run preview
-   npm run test:e2e
-   ```
-
-2. **Deploy to Staging First**
-   - Push code to staging branch
-   - Verify staging deployment succeeds
-   - Test staging thoroughly
-   - Wait 24 hours to catch any issues
-
-3. **Merge to Production**
-   ```bash
-   git checkout main
-   git merge staging
-   git push origin main
-   ```
-
-4. **Monitor Deployment**
-   - Watch build logs on Vercel
-   - Check for any build errors
-   - Verify deployment completes successfully
-
-5. **Post-Deployment Testing**
-   - Open production URL
-   - Test critical user flows:
-     - Login/logout
-     - Create customer
-     - Create order
-     - Search functionality
-   - Check browser console for errors
-   - Test on mobile device
-
-6. **Monitor for Issues**
-   - Watch Supabase logs
-   - Monitor error rates
-   - Check user feedback
-   - Be ready to rollback if needed
+1. **Watch the deployment** in the Vercel dashboard until it is **READY**; a failed build leaves
+   the previous deployment live.
+2. **Check the live site:** open croprxsolutions.app, sign in, and exercise the flow the change
+   touched. Check the browser console for errors.
+3. **Watch for errors** for the first hour: Sentry, Supabase logs, and user reports. The
+   `spot-check-prod` workflow gathers these into one view.
 
 ---
 
-## Rollback Procedure
+## Rollback
 
-If something goes wrong after deployment:
+The full decision tree is `docs/runbooks/incident-rollback.md`; say "roll back" to an agent and the
+`/rollback` workflow (`.claude/commands/rollback.md`) walks through it. Every rollback step that
+changes production waits for Mason's explicit OK.
 
-### Vercel Rollback
+### Bad frontend deploy — Vercel rollback
 
-1. Go to "Deployments" in Vercel dashboard
-2. Find the last working deployment
-3. Click "..." → "Promote to Production"
-4. Previous version is now live
+1. Open the Vercel dashboard → the CRX Manager project → **Deployments**.
+2. Find the last **READY** deployment from before the problem started.
+3. Click **"..."** → **Promote to Production**.
+4. Reload croprxsolutions.app and confirm the problem is gone.
 
-### Git Rollback
+Nothing is deleted; the bad deployment stays in the list.
 
-If you need to revert code:
-```bash
-git log                           # Find commit hash to revert to
-git revert <commit-hash>          # Creates a new commit that undoes changes
-git push origin main              # Push the revert
-```
+### Undoing the code itself
 
----
+A promoted older deployment is a stopgap — the next merge would ship the bad code again. Undo the
+code through the normal path: create a branch, `git revert <commit-hash>` on it, open a pull
+request, and merge once CI passes. Never push the revert straight to `main`.
 
-## Monitoring Production
+### Bad live migration or Edge Function
 
-### What to Monitor
-
-1. **Error Rates**
-   - Check browser console errors
-   - Monitor Supabase error logs
-   - Watch for failed requests
-
-2. **Performance**
-   - Page load times
-   - API response times
-   - Database query performance
-
-3. **User Issues**
-   - Failed login attempts
-   - Incomplete transactions
-   - User reports
-
-### Monitoring Tools
-
-#### Supabase Dashboard
-- Database activity
-- API usage
-- Error logs
-- Real-time connections
-
-#### Browser DevTools
-- Console errors (F12)
-- Network requests
-- Performance metrics
-
-#### Vercel Analytics
-- Visitor count
-- Page load times
-- Bandwidth usage
+- **Migration:** never edit or delete an applied migration. Write a new, compensating migration and
+  apply it through the normal review gates. Restoring from a backup is the last resort.
+- **Edge Function:** redeploy the last good version from git with the `deploy-edge-function`
+  workflow.
 
 ---
 
 ## Continuous Integration (CI)
 
-### GitHub Actions (already configured)
+GitHub Actions runs three workflows from `.github/workflows/`:
 
-CI is **not** optional and does not need to be created — it already runs on every
-pull request into `main` and on every push to `main`. Two workflows live in
-`.github/workflows/`:
+| Workflow | When it runs | What it does |
+|---|---|---|
+| `ci.yml` | Every pull request into `main` and every push to `main` | The main gate: lint, type check, unit tests with coverage, the production build, SQL migration validation, the documentation check, guard-hook regression tests, and the Phase 3C private-artifact containment check (plus a Windows leg of that check). **No browser test runs** — see the note below. |
+| `phase3-private-artifact-containment.yml` | Pull requests into `main` | Standalone containment check for private supplier-pricing artifacts, run from the trusted base branch. |
+| `coderabbit-final-review.yml` | Pull-request events (labels, new commits, and so on) | The CodeRabbit final-review gate: when a frozen candidate is labelled `ready-for-coderabbit`, it rechecks the head and required checks and then asks CodeRabbit for one formal review. See `docs/reference/coderabbit-native-review.md`. |
 
-| Workflow | What it does |
-|---|---|
-| `ci.yml` | The main gate. Lint, type check, unit tests, build, SQL migration validation, the documentation check, and the Phase 3C private-artifact containment check. **No browser test runs** — see the note below. |
-| `phase3-private-artifact-containment.yml` | Standalone containment check for candidate artifacts. |
-
-Two further workflows, `production-migration.yml` and
-`production-approval-canary.yml`, were **removed** on 2026-08-31 when the
-production migration approval gate was retired — see
-`docs/changelog.d/2026-08-31-retire-production-migration-approval-gate.md`. Do not
-expect them to exist.
+Two older workflows, `production-migration.yml` and `production-approval-canary.yml`, were
+**removed** on 2026-08-31 when the production migration approval gate was retired — see
+`docs/changelog.d/2026-08-31-retire-production-migration-approval-gate.md`. Do not expect them to
+exist.
 
 The jobs inside `ci.yml` are `phase3-private-artifact-containment`, `ci-scope`,
 `sql-validation`, `lint-typecheck-test`, `phase3c-containment-windows`, and
@@ -291,18 +176,9 @@ the agent surface gets the full run.
 > provides no browser coverage** — do not read a green CI as evidence that a UI
 > flow was exercised. The job's own comment carries the checklist for re-enabling
 > it, ending in "change `if: false` back to `if: github.event_name == 'push'`";
-> the blocker is that the E2E suite still points at production endpoints and the
-> safety guard in `tests/e2e/utils/safety-guards.ts` refuses to run against them.
-
-To reproduce the important parts of CI locally before pushing:
-
-```bash
-npm run typecheck
-npm run lint
-npm run test
-npm run build
-npm run check:docs
-```
+> the blockers are that no staging project exists yet and the E2E suite still
+> contains production endpoints, which the safety guard in
+> `tests/e2e/utils/safety-guards.ts` refuses to run against.
 
 `check:docs` is the documentation gate CI runs in `ci.yml`; it verifies that reference-doc claims
 still match the repository.
@@ -314,133 +190,36 @@ Edit the workflow files directly if CI needs to change; do not add a parallel
 
 ## Troubleshooting Deployment
 
-### Build Fails
+### Build fails
 
 **Error: "Module not found"**
-- Solution: Check `package.json` has all dependencies
-- Run `npm install` locally to verify
+- Check `package.json` lists the dependency, then run `npm ci` locally to reproduce.
 
 **Error: "Out of memory"**
-- Solution: Increase Node memory in build command:
+- Increase Node memory for the build:
   ```
   NODE_OPTIONS="--max-old-space-size=4096" npm run build
   ```
 
-### Environment Variables Not Working
+### Environment variables not working
 
-**Symptoms:**
-- App shows "Configuration Error" screen
-- Features don't work in production
+**Symptoms:** the app shows a "Configuration Error" screen, or features fail only in production.
 
-**Solutions:**
-1. Verify variable names start with `VITE_`
-2. Check they're set in hosting dashboard
-3. Redeploy after adding variables
-4. Check for typos in variable names
+1. Verify the variable names start with `VITE_`.
+2. Check they are set in the Vercel project settings.
+3. Redeploy after adding variables — Vite bakes them in at build time.
+4. Check for typos in the names.
 
-### Database Connection Issues
+### Database connection issues
 
-**Symptoms:**
-- "Failed to fetch" errors
-- Login doesn't work
-- Data doesn't load
+**Symptoms:** "Failed to fetch" errors, login fails, data does not load.
 
-**Solutions:**
-1. Verify Supabase project is not paused
-2. Check RLS policies allow access
-3. Confirm environment variables are correct
-4. Check Supabase API limits/quotas
-
-### SSL Certificate Issues
-
-**Symptoms:**
-- "Not secure" warning
-- HTTPS doesn't work
-
-**Solutions:**
-- Wait 24 hours for SSL to provision
-- Check DNS settings
-- Contact hosting support if still failing
+1. Verify the Supabase project is not paused.
+2. Check the RLS policies allow the access.
+3. Confirm the environment variables are correct.
+4. Check the Supabase API limits and quotas.
 
 ---
-
-## Best Practices
-
-### Version Control
-- Use semantic versioning (e.g., v1.0.0, v1.1.0)
-- Tag releases in git
-- Keep detailed changelog
-
-### Testing Strategy
-- Test locally first, always
-- Use staging for pre-production testing
-- Never deploy directly to production
-- Have a rollback plan ready
-
-### Database Management
-- Always backup before major changes
-- Test migrations on staging first
-- Use migration files (never manual changes)
-- Keep staging and production schemas in sync
-
-### Security
-- Rotate secrets regularly
-- Monitor for unauthorized access
-- Keep dependencies updated
-- Review RLS policies regularly
-
-### Communication
-- Announce maintenance windows
-- Document all changes
-- Keep stakeholders informed
-- Maintain deployment log
-
----
-
-## Production Checklist
-
-Print this out and check off before each production deployment:
-
-### Pre-Deployment
-- [ ] All tests pass locally
-- [ ] Code reviewed
-- [ ] Staging tested for 24+ hours
-- [ ] Database migrations ready
-- [ ] Environment variables configured
-- [ ] Rollback plan prepared
-
-### Deployment
-- [ ] Deploy during low-traffic period
-- [ ] Monitor build process
-- [ ] Verify successful deployment
-- [ ] Check production URL loads
-
-### Post-Deployment
-- [ ] Test critical user flows
-- [ ] Check for console errors
-- [ ] Monitor error rates (15 min)
-- [ ] Verify database connections
-- [ ] Test on mobile
-- [ ] Announce deployment complete
-
-### First 24 Hours
-- [ ] Monitor error logs
-- [ ] Watch user feedback
-- [ ] Check performance metrics
-- [ ] Be ready to rollback
-
----
-
-## Support
-
-If you encounter issues during deployment:
-
-1. Check the build logs carefully
-2. Review environment variables
-3. Verify database connectivity
-4. Test in staging environment
-5. Check Vercel status page
-6. Contact hosting support if needed
 
 ## Additional Resources
 

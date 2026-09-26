@@ -4,7 +4,8 @@ Last verified: 2026-09-26
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
-settled calls. Newest first. Each entry is a decision, why it was made, and the operative
+settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
+order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ## 2026-09-25 — GPT-6 guidance: one priority order, Astra reviews plans, model IDs live in one reference
@@ -37,7 +38,9 @@ all reviews and GPT-6 Sol for money and finance final gate reviews — make sure
 models," then "we don't need Terra as builder" and "make Luna the builder as well."
 
 **Operative rule.** The GPT-6 class ships two tiers only — `gpt-6-terra` and `gpt-6-spark` do not
-exist — so the old frontier/workhorse/light split collapses onto **Luna for volume (building, every
+exist [Update 2026-09-26: overclaim, corrected in the changelog — both are *refused for this account
+on this CLI* (reproduced 2026-09-23 and 2026-09-25 on both binaries), but the refusal matches a
+made-up name's, so it shows "not usable here", not "does not exist"] — so the old frontier/workhorse/light split collapses onto **Luna for volume (building, every
 iterating review round, bug hunting) and Sol for money** (the once-at-the-end gate that mints the
 proof). The 2026-09-20 tier decision below is unchanged in shape; only the model names moved.
 
@@ -49,7 +52,9 @@ pass. Free to do then: Codex credits were exhausted until 2026-09-26, so nothing
 **Do not re-derive the model names from an error message.** On `codex-cli` 0.153.4 every `gpt-6-*`
 name was refused as "not supported when using Codex with a ChatGPT account" — **the same message a
 made-up name returns**, so it proves nothing about spelling or plan access. Upgrading to 0.156.1 was
-the fix. The discriminating probe, which works even while out of credits: a valid model reaches the
+the fix. [Update 2026-09-26: not proven — the changelog downgrades this to an unverified hypothesis.
+The wrappers resolve the Desktop app binary (then `0.155.0-alpha.16.3`), not the npm CLI that was
+upgraded; the sample is one, and 0.153.4 is no longer installed to retest.] The discriminating probe, which works even while out of credits: a valid model reaches the
 usage-limit error; an invalid one stops at "not supported". Always include a known-bogus control.
 
 **Accepted residual:** Luna now builds and reviews, so an iterating round on Codex-built code is
@@ -62,10 +67,19 @@ demands `gpt-5.6-sol` and a branch-minted `gpt-6-sol` proof is correctly rejecte
 **no agent can merge this PR** — Mason merges it by hand, the same escape used when an agent merge
 gate is structurally stranded. Do NOT widen a validator to accept both models to get around it; if a
 human merge is ever unavailable, the alternative is a two-step accept-both → narrow migration.
+[Update 2026-09-26: this is now history — #796 merged to `main` on 2026-09-26 (`bf320639f`), so
+`main` now demands `gpt-6-sol` at `high` (`REQUIRED_CODEX_MODEL` in
+`.claude/hooks/migration-apply-lib.mjs`). The lesson above still applies to any future change of the
+gate's own identity.]
 
 **Not yet proven:** no end-to-end GPT-6 review has run (credits reset 2026-09-26). Run one Luna round
 and one Sol gate before trusting this on money work. Note `xhigh` was never validated as an accepted
 effort for `gpt-6-luna` — only the model name was. See `docs/changelog.d/2026-09-23-gpt6-model-routing.md`.
+[Update 2026-09-26: the changelog's full "What is NOT proven" list has two more items this entry
+left out — whether a GPT-6 model emits a *parseable terminal verdict line* (prose after it makes the
+wrapper refuse, leaving the gate unreachable), and whether Luna reads a large inlined diff and
+echoes the tail canary. Check all three on the first real Luna round and Sol gate. The changelog is
+the corrected copy of this entry; where they differ, follow the changelog.]
 
 **Adversarial review (Fable 5.1, 2026-09-25)** confirmed the gate code is sound — all enforcement
 points agree, the Codex mirror imports the shared validator rather than duplicating it, and tests are
@@ -73,6 +87,11 @@ load-bearing — and caught the merge chicken-and-egg above, an over-authorized 
 (since made review-only), and several overclaims now corrected in the changelog.
 
 ## 2026-09-20 — everyday code review moves to Luna at xhigh; Sol becomes a once-at-the-end gate
+
+[Update 2026-09-26: the two-tier shape below still stands, but its model names are **superseded by
+the 2026-09-23 entry** — iterating rounds now run on `gpt-6-luna` at `xhigh`, and the gate is
+`gpt-6-sol` at `high`. The guards now hard-require `gpt-6-sol` / `high`, not `gpt-5.6-sol`. Exact
+IDs live in `docs/reference/codex-model-tuning.md`.]
 
 **Source:** Mason's decision in this session on 2026-09-20, driven by Codex token cost. He asked for
 Luna at xhigh as the standing reviewer, with Sol reserved for genuinely complex work, and for money
@@ -104,7 +123,9 @@ frozen diff file with the CRX failure classes inlined. Do not "fix" the guards t
 
 **Source:** Mason's decision on 2026-09-05, after the 2026-09-05 analysis recorded in `docs/manual/KNOWN_ISSUES.md`.
 
-**Decision.** `scripts/apply-live-testdata-maintenance-20260812.mjs` is to be deleted through its own `--retire-producer` lane (one local file deletion; the script never touched the database in any lane), together with its test and its three snippet inputs. Its apply lane never ran, and its snippets did not cover the classifier defects found on 2026-09-02, so applying it would not have repaired the live false positives. The deletion is executed in the commit that follows this record, because the retire lane only runs against a reviewed commit that still contains the producer; `docs/manual/KNOWN_ISSUES.md` tracks whether it has landed.
+**Decision.** `scripts/apply-live-testdata-maintenance-20260812.mjs` is to be deleted through its own `--retire-producer` lane (one local file deletion; the script never touched the database in any lane), together with its test and its three snippet inputs. Its apply lane never ran, and its snippets did not cover the classifier defects found on 2026-09-02, so applying it would not have repaired the live false positives. The deletion is executed in the commit that follows this record, because the retire lane only runs against a reviewed commit that still contains the producer; `docs/manual/KNOWN_ISSUES.md` tracks whether it has landed. [Update 2026-09-26: landed — PR #622
+merged 2026-09-05 and the script is gone from the repo, so the "no longer requires a blob re-pin"
+sentence below now applies.]
 
 **What this forbids/implies:** do not revive the producer or its snippets; a classifier repair is a new, ordinary reviewed change against `.claude/hooks/live-testdata-lib.mjs`. The by-name deny rules that still name the retired path in the three guard files stay as they are until a separate guard change removes them. Once the deletion lands, editing `.codex/hooks/production-action-guard.mjs` no longer requires a blob re-pin.
 
@@ -532,6 +553,8 @@ loss; it is covered and mutation-tested.
   lesson, independent of this lock.
 - The durable boundary is unchanged and is not in this repository: GitHub `protect-main` branch
   protection, required checks, and formal review. Repository hooks are defense in depth.
+  [Update 2026-09-26: "formal review" is no longer a GitHub requirement — the 2026-09-02 entry
+  removed the required review; required checks are the merge gate.]
 
 ## 2026-09-01 — the guarded surface is NARROWED to hook/registration files; whether the lock survives at all is an open owner decision
 
@@ -581,6 +604,12 @@ unlock ceremony, no self-protecting rule book, no fail-open surface, and no way 
 Until Mason rules, the lock stays as narrowed and the `ask` tier remains the real gate.
 
 ## 2026-08-31 — control files are LOCKED by a hook, superseding the 2026-08-25 `ask` tier
+
+**SUPERSEDED 2026-09-01 — the lock, its rule book, its test, and `scripts/guard-unlock.mjs` were
+removed before PR #530 merged, so none of them ever reached `main`, and there is no unlock protocol; the 2026-08-25 `ask` tier was never replaced and still
+gates `Edit`/`Write`, with `review-proof-guard.mjs` covering shell/MCP writes. See the 2026-09-01
+(later the same day) "guarded-surface lock is DELETED" entry above.** Retained for the evidence of
+why the lock failed.
 
 **Supersedes item 3 of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier").
 That entry's protected set and its `Edit`/`Write` `ask` rules are replaced by a deterministic
@@ -666,6 +695,12 @@ Source: PR #530, `docs/changelog.d/2026-08-31-guarded-surface-lock.md`, and the 
 entries in `docs/changelog.d/` from the same day.
 
 ## 2026-09-01 — Mason gets a manual review override on `main`; agents are locked out of it
+
+**SUPERSEDED 2026-09-02 — the required review on `main` was removed, so there is no approval to
+override; the merge gates no longer require `reviewDecision === "APPROVED"` and only refuse
+`CHANGES_REQUESTED`. Still true from this entry: `enforce_admins` is off, both gates hard-deny
+`gh pr merge --admin`, and the separate-credential fix stays declined. See the 2026-09-02 "required
+review on `main` is removed" entry above.**
 
 **Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
 account to get around the has to have a review"), and his choice of the "override + agent lockout"
@@ -782,7 +817,9 @@ Note on (2): the incidental write-time coverage of `EXECUTE … USING` / `INSERT
 unconditional `hasMutation` trigger rather than modelled taint — lives in **parked PR #449, not in the hook
 that is running**. The active `.claude/hooks/actor-binding-check.mjs` contains no such trigger (PR #449's
 hardened rewrite is the much larger version referenced above), so today these forms are not caught at write
-time at all. Do not credit the running guard with them until #449 lands.
+time at all. Do not credit the running guard with them until #449 lands. [Update 2026-09-26: PR #449
+was closed unmerged on 2026-09-12, so none of its fixes are on `main` and "until #449 lands" is no
+longer a pending path.]
 
 Note on the tool path, which is wider than any residual listed above: the guard is registered under the
 matcher `"Write|Edit|MultiEdit"` in **both** `.claude/settings.json` and `.codex/hooks.json`, so a migration
@@ -798,7 +835,7 @@ delegates the write to a helper is allowed at write time — the guard only proc
 body holds a literal `INSERT INTO` / `UPDATE` (matched with a trailing space) / `DELETE FROM` — and it is **not** covered by the sweeps
 either, because the wrapper carries neither predicate's cue in its own `prosrc` and a private helper fails
 the `has_function_privilege('authenticated', ...)` candidacy test. There is no fail-closed callable rule in
-the running hook; that belongs to parked PR #449.
+the running hook; that belongs to parked PR #449 [Update 2026-09-26: closed unmerged 2026-09-12].
 
 Note on the write path itself, updated 2026-09-03: `Write` carries the full file; `Edit` and `MultiEdit`
 carry fragments. The hook now reconstructs the full post-edit file with `edit-splice-lib.mjs` before running
@@ -829,7 +866,8 @@ and a rewrite — not another round. It does **not** solve the naming-scope limi
   (`codex/actor-binding-guard-recut-20260831`, local only, no PR) duplicated one of PR #449's fixes.
 - PR #449 itself is **parked, not abandoned**: it holds the 19 closed bypasses and is worth landing after
   one clean review round on a fresh review budget. Landing it is an improvement to a capped control, not a
-  resumption of the hardening programme.
+  resumption of the hardening programme. [Update 2026-09-26: PR #449 was closed unmerged on
+  2026-09-12. Its 19 closed bypasses are not on `main`; reviving them would be a new PR.]
 
 **A generalisable lesson recorded here because it recurred seven times in ~24 hours.** Every one of those
 seven guard comments asserted a safety property its code did not have, and **every one overclaimed** — none
@@ -914,7 +952,8 @@ Codex PR #528 review finding that this log still scoped the tuning decision to O
 
 **Decision.** The Model Tuning guidance now kept in `docs/reference/claude-model-tuning.md` and originally added to `CLAUDE.md` by the 2026-07-25 entry applies to the
 whole Claude 5 family — Opus 5 and Fable 5 — not only Opus 5. The 2026-07-25 calibration
-(`<tone_preference>`, deliverable-length rule, subagent budget, self-verification carve-out,
+(`<tone_preference>` [Update 2026-09-26: that literal wrapper was retired by the 2026-09-04 entry; its
+behavior lives in `AGENTS.md` Owner Communication], deliverable-length rule, subagent budget, self-verification carve-out,
 uncapped review prompts with the settled overnight-sweep exception, and the effort ladder) carries
 over to Fable 5 unchanged. The carry-over is provisional — the 2026-07-25 review measured Opus 5
 only — but binding until a newer harness review supersedes it.
@@ -1027,7 +1066,10 @@ pipes, `node -e`, `bash -c`, `python3 -c`, heredocs, and `node -v`, all reportin
 "maintenance producer" message) is the larger remaining productivity cost. Evidence says it is
 ineffective — it blocks *reading* the file it protects while `node runner.mjs` / `npm run x` / `make x`
 execute it freely. It is coupled to the blob-pinned maintenance producer, so it is the next
-harness-focused task after this one, not a backlog item.
+harness-focused task after this one, not a backlog item. [Update 2026-09-26: done — the ~350-line
+opaque-invocation classifier was removed on 2026-09-05, when the producer was retired; only a by-name
+producer denial and a rule for script paths that cannot be read from the command text remain (see the header of
+`.claude/hooks/bash-safety-lib.mjs`).]
 
 ## 2026-08-30 — A default-branch label gate posts the final CodeRabbit command once
 
@@ -1036,6 +1078,9 @@ owner applies `ready-for-coderabbit`; a default-branch workflow validates that e
 posts exactly `@coderabbitai review` once with a hidden SHA marker. The generic Actions-authored
 marker prevents duplicate requests but is not a separate security identity. Before merge, its SHA,
 CodeRabbit's authenticated approval `commit_id`, and the live PR head must be identical.
+[Update 2026-09-26: the approval half is superseded — since the 2026-09-02 entry, `main` requires no
+approving review and the merge gates refuse only a `CHANGES_REQUESTED` verdict. The label workflow
+(`.github/workflows/coderabbit-final-review.yml`) still posts the review request.]
 **Why:** Manual comment posting was easy to forget or repeat, while automatic PR/push reviews spent
 the shared budget before changes were deployable.
 **What this forbids/implies:** Do not post the normal command by hand. New commits and reopened/draft
@@ -1063,7 +1108,10 @@ reviewer. Read and resolve its findings, then merge with
 protection change for both repositories: require one approval, dismiss stale approvals after a new
 commit, require approval from someone other than the last pusher, and enforce the rule for
 administrators. CodeRabbit's formal approval is the normal merge-unlock path; existing build and
-deployment checks remain separate. If a finding or base update creates a new commit, restart checks
+deployment checks remain separate. [Update 2026-09-26: that protection change was undone —
+administrator enforcement was turned off on 2026-09-01 and the required review was removed on
+2026-09-02 (see those entries). `main` now needs no approval; the required checks are the merge gate
+and an unresolved `CHANGES_REQUESTED` still blocks. The frozen-candidate review practice stands.] If a finding or base update creates a new commit, restart checks
 and request one follow-up incremental review of that corrected candidate. Do not use
 `@coderabbitai resume`, which restarts automatic review, and use `@coderabbitai full review` only
 when a complete reread is deliberately justified. This decision supersedes the automatic-review
@@ -1072,6 +1120,12 @@ path-selection, and final-head safety rules remain active.
 
 
 ## 2026-08-27 — Codex live migrations use a protected GitHub approval environment
+
+**SUPERSEDED 2026-08-31 — this approval environment and its workflows never ran and were deleted
+(PR #525);
+there is no GitHub dispatch path for migrations. See the 2026-08-31 "retire the production
+migration approval gate" entry above, and `AGENTS.md` for the current live-migration approval
+rule.**
 
 **Source:** Mason's in-chat request to build a safe Codex migration approval gate on 2026-08-27.
 
@@ -1419,7 +1473,9 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
    `.claude/settings.json`, `.claude/settings.local.json`, `.coderabbit.yaml`, `.husky/**`,
    `package.json`, `.github/workflows/**`, `AGENTS.md`, `CLAUDE.md`,
    `scripts/{check,validate,verify}-*`, `scripts/remove-applied-ledger-entry.mjs`,
-   `scripts/write-codex-push-proof.mjs` and `scripts/run-claude-review.mjs`.
+   `scripts/write-codex-push-proof.mjs` and `scripts/run-claude-review.mjs`. [Update 2026-09-26:
+   `AGENTS.md` and `CLAUDE.md` have since been dropped from this set; the current list is the
+   `ask` block in `.claude/settings.json`.]
 
    **What the `ask` tier actually does here, corrected 2026-08-25 after a CodeRabbit finding:**
    this repository sets `permissions.defaultMode: "dontAsk"` (`.claude/settings.json:3`, a
@@ -1443,7 +1499,8 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
 4. **Local pre-commit results are advisory, not independent certification.** The ~14 scripts the
    gate executes are writable by the same identity that runs them. The durable boundary is the one
    already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
-   CodeRabbit review on every PR.
+   CodeRabbit review on every PR. [Update 2026-09-26: CodeRabbit is no longer a merge requirement —
+   since 2026-09-02 no approving review is required; an unresolved `CHANGES_REQUESTED` still blocks.]
 5. **Local proof is proportionate and external proof remains complete.** Pre-commit now keeps the
    staged-file safeguards that fail fast on ledger omissions, private artifacts, SQL/frontend
    anti-patterns, Claude/Codex manifest drift, and dependency changes. Full lint, typecheck,
@@ -1607,6 +1664,9 @@ the entry below.
 red X and withheld approval but did not disable the merge button because GitHub required zero
 approvals. Mason's 2026-08-28 decision above replaced that posture with one required current
 approval, stale-review dismissal, last-pusher separation, and administrator enforcement.
+[Update 2026-09-26: that 2026-08-28 posture was itself undone — administrator enforcement off
+2026-09-01, required review removed 2026-09-02. `main` again requires zero approvals; a
+`CHANGES_REQUESTED` verdict still blocks through the merge gates.]
 
 **Also settled: the dashboard is inert and must not be used.** CodeRabbit config sources do not
 merge. The repo `.coderabbit.yaml` outranks the repository and organization UI settings, and any
@@ -1722,7 +1782,10 @@ put to him: *should `Current` mean "not yet due" only, with a new `1-30 Days` co
 - The AP Aging UI labels and CSV export state no basis today. They should state whichever is
   adopted — that holds under either mapping.
 
-**Status.** Recorded only; **no code, SQL, or migration has been written.** Scope note for the
+**Status.** Recorded only; **no code, SQL, or migration has been written.** [Update 2026-09-26: no
+longer true — Mason answered the mapping on 2026-08-26 (entry below) and
+`supabase/migrations/20260826222000_correct_ap_aging_due_date_buckets.sql` is applied live (ledger
+`20260901045346`). The scope note named next was never committed and does not exist.] Scope note for the
 implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full finding: HIGH 1 in
 `docs/audits/gauntlet/2026-08-23-section-09-purchase-orders-receiving-vendor-bills-ap-refresh.md`.
 
@@ -1753,6 +1816,10 @@ the 2026-08-24 entry above; the days-past-due basis remains unchanged.
 the mechanics of the 2026-07-17 / 2026-07-30 standing CodeRabbit review policy in `AGENTS.md`,
 which is unchanged. This entry covers the **configuration** half of the work opened as PR #441.
 The merge-gate enforcement half is parked — see "What is deliberately not here" below.
+[Update 2026-09-26: `AGENTS.md` no longer carries a standing CodeRabbit policy section; it lists a
+CodeRabbit review of the frozen head as one step of the protected path in `.claude/commands/ship.md`.
+Since 2026-09-02 GitHub requires no approving review, so that review is held by convention; only an
+unresolved `CHANGES_REQUESTED` blocks a merge.]
 
 **The problem.** CodeRabbit was refusing reviews for two *different* reasons, and the distinction
 matters because only one of them is fixable with money:
@@ -1876,7 +1943,8 @@ rounds, grew a second half: an **executable pre-merge gate** in
 half on 2026-08-24** — the loop was self-sustaining (the PR edits guard machinery → guard machinery
 is a risky path → risky paths need a clean exact-SHA Codex proof → each guard fix is new guard code
 to review), and six CodeRabbit reviews in one day made the per-round cost real. Three Codex Highs
-are outstanding on it. It stays open as PR #441 in draft.
+are outstanding on it. It stays open as PR #441 in draft. [Update 2026-09-26: PR #441 was closed
+unmerged on 2026-08-27; its config half shipped separately as #456.]
 
 **Known consequence of shipping this half alone, stated plainly.** Lowering
 `auto_pause_after_reviewed_commits` from 5 to 2 reduces *automatic* review coverage while the
@@ -1959,6 +2027,8 @@ transform of the existing checks is mechanical; block-message text is preserved 
    in `.codex/hooks/production-action-guard.mjs` (P1). Adding a new production-mutating command
    without wiring it into that guard is the defect, not an oversight to fix later. Editing that guard
    re-pins its blobs in `scripts/apply-live-testdata-maintenance-20260812.mjs` in the same change.
+   [Update 2026-09-26: the re-pin half is obsolete — that maintenance script was deleted in #622
+   (2026-09-05 entry), so editing the guard no longer needs a blob re-pin. The wiring rule stands.]
 
 7. **The apply target is pinned to CRX production; there is no `--project` flag.** Round 4 found
    that parameterizing the ref was unsound: `applied-migrations.json`, the reviewer/Codex proofs and
@@ -2079,6 +2149,10 @@ surface is touched.
 ---
 
 ## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
+
+**SUPERSEDED 2026-08-25 — the draw-down chain, including the receipt-intent binding, is applied
+live and the draw pause was released; "keep draws paused" no longer applies. See the 2026-08-25
+"Booking-draw pause RELEASED" entry above.**
 
 **Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
 requires Mason's scheduling approval before any separately authorized live apply.
@@ -2326,6 +2400,10 @@ name parsing, crew-typed brands) always lands as a proposal, never as a direct w
 
 ## 2026-08-18 — CRX pins `autoCompactWindow` to 500,000; other repos keep the 200,000 global
 
+**SUPERSEDED 2026-08-20 — the project pin was removed and must not be reintroduced; `/autocompact`
+(user settings) now governs the threshold. The operative rule below is the opposite of current
+practice. See the 2026-08-20 "The project no longer pins `autoCompactWindow`" entry above.**
+
 **Source:** Mason's in-chat question and approval, 2026-08-18, during the product-data-model
 planning session — *"Should we change our context limit for these long winded large planning
 sessions?"*, then *"Yes add to crx manager."*
@@ -2424,6 +2502,9 @@ money-safety guard and is deliberately left for its own separately-reviewed PR. 
 **Operative rule.** A session that lands commits must update **one** ledger file, chosen by what the
 work was. Reach for `docs/CHANGELOG.md` for general work; do not force a policy or schema record
 into it. `scripts/log-session.mjs` remains the scaffold for the CHANGELOG case only.
+[Update 2026-09-26: general shipped work is now recorded as a new
+`docs/changelog.d/<YYYY-MM-DD>-<slug>.md` file (`AGENTS.md`; `docs/changelog.d/README.md`), which
+the pre-commit ledger guard prefers. `docs/CHANGELOG.md` is the older history.]
 
 **Review round (PR #412).** CodeRabbit raised four findings against the first implementation and all
 four were real. The substantive one was a bug introduced by this very change: the accepted set was
@@ -2467,6 +2548,12 @@ who drew a booking down are unchanged, because every draw is still logged agains
 `md5(prosrc)` it expects, so whichever applies second fails its own drift preflight. Settled order:
 **PR #404 first**, then the owner migration is rebuilt against #404's applied body. Do not re-derive
 this ordering from scratch — it is a consequence of the md5 pin, not a preference.
+[Update 2026-09-26: the owner migration was never rebuilt or applied and is not in the repository.
+Its branch was marked for deletion after a live check confirmed its other protections
+(`AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`, the soft-delete exclusion, `BOOKING_CLOSED`)
+had already landed through other migrations — see
+`docs/audits/2026-09-01-no-pr-branch-disposition-plan.md`. The decision itself (any rep) stands; the
+sequencing above is moot.]
 
 ---
 
@@ -2526,17 +2613,10 @@ entry as precedent for publishing any other live data; a fresh owner decision is
 Mason's stated basis was that the data in this system is not real or operational, so the basis does
 not carry to data that is.
 
-**Related, and closed — not an open thread.** An earlier version of this paragraph pointed at a
-narrow live-ledger recovery exception (the rule that would let an already-applied migration be
-recovered to Git without its already-live SQL blocking the push proof) as a pending approval on
-PR #403. **PR #403 was closed on 2026-08-25 by Mason's explicit decision and will not merge.** That
-exception is therefore **not in force**, and no Decision Log entry for it exists on `main`. Do not
-cite it as approved policy, and do not treat it as unfinished work to be resurrected. The recovery
-it existed to enable had already been completed by hand on 2026-08-14 — commit `3a2a0ca0`, via
-PR #392 — the need has not recurred across the 188 commits since, and the attestation machinery
-needed five Sol adversarial rounds before it was no longer forgeable. A future byte-verbatim
-recovery uses that same manual path, or requires a fresh owner decision. Evidence:
-https://github.com/masonwells1/CRX_Manager_V1.0/pull/403#issuecomment-5416488045
+**Related, and closed — not an open thread.** The live-ledger recovery exception this paragraph
+once pointed to as pending on PR #403 is **not in force**: #403 was closed unmerged on 2026-08-25.
+The full record (reasons, the manual recovery path to use instead, evidence link) is the 2026-08-25
+"PR #403 closed" entry above. [Consolidated 2026-09-26: this paragraph duplicated that entry.]
 
 **This override does not depend on #403.** Publishing `20260812115238` in full rests on Mason's own
 explicit 2026-08-14 instruction recorded under **Source** above, and on the byte-for-byte match
@@ -2643,7 +2723,8 @@ earlier draft of this paragraph left out, both of which change how it should be 
   currently a derived-mirror shape, and no conversion has happened anywhere on this schema for it to
   be preferred over.
 
-**SETTLED 2026-08-19 — see the 2026-08-19 entry at the top of this log.** The question was whether
+**SETTLED 2026-08-19 — see the 2026-08-19 entry "The purchase-order 'mirror' CHECK clears the money
+gate, as a closed two-column exception" (above this one in the log).** The question was whether
 the mirror form clears the AGENTS.md gate: the gate's wording is "an active **finite** whole-cent
 CHECK", the mirror form carries no finiteness clause of its own, and what rejects `NaN`/`Infinity`
 here is the generated column's cast rather than the CHECK. It also does not follow the
@@ -2869,7 +2950,10 @@ branch protection, PR + CodeRabbit review, exact-SHA `gpt-5.6-sol` proofs for ri
 money/migration/bash-safety/RLS guards. Do not rebuild factory-style governance without Mason explicitly
 asking; if autonomous batching is wanted later, design it around the existing `/ship` pipeline with
 hooks that fail OPEN for coordination (never fail-closed on ordinary work). All factory entries below
-this one are historical.
+this one are historical. [Update 2026-09-26: the safety-net list has since changed — risky-diff
+proofs are now exact-SHA `gpt-6-sol` / `high` (2026-09-23 entry), and since 2026-09-02 no approving
+review is required to merge: the required CI checks are the merge gate, CodeRabbit review is held by
+convention, and an unresolved `CHANGES_REQUESTED` still blocks. The no-factory rule stands.]
 
 ---
 
@@ -2970,6 +3054,13 @@ move a reviewed exception to the exact-empty allowlist and keep every relation s
 ---
 
 ## 2026-07-30 — SETTLED: active adversarial review uses independent Sol/high sessions
+
+**SUPERSEDED 2026-09-20 and 2026-09-23 — model choice replaced by the 2026-09-20 entry (iterating rounds on Luna at `xhigh`;
+Sol at `high` only as the once-at-the-end gate on risky diffs) and the 2026-09-23 entry (the gate
+now pins `gpt-6-sol`, not `gpt-5.6-sol`). Current IDs: `docs/reference/codex-model-tuning.md`; the
+rule: `AGENTS.md` "Safety and Protected Delivery". The factory was removed 2026-08-07, and
+CodeRabbit is no longer a required every-PR gate (2026-09-02). Still true: a proof must pin model and
+effort and be bound to the exact reviewed bytes.**
 
 **Decision (Mason, in chat):** Claude/Fable credits are nearly exhausted, so all active adversarial
 review gates now use `gpt-5.6-sol` at high reasoning effort. Claude/Fable review remains available
@@ -3135,7 +3226,10 @@ Operative rule: after CI/Vercel go green, do not merge until CodeRabbit has post
 its real findings are resolved. **Follow-up (open):** add a merge-blocking required status check
 for CodeRabbit to the `protect-main` ruleset once its exact check name is confirmed on a live PR.
 (Source: AGENTS.md "Standing CodeRabbit review policy"; PR #160 landed the CRX config; FarmRx
-config commit 943e5688.)
+config commit 943e5688.) [Update 2026-09-26: that follow-up is reversed, not open — on 2026-09-02
+Mason chose to keep CodeRabbit running but stop letting it block a merge, and the ruleset carries no
+CodeRabbit check. Automatic reviews were turned off on 2026-08-28 (frozen candidates only). The
+"Standing CodeRabbit review policy" section no longer exists in `AGENTS.md`.]
 
 ## 2026-07-17 — SETTLED: save_customer edits are assigned-rep-or-admin only (no office-manager carve-out)
 
@@ -3191,20 +3285,6 @@ client-side against `customers.assigned_tier` (no RPC payload change needed).
 
 ---
 
-## 2026-07-13 — SETTLED & ACTIVE: Codex standing push/merge authorization (mirror of Claude's)
-
-**Status: ACTIVE since 2026-07-14** — merged to `main` via PR #114 (harness through review round 4) and PR #118 (round-5 hardening delta), both through the `protect-main` ruleset with Mason's explicit approval. Mason authorized the design 2026-07-13, approved the GitHub protection change, and approved the merge; the final branch passed 5 adversarial Codex rounds and 4 Claude rounds. GitHub requires a pull request plus a passing **Vercel** status check (ruleset verified via the rulesets API), applies the rule to administrators, and disables force-push/deletion — so **direct pushes to `main` no longer exist for anyone**; all agents land work via branch → PR → green checks → merge. Follow-up for Mason: add the CI checks now confirmed on PR #118 — "Lint, Type Check, Test, Build" and "SQL Migration Validation" — as required checks in the ruleset ("E2E Smoke Tests" reports as skipped on docs-only PRs, so add it only if skipped counts as passing is acceptable), and enable "require branches to be up to date". Claude round 4 proved that repository-owned hooks cannot be the sole security boundary when the same local agent can edit files and spawn arbitrary processes; guard hooks, CI, Husky, and the review wrapper are classified as risky so self-modifications cannot avoid second-model review.
-
-**Proposed decision:** Codex may push or merge ordinary reversible code to `main` once the full green pipeline passes. A main-bound diff classified as risky by the shared `.claude/hooks/codex-push-lib.mjs` path/content rules additionally requires a real Claude review of that exact commit in the current session and a fresh SHA-bound proof at `.claude/session-state/claude-review-push.json`. The Codex production guard applies this rule to direct pushes, `git -C` forms, `gh pr merge`, and GitHub MCP merge tools, and fails closed when it cannot verify the ref, diff, PR target, or proof.
-
-**Review hardening:** force intent is checked before target/diff classification and denied for every branch (`--force`, `-f`, `--force-with-lease`, combined short flags, or `+` refspecs); bulk modes (`--all`, `--branches`, `--mirror`, `--prune`) are denied. Both agents recognize `git`/`git.exe`/quoted executable paths, resolve `git -C`, inspect every push in a chained command, use the hook payload/tool working directory, reject shell directory or `GIT_DIR`/`GIT_WORK_TREE` context changes, and fail closed when refs/diffs cannot be inspected. Server-side merge routes (`gh pr merge`, relative/full-URL `gh api .../pulls/<n>/merge`, and GitHub MCP merge tools) must report `mergeStateStatus=CLEAN` and a non-empty rollup with every check completed in an accepted green state before the risk/proof gate can allow them. GraphQL merges and unrecognized GitHub API/tool writes deny closed. Only a successful real `run-claude-review.mjs --scope base-main` run using the absolute installed Claude Code binary with `shell:false` and exactly one terminal `FINAL_VERDICT` can write the Claude proof; the standalone verdict writer was removed, the wrapper is covered by the ledger guard, and recognized direct tool/shell proof access plus contiguous/split interactive entry into the proof directory is denied for both agents.
-
-**Unchanged boundaries:** this grant never covers deleting `main`, force-pushing, live migrations or data writes, edge-function deploys, secrets/auth/permission changes, direct GitHub writes that bypass Husky, or bypassing the reviewed push path. Codex's Supabase access remains strictly read-only: `execute_sql` rejects multiple statements and every custom/application function call, including mutating RPCs invoked through `SELECT`. Repository-scoped `node_repl` and Node eval/print modes are denied because they can launch uninspected write processes. The initial harness branch may only be pushed to its feature branch. Local hooks are deterministic honest-agent guardrails, not a cryptographic sandbox; GitHub branch protection is the external hard boundary and must require a pull request plus passing checks before this grant can activate.
-
-**Why:** Mason wants the same momentum for either primary coding agent, while preserving a deterministic second-model gate on money, database, security, and other high-blast-radius changes.
-
----
-
 ## 2026-07-13 — SETTLED: pre-authorized runs may apply live migrations without a per-migration in-chat OK
 
 **Decision (Mason, in-chat, 2026-07-13):** the migration-apply approval question flagged on
@@ -3249,6 +3329,32 @@ in chat; destructive migrations always stop regardless of arming.
 
 ---
 
+## 2026-07-13 — SUPERSEDED (was "SETTLED & ACTIVE"): Codex standing push/merge authorization (mirror of Claude's) — not the live-migration entry
+
+**SUPERSEDED 2026-07-30 and 2026-08-14 — kept as history; for the live-migration rule `AGENTS.md`
+cites as "the 2026-07-13 entry", read the entry directly above this one.** What changed: (1) a risky
+main-bound diff no longer needs a Claude review or `.claude/session-state/claude-review-push.json` —
+the Codex production guard (`.codex/hooks/production-action-guard.mjs`) instead demands an exact-SHA
+Sol proof from `scripts/write-codex-push-proof.mjs` (switched to Sol by the 2026-07-30 entry; now
+`gpt-6-sol` / `high` per the 2026-09-23 entry). (2) Codex's Supabase access is write-enabled (the
+2026-08-14 entry), not read-only. (3) The follow-up below is done: the `protect-main` ruleset now
+requires `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation`, and branches must
+be up to date. Still true: nobody pushes directly to `main`; Codex lands ordinary work through
+branch → PR → green checks → merge, and the unchanged boundaries (no force-push, no deleting `main`)
+stand.
+
+**Status: ACTIVE since 2026-07-14** — merged to `main` via PR #114 (harness through review round 4) and PR #118 (round-5 hardening delta), both through the `protect-main` ruleset with Mason's explicit approval. Mason authorized the design 2026-07-13, approved the GitHub protection change, and approved the merge; the final branch passed 5 adversarial Codex rounds and 4 Claude rounds. GitHub requires a pull request plus a passing **Vercel** status check (ruleset verified via the rulesets API), applies the rule to administrators, and disables force-push/deletion — so **direct pushes to `main` no longer exist for anyone**; all agents land work via branch → PR → green checks → merge. Follow-up for Mason: add the CI checks now confirmed on PR #118 — "Lint, Type Check, Test, Build" and "SQL Migration Validation" — as required checks in the ruleset ("E2E Smoke Tests" reports as skipped on docs-only PRs, so add it only if skipped counts as passing is acceptable), and enable "require branches to be up to date". Claude round 4 proved that repository-owned hooks cannot be the sole security boundary when the same local agent can edit files and spawn arbitrary processes; guard hooks, CI, Husky, and the review wrapper are classified as risky so self-modifications cannot avoid second-model review.
+
+**Proposed decision:** Codex may push or merge ordinary reversible code to `main` once the full green pipeline passes. A main-bound diff classified as risky by the shared `.claude/hooks/codex-push-lib.mjs` path/content rules additionally requires a real Claude review of that exact commit in the current session and a fresh SHA-bound proof at `.claude/session-state/claude-review-push.json`. The Codex production guard applies this rule to direct pushes, `git -C` forms, `gh pr merge`, and GitHub MCP merge tools, and fails closed when it cannot verify the ref, diff, PR target, or proof.
+
+**Review hardening:** force intent is checked before target/diff classification and denied for every branch (`--force`, `-f`, `--force-with-lease`, combined short flags, or `+` refspecs); bulk modes (`--all`, `--branches`, `--mirror`, `--prune`) are denied. Both agents recognize `git`/`git.exe`/quoted executable paths, resolve `git -C`, inspect every push in a chained command, use the hook payload/tool working directory, reject shell directory or `GIT_DIR`/`GIT_WORK_TREE` context changes, and fail closed when refs/diffs cannot be inspected. Server-side merge routes (`gh pr merge`, relative/full-URL `gh api .../pulls/<n>/merge`, and GitHub MCP merge tools) must report `mergeStateStatus=CLEAN` and a non-empty rollup with every check completed in an accepted green state before the risk/proof gate can allow them. GraphQL merges and unrecognized GitHub API/tool writes deny closed. Only a successful real `run-claude-review.mjs --scope base-main` run using the absolute installed Claude Code binary with `shell:false` and exactly one terminal `FINAL_VERDICT` can write the Claude proof; the standalone verdict writer was removed, the wrapper is covered by the ledger guard, and recognized direct tool/shell proof access plus contiguous/split interactive entry into the proof directory is denied for both agents.
+
+**Unchanged boundaries:** this grant never covers deleting `main`, force-pushing, live migrations or data writes, edge-function deploys, secrets/auth/permission changes, direct GitHub writes that bypass Husky, or bypassing the reviewed push path. Codex's Supabase access remains strictly read-only: `execute_sql` rejects multiple statements and every custom/application function call, including mutating RPCs invoked through `SELECT`. Repository-scoped `node_repl` and Node eval/print modes are denied because they can launch uninspected write processes. The initial harness branch may only be pushed to its feature branch. Local hooks are deterministic honest-agent guardrails, not a cryptographic sandbox; GitHub branch protection is the external hard boundary and must require a pull request plus passing checks before this grant can activate.
+
+**Why:** Mason wants the same momentum for either primary coding agent, while preserving a deterministic second-model gate on money, database, security, and other high-blast-radius changes.
+
+---
+
 ## 2026-07-12/13 — Backup strategy: weekly off-site + weekly in-DB snapshot
 
 **Decision:** Two independent weekly backups run: an encrypted `pg_dump` pushed to the private
@@ -3264,6 +3370,10 @@ doesn't survive a DB-level disaster).
 
 ## 2026-07-10 — Live migration apply is hands-free, gated by the apply-guard proof
 
+[Update 2026-09-26: despite the heading, this is not a standing no-approval rule. An interactive
+session still needs Mason's in-chat OK (see the body and `AGENTS.md`); only an armed autopilot run
+under the 2026-07-13 "pre-authorized runs may apply live migrations" entry is hands-free.]
+
 **Decision:** Applying a live migration no longer needs an in-chat approval popup, but it is
 still hard-gated: an agent may only call `apply_migration` after producing a fresh
 migration-apply-guard proof file (this session's reviewer verdict), and SQL/RLS/money/edge-fn
@@ -3275,7 +3385,8 @@ rubber-stamp.
 verdict; the proof file must be generated in the current session. In an ordinary interactive
 session, still get Mason's in-chat OK — the proof gate is a floor, not a substitute for his
 authorization. (The wording ambiguity about pre-authorized loops is SETTLED — see the
-2026-07-13 entry above: armed autopilot + proof gate suffices in a hands-free run.)
+2026-07-13 "pre-authorized runs may apply live migrations" entry above: armed autopilot + proof gate
+suffices in a hands-free run.)
 
 ---
 
@@ -3301,7 +3412,10 @@ were removed (commit `97f7bf94`, 2026-07-05) and the removal was reinforced (com
 rule or a popup an agent can talk past — see AGENTS.md's HARD-vs-SOFT principle.
 **What this forbids/implies:** don't re-add approval popups for these actions; if a fresh
 worktree shows prompts again, that's the known `settings.json` gotcha, not a policy reversal —
-fix the hook/settings file instead.
+fix the hook/settings file instead. [Update 2026-09-26: no longer true for edge-function deploys.
+`.claude/settings.json` puts them back behind `ask` (`supabase functions deploy` and the
+`deploy_edge_function` MCP tools), which the 2026-08-25 PR #432 entry explains is a denial under
+`dontAsk`, and `AGENTS.md` requires Mason's explicit approval before any Edge Function deploy.]
 
 ---
 
@@ -3346,7 +3460,8 @@ must respect the same precedence (verified: migration `20260623120000`).
 
 ## 2026-06-17 — Split invoices modeled order-side, allocated by field/acre
 
-**⚠ SUPERSEDED by the 2026-07-17 split-billing decision (top of log).** Kept for historical rationale
+**⚠ SUPERSEDED by the 2026-07-17 "split-billing model = per-line custom splits on the FIELD-APP
+path" entry (above).** Kept for historical rationale
 only. The operative surface is now the FIELD-APP path (per-line custom splits); the order-side
 `order_shares` engine is unproven and slated for retirement. Do NOT treat the guidance below as current.
 
@@ -3362,6 +3477,11 @@ which one is actually live for that flow first (verified: docs/CHANGELOG.md 2026
 ---
 
 ## 2026-06-16 — Auto-push to `main` authorized for green, reversible code
+
+**SUPERSEDED 2026-07-14 — direct pushes to `main` no longer exist for anyone (the `protect-main`
+ruleset; see the 2026-07-13 Codex push/merge entry). All code lands branch → PR → required checks →
+review → merge, per `AGENTS.md` and `.claude/commands/ship.md`; `AGENTS.md` says never push directly
+to `main`.**
 
 **Decision:** Once a code change (not a migration) passes the full gate — lint, typecheck,
 build, tests, Codex review — an agent may push it to `main` without a further in-chat OK.
@@ -3424,6 +3544,11 @@ and get skimmed past, while a hook can't be forgotten.
 **What this forbids/implies:** never hand-edit `.agents/` or `.codex/hooks.json` directly to
 add logic — edit the source under `.claude/` and regenerate. When tempted to add a new prose
 rule for something that really matters, prefer writing a hook/check instead.
+[Update 2026-09-26: the `.codex/hooks.json` half is wrong — `scripts/sync-agent-workflows.mjs`
+generates only `.agents/`. `.codex/hooks.json` is hand-maintained: it invokes the shared hooks in
+`.claude/hooks/` through the portable adapter, and any Claude/Codex hook difference must be
+declared in `scripts/agent-manifest-parity.mjs` (see `CLAUDE.md` and the 2026-08-24 CodeRabbit
+config entry). The rest of this entry stands.]
 
 ---
 

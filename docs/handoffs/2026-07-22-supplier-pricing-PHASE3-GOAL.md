@@ -1,5 +1,14 @@
 # CRX Supplier Pricing Phase 3 — Hands-Off Goal Contract
 
+> **STATUS 2026-09-26 — COMPLETE; this contract is closed and kept as history.** The Stage C
+> owner-review packet merged as PR #246 (2026-07-28). Stage C then landed as PR #282 (merged
+> 2026-07-29): migration `20260729213733_supplier_pricing_phase3c_return_policy_classification` is in
+> the live ledger (21 products `no_return`, 2 `returnable`, the rest `unknown` by owner decision;
+> family grouping stays parked — `docs/reference/database-schema.md`, "Supplier Pricing Phase 3
+> Stage C"). The "parked" wording below is the 2026-07-22 → 07-28 state. The implementation plan it
+> cites (`docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`) was removed on
+> 2026-09-26 and remains in git history. Nothing here authorizes new work.
+
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
 **Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, a protected green/CodeRabbit-resolved PR, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.

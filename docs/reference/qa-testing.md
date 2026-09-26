@@ -39,7 +39,7 @@ Test every feature as each role:
 7. Assign driver
 8. Confirm/start delivery (scheduled -> in_progress, inventory check warning)
 9. Complete delivery (updates inventory, order fulfillment, creates remainders for partial)
-10. Record payment (updates order balance_due)
+10. Record payment (updates the invoice's `paid_amount_cents`, so its generated `balance_cents` falls — orders carry no balance)
 
 ### Quick Delivery (ad-hoc)
 1. Open Quick Delivery modal (from Deliveries page or driver dashboard)
@@ -74,10 +74,10 @@ Test every feature as each role:
 - Bulk imports with invalid data
 - PDF generation with very long product names
 - Delivery for cancelled order
-- Quick delivery when inventory is insufficient — `create_quick_delivery()` pre-checks with `FOR UPDATE` locks
+- Quick delivery when inventory is insufficient — since `20260706130000` (warn-not-block) `create_quick_delivery()` proceeds, allows negative stock, flags the ledger row `requires_review = true`, and notifies admins; test the warning and flag, not a refusal
 - Invoice posting in closed accounting period — `post_invoice()` calls `check_period_open()`, raises error
 - Quote acceptance releases inventory holds (deactivates without restoring qty)
-- Quote decline/expiry releases inventory holds AND restores `quantity_available`
+- Quote decline/expiry releases inventory holds (deactivates them; `quantity_available` is unchanged, because holds never deducted it)
 - Silent RLS failures — `checkMutationResult()` catches 0-row mutations that Supabase doesn't flag as errors
 - Offline sync conflict detection — stale `snapshotAt` vs server `updated_at` returns conflict warnings
 - Reconciliation checks — cross-entity data integrity (order totals, inventory ledger, invoice payments, balance formula, commission splits)
@@ -90,9 +90,10 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 |-------|-----------------|-----------|
 | Order Totals | `order.total_amount == SUM(qty × price)` across line items | ±1 cent |
 | Inventory Ledger | `quantity_available == SUM(received) - SUM(delivered) + SUM(returned) ± adjustments` | ±0.01 |
-| Invoice Payments | `paid_amount_cents == SUM(payment_allocations)` | ±1 cent |
-| Invoice Balance | `balance_cents == total - paid - prepay` (GENERATED ALWAYS sanity) | ±1 cent |
+| Invoice Payments | `paid_amount_cents == SUM(invoice_line_allocations.amount_cents)` | ±1 cent |
+| Invoice Balance | `balance_cents == total - paid - prepay - write_off ± credit_applied` (+ for a credit memo, − otherwise; GENERATED ALWAYS sanity) | ±1 cent |
 | Commission Splits | Split percentages sum to exactly 100% per order | ±0.01% |
+| Quote Hold Parity, Delivery-Invoice Quantity Parity, Prebooked Inventory, Return Credit Linkage, Customer AR Consistency | Newer checks — read `src/lib/reconciliation.ts` for each rule | per check |
 
 **Test pattern:** Pure functions take typed arrays and return `Discrepancy[]` — testable without DB mocks. DB wrapper `runReconciliationChecks()` is thin: fetch + delegate.
 
@@ -105,8 +106,8 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 ## Inventory & Delivery Improvements Tests
 
 - `src/lib/loadSheetPdf.test.ts` — 6 tests: save filename, product summary table, quantity aggregation across stops, per-stop tables, custom filename, empty stops error
-- `src/components/inventory/TransactionLedgerModal.test.ts` — 3 tests: running balance computation (positive, negative, mixed quantities)
-- `src/components/inventory/BatchAdjustModal.test.ts` — 3 tests: RPC call creation per item, zero-delta filtering, reason inclusion
+- `src/components/inventory/TransactionLedgerModal.test.ts` — 4 tests: unknown future transaction type, authoritative inventory rows for the selected product, zeroes when no inventory row exists, and rendering of authoritative stock totals plus review-required transactions
+- `src/components/inventory/BatchAdjustModal.test.ts` — 4 tests: RPC call creation per item, zero-delta filtering, reason inclusion, per-row idempotency key
 - jsPDF mock pattern: must use `function JsPDFMock() { return mockDoc; }` (not arrow functions — arrow functions can't be `new`'d)
 
 ---
@@ -175,23 +176,24 @@ Role tests (`role-sales-rep.spec.ts`, `role-applicator.spec.ts`, `role-security.
 
 | Env Variable | Required Role | Notes |
 |---|---|---|
-| `SALES_REP_EMAIL` / `SALES_REP_PASSWORD` | `sales_rep` | Must NOT be admin |
-| `APPLICATOR_EMAIL` / `APPLICATOR_PASSWORD` | `applicator` | Must NOT be admin |
-| `DRIVER_EMAIL` / `DRIVER_PASSWORD` | `driver` | Must NOT be admin |
+| `E2E_SALESREP_EMAIL` / `E2E_SALESREP_PASSWORD` | `sales_rep` | Must NOT be admin |
+| `E2E_APPLICATOR_EMAIL` / `E2E_APPLICATOR_PASSWORD` | `applicator` | Must NOT be admin |
+| `E2E_DRIVER_EMAIL` / `E2E_DRIVER_PASSWORD` | `driver` | Must NOT be admin |
 
-Without these, tests fall back to the admin account and skip role-specific assertions (blocked pages, sidebar visibility). To create accounts:
+Without these, the specs fall back to fixed test-account emails written in the spec files, and they skip the role-specific assertions (blocked pages, sidebar visibility) when the account email contains "admin" (applicator and driver specs also skip when it equals `E2E_TEST_EMAIL`). To create accounts:
 
 1. Use the `create-user` Edge Function or Supabase dashboard
-2. Assign the correct role in `user_profiles.role`
+2. Assign the correct role in `profiles.role`
 3. Add credentials to `.env` and CI secrets
 
 ### Sidebar Navigation Test Expectations
 
 The sidebar uses grouped sections (not a flat list). Role tests checking sidebar text must match the current structure:
-- Admin sees all groups: Operations, Financial, Compliance, Settings, etc.
-- Sales rep sees: Dashboard, Customers, Quotes, Orders, Deliveries, Invoices, Payments
-- Driver sees: Dashboard, Deliveries
-- Applicator sees: Dashboard, Jobs
+- Admin and sales rep share the office tree (`officeNavigation`): Today, To-Ship, then groups such as Sell & Deliver, Spray Fields, Customers & Fields, Inventory & Buying, Money, Compliance & Records, Insights, Setup & Admin, and Team Board. Items marked `roles: ['admin']` are hidden from sales reps.
+- Driver sees (`driverNavigation`): My Route, Deliveries, Team Board, Help
+- Applicator sees (`applicatorNavigation`): My Day, My Jobs, Record Book, Team Board, Help
+
+`src/components/layout/Sidebar.tsx` is the source of truth; read it rather than this summary.
 
 When the sidebar structure changes, grep `tests/e2e/role-*.spec.ts` for sidebar text assertions.
 
@@ -210,14 +212,10 @@ page.once('dialog', dialog => dialog.accept());
 await page.click('button:has-text("Delete")');
 ```
 
-**Note:** As of March 2026, most `window.confirm()` calls have been replaced with the shared `ConfirmModal` component. For these, use standard Playwright button clicks instead of dialog handlers:
+**Note:** The app no longer uses browser-native `confirm()` / `alert()` / `prompt()` dialogs (they are forbidden by `docs/workflows/SAFE_DEVELOPMENT_RULES.md`); confirmations are in-app `ConfirmModal` / `ReasonModal` components. Use standard Playwright button clicks:
 
 ```typescript
-// For ConfirmModal-based confirmations (most actions now):
 await page.click('button:has-text("Confirm")');
-
-// For any remaining browser-native dialogs:
-page.once('dialog', dialog => dialog.accept());
 ```
 
 Common confirmation triggers in the app:
@@ -360,7 +358,7 @@ tests/e2e/fixtures/
 Workflow tests that create deliveries must account for available inventory:
 - Check inventory baselines before scheduling quantities
 - Use smaller delivery quantities (e.g., 1-2 units) to avoid exceeding available stock
-- The `complete_delivery` RPC enforces positive inventory — it will fail if physical stock goes negative
+- The `complete_delivery` RPC does not refuse on low stock (warn-not-block since `20260706130000`): it proceeds, allows negative stock, flags `requires_review`, and notifies admins — so an oversized test delivery leaves real negative stock behind
 
 ---
 
@@ -390,8 +388,9 @@ These RPCs are defined in migrations but have NO frontend callers (test stubs on
 - `restore_cancelled_delivery`
 - `restore_cancelled_order`
 - `reverse_blend_ticket_approval`
-- `revert_quote_status`
 - `unapply_credit_memo`
+
+(`revert_quote_status` is no longer dead: `src/pages/QuoteBuilder.tsx` calls it for the admin-only quote reopen.)
 
 ---
 

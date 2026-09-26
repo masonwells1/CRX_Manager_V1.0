@@ -1,7 +1,11 @@
 # Holds Historical Inflation Cleanup — Design Notes
 
+> **STATUS — RESOLVED 2026-05-08; no cleanup migration was needed.** Production diagnostics found zero
+> inflated holds (see "RESOLVED — 2026-05-08" at the end; closed in commit `86d5789ad`). The design notes
+> below are kept as history because an applied migration comment cites this file.
+
 **Created:** 2026-05-07 (logged from final-wave-review F7)
-**Status:** TODO — design pass required before any cleanup migration is written
+**Status (original, superseded):** TODO — design pass required before any cleanup migration is written
 **Severity:** HIGH (production data integrity)
 **Companion code fix:** [supabase/migrations/20260507210000_fix_holds_no_phantom_restoration.sql](../../supabase/migrations/20260507210000_fix_holds_no_phantom_restoration.sql) (already stops the bleeding; this doc covers draining the wound)
 

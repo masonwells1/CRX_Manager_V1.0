@@ -1,10 +1,12 @@
-# CRX Manager — Combined TODO (as of 2026-07-16)
+# CRX Manager — Combined TODO (statuses last corrected 2026-09-26)
 
 The single combined list of everything still open, in priority order.
 Built 2026-07-16 from a full docs review with subagent verification of every
-"done" and "open" claim against the code on disk and the live database.
+"done" and "open" claim against the code on disk and the live database. Items were added
+through 2026-09-03, and stale statuses were corrected on 2026-09-26. A live count inside an
+item is as of the date that item states.
 
-- Shipped history → `docs/CHANGELOG.md`
+- Shipped history → `docs/changelog.d/` (one file per change; `docs/CHANGELOG.md` holds entries up to 2026-08-27)
 - Full detail on parked findings/migrations → `docs/manual/KNOWN_ISSUES.md` (canonical for agents)
 - Strategic direction + engineering ticket board → `docs/roadmap/2026-07-15-roadmap-and-execution-plan.md`
 
@@ -44,13 +46,13 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > data-entry bottleneck — worth doing in one sitting).
 
 1. ~~**Re-base the 18 negative-inventory products**~~ — **⏸ DEFERRED by Mason 2026-07-16**
-   ("skip and don't worry about it for now"). The 18 rows (verified live:
-   `inventory.quantity_available < 0`) stay as-is until he brings physical counts;
+   ("skip and don't worry about it for now"). The 18 rows (verified live 2026-07-16:
+   `inventory.quantity_available < 0`; 19 when re-verified 2026-08-08 per KNOWN_ISSUES §1) stay as-is until he brings physical counts;
    worksheet: `docs/operations/2026-06-10-negative-inventory-rebase-worksheet.md`.
    Deliveries are flowing despite it, so nothing is hard-blocked today. Don't re-raise
    as the top action — revisit only when Mason asks or a delivery actually fails on it.
 2. **Run a real billing cycle in the app** — order → delivery → invoice → post →
-   payment. Live DB still shows **0 payments** (10 invoices: 8 draft / 2 posted).
+   payment. Live DB showed **0 payments** on 2026-07-16 (10 invoices: 8 draft / 2 posted).
    Deliveries ARE flowing now (106 live). Afterward ask for the money-audit re-run
    (`/foundation-ultra-review`) — all prior money audits were vacuously clean on empty data.
 3. **Create a Stripe account** (~15 min) and hand over API keys — unblocks A1
@@ -72,7 +74,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
    5 empty deliveries, 1 E2E invoice).
 6. **Send ~10 real vendor bills + Anthropic API key** — unblocks the D1 extraction pilot.
 7. **Supabase Pro / PITR decision + run the first `/backup-db`** — FREE plan today;
-   only ONE in-DB snapshot run exists (verified live) and no off-repo dump has been
+   only ONE in-DB snapshot run existed (verified live 2026-07-16) and no off-repo dump has been
    taken via `/backup-db` yet. Also gates leaked-password protection (L4).
 8. **Backup restore drill** — one-time restore to a throwaway project to prove recovery works.
 9. **Create staging Supabase project + GitHub secrets** — unblocks the parked E2E CI lane.
@@ -94,7 +96,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > deliberately ("we are not going to patch it now"), then reopened for implementation on
 > 2026-09-03. Migration `20260903150100_ledger_backed_commission_history` was applied live the same
 > day as ledger version `20260903202611`; exact reports begin on `2026-09-04` Chicago time. The
-> reviewed source is awaiting merge through the protected PR path.
+> source merged to `main` in PR #592 on 2026-09-08.
 >
 > **Must land BEFORE the first commission payout of the season** — Mason put that at *"probably a
 > few months out"* on 2026-09-03. Confirm the real date with him; don't assume.
@@ -137,7 +139,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > Claude reviews correctly rejected its backdated opening state. The corrected migration uses a real
 > immutable cutover and passed renewed PostgreSQL 17, exact-SHA, RLS, drift, and Claude review gates
 > before its guarded live apply. Postflight found 35 opening states (33 baseline, 2 legacy excluded),
-> zero settlement events, and no live `[E2E]` fixture writes. Source merge remains separate.
+> zero settlement events, and no live `[E2E]` fixture writes. Source merged in PR #592 (2026-09-08).
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
 > `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md` (removed 2026-09-26 — the feature is live;
@@ -156,11 +158,11 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > maintain `commissions.paid_date`. Those operational rows remain inputs, but stable reporting also
 > needs the candidate's immutable cutover and event ledgers; current mutable rows alone are not history.
 
-- **Gauntlet close-out (T3)** — most July-14/15 HIGHs verified applied live this pass
+- **Gauntlet close-out (T3)** — most July-14/15 HIGHs verified applied live in the 2026-07-16 pass
   (incl. the three commission/prepay-admin migrations, re-stamped as live versions
   `20260715134551/134618/134629`). Remaining: re-run gauntlet §5–§8 from fresh main to
-  confirm closure with live evidence. ~~T1 registry regen~~ **DONE** (verified fresh at
-  high-water `20260715203911`). ~~T2 ledger/docs update~~ **DONE in this cleanup.**
+  confirm closure with live evidence. ~~T1 registry regen~~ **DONE** 2026-07-16 (the registry has been
+  regenerated since; see the status snapshot below). ~~T2 ledger/docs update~~ **DONE 2026-07-16.**
 - **Offline Stage 1B real-phone proof (T5/N3)** — browser rollout is live; run the
   on-device proof (lost-response recovery, two-tab replay, office resolution) with `[E2E]` fixtures.
 - **Dead-structure retirement batch (T4)** — now only the `setup-blend-tickets-storage`
@@ -173,11 +175,13 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   **Chemical-sale follow-up SHIPPED 2026-07-21** (PR #197 + migration `20260721223817`, applied
   live): save_invoice now persists payment_terms; same picker on InvoiceDetail; single + batch
   PDFs print the invoice override. The approved due-dates spec is now fully complete.
-- **Per-line-item custom split billing (field-app)** — SPEC COMPLETE, review-hardened (3 advisor
-  passes), **not started; Mason builds in Codex next week.** Default splits from field ownership,
-  override %/price per invoice line, one invoice per customer, unpost reversible, $0 recorded-but-unsent.
-  Spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`. Build §6.1 (baseline real-billing
-  cycle) FIRST, then schema→calculator→RPC behind a feature flag. This is the settled resolution of the
+- ~~**Per-line-item custom split billing (field-app)**~~ — **SHIPPED AND LIVE 2026-07-21** (PR #164;
+  migrations `20260720213000` / `20260720214000` / `20260720233000` are in the live ledger; the
+  `per_line_split_billing_enabled` flag has been ON since 2026-07-21 — KNOWN_ISSUES §0). Default splits
+  from field ownership, override %/price per invoice line, one invoice per customer, unpost reversible,
+  $0 recorded-but-unsent. **Not yet used on real invoices** (zero split rows at the 2026-07-27 check);
+  the first real billing cycle (owner action 2) will be its first real use. Design record:
+  `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`. This is the settled resolution of the
   split-billing architecture decision (§4).
 - **X1 Stripe ACH pay-now links** — after owner action 3.
 - **X2 EPA backfill Waves 4–5 execution** — after owner action 4.
@@ -202,7 +206,13 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **Grower portal** — deferred until P1/P3 prework + A1 click-through data. Vision docs
   live in `docs/plans/` (grower-portal brainstorm + 2 design/grounding docs).
 - **EPA Stage 2 (OCR REI/PHI auto-fill)** — deliberately deferred safety trap.
-- **H2 migration-baseline squash** (791 live migrations) — quiet window only.
+- **True inventory costing (on-hand average purchase cost)** — scoped, never built (`inventory`,
+  `inventory_transactions` and `receiving_records` still carry no cost columns). Its parking gate —
+  supplier-pricing Phases 1a/1b shipped — was met in July; it needs Mason's go to schedule.
+  Plan: `docs/plans/2026-07-16-inventory-costing-plan.md`.
+- **H2 migration-baseline squash** (1,011 live ledger rows on 2026-09-26) — quiet window only. A
+  clean-rebuild baseline for new projects now exists (`supabase/baselines/`, high-water
+  `20260727174805`, checked by `npm run test:schema-baseline`); the old migration files stay as the audit trail.
 - **Offline deferred list** — signature/photo persistence, notification replay, cross-tab
   Web Locks, more operations, auto device-discovery of office resolutions (KNOWN_ISSUES §5).
 - **`apply_prepay_to_invoice` hand-decrement cleanup** — drop only after more prod watching.
@@ -303,13 +313,15 @@ earmark migrations as-is · broad offline money mutations.
 
 ---
 
-## 📋 Status snapshot (verified live 2026-07-16)
+## 📋 Status snapshot (as of 2026-07-16 unless a row says otherwise — re-query before relying on a count)
+
+Current live state belongs in `docs/manual/CURRENT_STATE.md`; this table is a dated snapshot.
 
 | Metric | Value |
 |---|---|
-| Live migrations | 791 (disk has fewer — pre-existing drift, not a bug) |
-| Edge functions | 7 ACTIVE (create-user v23, process-blend-ticket v25, process-document v18, send-email v17, reset-user-password v15, epa-lookup v4, setup-blend-tickets-storage v18 ← retirement pending) |
-| Schema registry | FRESH — high-water `20260715203911` (= latest live migration) |
+| Live migrations | 1,011 ledger rows, latest `20260926163005` (read-only ledger query 2026-09-26; 791 on 2026-07-16) |
+| Edge functions | 8 functions in `supabase/functions/` (2026-09-26, not counting `_shared`): the 7 below plus `customer-document-files` (deployed v1 2026-09-22 per `DEPLOYMENT.md`). Versions as of 2026-07-16: create-user v23, process-blend-ticket v25, process-document v18, send-email v17, reset-user-password v15, epa-lookup v4, setup-blend-tickets-storage v18 ← retirement pending |
+| Schema registry | Generated 2026-09-20, high-water `20260920052149` — 7 migrations behind live (applied 2026-09-21 → 2026-09-26) |
 | customers / products | 153 / 604 |
 | fields / quotes / orders | 5 / 3 / 63 |
 | invoices | 10 (8 draft, 2 posted) |
@@ -320,7 +332,7 @@ earmark migrations as-is · broad offline money mutations.
 | In-DB backup runs | 1 (weekly pg_cron live) — off-site `/backup-db` dump: none yet |
 | Production | croprxsolutions.app — `main` merges deploy via PR only (branch protection) |
 
-## ✅ Verified done this pass (don't re-do)
+## ✅ Verified done in the 2026-07-16 pass (don't re-do)
 
 - Schema registry regen (T1) — fresh at `20260715203911`.
 - 2026-07-14 workflow-review HIGH (deactivated-admin commission access): all 3 fix

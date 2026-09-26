@@ -1,5 +1,9 @@
 # Supplier Pricing Phase 3C Review-Packet Overnight Ledger — July 26, 2026
 
+> **STATUS 2026-09-26 — COMPLETE; kept as history.** PR #246 merged 2026-07-28, and Stage C landed
+> via PR #282 (merged 2026-07-29; migration `20260729213733` in the live ledger). Every "PARKED" or
+> "PR #246 OPEN" line below is the July state. See the closing status line at the end.
+
 ## Mission
 
 - Mission doc:
@@ -659,3 +663,7 @@ live mutation, flag enablement, deploy, or merge.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.
 - `VERDICT:` PARKED — PR #246 OPEN; CURRENT HEAD MUST MATCH A RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF PENDING
+
+## Status update 2026-09-26 (docs cleanup)
+
+- `STATUS:` COMPLETE — ledger closed. PR #246 merged 2026-07-28; Stage C landed via PR #282 (merged 2026-07-29) and migration `20260729213733_supplier_pricing_phase3c_return_policy_classification` is in the live ledger. The PARKED verdict above is the 2026-07-27 state.

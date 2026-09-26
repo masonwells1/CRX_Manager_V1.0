@@ -1,27 +1,27 @@
-# Database Schema Reference (156 tables + 2 views)
+# Database Schema Reference (160 tables + 2 views)
 
-> Count as of 2026-08-09, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 156 tables; **`.claude/schema-registry.json`** is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
+> Count as of 2026-09-26: 160 tables in `.claude/schema-registry.json` (generated from live 2026-09-20) and in `src/types/supabase.ts`, plus 2 views (`profile_public_view`, `view_unmigrated_products`); no migration on disk after that refresh creates or drops a table. The 4 tables added since the previous count (156, 2026-08-09) are `below_cost_approvals`, `commission_history_cutover`, `commission_earned_state_ledger`, and `commission_settlement_events`. The per-table sections below are a curated tour, not an exhaustive enumeration of all 160 tables; **`.claude/schema-registry.json`** is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
-- `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance, `row_version bigint`). Existing-customer whole-record saves fail closed when the loaded version is stale. Applied live 2026-07-30 as ledger version `20260730235031` (history row 847, submitted as `20260730201230_quote_customer_row_version_guard`); the "LOCAL ONLY pending apply" marker that stood here was stale from that date.
-- `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
-- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
+- `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-3, credit_limit_cents, finance_charge_rate, prepay_balance_cents, `row_version bigint`). Existing-customer whole-record saves fail closed when the loaded version is stale. Applied live 2026-07-30 as ledger version `20260730235031` (history row 847, submitted as `20260730201230_quote_customer_row_version_guard`); the "LOCAL ONLY pending apply" marker that stood here was stale from that date.
+- `customer_addresses` - Multiple addresses per customer (label, address_line, city, state, zip, delivery_notes, is_default, latitude, longitude)
+- `products` - Product master (product_name, sku, category, vendor, tier1-3 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
 - `cost_history` - Cost change audit log (product_id, old/new costs, margins and prices, source/reason, change-set identity, old/new pricing versions, change_note). Supplier Pricing Phase 1a is live through its strict enforcement cutover: app roles cannot insert history directly, and the governed pricing trigger is the single writer.
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_obstacles` - Point hazards pinned to fields (kind, optional label, GeoJSON Point, created_by). Readable by admin/sales/applicators (matches fields); maintained by admin/sales reps.
 - `job_loader_worksheets` - Saved loader/tank scenarios per job (capacity, balancing mode, per-load acres, loads-done, one selected per job). Reads follow job visibility; office-only writes.
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
 - `field_polygons` - Multi-polygon support per field (field_id, polygon_geojson jsonb, label, acres, sort_order). Sibling to `fields.parent_field_id` grouping; migration 20260334900000 (Field Management V3)
-- `vehicles` - Ground/air application equipment (type, capacity, registration, FAA N-number or DOT#, status)
-- `application_services` - Named application services with per-acre pricing (name, vehicle_id, default_rate_per_acre_cents, cost_per_acre_cents, is_active). Services like "Hagie Y-Drop Nitrogen" or "Rogator Application". **`cost_per_acre_cents` is admin-only at the column-grant level** (migration `20260729015706`): `authenticated` holds SELECT/INSERT/UPDATE on the other nine columns only, so an ordinary table read never returns cost and `select('*')` on this table fails outright. Admins read it through `admin_get_application_service_costs` and save the whole row — name, rate, cost, vehicle, sort order, active flag — through `admin_save_application_service` (migration `20260729035923`), which writes everything in one transaction so a create can never commit the row without its cost. `admin_set_application_service_cost` still exists but is retained only for one release; see `docs/manual/KNOWN_ISSUES.md` §0d. RLS is untouched — every active profile still reads the row, because drivers need the service name and customer-facing rate. Adding a column to this table means adding it to that grant, or `authenticated` will not see it.
+- `vehicles` - Ground/air application equipment (vehicle_name, vehicle_type: ground/air, category, capacity_gallons, capacity_unit, registration, status: active/inactive/maintenance)
+- `application_services` - Named application services with per-acre pricing (name, vehicle_id, default_rate_per_acre_cents, cost_per_acre_cents, is_active). Services like "Hagie Y-Drop Nitrogen" or "Rogator Application". **`cost_per_acre_cents` is admin-only at the column-grant level** (migration `20260729015706`): `authenticated` holds SELECT/INSERT/UPDATE on the other nine columns only, so an ordinary table read never returns cost and `select('*')` on this table fails outright. Admins read it through `admin_get_application_service_costs` and save the whole row — name, rate, cost, vehicle, sort order, active flag — through `admin_save_application_service` (migration `20260729035923`), which writes everything in one transaction so a create can never commit the row without its cost. `admin_set_application_service_cost` still exists: it was meant to be retained for one release only, that window has passed, and its retirement is still open; see `docs/manual/KNOWN_ISSUES.md` §0e. RLS is untouched — every active profile still reads the row, because drivers need the service name and customer-facing rate. Adding a column to this table means adding it to that grant, or `authenticated` will not see it.
 - `customer_application_rates` - Per-customer rate overrides for application services (~5% of customers). UNIQUE(customer_id, application_service_id, season)
 
 ## Quotes & Orders
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at, `row_version bigint`). The trigger increments the stored version on every quote update; clients use the value returned by `save_quote`, never calculate an increment. Applied live 2026-07-30 alongside the `customers` half above — same migration, same ledger version `20260730235031`.
 - `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
-- `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb). Client-writable no longer: `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) applied live as ledger version `20260816174353` and dropped the `qversions_insert` policy, leaving `qversions_select` as the only policy and `create_quote_version` as the only **browser-reachable** writer. `service_role` and `postgres` retain direct INSERT/UPDATE/DELETE grants and bypass RLS, so an edge function or the table owner can still write directly — verified live 2026-08-19 against `information_schema.role_table_grants`. Re-read live 2026-08-18: `has_table_privilege('authenticated', …, 'INSERT'/'UPDATE'/'DELETE')` all false. The "LOCAL ONLY pending apply" marker that stood on the RLS matrix row below was stale from that apply. **Pending (`20260826220000`, PR #401, NOT APPLIED):** adds nullable `restore_trusted_at timestamptz`, a server-issued marker stamped by `create_quote_version` on its own first successful insert and by no other **browser-reachable** writer. The migration adds no trigger or column-level restriction, so the same `service_role`/`postgres` RLS bypass noted above can set `restore_trusted_at` directly — the marker constrains the browser path, not the privileged one. `restore_quote_version` then refuses an unmarked version with `QUOTE_VERSION_LEGACY_UNTRUSTED` before any quote or money row is rebuilt. Existing rows are deliberately NOT backfilled, so pre-boundary snapshots stay readable but non-restorable.
+- `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb). Client-writable no longer: `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) applied live as ledger version `20260816174353` and dropped the `qversions_insert` policy, leaving `qversions_select` as the only policy and `create_quote_version` as the only **browser-reachable** writer. `service_role` and `postgres` retain direct INSERT/UPDATE/DELETE grants and bypass RLS, so an edge function or the table owner can still write directly — verified live 2026-08-19 against `information_schema.role_table_grants`. Re-read live 2026-08-18: `has_table_privilege('authenticated', …, 'INSERT'/'UPDATE'/'DELETE')` all false. The "LOCAL ONLY pending apply" marker that stood on the RLS matrix row below was stale from that apply. **Applied live 2026-08-27 (`20260826220000`, PR #401, ledger version `20260827113443`):** adds nullable `restore_trusted_at timestamptz`, a server-issued marker stamped by `create_quote_version` on its own first successful insert and by no other **browser-reachable** writer. The migration adds no trigger or column-level restriction, so the same `service_role`/`postgres` RLS bypass noted above can set `restore_trusted_at` directly — the marker constrains the browser path, not the privileged one. `restore_quote_version` then refuses an unmarked version with `QUOTE_VERSION_LEGACY_UNTRUSTED` before any quote or money row is rebuilt. Existing rows are deliberately NOT backfilled, so pre-boundary snapshots stay readable but non-restorable.
 - `quote_product_draws` - Per-(quote, product) booking draw-down ledger (quantity_drawn, UNIQUE(quote_id, product_id)). Survives quote edits (save_quote recreates quote_items); written only by `draw_down_quote`/`convert_quote_to_order` SECDEF RPCs. Added `20260610145253`
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
 - `quote_templates` - Reusable quote structures (template_name, description, created_by)
@@ -33,19 +33,19 @@
 ## Inventory
 - `inventory` - Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level, manufactured_at_delivery — P4-7 phantom-row flag, default false)
 - `inventory_transactions` - Audit trail (transaction_type CHECK: received/booked/delivered/returned/adjusted/transferred/job_applied/cancelled_delivery_reversal/void_delivery_reversal/prebooked/released/prebook_reconciliation)
-- `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program, expires_at, is_active, source_id — links to quote for auto-release on accept/decline/expire)
+- `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program/job, expires_at, is_active, source_id — links to quote for auto-release on accept/decline/expire)
 - `purchase_orders` - Supplier POs (po_number, vendor, status, exact dollar `total_cost`, generated bigint `total_cost_cents`)
 - `purchase_order_items` - PO line items (quantity_ordered, quantity_received, exact dollar `unit_cost`, generated bigint `unit_cost_cents`)
 - `purchase_order_import_intents` - RPC-owned global vendor-document claim for bulk PO imports (intent_key, purchase_order_id, first actor provenance). RLS is enabled with no authenticated direct table access; the claim cascades only when the admin-only PO delete workflow removes its PO.
 
 ## Deliveries
 - `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)
-- `delivery_items` - Items on delivery (order_item_id, product_id, quantity, tote_number, is_non_returnable)
+- `delivery_items` - Items on delivery (order_item_id, product_id, quantity, quantity_delivered, unit_size, notes, tote_number). There is no `is_non_returnable` column here; that flag is on `receiving_records`.
 - `delivery_photos` - Driver-uploaded delivery photos (delivery_id, storage_path, image_url, uploaded_by)
-- `delivery_remainders` - Partial delivery remainder items (delivery_id, order_item_id, product_id, remainder_quantity, status: pending/scheduled/delivered/cancelled)
+- `delivery_remainders` - Partial delivery remainder items (original_delivery_id, order_id, order_item_id, customer_id, product_id, quantity_remaining, followup_delivery_id, status: pending/scheduled/fulfilled/cancelled)
 
 ## Receiving
-- `receiving_records` - Per-event receiving records (po_id, po_item_id, product_id, quantity_received, condition, lot_number, notes, storage_location, received_by)
+- `receiving_records` - Per-event receiving records (purchase_order_id, po_item_id, product_id, quantity_received, condition, lot_number, notes, storage_location, received_by, is_non_returnable)
 - `receiving_photos` - Photos attached to receiving events (receiving_record_id, storage_path, image_url)
 
 ## Job Scheduling
@@ -79,20 +79,20 @@
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
 ## Billing / Invoices
-- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/posted/void, balance_cents bigint [GENERATED, CHECK >= 0 added 2026-05-13 audit #19], due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
-- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents, quoted_price_cents, price_source)
-- `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
+- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/unposted/posted/paid/overdue/voided/cancelled, balance_cents bigint [GENERATED, CHECK >= 0 added 2026-05-13 audit #19], due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
+- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, quoted_price_cents, price_source)
+- `allocation_sets` - Payment-to-invoice allocation groups (entity_type: order/invoice/payment, entity_id, version, is_active, created_by, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
 - `invoice_line_allocations` - Payment portions applied to invoice items
-- `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id, reference_number, bucket_label, source_type, source_reference)
-- `prepay_applications` - Prepay credit applications to invoices (credit_id, invoice_id, applied_cents)
-- `financial_audit_log` - Immutable audit trail (entity_type, entity_id, action, old_data/new_data jsonb, performed_by)
+- `prepay_credits` - Prepayment credits (customer_id, season, original_amount_cents, balance_cents, payment_method, reference_number, bucket_label, source_type, source_reference, quote_id, allocation_set_id)
+- `prepay_applications` - Prepay credit applications to invoices (prepay_credit_id, invoice_id, applied_amount_cents, applied_by, applied_at)
+- `financial_audit_log` - Immutable audit trail (operation_type, entity_type, entity_id, actor_user_id, actor_role, old_values/new_values jsonb, total_impact_cents, description)
 
 ## Accounts Payable
 - `vendors` - Vendor master (name UNIQUE, contact_name, phone, email, address, default_payment_terms, default_payment_terms_days, notes, deleted_at)
 - `vendor_bills` - AP bills (vendor_id, purchase_order_id nullable, bill_number, bill_date, due_date, payment_terms, subtotal_cents, adjustment_cents, total_cents, paid_cents, balance_cents, status: unpaid/partially_paid/paid/voided, notes, created_by, deleted_at)
-- `vendor_payments` - Payments against vendor bills (vendor_bill_id, payment_date, amount_cents, payment_method: check/ach/wire/credit_card, reference_number, notes, created_by)
-- `rup_sales_records` - RUP compliance records auto-generated from invoices (invoice_id, invoice_item_id, order_id, customer_id, product_id, sale_date, product_name, epa_registration, quantity, unit, unit_price_cents, total_cents, buyer_name, buyer_certification_number/type/expiry, signal_word, compliance_status: compliant/warning/non_compliant, compliance_notes, season)
+- `vendor_payments` - Payments against vendor bills (vendor_bill_id, payment_date, amount_cents, payment_method: check/ach/cash/credit_card/wire/other, reference_number, notes, created_by, voided_at, voided_by, void_reason)
+- `rup_sales_records` - RUP compliance records auto-generated from invoices (invoice_id, order_id, customer_id, product_id, sale_date, product_name, epa_registration, quantity, unit, unit_price_cents, total_cents, buyer_name, buyer_certification_number/type/expiry, signal_word, compliance_status: compliant/warning/non_compliant, compliance_notes, season, voided_at, voided_by, void_reason)
 
 ## Financial
 - `accounting_periods` - Month-end close tracking (status: open/closed)
@@ -105,18 +105,18 @@
 - `finance_charges` - Interest charges on overdue invoices
 
 ## Blend Recipes
-- `blend_recipes` - Saved blend recipe templates (recipe_name, recipe_number, category, total_cost, total_weight, status)
+- `blend_recipes` - Saved blend recipe templates (name, description, recipe_type: crop_specific/generic, crop_type, timing, is_active, created_by, deleted_at)
 - `blend_recipe_items` - Recipe ingredients (recipe_id, product_id, quantity, unit, sort_order)
-- `blend_ticket_to_order_items` - Links blend tickets to order items (blend_ticket_id, order_id, order_item_id, linked_by)
+- `blend_ticket_to_order_items` - Links blend tickets to order items (blend_ticket_id, blend_ticket_product_id, order_id, order_item_id, quantity_applied, notes, created_by)
 
 ## Warehouses & Cycle Counts
-- `warehouses` - Storage locations (warehouse_name, code, address, is_active, is_default)
-- `cycle_counts` - Count sessions (count_number, warehouse_id, status: in_progress/completed/cancelled, counted_by)
-- `cycle_count_items` - Individual count lines (cycle_count_id, product_id, expected_qty, counted_qty, variance, variance_pct, resolved)
+- `warehouses` - Storage locations (name, code, address, city, state, is_active, is_default)
+- `cycle_counts` - Count sessions (count_number, warehouse [text], status: in_progress/completed/cancelled, initiated_by, completed_by, started_at, completed_at, item_revision)
+- `cycle_count_items` - Individual count lines (cycle_count_id, product_id, inventory_id, expected_qty, counted_qty, variance, variance_pct, is_counted, counted_by, counted_at)
 
 ## Returns
 - `returns` - Return/RMA headers (return_number, order_id, customer_id, status: requested/approved/received/credited/rejected/cancelled, reason, reason_notes, total_credit_cents, credit_invoice_id, cancelled_at, cancelled_by, cancellation_reason, credited_by)
-- `return_items` - Return line items (return_id, order_item_id, product_id, quantity, unit_price, restocked, sort_order)
+- `return_items` - Return line items (return_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, condition, restock, restocked, restocked_quantity, sort_order)
 
 ## Compliance
 - `applicator_licenses` - Applicator license tracking; held by a customer OR a staff profile (customer_id uuid NULL, profile_id uuid NULL REFERENCES profiles — CHECK `applicator_licenses_holder_check` requires one holder; license_number, license_type: private/commercial/public, holder_name, state, expiry_date, certification_categories text[], is_active). Staff-held licenses gate job assignment via the `enforce_applicator_license` trigger on `jobs` (migration 20260610185714).
@@ -126,9 +126,18 @@
 - `rebate_claims` - Rebate claims (program_id, claim_number UNIQUE, quantity, claim_amount_cents, paid_amount_cents, status: pending/submitted/approved/paid/rejected). UNIQUE on `claim_number` added by migration 20260513000000 (audit #33).
 - `rebate_claim_counters` - Per-year atomic counter for `RC-YYYY-NNNN` claim numbers (year PK, next_value). System table — RLS on, no policies; written only by `create_rebate_claim()` RPC. Migration 20260513000000 (audit #33).
 
+## Money tables added since the tour was written
+Columns below are from `.claude/schema-registry.json`; read the named migrations before relying on behavior.
+- `below_cost_approvals` - Admin approval record for a line priced below cost (operation, entity_type: order/invoice/quote, entity_id, line_id, product_id, actor_user_id, reason, unit_price_cents, locked_unit_cost_cents, quantity, total_shortfall_cents). Added by `20260812115237_enforce_below_cost_admin_approval`.
+- `credit_memo_applications` - A credit memo amount applied to a target invoice (credit_memo_id, target_invoice_id, amount_cents, applied_by, applied_at, reversed_at, reversed_by, reversal_reason)
+- `field_app_billing_sets` / `field_app_billing_lines` - Per-line split-billing source lines for a field-application invoice group (set: invoice_group_id, source_job_id; line: billing_set_id, line_kind: chemical/service/fuel_surcharge/flat_fee, product_id, application_service_id, source_quantity, source_acres, source_unit_price_cents, source_line_cents)
+- `invoice_line_shares` - Each customer's share of a billing line (billing_line_id, invoice_item_id, customer_id, split_mode, split_micro_pct, allocated_quantity, allocated_acres, unit_price_cents, amount_cents, override reasons, calculation/vector hashes); `invoice_line_share_snapshots` freezes those shares at post
+- `split_invoice_provenance`, `split_invoice_creation_claims`, `split_invoice_mutation_claims` - Provenance and transaction-scoped claims for split invoices created from an order (mutation claims cover save_invoice/delete_invoices/void_invoice/cancel_order)
+- `job_product_draws` - Per-(job, product) booking draw-down against a quote (job_id, quote_id, product_id, quantity_drawn)
+
 ## Email & Notifications
-- `email_log` - Email audit trail with idempotency (email_type, recipient, subject, status, idempotency_key)
-- `ar_reminder_tracking` - AR reminder deduplication (customer_id, reminder_level, sent_at)
+- `email_log` - Email audit trail with idempotency (email_type, recipient_email, subject, status: pending/sent/failed/bounced, idempotency_key)
+- `ar_reminder_tracking` - AR reminder deduplication (customer_id, reminder_level: 30/60/90, sent_date, email_log_id)
 - `failed_notifications` - Failed notification retry queue (notification_type, entity_type, entity_id, error_message, attempts, max_attempts, resolved_at)
 
 ## Billing Shares

@@ -1,6 +1,14 @@
 # Per-Line-Item Split Billing — Design Spec v2 (FUTURE build)
 
-**Status:** DESIGN SPEC — v2, review-hardened. Approved in concept by Mason 2026-07-17. **Not
+> **STATUS 2026-09-26 — SHIPPED AND LIVE.** Merged in PR #164 on 2026-07-21. Migrations
+> `20260720213000_per_line_split_billing_schema`, `20260720214000_per_line_split_billing_calculator` and
+> `20260720233000_per_line_split_billing_save_rpc` are in the live ledger, and
+> `app_settings.per_line_split_billing_enabled` has been ON since 2026-07-21. Not yet used on real invoices
+> (zero split rows at the 2026-07-27 check). Current detail: `docs/manual/KNOWN_ISSUES.md` §0 "Per-line
+> split-billing". The spec below is kept as the design record the applied migrations cite; its "Not started"
+> status is the 2026-07-17 state.
+
+**Status (original, 2026-07-17):** DESIGN SPEC — v2, review-hardened. Approved in concept by Mason 2026-07-17. **Not
 started.** Mason will start the build in **Codex next week** (once usage credits reset). Do NOT begin
 without a first real field-application billing cycle on the existing engine (baseline proof) first.
 
