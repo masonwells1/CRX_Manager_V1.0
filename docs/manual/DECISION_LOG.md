@@ -611,10 +611,10 @@ gates `Edit`/`Write`, with `review-proof-guard.mjs` covering shell/MCP writes. S
 (later the same day) "guarded-surface lock is DELETED" entry above.** Retained for the evidence of
 why the lock failed.
 
-[Historical — void: this paragraph described the lock's plan. The lock never reached `main`, so the
-2026-08-25 `ask` tier was never replaced and is the control that applies today.] **Supersedes item 3
-of the 2026-08-25 entry below** ("Control-file edits move to the `ask` tier"). That entry's protected
-set and its `Edit`/`Write` `ask` rules are replaced by a deterministic PreToolUse lock; do not restore them.
+**The 2026-08-25 `ask` tier is the control that applies today — keep it.** The lock described here
+never reached `main`, so this entry's original plan never took effect. That plan read: it would
+supersede item 3 of the 2026-08-25 entry below ("Control-file edits move to the `ask` tier") and
+replace that entry's `Edit`/`Write` `ask` rules with a PreToolUse lock. It is recorded here as history only.
 
 Mason asked to stop being prompted for approval on file edits. Investigating that produced three
 findings, in order, and the third is the one that mattered:

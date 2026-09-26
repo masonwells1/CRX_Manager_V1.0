@@ -300,7 +300,7 @@ path named. Re-verify against the live app before acting — these were checked 
 
 **Proof still owed**
 - **Commission as-of report, live real-path proof** (acceptance #6 of the 2026-09-03 spec, removed in
-  this cleanup): when the first commission payment posts (real or `[E2E]`), run the report for a date
+  this cleanup): create and post a disposable `[E2E]` commission payment (a live-data change — needs Mason's OK first; never use or void a real payment), run the report for a date
   before and a date after the payment, void it, run both again, and confirm the answers change correctly.
   Only a disposable PostgreSQL 17 proof exists so far.
 

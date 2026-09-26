@@ -1286,9 +1286,10 @@ granted by **admin rights on his account**, and every Claude and Codex session a
 same account. There is therefore no mechanism that offers the override to Mason and withholds it
 from an agent; the guards can only refuse the *commands* that would use it.
 
-**What is in place.** Both merge gates deny `gh pr merge --admin` outright, verify
-`reviewDecision === "APPROVED"` directly rather than inferring it (**corrected 2026-09-26:** no
-approving review has been required since 2026-09-02 — `.claude/hooks/pr-merge-guard.mjs` refuses
+**What is in place.** Both merge gates deny `gh pr merge --admin` outright, read the PR's review
+state directly rather than inferring it (**corrected 2026-09-26:** they no longer require
+`reviewDecision === "APPROVED"` — no approving review has been required since 2026-09-02;
+`.claude/hooks/pr-merge-guard.mjs` refuses
 `CHANGES_REQUESTED` and requires `mergeStateStatus` CLEAN with every check green; the landing path
 in `.claude/commands/ship.md` Step 8 still requires the `ready-for-coderabbit` review of the frozen
 head before merge — only the GitHub *approval* requirement was removed), and deny the
