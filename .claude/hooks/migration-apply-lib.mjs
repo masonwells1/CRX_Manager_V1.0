@@ -31,7 +31,7 @@ import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
 
-export const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
+export const REQUIRED_CODEX_MODEL = "gpt-6-sol";
 export const REQUIRED_CODEX_EFFORT = "high";
 export const PROOF_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
 export const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -975,7 +975,7 @@ export function evaluateMigrationApply({
       // .claude/session-state/codex-review-mig-<safeName>.json:
       //   { "queryHash": <sha256 of the EXACT transmitted SQL>,
       //     "verdict": "clean" | "ship" | "ship-with-followups",
-      //     "model": "gpt-5.6-sol",
+      //     "model": "gpt-6-sol",
       //     "reasoning_effort": "high",
       //     "timestamp": <ISO-8601, <30 min old> }
       // Write it ONLY after an ACTUAL /codex-review run on this migration this

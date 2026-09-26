@@ -37,7 +37,9 @@ The read-only report commands `status` and `fleet` carry this routing in their f
 
 `money-inventory-hunt.js` deliberately pins its finder and verifier calls to `high` until a real effort comparison proves a better setting. Do not change that based only on the table above.
 
-The July 2026 tuning was measured on Opus 5. Applying it to Fable 5 remains provisional but binding until a newer CRX harness review replaces it; a Fable 5 session must not treat this guidance as Opus-only or skip it. Background and measurements: `docs/research/2026-07-25-opus5-harness-review.md`.
+Current Claude models (September 2026): Fable 5.1 (`claude-fable-5-1`), Opus 5.5 (`claude-opus-5-5`), Sonnet 5 (`claude-sonnet-5`), and Haiku 4.5 (`claude-haiku-4-5-20251001`). Pin a model with the Claude Code aliases `fable`, `opus`, `sonnet`, or `haiku` rather than a dated ID, so agents, workflows, and `scripts/run-claude-review.mjs` follow each new release instead of going stale. Pin an exact ID only when a measurement depends on that exact model, and say so next to the pin.
+
+The July 2026 tuning was measured on Opus 5. Applying it to newer models (Opus 5.5, Fable 5.1) remains provisional but binding until a newer CRX harness review replaces it; a Fable or newer Opus session must not treat this guidance as Opus-only or skip it. Background and measurements: `docs/research/2026-07-25-opus5-harness-review.md`. The Codex equivalent of this document is `docs/reference/codex-model-tuning.md`.
 
 ## External Guidance
 
