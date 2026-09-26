@@ -58,8 +58,7 @@ of twelve, told Codex to wait for plan approval, left out CodeRabbit, and pointe
   private links; API keys, auth tokens, and SDK keys; edge-config writes; rolling releases; and
   every domain and credit purchase. Connector tool lists change between sessions, so this is a
   best-effort explicit list on top of `defaultMode: dontAsk`, which already refuses any unlisted
-  tool. Under `defaultMode: dontAsk` these were already refused as unlisted
-  tools. Listing them in `deny` makes that explicit and keeps it if the mode ever changes. No
+  tool. Listing them in `deny` makes that explicit and keeps it if the mode ever changes. No
   workflow uses them, because production deploys only through a PR merge, and a Vercel rollback
   stays one click in the Vercel dashboard. The old tool names are kept; they match nothing but are
   harmless. Nothing was added to `allow` or `ask`.
@@ -76,6 +75,9 @@ proof, and this cloud session has no Codex CLI. The checklist is in
 FIX-THEN-SHIP: 1 HIGH, 4 MED, 5 LOW, all confirmed and fixed in this change. The HIGH was that the
 first draft of the priority order let Mason's message outrank the Hard Rules. The MEDs were the
 unbounded stop rule, the landing order, two gauntlet contradictions, and missing Vercel denies.
+A second Opus round on the fixed head returned FIX-THEN-SHIP with 1 MED (more Vercel denies) and 5
+LOWs, all fixed; a third round returned CLEAN with 3 LOWs (a gauntlet scope wording clash, this
+changelog's wording, and more Vercel check and upload tools), also fixed in this change.
 
 **Proof observed (cloud session):** `npm run test:agent-workflows` passed; all 53 top-level
 `*.test.mjs` files directly under `.claude/hooks/`, `.codex/hooks/`, and `scripts/` passed (the

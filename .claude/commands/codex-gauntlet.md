@@ -76,13 +76,13 @@ The remedy for a stale branch is to **rebase/refresh it onto `main`** (or re-poi
 
 ### Step 1: Pick Scope
 
-Choose exactly one:
+Choose one per run:
 
 - `--base origin/main` (after `git fetch origin`) for a branch review before push — never bare `main`; a stale local main distorts the diff (see Step 0).
 - `--uncommitted` for staged, unstaged, and untracked working-tree changes.
 - `--commit <sha>` for one commit.
 
-If the branch has both committed and uncommitted work and Mason did not specify scope, review both together (the branch against `origin/main` plus the working tree) and say so in one line; do not stop to ask.
+If the branch has both committed and uncommitted work and Mason did not specify scope, run two passes, `--base origin/main` then `--uncommitted`, and say so in one line; do not stop to ask.
 
 ### Step 2: Evidence Gates
 

@@ -280,7 +280,17 @@
       "mcp__Vercel__create_private_link_endpoint",
       "mcp__Vercel__update_private_link_endpoint",
       "mcp__Vercel__update_project_check",
-      "mcp__Vercel__update_ai_gateway_virtual_model_config_by_slug"
+      "mcp__Vercel__update_ai_gateway_virtual_model_config_by_slug",
+      "mcp__Vercel__create_check",
+      "mcp__Vercel__update_check",
+      "mcp__Vercel__rerequest_check",
+      "mcp__Vercel__create_deployment_check_run",
+      "mcp__Vercel__update_deployment_check_run",
+      "mcp__Vercel__get_access_to_vercel_url",
+      "mcp__Vercel__upload_file",
+      "mcp__Vercel__create_storage_stores_blob",
+      "mcp__Vercel__update_session_network_policy",
+      "mcp__Vercel__retry_vercel_ci_invocation"
     ]
   },
   "hooks": {
