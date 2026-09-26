@@ -25,6 +25,31 @@ import path from "node:path";
 // branch/project lifecycle, and destructive file/db ops STAY blocked here.
 const DENY_TOOLNAME_RE = /(deploy_edge_function|deploy_to_vercel|deploy_project|reset_branch|delete_branch|merge_branch|rebase_branch|pause_project|restore_project|push_files|create_or_update_file|delete_file|merge_pull_request|start_process|interact_with_process|write_file|edit_block|move_file|set_config_value)/i;
 
+
+// ── OPTION-SCAN IDIOM (2026-09-07) ──────────────────────────────────────────
+// These helpers retain the alias hardening from this branch. They scan complete
+// argument tokens only, so an option cannot be read across a shell separator.
+const WS = String.raw`[^\S\r\n]+`;
+const OPT_SCAN = String.raw`(?:${WS}[^\s;&|)]+)*?${WS}`;
+
+// A short-option cluster carrying any of `letters` anywhere in it.
+const cluster = (letters) => String.raw`-[A-Za-z]*[${letters}][A-Za-z]*(?=$|\s)`;
+
+// A full long option or an unambiguous prefix, bounded at the option token.
+function prefixChain(word) {
+  let inner = "";
+  for (let i = word.length - 1; i >= 1; i--) inner = `(?:${word[i]}${inner})?`;
+  return `--${word[0]}${inner}(?=$|[\\s=])`;
+}
+
+// Git commit options that consume the rest of a cluster as a value. Only
+// non-value-taking letters may precede the short no-verify flag.
+const GIT_COMMIT_VALUE_OPTS = "mcCFtuS";
+const GIT_COMMIT_FLAG_ONLY = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  .split("")
+  .filter((c) => !GIT_COMMIT_VALUE_OPTS.includes(c))
+  .join("");
+
 // `git` and `gh` accept GLOBAL OPTIONS BETWEEN the binary and the subcommand
 // (`git -C <dir> push`, `gh -R <owner>/<repo> pr merge`). A bare `git\s+push`
 // cannot span them, so those shapes were AUTO-APPROVED while armed — armed mode
@@ -187,6 +212,24 @@ const bin = (name) => String.raw`\b${foldCase(name)}\b${BIN_TAIL}`;
 const git = (rest) => new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+${rest}`);
 const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`);
 
+// PowerShell removal aliases and cmd.exe recursive-delete aliases. These retain
+// the branch's complete-token, order-independent switch scan, while `bin()`
+// gives every alias the same executable-suffix and path-qualified command-head
+// resolution as rm, git, and the other shape-aware rules below.
+const PS_RECURSIVE_REMOVE_HEAD = ["Remove-Item", "ri", "rd", "rmdir", "del", "erase"]
+  .map(bin)
+  .join("|");
+const CMD_RECURSIVE_DELETE_HEAD = ["rmdir", "rd", "del", "erase"].map(bin).join("|");
+const PS_RECURSIVE_REMOVE_RE = new RegExp(
+  String.raw`(?:${PS_RECURSIVE_REMOVE_HEAD})` + OPT_SCAN +
+    String.raw`-[Rr](?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?=$|[\s:])`,
+  "i"
+);
+const CMD_RECURSIVE_DELETE_RE = new RegExp(
+  String.raw`(?:${CMD_RECURSIVE_DELETE_HEAD})` + OPT_SCAN + String.raw`\/[sq]\b`,
+  "i"
+);
+
 // Every OTHER name-anchored rule below had the same binary hole, for the same
 // reason — the name is followed by a required `\s`, so an extension ends the match
 // before the dangerous subcommand is read. `supabase.exe db reset`,
@@ -207,31 +250,49 @@ const gh = (rest) => new RegExp(String.raw`${bin("gh")}${GLOBAL_OPTS}\s+${rest}`
 const nameAnchored = (name, rest) => new RegExp(String.raw`${bin(name)}\s+${rest}`);
 const NPX = String.raw`(?:${bin("npx")}\s+)?`;
 
+// Recursive rm is denied in every documented recursive spelling. Reuse main's
+// shape-based bin() head so this branch retains Windows/path resolution without
+// reviving the enumerated suffix helper reverted in 0b0561efa.
+const RM_RECURSIVE_RE = new RegExp(
+  String.raw`${bin("rm")}` + OPT_SCAN + `(?:${prefixChain("recursive")}|${cluster("rR")})`
+);
+
+
 // Bash command shapes that must never be auto-approved: history rewrites,
 // destructive deletes, pushes/deploys, DB resets, secret writes, hook bypass.
 const DENY_BASH_RES = [
   git(String.raw`push\b`),                         // no unattended push — Mason reviews in the morning
   git(String.raw`(?:push\s+)?(?:--force\b|-f\b|--force-with-lease\b)`),
   git(String.raw`reset\s+--hard\b`),
-  git(String.raw`clean\s+-[A-Za-z]*[fdx]`),
+  // Retain the branch token scan: force can be long, separated, clustered, or
+  // preceded by other clean options; -X remains a distinct destructive flag.
+  git(String.raw`clean\b${OPT_SCAN}(?:${prefixChain("force")}|${cluster("fdxX")})`),
   /--no-verify\b/,
-  nameAnchored("rm", String.raw`(?:-[A-Za-z]*r[A-Za-z]*f|-[A-Za-z]*f[A-Za-z]*r)`), // rm -rf / -fr
+  // Git parses clusters, but value-taking options consume the remainder of theirs.
+  new RegExp(
+    String.raw`${bin("git")}${GLOBAL_OPTS}\s+commit\b` +
+      OPT_SCAN + `-[${GIT_COMMIT_FLAG_ONLY}]*n[A-Za-z]*(?=$|\\s)`
+  ),
+  RM_RECURSIVE_RE,
+  PS_RECURSIVE_REMOVE_RE,
+  CMD_RECURSIVE_DELETE_RE,
+  // Preserve the legacy broad deny while the more exact cmd.exe rule above adds
+  // aliases and unordered switches; this merge must not narrow a deny.
+  /\brmdir\b|\bdel\s+\/[sq]/i,
   new RegExp(String.raw`\brmdir\b|${bin("del")}\s+\/[sq]`, "i"),
   git(String.raw`worktree\s+remove\b`),
-  git(String.raw`branch\s+(?:-D|--delete\s+--force)\b`),
+  // Keep both force-delete routes, now using main's global-option-aware git head.
+  new RegExp(String.raw`${bin("git")}${GLOBAL_OPTS}\s+branch\b` + OPT_SCAN + cluster("D")),
+  new RegExp(
+    String.raw`${bin("git")}${GLOBAL_OPTS}\s+branch\b` +
+      `(?=${OPT_SCAN}(?:${prefixChain("delete")}|${cluster("d")}))` +
+      `(?=${OPT_SCAN}(?:${prefixChain("force")}|${cluster("f")}))`
+  ),
   git(String.raw`filter-(?:branch|repo)\b`),
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+db\s+(?:push|reset)\b`),
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+migration\s+repair\b`),
   new RegExp(String.raw`${NPX}${bin("supabase")}\s+functions\s+deploy\b`), // CLI edge deploy = same gate as the MCP tool
   gh(String.raw`pr\s+merge\b`),                    // lands on main around the push guard
-  // Same case defect as `bin()`, reached by the three rules that do NOT route
-  // through it. `dropdb`/`createdb` are bare-word BINARY names (nothing required
-  // after them, which is why an extension never broke them) and `.env` is a
-  // FILENAME — all three are resolved case-insensitively on Windows, so `DROPDB
-  // crx` and `echo SECRET >> .ENV` walked through while their lowercase twins
-  // denied. Folded by the same rule rather than by a second, differently-shaped
-  // fix. `rmdir`/`del` below already carry an `i` flag on a pattern with no nested
-  // quantifiers, so they were never exposed; DENY_PATH_RE likewise.
   new RegExp(String.raw`\b(?:${foldCase("dropdb")}|${foldCase("createdb")})\b`),
   nameAnchored("vercel", String.raw`(?:deploy|--prod|promote)\b`),
   new RegExp(String.raw`(?:^|[\s;&|>])\.${foldCase("env")}\b`),          // touching .env
@@ -322,7 +383,7 @@ const INTENT_ALLOW_BASH_RE = /^\s*(git\s+(status|diff|log|branch|show|fetch|work
 // prefix, a suffix, or a chain cannot ride it.
 //
 // FORWARD SLASHES ONLY. An earlier revision also accepted the Windows backslash
-// spelling, which CI caught as a genuine cross-platform bug: on Linux `\` is not a
+// spelling, which CI caught as a genuine cross-platform bug: on Linux `` is not a
 // separator, so `.claude\hooks\autopilot-arm.mjs` is ONE filename and never
 // resolves to the trusted path. Normalizing backslashes would be worse than
 // rejecting them — on Linux a file literally named `.claude\hooks\autopilot-arm.mjs`
