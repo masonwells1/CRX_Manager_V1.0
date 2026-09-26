@@ -22,7 +22,7 @@ If on `main`, create one: `git checkout -b ship/<short-slug>`. Tell Mason the br
 
 **Size it first** (Anthropic: most coding is single-agent work — don't pay the ~15× multi-agent review cost on a tiny change):
 - **Trivial** — one file, no SQL / money / inventory / RLS / auth / permission / lifecycle / other business-critical change (a copy tweak, a style fix, a prop rename): SKIP the review fan-out (Step 3) and the migration gate. Just make the change, run Step 2 (lint + build + test) and Step 2.5, then go to Step 7. Tell Mason in one line you're taking the light path.
-- **Substantial** — multiple files, OR touches SQL / money / RLS / a lifecycle / an RPC: run the full pipeline below.
+- **Substantial** — everything that is not Trivial: multiple files, OR touches SQL / money / inventory / RLS / auth / permission / a lifecycle / an RPC / other business-critical behavior: run the full pipeline below.
 
 **For substantial work, plan before coding** — this is where Mason (a non-coder) has the most power, because he can read English even though he can't read code:
 1. Read the live schema / existing code for the area (don't trust memory).
