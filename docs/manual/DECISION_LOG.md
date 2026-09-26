@@ -29,6 +29,20 @@ comment that emails him.
    secrets, authentication, billing and permissions changes.
 4. Mason gets a short plain-English daily summary of what merged, what was applied, and what is
    waiting on him (`.github/workflows/daily-landing-summary.yml`).
+5. **Where "permissions" starts (added the same day).** Sol's round-9 review showed that item 3 was
+   not enforced for migrations: 48 of the last 60 carry GRANT/REVOKE lines, almost all routine. Asked
+   in plain English, Mason chose **"Routine auto, widening waits"**: agents apply the routine
+   lock-down lines for brand-new tables and functions themselves; anything that opens access wider
+   (e.g. to the public), removes or edits an existing access rule, turns off row security, or touches
+   logins/roles waits for him. Enforced by `.claude/hooks/migration-access-lib.mjs`
+   (`accessChangeCheck`), which the apply guard runs right after the destructive check. Measured on
+   the last 60 real migrations: 38 would apply by themselves, 22 wait for him (10 destructive, the
+   rest access changes to existing objects or the storage schema). One stated residual, told to
+   Mason: a function the migration REPLACES (`CREATE OR REPLACE`) counts as created by it, so
+   re-stating its grants to `authenticated`/`service_role`/`postgres` is routine even though the
+   classifier cannot see what the function's grants were before — counting it as existing would
+   send 47 of 60 migrations to him instead of 22. The two reviewers and the Sol apply proof still
+   read every grant.
 
 **What this supersedes.** The parts of the **2026-06-16 standing push policy** that limited
 unattended landing, the **2026-07-13 hands-free migration policy** (its proof gate now applies in

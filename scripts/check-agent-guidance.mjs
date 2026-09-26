@@ -143,6 +143,7 @@ const autonomousLandingChecks = [
   ["a clean exact-SHA Sol review of that head", /fresh exact-SHA Sol[^.]*review of that head is clean/i],
   ["every required check green", /every required check is green/i],
   ["migrations limited to NON-destructive ones", /NON-destructive migration/i],
+  ["access changes limited to routine grants (Mason, 2026-09-26)", /routine grants only/i],
   ["the migration-apply-guard proof gate", /migration-apply-guard proof gate/i],
   ["both reviewer proofs and a fresh Sol proof", /both reviewer proofs and a fresh content-bound Sol proof/i],
   ["30-minute proof freshness", /under 30 minutes/i],

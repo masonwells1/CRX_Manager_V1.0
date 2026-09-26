@@ -35,6 +35,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { destructiveMigrationCheck } from "../.claude/hooks/live-testdata-lib.mjs";
+import { accessChangeCheck } from "../.claude/hooks/migration-access-lib.mjs";
 
 const ISSUE_TITLE = "Daily landing summary";
 const MASON = "masonwells1";
@@ -96,7 +97,7 @@ export function waitingReasons({ labels = [], files = [] }) {
     // migration is not a safe one (Sol MEDIUM, round 7): flag it for Mason rather
     // than classify missing SQL as harmless. A removed file has no SQL to add.
     if (typeof file?.patch !== "string" && String(file?.status || "") !== "removed") {
-      reasons.push(`its database change ${path.basename(name)} could not be read from GitHub, so it could not be checked for deleting data — have an agent check it`);
+      reasons.push(`its database change ${migrationName(path.basename(name))} could not be read from GitHub, so it could not be checked for deleting data — have an agent check it`);
       continue;
     }
     const added = String(file?.patch || "").split(/\r?\n/)
@@ -106,7 +107,16 @@ export function waitingReasons({ labels = [], files = [] }) {
     let verdict;
     try { verdict = destructiveMigrationCheck(added); } catch { verdict = { destructive: true, reason: "could not be classified" }; }
     if (verdict.destructive) {
-      reasons.push(`its database change ${path.basename(name)} deletes data (${verdict.reason}), which stays yours to approve`);
+      reasons.push(`its database change ${migrationName(path.basename(name))} deletes data (${plainText(verdict.reason, 100)}), which stays yours to approve`);
+      continue;
+    }
+    // Permission changes are his too (2026-09-26). The patch shows only this
+    // PR's added lines, so for an EDITED file the check may miss objects the
+    // file created earlier — that errs toward listing it, never toward hiding it.
+    let access;
+    try { access = accessChangeCheck(added); } catch { access = { changesAccess: true, reason: "could not be classified" }; }
+    if (access.changesAccess) {
+      reasons.push(`its database change ${migrationName(path.basename(name))} changes who can access what (${plainText(access.reason, 120)}), which stays yours to approve`);
     }
   }
   return reasons;

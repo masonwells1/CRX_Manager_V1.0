@@ -65,7 +65,7 @@ playbook is detail on top of that.
 
 - **Approve a database change that deletes data.** Anything that erases business records, or drops a table or column that holds data. Agents cannot apply these at all, in any session — not even after your yes, because a safety script has no way to prove a yes you typed to an agent. They park it, explain the risk in plain English, and hand it to you to apply yourself in the Supabase dashboard, walking you through each step.
 - **Approve Edge Function deploys.** These are the small pieces of backend code that send emails, scan blend-ticket photos (OCR), and create/reset user accounts. A bad deploy can silently break one of those without touching the rest of the app.
-- **Approve anything touching secrets, logins, billing, or permissions.** Passwords and keys, who can sign in and how, what you pay for, and who is allowed to do what.
+- **Approve anything touching secrets, logins, billing, or permissions.** Passwords and keys, who can sign in and how, what you pay for, and who is allowed to do what. For database changes you chose (2026-09-26) where the line sits: the routine "lock this new function or table down to signed-in staff" lines apply by themselves; anything that opens access wider (for example to the public), removes or changes an existing access rule, turns off row security, or touches logins, file storage or roles waits for you, and a safety script refuses to apply it for an agent.
 
 A few other things agents simply never do on their own — overwriting history on GitHub (a force-push), changing live data by hand outside a reviewed migration, or changing domains or account ownership. `AGENTS.md` holds that full list; if another document ever shows a shorter one, `AGENTS.md` wins.
 

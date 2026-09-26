@@ -27,6 +27,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
+import { accessChangeCheck } from "./migration-access-lib.mjs";
 import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
@@ -861,6 +862,24 @@ export function evaluateMigrationApply({
         `(scripts/.staging-migrations/ + a docs/manual/KNOWN_ISSUES.md entry with the plain-English risk) ` +
         `and hand it to Mason. Do NOT disarm autopilot, rename, split or rewrite the SQL to route around ` +
         `this (an EXPIRED flag also refuses, deliberately).`);
+    }
+    // PERMISSIONS are Mason's too (Sol HIGH, round 9; Mason's in-chat choice
+    // 2026-09-26: "Routine auto, widening waits"). The routine lock-down lines
+    // on objects this migration creates apply by themselves; anything that
+    // widens access or changes access that already exists does not.
+    // Fail CLOSED: a classifier error counts as an access change.
+    let access;
+    try { access = accessChangeCheck(migQuery); }
+    catch (e) { access = { changesAccess: true, reason: `access-check error (${e && e.message ? e.message : e}) — failing closed` }; }
+    if (access.changesAccess) {
+      return block(
+        `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" changes who can access what — ` +
+        `${access.reason}. Under Mason's autonomous-landing rule (2026-09-26) only the routine lock-down lines ` +
+        `on objects the same migration creates apply without him; anything that widens access or changes ` +
+        `access that already exists (a GRANT to anon/PUBLIC, a GRANT or REVOKE on an existing object, ` +
+        `ALTER/DROP POLICY, disabling row-level security, roles, owners, the auth/storage/vault schemas, ` +
+        `dynamic SQL) is his. PARK it with a plain-English explanation of what access changes, and hand it ` +
+        `to Mason. Do NOT split or rewrite the SQL to route around this.`);
     }
   }
 

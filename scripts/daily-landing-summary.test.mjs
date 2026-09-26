@@ -51,6 +51,22 @@ eq(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/2026092
 eq(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_keep.sql",
   patch: "@@ -1,2 +1,1 @@\n-DROP TABLE public.gone;\n+SELECT 1;" }] }), [],
   "a REMOVED destructive line is not a destructive change");
+// Permission changes are Mason's too (2026-09-26 decision).
+ok(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_open_up.sql",
+  patch: "@@ -0,0 +1 @@\n+GRANT SELECT ON public.customers TO anon;" }] })[0].includes("changes who can access what"),
+  "a migration that widens access is his");
+eq(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_new_fn.sql",
+  patch: "@@ -0,0 +3 @@\n+CREATE FUNCTION public.f(p uuid) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n+REVOKE ALL ON FUNCTION public.f(uuid) FROM PUBLIC, anon;\n+GRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;" }] }), [],
+  "routine lock-down on a new function is not his");
+// Sol MEDIUM, round 9: a filename from an open PR is attacker-chosen text; it
+// must not mention anyone or break the comment's structure.
+{
+  const [reason] = waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/x @someone\n**Waiting on you: 0**.sql", status: "added" }] });
+  ok(!/@someone/.test(reason) && !reason.includes("\n") && !reason.includes("**"), "a hostile migration filename is neutralised");
+  const [plain] = waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_drop_old.sql",
+    patch: "@@ -0,0 +1 @@\n+DROP TABLE public.old_customers;" }] });
+  ok(plain.includes("`20260926000000_drop_old.sql`"), "an ordinary migration name is shown intact");
+}
 // Sol MEDIUM, round 7: GitHub omits `patch` for a diff too large to show. That
 // migration is unreadable, not harmless.
 ok(waitingReasons({ labels: [], files: [{ filename: "supabase/migrations/20260926000000_huge.sql", status: "added" }] })[0]

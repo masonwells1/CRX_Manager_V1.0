@@ -456,6 +456,34 @@ for (const [label, autopilot] of [["UNARMED", null], ["ARMED", armed()]]) {
   denies(evaluate(destructiveFixture(autopilot), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
     "destructive statement", `${label}: a self-asserted approval input is ignored — destructive SQL stays refused`);
 }
+// PERMISSIONS are Mason's too (Sol HIGH, round 9; his 2026-09-26 choice "Routine
+// auto, widening waits"): a migration that widens or changes existing access is
+// refused for agents in every session, whatever its proofs.
+{
+  const WIDENING = "GRANT SELECT ON public.customers TO anon;\n";
+  const wideningHash = createHash("sha256").update(WIDENING).digest("hex");
+  const wideningFixture = (autopilot) => fixture({
+    autopilot,
+    migrationFile: WIDENING,
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: wideningHash },
+    codexProof: { ...goodCodex, queryHash: wideningHash },
+  });
+  for (const [label, autopilot] of [["UNARMED", null], ["ARMED", armed()]]) {
+    denies(evaluate(wideningFixture(autopilot), { query: WIDENING, landingGate: () => ({ ok: true }) }),
+      "changes who can access what", `${label}: a GRANT to anon is refused even with perfect proofs and a ready PR`);
+  }
+  // The routine lock-down on a function the same migration creates passes this
+  // check and reaches the next one.
+  const ROUTINE_SQL = "CREATE FUNCTION public.f(p uuid) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n" +
+    "REVOKE ALL ON FUNCTION public.f(uuid) FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n";
+  const routineHash = createHash("sha256").update(ROUTINE_SQL).digest("hex");
+  allows(evaluate(fixture({
+    migrationFile: ROUTINE_SQL,
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: routineHash },
+    codexProof: { ...goodCodex, queryHash: routineHash },
+  }), { query: ROUTINE_SQL, landingGate: () => ({ ok: true }) }),
+    "routine lock-down on a new function applies with perfect proofs and a ready PR");
+}
 denies(
   evaluate(
     fixture({
