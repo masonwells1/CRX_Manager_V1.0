@@ -49,6 +49,7 @@ Mason typed — one of them a regression against `main`. Two changes, same PR:
 ### Review status
 
 Two independent Claude adversarial review rounds found the envelopes-first regression
-(fixed by item 2) and the hold-clear hole (fixed by item 3). The required `gpt-5.6-luna` xhigh Codex round has
-not run on this PR (usage limit until 2026-09-26) and must run clean on the final head
-before merge.
+(fixed by item 2) and the hold-clear hole (fixed by item 3). The Codex round could not run
+before merge (usage limit until 2026-09-26). It ran after merge on 2026-09-26 through the
+Codex GitHub App (not pinned to luna/xhigh: the session had no Codex CLI login) and found
+one P1, fixed in `2026-09-26-codex-794-dangling-fence-clear.md`.
