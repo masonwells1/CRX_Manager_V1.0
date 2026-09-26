@@ -376,6 +376,73 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
+
+Each item was re-checked against `main` on 2026-09-26 before its source doc was deleted; the source path
+is named so the full write-up can be recovered from git history. Owner decisions from the same sweep went
+to `TODO.md` §5. Re-verify against the live app before fixing.
+
+- **Field Mode driver receipt gap (latent; RLS fix declined 2026-06-14).** The `customers_select` driver
+  branch (`20260510070000`) shows a customer only when the delivery's `scheduled_date >= today - 1`. A driver
+  completing an assigned stop with a NULL or older `scheduled_date` sees "Unknown customer" in `/my-route`,
+  and `FieldStop` silently skips the customer receipt email. Fix: widen the driver branch for assigned open
+  stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`,
+  `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`.)
+- **Public photo buckets (owner security decision, open since 2026-06-15).** `delivery-photos`,
+  `receiving-photos` and `team-note-attachments` are `public=true` and served through `getPublicUrl`
+  (`DeliveryDetail.tsx`, `FieldStop.tsx`, `NotePhotoUpload.tsx`), so anyone holding a URL has permanent
+  unauthenticated access to customer delivery photos. Paths are non-enumerable and type/size are capped
+  (`20260615182721`). Decide: keep public, or make private and switch to `createSignedUrl`.
+  (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`.)
+- **Field-app access-scope lows (June 2026 parity ledger).** (1) `fields_select` (`20260214210000`) lets every
+  active applicator read all customers' fields, not only dispatched ones; (2) `job_chemicals_select_location_dispatchee`
+  (`20260627120000`) lets dispatched applicators read `cost_per_unit_cents`; (3) `update_field_app_invoice_billing`
+  gates admin OR sales_rep with no per-row ownership, so any rep can edit another rep's draft billing fields;
+  (4) `buildInvoiceEmailPayload` (`src/lib/emailService.ts`) puts the invoice number/date into email HTML
+  unescaped. (Source: `docs/archive/2026-summer/fieldapp-parity/LEDGER.md`.)
+- **Split-acre rounding drift (deferred MED, Track B B1.4).** `derive_customer_shares_from_fields` (latest body
+  `20260429140635`) rounds `share_acres` to 2 dp, so small multi-customer splits can drift a few cents from the
+  field's applied acres. Re-verify the current billing path still consumes it, then bill at 4 dp / display 2 dp,
+  or reconcile per field by largest remainder. (Source: `docs/archive/2026-summer-closeout/roadmap/2026-06-22-field-mapping-billing-BUILD-SPEC.md`.)
+- **FieldSetup boundary-save follow-ups E1/E2 (Track A, 2026-06-23).** E1: after a boundary/override save the
+  page does not refresh `total_acres` from the RPC result, so an attribute-only re-save can revert legacy
+  `total_acres` to the stale loaded value (see the KNOWN FOLLOW-UP comment in `src/pages/FieldSetup.tsx`).
+  E2: deleting every drawn polygon of a loaded multi-part field makes `buildBoundaryGeometry` fall back to the
+  old boundary, so `set_field_boundary` may re-measure only the largest part.
+  (Source: `docs/build-loops/field-acre-billing/HANDOFF.md`.)
+- **Reports › Profitability still uses stored order profit.** The customer / product / monthly sub-fetchers in
+  `src/pages/Reports.tsx` compute margins in the browser from `orders.total_profit` and `order_items.profit`.
+  The server RPC `get_profitability_report` (`20260812115235`, live 2026-08-12), which uses the as-of-sale cost
+  snapshot, has no caller. Fix: switch the three sub-fetchers to the RPC and compare a real date range.
+  (Source: `docs/handoffs/2026-08-09-pricing-audit-local-finish.md`.)
+- **AR aging and date boundaries (2026-05-25 review).** (1) The Financial Dashboard's AR aging (current ≤ 30
+  days, UTC `now()`) disagrees with the AR Aging page (current 0–29, as-of date), so a 30-day-old invoice shows
+  as current on one and 30–59 on the other. (2) `invoice_date` has no future-date bound in the UI or on the
+  server, so a typo like 2206 is accepted. (3) Three filters cut the day at UTC midnight rather than Chicago:
+  `Invoices.tsx` season filter, `TeamBoard.tsx` date filter, and the `CustomerDetail.tsx` 90-day window.
+  (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`.)
+- **List-page row caps (scale limit).** Orders stops at 500 and Invoices at 2000 with a warning toast;
+  Deliveries stops at 500 silently; `DataTable` has no pagination. Revisit before volumes near the caps.
+  `SelectLocationsModal` still splits map and list 50/50 on tablets.
+  (Source: `docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md`.)
+- **Customer-facing PDF polish (LOW).** `src/lib/quotePdf.ts` advances section-header notes only 4pt per line
+  at 9pt font, so multi-line section notes overprint the items table; `src/lib/yearEndSummaryPdf.ts` sets the
+  YoY "Change" colour in `didDrawCell` (after the cell is drawn), so it never shows — move it to `didParseCell`.
+  (Source: `docs/archive/2026-spring/2026-05-30-whole-codebase-audit.md`.)
+- **Edge Function alerting fails quiet (LOW).** `create-user`, `reset-user-password` and `send-email` only use
+  `captureEdgeException`, which logs `[SENTRY_MISCONFIG]` and drops the alert when `SENTRY_DSN` is unset.
+  Calling `validateSentryDsnOrThrow()` at module boot would make it fail loud; that needs `SENTRY_DSN`
+  confirmed on those functions and three live Edge Function deploys (Mason's approval).
+  (Source: `docs/archive/2026-spring/2026-05-30-p2p3-sprint-handoff.md`.)
+- **CRM Phase 5 (AI receptionist) preconditions.** (1) `get_customer_prep_card` is not service-role callable
+  (its in-body authz needs an active user profile), so the receptionist needs an additive server-only entry
+  point sharing the same logic; (2) `customer_documents` cannot take service ingestion yet — `uploaded_by` is
+  NOT NULL and there is no unique provider document id for webhook dedup; (3) the interaction provenance-guard
+  trigger also fires for service role, so AI intake must INSERT provenance with the row and never UPDATE it;
+  (4) the 15-month transcript auto-purge job (DECISION_LOG) is a build precondition; (5) open design question:
+  must every stored customer fact cite a `customer_interaction`?
+  (Source: `docs/loops/crm-relationship-intelligence-ledger.md`.)
+
 ## OPEN 2026-09-21 (FIX WRITTEN AND PROVEN LOCALLY — NOT DEPLOYED) — a customer-document download link can outlive the document's soft delete
 
 **What is wrong on live.** The live Storage policies let the uploader, and any admin, read objects in
@@ -4901,7 +4968,7 @@ not happened** — checked directly rather than inferred from the empty split ta
 would not touch those: live as of 2026-07-27, `field_app_locations` = 0 rows, `field_app_location_shares` = 0,
 and of 4 total `jobs` none is `invoiced` and no `invoices` row carries a `job_id`. So no field-application
 invoice of any kind has been produced yet, split or not.)*
-Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
+Owner-facing detail was in `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md` (shipped; removed 2026-09-26, in git history).
 
 **Resolved 2026-07-21 — Supplier Pricing Phase 1a rollout gap.** The governed
 Product-page and XLSX pricing paths are live, the final lifecycle migration is
@@ -5033,8 +5100,8 @@ Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyro
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `supabase/migrations/20260807220323_log_customer_fact_rpc.sql` | `log_customer_fact` RPC: retry-safe, role-gated, actor-pinned CRM fact intake replacing the direct `customer_facts` insert in `CustomerFacts.tsx` | **APPLIED LIVE 2026-08-07** as version 20260807220323 (authored 20260807120000). History row 856. Frontend cutover to the RPC landed in the same change. | Done — both Codex charters CLEAN, postflight ACL assertions passed at apply. |
-| `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |
-| `docs/audits/nightly-debug/parked-migrations/PARKED-07-seed-admin-security-OWNER-ACTION.md` | Flagged `seed-admin` edge function as an unauthenticated admin-mint endpoint | — | **RESOLVED** — `seed-admin` no longer exists in `supabase/functions/` (confirmed on disk this pass; `docs/reference/gotchas.md` line ~118 notes it was deleted 2026-06-16 as a security cleanup). |
+| `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` (removed 2026-09-26) | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |
+| `docs/audits/nightly-debug/parked-migrations/PARKED-07-seed-admin-security-OWNER-ACTION.md` (removed 2026-09-26) | Flagged `seed-admin` edge function as an unauthenticated admin-mint endpoint | — | **RESOLVED** — `seed-admin` no longer exists in `supabase/functions/` (confirmed on disk this pass; `docs/reference/gotchas.md` line ~118 notes it was deleted 2026-06-16 as a security cleanup). |
 | `scripts/.staging-migrations/SUPERSEDED-20260611080937_idempotency_lookup_operation_scope_sweep.sql` | Idempotency lookup operation-scoping sweep | Filename says SUPERSEDED | Nothing — already replaced, safe to ignore/delete |
 | `scripts/.staging-migrations/workflow-fix-parked/u12/*`, `.../u13/*` | Draft patches for Applicator "My Day" (U12) and dispatch-assignment unification (U13) | **Verified superseded and removed locally in this ticket.** `docs/loops/business-workflow-fix-ledger.md` confirms both U12 and U13 **SHIPPED LIVE 2026-07-06/07** under different migration names (`20260707010000`/`20260707011000` for U12, `20260707020000` for U13) — not the deleted draft filenames (`20260706060000`, `20260706100000`). | Do not re-apply the removed drafts. |
 | `scripts/.staging-migrations/workflow-waves-parked/SUPERSEDED-dispatch-backfill.sql` (was `PARKED-dispatch-backfill.sql`, renamed 2026-07-29) | One-time backfill of `job_location_dispatches` for legacy-assigned open jobs | **RETIRED 2026-07-29 — no longer parked, DO NOT APPLY.** The legacy population it was written for is gone and the live sync triggers cover the ordinary assignment paths. Verified read-only against live 2026-07-29: its own count query returns 0 rows (same as when parked on 2026-07-10), **no** open assigned job is missing a dispatch row at all (0 across every assignee, not just qualifying ones), and `trg_sync_job_location_dispatch_on_applicator_change` on `jobs` + `trg_sync_job_location_dispatch_on_field_insert` on `job_fields` are both live. It is **not** claimed that a gap can never reopen — see the dispatch trigger-coverage row below. | Nothing — it is not waiting on Mason. Do **not** re-run the count query "just in case" and apply it: this is a business-data write. If a dispatch row is ever genuinely missing, diagnose the trigger, do not resurrect this backfill. |

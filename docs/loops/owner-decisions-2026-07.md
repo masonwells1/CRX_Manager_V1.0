@@ -9,7 +9,7 @@ already drafted-and-parked (Wave A), the packet notes it. Live counts pulled 202
 >   the two untagged test customers were renamed live with the `[E2E]` prefix. True-junk deletes
 >   (8 `RTJ Recipe…` rows, zero-link customers, vendor `we`, bad emails) still need line-item approval.
 > - **Packet 4 (due dates): DECIDED** — Net 30 default + Net 15 / due-on-receipt / custom-date
->   override. Build spec: `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`.
+>   override. Build spec (shipped; removed 2026-09-26, in git history): `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`.
 > - **Packet 5 (wire-vs-retire): SETTLED — KEEP** all five structures (planned features).
 > - **Packet 6 ("wire" method): RESOLVED, packet was stale** — `20260702152000_payment_method_wire.sql`
 >   is applied live; all four CHECK constraints already allow `'wire'` (verified 2026-07-16).

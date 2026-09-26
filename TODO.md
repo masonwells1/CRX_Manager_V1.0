@@ -60,7 +60,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
    tool (shipped) makes this data-entry. Gates the whole compliance track.
 5. **Decision packets** (details in `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3).
    **Decided 2026-07-16:** due dates = Net 30 + override (build spec in
-   `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`) · dead structures = KEEP
+   `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`, removed 2026-09-26, in git history) · dead structures = KEEP
    (planned features) · "wire" = already live (stale packet) · junk data = keep test
    entities tagged `[E2E]` (tagging done live).
    **Still open:** vendor-name merges · category remap · #107 auto-draft-on-applicator
@@ -138,7 +138,8 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > zero settlement events, and no live `[E2E]` fixture writes. Source merge remains separate.
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
-> `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`.
+> `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md` (removed 2026-09-26 — the feature is live;
+> it remains in git history, and its one unrun acceptance check is in §5 "Proof still owed").
 >
 > **ANSWERED 2026-09-03 — treat this as a financial-reporting requirement, not a convenience.**
 > Asked what he uses it for, Mason said: *"year end, checking what I owed and reconciling payouts —
@@ -234,6 +235,62 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   discount terms · compliance document vault · application-time compliance check ·
   duplicate-customer detection. Plus the open-source comparison backlog
   (`docs/research/2026-06-19-future-projects-open-source-comparison.md`).
+
+## 🗂️ 5. Carried over by the 2026-09-26 docs cleanup (their only record was a removed doc)
+
+The source docs were deleted as finished history; each is recoverable from git history by the
+path named. Re-verify against the live app before acting — these were checked against `main` on
+2026-09-26, not against live data.
+
+**Owner decisions still open**
+- **Editing a partly delivered order** (2026-05-04 core-workflow audit P1-3): should unshipped lines
+  on a `partially_fulfilled` order be editable? Today `OrderDetail` locks them.
+- **Money housekeeping** (2026-05-04 money/AR audit): (1) finance charges run only from the manual AR
+  Aging button — automate monthly or keep manual? (2) reopening a closed period gives no age-based
+  warning — add one? (3) Month-End Close "reviewed" checkboxes are not saved with the close — persist them?
+- **Restricted-use (RUP) expired licenses** (sell-side plan gate G2, 2026-06-13 recovery audit): a RUP
+  sale to a customer whose applicator license is EXPIRED (not missing) is recorded as a WARNING, not
+  NON-COMPLIANT (`generate_rup_sales_records`, `src/lib/rupCompliance.ts`). Confirm WARNING is right, or
+  switch to NON-COMPLIANT. Also confirm the WPS notice PDF's "see product label" wording is sufficient.
+- **Retired product with an open PO** (P4-11, deferred 2026-05-06): `get_inventory_position` shows only
+  active products, so a retired product with open PO lines drops out of the Inventory / on-order view.
+  Options: show a "Retired – has open PO" badge, or refuse PO lines on retired products server-side.
+- **Full-acreage billing nudge** (field-map-ux F2, parked 2026-06-24): an automatic "confirm before
+  posting" prompt when a field-application invoice bills a field's full acreage. Only the "Full field /
+  Edited" badge shipped. The premise has changed: `job_applied_record_fields.applied_acres` now records
+  real sprayed acres, so a data-driven nudge may be buildable without new capture. Build it, or keep the badge.
+- **Map licensing check** (2026-06-22 field-mapping roadmap): confirm the Mapbox GL usage-metered cost
+  tier and the satellite basemap's commercial-use terms for a revenue app (a free government-imagery
+  basemap is the fallback).
+- **Per-product margin targets** (2026-08-09 pricing audit): how to seed margin targets across ~600 SKUs
+  (the recommendation then was to derive them from historical selling prices).
+- **Integrity-report flags from 2026-08-01**: Inventory Ledger (10 products whose on-hand does not match
+  the transaction ledger) and Delivery-Invoice Qty Parity (157 delivered-but-not-invoiced order+product
+  pairs). Decide whether these are real billing/ledger gaps or whether the parity check should exclude
+  intentionally deferred-billing orders. The Pre-booked check's only flag was an inactive test product.
+- **Junk-customer line items** (detail for §1 item 5, flag list 2026-07-05; re-verify links live first):
+  zero-link rows with id prefixes `73672cfe`, `b4d71a33` (a PO-bucket row), `e8508e65` and `b6a1d451`
+  (inactive duplicates). The inactive `d8bd091a` row has 2 orders and 4 commissions — merge it into its
+  active twin, do not delete it. The active `987c3722` row (1 field) is your call.
+
+**Owner smoke test**
+- Click-test the three act-from-the-list write buttons on real data (open since 2026-06-24): Quotes list
+  "Convert to Order", Deliveries list "Complete" (signed-by popup), and Receiving Hub "Receive" on a PO
+  line. Each should match its detail-page flow.
+
+**Features approved or requested but never built**
+- **Record Payment prefill** (approved 2026-05-04): Record Payment from an order, invoice or customer opens
+  `/payments` with no customer preselected (`PaymentAllocation` reads no URL parameters).
+- **One shared route list** (approved 2026-05-04): Sidebar, CommandPalette and `usePageMeta` each keep a
+  separate hand-maintained route list.
+- **Vendor Purchase Order PDF/email** and a **single combined PDF for batch invoice print** (2026-05-04
+  reports audit): neither exists today.
+
+**Proof still owed**
+- **Commission as-of report, live real-path proof** (acceptance #6 of the 2026-09-03 spec, removed in
+  this cleanup): when the first commission payment posts (real or `[E2E]`), run the report for a date
+  before and a date after the payment, void it, run both again, and confirm the answers change correctly.
+  Only a disposable PostgreSQL 17 proof exists so far.
 
 ## 🚫 Not building (settled — don't re-add without new evidence)
 
