@@ -63,7 +63,7 @@ playbook is detail on top of that.
 
 **What you still do — the whole list:**
 
-- **Approve a database change that deletes data.** Anything that erases business records, or drops a table or column that holds data. Agents are blocked from applying these on their own in every session. They park it, explain the risk in plain English, and wait for your yes.
+- **Approve a database change that deletes data.** Anything that erases business records, or drops a table or column that holds data. Agents cannot apply these at all, in any session — not even after your yes, because a safety script has no way to prove a yes you typed to an agent. They park it, explain the risk in plain English, and hand it to you to apply yourself in the Supabase dashboard, walking you through each step.
 - **Approve Edge Function deploys.** These are the small pieces of backend code that send emails, scan blend-ticket photos (OCR), and create/reset user accounts. A bad deploy can silently break one of those without touching the rest of the app.
 - **Approve anything touching secrets, logins, billing, or permissions.** Passwords and keys, who can sign in and how, what you pay for, and who is allowed to do what.
 
@@ -104,7 +104,7 @@ A few other things agents simply never do on their own — overwriting history o
 ## When things go wrong
 
 - **A deploy made the site look/act wrong:** say **"is prod okay?"** to confirm, then **"roll back the site."** The fix is a one-click "Promote to Production" on the previous good build in the Vercel dashboard (Deployments tab → find the last good build → "..." → Promote to Production) — fully reversible, nothing is deleted.
-- **A database change broke something:** say **"walk me through rollback."** The agent never edits or deletes the migration that already ran — it writes a brand-new migration that corrects it and runs it through the same review gates as any other database change. If the correction deletes data, it waits for your yes before applying it live.
+- **A database change broke something:** say **"walk me through rollback."** The agent never edits or deletes the migration that already ran — it writes a brand-new migration that corrects it and runs it through the same review gates as any other database change. If the correction deletes data, the agent cannot apply it — it hands it to you, as above.
 - **The app seems down or an error is showing:** check Sentry (error tracking) and say **"is prod okay?"** — it pulls the live picture in one shot.
 - **An agent seems stuck, confused, or is going in circles:** say **"/clear"** to wipe its short-term memory and restate what you want, or just start a fresh session. A stale, cluttered conversation causes more mistakes than starting over costs you.
 

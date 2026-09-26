@@ -47,10 +47,12 @@ still blocks; `--admin` and `--auto` merges stay refused.
   `--match-head-commit <the head the gate checked>` so GitHub itself refuses a head that moved between
   the check and the merge (REST and connector merge routes cannot carry it and are refused).
 - `migration-apply-lib.mjs` applies the formerly hands-free-only proof set in every session and refuses
-  destructive SQL for agents everywhere. The one door for a destructive migration is Mason's in-chat
-  yes, then `scripts/apply-migration-file.mjs ... --mason-approved-destructive` in an UNARMED session,
-  with every proof still required; an armed run refuses it regardless. The flag is self-attested — the
-  same trust the in-chat OK always carried — so it is a deliberate speed bump, not proof.
+  destructive SQL for agents everywhere, with NO override: an approval flag the agent passes itself
+  cannot prove Mason approved that exact migration (Sol HIGH, round 6), so a destructive migration is
+  parked and Mason applies it himself. A Mason-bound approval mechanism is a possible follow-up.
+- Autonomous applies come from Claude sessions only. Codex's `production-action-guard` blocks every
+  live apply, and its old protected-environment migration workflow no longer exists, so a Codex
+  session hands its migration to a Claude session (Sol MEDIUM, round 6).
 - Armed autopilot lets exactly two whole-command shapes through to those guards — a plain
   `git push origin <work-branch>` and `gh pr merge <n> [--squash|…] --match-head-commit <sha>` — and
   still denies every other push or merge spelling.

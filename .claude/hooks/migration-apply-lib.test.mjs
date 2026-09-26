@@ -449,21 +449,13 @@ const destructiveFixture = (autopilot) => fixture({
 // was prose); it is now refused for the agent, perfect proofs or not.
 denies(evaluate(destructiveFixture(null), { query: DESTRUCTIVE }),
   "destructive statement", "UNARMED session refuses a destructive migration even with perfect proofs");
-// The one door Mason opens in person: after his in-chat yes, the apply script's
-// explicit flag, in an unarmed session, with every proof still required.
-allows(evaluate(destructiveFixture(null), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
-  "UNARMED session + Mason's explicit destructive approval + perfect proofs is allowed");
-denies(evaluate(destructiveFixture(armed()), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
-  "destructive statement", "an ARMED run refuses destructive SQL whatever the approval flag says");
-denies(evaluate(destructiveFixture(null), { query: DESTRUCTIVE, masonApprovedDestructive: "true" }),
-  "destructive statement", "only the boolean true opens the door (a truthy string does not)");
-denies(
-  evaluate(fixture({
-    migrationFile: DESTRUCTIVE,
-    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: destructiveHash },
-    codexProof: null,
-  }), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
-  "Sol high-effort gate", "Mason's destructive approval never waives the Sol proof");
+// There is NO agent-assertable override (Sol HIGH, 2026-09-26): an approval flag
+// the agent can pass itself cannot prove Mason approved this exact migration. Any
+// such input is ignored, armed or not.
+for (const [label, autopilot] of [["UNARMED", null], ["ARMED", armed()]]) {
+  denies(evaluate(destructiveFixture(autopilot), { query: DESTRUCTIVE, masonApprovedDestructive: true }),
+    "destructive statement", `${label}: a self-asserted approval input is ignored — destructive SQL stays refused`);
+}
 denies(
   evaluate(
     fixture({

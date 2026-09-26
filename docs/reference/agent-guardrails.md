@@ -23,9 +23,10 @@
 > head that moved in between; REST and connector merges cannot carry it and are refused. `--auto` into `main` is
 > refused outright; `--admin` and `CHANGES_REQUESTED` still are. A repeated StatusContext counts its WORSE state. (2) `migration-apply-lib.mjs` applies its former
 > hands-free-only proof set (content binding, both reviewer names, fresh content-bound Sol proof) in EVERY session,
-> and refuses DESTRUCTIVE SQL for agents in every session; the only door is Mason's in-chat yes plus
-> `scripts/apply-migration-file.mjs --mason-approved-destructive` in an UNARMED session (armed runs refuse it
-> regardless). The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
+> and refuses DESTRUCTIVE SQL for agents in every session with no override (an agent-passed approval flag cannot
+> prove Mason approved that exact migration; `apply-migration-file.mjs` rejects `--mason-approved-destructive` as
+> unknown) — Mason applies destructive migrations himself. Autonomous applies are Claude-only: Codex's
+> `production-action-guard` blocks every live apply. The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
 > row below no longer exists. As its LAST check it runs `migration-landing-gate-lib.mjs`: the apply must come from a
 > clean checkout of the PR's branch (migration committed at HEAD, HEAD = the open PR's head into `main`) whose head
 > has CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof — so no migration reaches

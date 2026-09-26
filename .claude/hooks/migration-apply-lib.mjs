@@ -321,12 +321,8 @@ export function evaluateMigrationApply({
   // still matching by substring. Flipping the default closes that; both known callers
   // are the PreToolUse hook and apply-migration-file.mjs, and both want exact.
   requireExactProofName = true,
-  // Mason's autonomous-landing rule (2026-09-26): a DESTRUCTIVE migration stays
-  // Mason's decision. Only scripts/apply-migration-file.mjs can set this, from its
-  // explicit `--mason-approved-destructive` flag, after Mason says yes in chat. It
-  // is honoured only in an UNARMED session; armed runs refuse destructive SQL
-  // whatever this says. The MCP PreToolUse hook never sets it.
-  masonApprovedDestructive = false,
+  // (No destructive-approval input exists, deliberately: an agent-run command
+  // cannot prove Mason approved an exact migration — Sol HIGH, 2026-09-26.)
   // The pull-request half of the autonomous-landing rule — see
   // migration-landing-gate-lib.mjs. Injection point for tests only; both real
   // callers leave it unset and get the real gate. `landingDeadlineMs` is the
@@ -848,24 +844,23 @@ export function evaluateMigrationApply({
   // fresh content-bound gpt-6-sol/high Codex proof applies with no per-migration
   // ask. That is what Mason confirmed; the proof checks below are unchanged, they
   // simply stopped being optional outside autopilot. A DESTRUCTIVE migration is
-  // still Mason's: refused for agents in every session, except the one door he
-  // opens in person (masonApprovedDestructive, unarmed only).
+  // still Mason's: refused for agents in every session, with no agent-assertable
+  // override (an approval flag an agent could pass itself is not approval).
   if (migQuery) {
     // Fail CLOSED: a classifier error counts as destructive.
     let d;
     try { d = destructiveMigrationCheck(migQuery); }
     catch (e) { d = { destructive: true, reason: `destructive-check error (${e && e.message ? e.message : e}) — failing closed` }; }
-    if (d.destructive && (handsFree || masonApprovedDestructive !== true)) {
+    if (d.destructive) {
       return block(
         `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" contains a destructive statement ` +
-        `(${d.reason}). Destructive migrations are Mason's decision and never apply on an agent's own ` +
-        `authority — Mason's autonomous-landing rule (2026-09-26), which keeps the settled 2026-07-13 ` +
-        `refusal — because deleted data has no point-in-time recovery on this Supabase plan. PARK it ` +
+        `(${d.reason}). Destructive migrations are Mason's decision and NEVER apply through an agent — ` +
+        `Mason's autonomous-landing rule (2026-09-26), which keeps the settled 2026-07-13 refusal — because ` +
+        `deleted data has no point-in-time recovery on this Supabase plan, and no agent-run command can ` +
+        `prove that Mason approved this exact migration (Sol HIGH, 2026-09-26). PARK it ` +
         `(scripts/.staging-migrations/ + a docs/manual/KNOWN_ISSUES.md entry with the plain-English risk) ` +
-        `and ask Mason. Only after he says yes IN CHAT may the apply be re-run, in an UNARMED session, with ` +
-        `scripts/apply-migration-file.mjs --mason-approved-destructive; every proof below is still required. ` +
-        `An armed run refuses destructive SQL whatever the flag says — do NOT disarm autopilot to route ` +
-        `around this (an EXPIRED flag also refuses, deliberately).`);
+        `and hand it to Mason. Do NOT disarm autopilot, rename, split or rewrite the SQL to route around ` +
+        `this (an EXPIRED flag also refuses, deliberately).`);
     }
   }
 

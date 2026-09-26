@@ -250,7 +250,7 @@ Smoke:        SMOKE_PASS_ROLLBACK (or: not run — say so)
 ⚠️  Remember: This migration is LOCAL only. Applying it to the live database goes
     through `/migration-review` → `scripts/apply-migration-file.mjs` after the PR's
     final CodeRabbit and Sol reviews are clean (Mason's 2026-09-26 landing rule:
-    non-destructive = full proof + Sol gate, no ask; destructive = his in-chat yes). NEVER `supabase db push` and
+    non-destructive = full proof + Sol gate, no ask; destructive = Mason applies it himself; no agent can). NEVER `supabase db push` and
     NEVER the dashboard SQL editor — both bypass the review gate and are blocked.
 ```
 

@@ -71,7 +71,7 @@ Compare against the live database (Supabase MCP `list_migrations`). If there are
 ⚠️  You have X new migration(s) not yet applied to production.
     Apply them through /migration-review → scripts/apply-migration-file.mjs
     BEFORE merging (non-destructive: under Mason's 2026-09-26 landing rule
-    once the final reviews are clean; destructive: his in-chat yes), or the
+    once the final reviews are clean; destructive: Mason applies it himself), or the
     app will reference tables/columns/functions that don't exist yet.
     NEVER `supabase db push` — it bypasses the review gate and is blocked.
 ```
@@ -156,7 +156,7 @@ pass; report the merge explicitly rather than silently. A direct `vercel --prod`
 merge path or an Edge Function deploy still needs Mason's explicit yes. A non-destructive live
 migration applies under the same rule through migration-apply-guard's full proof gate (hash-bound
 dual-reviewer proof + hash-bound Sol proof, both fresh ≤30 min) in any session; a destructive one
-needs his in-chat yes, every time.
+is Mason's to apply himself — no agent command can.
 If blocked: List every issue that needs fixing first.
 
 ## Rules
@@ -168,4 +168,4 @@ If blocked: List every issue that needs fixing first.
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER trigger CodeRabbit while implementation or Codex review is still changing the branch
 - NEVER merge over a `CHANGES_REQUESTED` verdict, and never without CodeRabbit's APPROVED review bound to the exact candidate commit (Mason's autonomous-landing rule, 2026-09-26)
-- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive migrations need his in-chat yes
+- Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive migrations are Mason's to apply himself — no agent command can

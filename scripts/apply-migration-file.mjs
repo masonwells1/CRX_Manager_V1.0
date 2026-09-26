@@ -35,10 +35,6 @@
 //
 //   Flags:
 //     --confirm            actually transmit. Without it this is a dry run.
-//     --mason-approved-destructive
-//                          ONLY after Mason said yes IN CHAT to this exact destructive
-//                          migration. Honoured only in an unarmed session; every proof
-//                          is still required. See AUTHORIZATION.
 //     (no --name flag: the ledger name is derived from the filename — see LEDGER NAME)
 //     --created-by <who>   ledger created_by (default: the CRX ledger convention)
 //
@@ -51,11 +47,10 @@
 //   per-migration ask, in any session, once the rule book passes — both reviewer
 //   proofs and a fresh content-bound gpt-6-sol/high proof, all under 30 minutes.
 //   A DESTRUCTIVE migration (DELETE/TRUNCATE of business rows, DROP of data-bearing
-//   tables/columns) stays Mason's: the rule book refuses it unless this run carries
-//   --mason-approved-destructive, which an agent passes only after Mason said yes in
-//   chat to that migration, and never in an armed run (refused there regardless).
-//   That flag is self-attested — the same trust the in-chat OK always carried — so
-//   it is a deliberate speed bump, not proof Mason agreed.
+//   tables/columns) stays Mason's: the rule book refuses it through this script in
+//   every session. There is deliberately no override flag — a flag the agent can
+//   pass itself cannot prove Mason approved that exact migration (Sol HIGH,
+//   2026-09-26) — so a destructive migration is parked and handed to Mason.
 
 import { readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -122,7 +117,10 @@ if (!filePath) {
 }
 
 const confirm = argv.includes("--confirm");
-const masonApprovedDestructive = argv.includes("--mason-approved-destructive");
+rejectedFlag("--mason-approved-destructive",
+  "apply-migration-file: --mason-approved-destructive does not exist. A destructive migration never applies " +
+  "through an agent-run command: a flag the agent can pass itself cannot prove Mason approved that exact " +
+  "migration. Park it and hand it to Mason.");
 const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 
 // ── TARGET: pinned, not a parameter ────────────────────────────────────────
@@ -324,7 +322,6 @@ try {
     // The proof must name THIS migration exactly. Substring matching is what let an
     // aliased filename inherit another migration's proof; see the note in the lib.
     requireExactProofName: true,
-    masonApprovedDestructive,
   });
 } catch (err) {
   die(2,
@@ -342,7 +339,7 @@ console.log("APPLY GATE PASSED — ordering, autopilot state, destructive-conten
 if (!confirm) {
   console.log("");
   console.log("DRY RUN — nothing was transmitted. Re-run with --confirm to apply for real.");
-  console.log("Gate passed. Under Mason's 2026-09-26 landing rule a non-destructive migration whose final Sol and CodeRabbit reviews are clean may now be applied with --confirm; a destructive one needs his in-chat yes first.");
+  console.log("Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, whose PR's final Sol and CodeRabbit reviews are clean, may now be applied with --confirm.");
   process.exit(0);
 }
 
