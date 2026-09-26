@@ -18,7 +18,8 @@ live that day, that `20260914100500`, `100600`, `100800` and `100900` are still 
 customer-document candidate (then `20260914100450`) has never been applied; entries below that still call
 the first four "parked" predate that read. A 2026-09-22 UTC read-only ledger read confirmed by name that
 `20260914100500` and `100600` have since applied, so the customer-document candidate was restamped
-`20260914100700` and is still not applied. The 2026-09-20 read had confirmed by name that the
+`20260914100700`; a 2026-09-26 read-only ledger read confirmed it has since applied (the entry below is
+now resolved). The 2026-09-20 read had confirmed by name that the
 six-generator year fix `20260908140000` IS applied; boundary figures are
 recorded in `docs/reference/migration-history.md`, not here); the F2 entry retains its
 separate 2026-09-04 verification.** This file does **not** state the ordering boundary, the ledger row
@@ -376,7 +377,14 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-21 (FIX WRITTEN AND PROVEN LOCALLY — NOT DEPLOYED) — a customer-document download link can outlive the document's soft delete
+## RESOLVED 2026-09-26 (opened 2026-09-21) — a customer-document download link can outlive the document's soft delete
+
+**Resolved.** All three pieces are live: the Edge Function (v1, 2026-09-22), the page that calls it
+(#764 on `main`), and migration `20260914100700_customer_document_bytes_server_only` (applied live
+2026-09-26 as ledger version `20260926163005`). A read-only post-apply check on 2026-09-26 found no
+Storage policy on `storage.objects` naming the `customer-documents` bucket,
+`customer_documents_storage_path_shape_check` present, and 0 bucket objects and 0 document rows. The
+text below is the original record, kept for history.
 
 **What is wrong on live.** The live Storage policies let the uploader, and any admin, read objects in
 the private `customer-documents` bucket. Whoever can read an object can also ask Storage for a
