@@ -487,13 +487,20 @@ npm run test:e2e:smoke    # Only the @smoke-tagged E2E tests
 ```
 (All E2E commands need the staging settings described above.)
 
-### Live-database checks (read-only)
+### Live-database checks
 ```bash
-npm run db-sweeps         # Database-invariant sweeps (see scripts/db-invariant-sweeps/README.md)
-npm run smoke             # Rolled-back smoke chains (see scripts/smoke/README.md)
+npm run db-sweeps              # Read-only database-invariant sweeps (see scripts/db-invariant-sweeps/README.md)
+npm run smoke -- --list        # List the rolled-back smoke chains
+npm run smoke -- --spec <rpc>  # Run the chain(s) covering one RPC (see scripts/smoke/README.md)
 ```
 
-> **Hooks:** pre-commit runs fast staged-file checks; pre-push runs typecheck and build; CI runs lint, tests, and the build on every pull request.
+The sweeps are read-only. The smoke chains always roll back, but they run against the live
+database and are not free of side effects: sequence numbers they consume stay consumed, they take
+brief row locks, and `smoke-auto-expire-draw-skip.sql` briefly locks and expires real quotes inside
+its rolled-back transaction. Run only the chain for the RPC you changed, off-hours when cautious
+(`scripts/smoke/README.md`).
+
+> **Hooks:** pre-commit runs fast staged-file checks; pre-push runs typecheck and build; CI runs lint, tests, and the build when its `ci-scope` job routes the pull request to full CI (a docs-only change skips them); the documentation check runs on every pull request.
 
 ### Git Commands
 ```bash
