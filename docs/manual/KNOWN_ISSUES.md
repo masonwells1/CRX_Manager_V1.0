@@ -99,7 +99,11 @@ UPDATE's new row is checked against SELECT policies. Admins are unaffected, and 
 customer-document rows when this was found, so nobody has hit it. The fix is the parked
 `20260921180000_soft_delete_customer_document_rpc` (new SECURITY DEFINER RPC, no policy change;
 migration-history row 936), which applies only after `20260914100700`, `20260914100800` and
-`20260914100900`, and with Mason's approval. The page change that calls it merges only after that
+`20260914100900`, and with Mason's approval. **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge its PR
+or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed
+in the live ledger** (planned 2026-09-27). `20260914101000`..`101300` are on unmerged PR #793,
+so the pending-migration guard cannot see them; landing this higher stamp first would strand
+them. Full order: `20260914100700`, `100800`, `100900`, `101000`..`101300`, then this file. The page change that calls it merges only after that
 apply. The `gpt-5.6-sol` gate returned CLEAN on two earlier heads of the candidate (`1789c72b3`,
 `8069cd45a`); those proofs are void because the signature changed after them. Its 2026-09-26 run
 on `f351c4a20` returned BLOCKERS that were both stale-base artifacts (that head predated #794 and

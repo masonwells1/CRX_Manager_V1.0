@@ -42,4 +42,15 @@ simulated inside the prover.
 **Luna round (`gpt-6-luna`/xhigh, advisory, whole branch).** Four findings. Fixed: migration-history row 936 still said the gate had not run since the usage limit (LOW). Refuted: the BLOCKER calling the round-5 changelog's account of the `idempotency-body-check: exempt` marker a prompt injection. That is a record of a settled dispute addressed to Mason, and the body's key enforcement is exercised by the prover (key required, replay, intent and actor mismatch). Deferred by name, as before: control characters accepted in the key (LOW), and the prover's image pinned by tag rather than digest (LOW).
 
 **Still unverified.** The Sol gate on the final head; the live apply (Mason's approval, after
-`20260914100700`, `100800`, `100900`); and a rep's Remove click on live after the page branch deploys.
+`20260914100700`, `100800`, `100900`, `101000`..`101300`); and a rep's Remove click on live after the page
+branch deploys.
+
+**Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane).** Do not merge this PR or apply
+`20260921180000` until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed in the live
+ledger (planned 2026-09-27). `20260914101000`..`101300` are on unmerged PR #793, so the pending-migration guard
+cannot see them, and landing this higher stamp first would strand them.
+
+**CodeRabbit on #800 (CHANGES_REQUESTED at `c4144b4b2`), three findings, all verified valid and fixed.** The hold
+was missing from `CURRENT_STATE.md`, `KNOWN_ISSUES.md`, this entry, and migration-history row 936 plus its
+addendum (two Majors). The `src/lib/db.ts` comment named only two suffixed tokens, but every token the RPC raises
+itself is suffixed; only the helper's own refusals pass through bare (Minor).

@@ -47,7 +47,11 @@ enough — until the page deploys it keeps issuing the direct `UPDATE`, which th
 still refuses (see KNOWN_ISSUES). It applies after
 `20260914100700`, `20260914100800` and `20260914100900`, **and only with Mason's explicit approval
 in the applying session** — the predecessor order and the gate are not the only apply conditions
-(`KNOWN_ISSUES.md` records the same requirement). Its Sol gate has not passed ON THE CURRENT HEAD. It
+(`KNOWN_ISSUES.md` records the same requirement). **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge its PR
+or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed
+in the live ledger** (planned 2026-09-27). `20260914101000`..`101300` are on unmerged PR #793,
+so the pending-migration guard cannot see them; landing this higher stamp first would strand
+them. Full order: `20260914100700`, `100800`, `100900`, `101000`..`101300`, then this file. Its Sol gate has not passed ON THE CURRENT HEAD. It
 returned CLEAN (`gpt-5.6-sol`) on the earlier heads `1789c72b3` and `8069cd45a`, but the signature
 changed after them and every commit since unbinds those proofs. On 2026-09-26 it ran on `f351c4a20`
 and returned BLOCKERS, but both findings were artifacts of a stale base: that head was two commits

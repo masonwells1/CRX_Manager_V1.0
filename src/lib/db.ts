@@ -346,11 +346,15 @@ export const RpcErrorCodes = {
   // held by another actor, and a key reused for a different request. Most RPCs
   // raise these BARE, and pages classify them through src/lib/idempotency.ts
   // (isDefinitiveRpcRejection / getIdempotencyBindingRejection), which match the
-  // token by EXACT equality. soft_delete_customer_document is the exception: it
-  // raises IDEMPOTENCY_INTENT_MISMATCH and IDEMPOTENCY_RESULT_INVALID with a
-  // human suffix ("TOKEN: text"), which those exact-match helpers do NOT
-  // recognise. Its callers must classify with hasRpcCode / rpcCodeDetail below,
-  // which accept the suffixed form.
+  // token by EXACT equality. soft_delete_customer_document is the exception:
+  // EVERY token it raises itself (AUTH_REQUIRED, INSUFFICIENT_ROLE,
+  // IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_INTENT_MISMATCH,
+  // IDEMPOTENCY_RESULT_INVALID, IDEMPOTENCY_HELPER_FAULT,
+  // CUSTOMER_DOCUMENT_NOT_FOUND) carries a human suffix ("TOKEN: text"), which
+  // those exact-match helpers do NOT recognise. Only the shared helper's own
+  // refusals (IDEMPOTENCY_ACTOR_MISMATCH, IDEMPOTENCY_CROSS_OP_KEY_REUSE) pass
+  // through bare. Its callers must classify every refusal with hasRpcCode /
+  // rpcCodeDetail below, which accept both forms.
   IDEMPOTENCY_KEY_REQUIRED: 'IDEMPOTENCY_KEY_REQUIRED',
   IDEMPOTENCY_ACTOR_MISMATCH: 'IDEMPOTENCY_ACTOR_MISMATCH',
   IDEMPOTENCY_INTENT_MISMATCH: 'IDEMPOTENCY_INTENT_MISMATCH',
