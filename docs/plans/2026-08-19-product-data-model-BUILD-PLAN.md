@@ -138,9 +138,9 @@ things that are not technical.**
 |---|---|---|
 | **Codex credits are at zero** | Sol cannot execute, and the `gpt-5.6-sol` adversarial gate cannot run | **Mason** |
 | **Supabase connector scope in the Codex app** | `.codex/config.toml` targets `rhyzpcqhnizqbxphqdkr` with `read_only=false`; the OAuth grant was recorded dead (`invalid_grant`) 2026-08-14 | **Mason** |
-| **The database backup is 10 days old** | `backups/LATEST-OK.json` = `2026-08-09`, 156 tables, 9,927 rows. Prior cadence was 4–6 days, so the schedule has degraded. **The Supabase org is on the free plan — there is no point-in-time recovery, so this file is the only restore path.** WP-0 mutates live rows | **Prerequisite** — see §7 |
-| **The parked-migration scan is fail-closed** | `scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN`. This build adds three migrations to a queue that cannot currently be counted | **Prerequisite** — see §7 |
-| **The plan documents exist only as unpushed local commits** | Sol starting from `origin/main` cannot read them | **Prerequisite** — see §7 |
+| **The database backup is 10 days old** *(as of 2026-08-19; on 2026-09-26 the local `backups/LATEST-OK.json` still read `2026-08-09`, 48 days old)* | `backups/LATEST-OK.json` = `2026-08-09`, 156 tables, 9,927 rows. Prior cadence was 4–6 days, so the schedule has degraded. **The Supabase org is on the free plan — there is no point-in-time recovery, so this file is the only restore path.** WP-0 mutates live rows | **Prerequisite** — see §7 |
+| **The parked-migration scan is fail-closed** | `scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN`. This build adds three migrations to a queue that cannot currently be counted | **Done** — fixed by PR #437 (merged 2026-08-21); see `docs/reference/parked-migration-scan-unknown-diagnosis.md` |
+| **The plan documents exist only as unpushed local commits** | Sol starting from `origin/main` cannot read them | **Done** — on `main` via PRs #429, #435 and #498 |
 
 ### One consequence of Sol executing, stated plainly
 
@@ -2936,15 +2936,15 @@ hands-free run. See §8.
 | 1 | **Restore Codex credits** | Mason |
 | 2 | **Confirm the Codex-app Supabase connector** scope | Mason |
 | 3 | **Fresh verified backup** — `/backup-db`, confirm `backups/LATEST-OK.json` re-stamps. No PITR exists | Prerequisite |
-| 4 | **Repair the parked-migration scan** until `fleet-status.mjs` stops reporting `PARKED STATE UNKNOWN` | Prerequisite |
-| 5 | **Land the plan documents** — push this branch, PR, merge (docs-only, standing policy) so every session and worktree shares the contract, then cut the build worktree from `main` | Prerequisite, needs Mason's OK to push |
+| 4 | **Repair the parked-migration scan** until `fleet-status.mjs` stops reporting `PARKED STATE UNKNOWN` | **Done** — PR #437, merged 2026-08-21 |
+| 5 | **Land the plan documents** — push this branch, PR, merge (docs-only, standing policy) so every session and worktree shares the contract, then cut the build worktree from `main` | **Documents landed** on `main` via PRs #429, #435 and #498. **Still to do when the build starts:** cut the build worktree from current `main` |
 | 6 | **Write the mission doc and ledger** (§8) | Prerequisite |
 
 ### Handoff mechanics *(Fable F-13)*
 
-Sol works **in the build worktree cut from `main` after prerequisite 5**. Until that lands, the
-plan documents exist only as unpushed local commits and a session starting from `origin/main`
-cannot read them.
+Sol works **in the build worktree cut from `main` after prerequisite 5**. (The documents half of
+prerequisite 5 is done — they are on `main`, so a session starting from `origin/main` can read them;
+the build worktree is cut when the build starts.)
 
 ### Standing gates
 

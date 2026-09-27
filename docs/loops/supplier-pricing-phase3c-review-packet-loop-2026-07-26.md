@@ -4,8 +4,10 @@
 > merged 2026-07-28. Stage C itself then landed: PR #282 merged 2026-07-29 and migration
 > `20260729213733_supplier_pricing_phase3c_return_policy_classification` is in the live ledger
 > (21 products `no_return`, 2 `returnable`, the rest left `unknown` by owner decision — see
-> `docs/reference/database-schema.md`, "Supplier Pricing Phase 3 Stage C"). The "PARKED — PR #246 IS
-> OPEN" status below is the July 26–27 state, not the current one. Nothing here authorizes new work.
+> `docs/reference/database-schema.md`, "Supplier Pricing Phase 3 Stage C"). **Everything below is the
+> July 26–27 record and is historical and non-actionable:** the "PARKED — PR #246 IS OPEN" status, the
+> "current" candidate, the pending decisions, the future gates and the conditions for staying PARKED.
+> Nothing here authorizes new work.
 
 ## Mission status as of 2026-07-27 — packet complete; external gates only
 

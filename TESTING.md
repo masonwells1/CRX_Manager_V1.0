@@ -8,9 +8,9 @@ This guide will walk you through testing the application. No coding experience n
 |--------|-------|
 | **Unit tests** | Vitest `*.test.ts(x)` files next to the code in `src/`; `npm test` prints the current file and pass totals |
 | **E2E specs** | Playwright specs in `tests/e2e/`. They run only against a staging Supabase project, and none exists yet, so they cannot run today (see [Running E2E Tests](#running-e2e-tests)) |
-| **Pre-commit hook** | Fast checks on the files you staged (SQL and frontend validators, ledger and private-artifact checks). It does **not** run the build or the tests |
+| **Pre-commit hook** | Fast checks: the SQL and frontend validators and the ledger check look at the files you staged; the private-artifact containment check also scans untracked and modified files. It does **not** run the build or the tests |
 | **Pre-push hook** | Private-artifact containment, `npm run typecheck`, and `npm run build` — blocks the push if any fails |
-| **CI (GitHub Actions)** | The full proof on every pull request that changes code: lint, typecheck, unit tests with coverage, build, documentation and SQL checks. This is the gate a change must pass before it can merge |
+| **CI (GitHub Actions)** | Lint, typecheck, unit tests with coverage and build run when the `ci-scope` job routes the pull request to full CI (a docs-only change skips them); the documentation and SQL checks run on every pull request. This is the gate a change must pass before it can merge |
 
 ## Table of Contents
 1. [Setting Up Your Computer](#setting-up-your-computer)
@@ -184,9 +184,9 @@ This keeps running and automatically re-tests when you save a file. Great during
 
 ### What Runs Automatically
 
-- **On every commit (pre-commit hook):** fast checks on the staged files only — the SQL and frontend validators, the ledger check, and the private-artifact containment check (plus agent-workflow and dependency checks when those files changed). It does **not** build the app or run the tests.
+- **On every commit (pre-commit hook):** fast checks — the SQL and frontend validators and the ledger check on the staged files, and the private-artifact containment check, which also scans untracked and modified files (plus agent-workflow and dependency checks when those files changed). It does **not** build the app or run the tests.
 - **On every push (pre-push hook):** private-artifact containment, `npm run typecheck`, and `npm run build`. If any fails, the push is **blocked**.
-- **On every pull request that changes code (CI):** lint, typecheck, the full unit-test suite with coverage, the build, and the documentation and SQL checks. Run `npm test` yourself before pushing if you want the test answer early.
+- **On every pull request (CI):** the documentation and SQL checks always; lint, typecheck, the full unit-test suite with coverage, and the build when the `ci-scope` job routes the pull request to full CI (a docs-only change skips them). Run `npm test` yourself before pushing if you want the test answer early.
 
 The hooks live in the tracked `.husky/` folder. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#pre-commit-checks) for the full list.
 

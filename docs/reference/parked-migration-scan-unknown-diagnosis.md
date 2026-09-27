@@ -33,8 +33,8 @@ real pending work, and an extra scan only costs time.
 
 ## Why it can never be satisfied
 
-`migration-history.md` is a **shared file on `origin/main`**. Its three current LOCAL CANDIDATE
-rows are:
+`migration-history.md` is a **shared file on `origin/main`**. At the 2026-08-20 diagnosis its three
+LOCAL CANDIDATE rows were (all three have since been applied live — see the note at the top):
 
 | Version | File |
 |---|---|
@@ -44,7 +44,8 @@ rows are:
 
 **All three already live on `origin/main`** — verified: the SQL files are present in
 `supabase/migrations/` in the main checkout, and the history rows are accurate (none of the three
-appear in the live `list_migrations` output, so they really are parked, not stale rows).
+appeared in the live `list_migrations` output on 2026-08-20, so they really were parked then, not
+stale rows).
 
 A file that is already on `origin/main` **cannot appear in any branch's diff against
 `origin/main`.** So the reconciliation is unsatisfiable by construction for mainline-parked
