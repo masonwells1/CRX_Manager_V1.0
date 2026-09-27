@@ -52,9 +52,10 @@ works for reps only after **both** steps land: this migration applies, **and** t
 change (branch `claude/customer-document-rep-remove-page-v3`) deploys. The migration alone is not
 enough — until the page deploys it keeps issuing the direct `UPDATE`, which the rep's RLS policy
 still refuses (see KNOWN_ISSUES). It applies after
-`20260914100700`, `20260914100800` and `20260914100900`, **and only with Mason's explicit approval
-in the applying session** — the predecessor order and the gate are not the only apply conditions
-(`KNOWN_ISSUES.md` records the same requirement). **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge its PR
+`20260914100700`, `20260914100800` and `20260914100900`. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the ordering hold has
+lifted, it applies under the autonomous-landing rule (#804): CodeRabbit APPROVED on the final head,
+a fresh exact-SHA `gpt-6-sol` review clean, every required check green, and the migration-apply-guard
+proofs. **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge its PR
 or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed
 in the live ledger** (planned 2026-09-27). `20260914101000`..`101300` are on unmerged PR #793,
 so the pending-migration guard cannot see them; landing this higher stamp first would strand

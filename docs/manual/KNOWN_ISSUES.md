@@ -111,7 +111,10 @@ UPDATE's new row is checked against SELECT policies. Admins are unaffected, and 
 customer-document rows when this was found, so nobody has hit it. The fix is the parked
 `20260921180000_soft_delete_customer_document_rpc` (new SECURITY DEFINER RPC, no policy change;
 migration-history row 936), which applies only after `20260914100700`, `20260914100800` and
-`20260914100900`, and with Mason's approval. **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge its PR
+`20260914100900`. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the ordering hold has
+lifted, it applies under the autonomous-landing rule (#804): CodeRabbit APPROVED on the final head,
+a fresh exact-SHA `gpt-6-sol` review clean, every required check green, and the migration-apply-guard
+proofs. **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge its PR
 or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed
 in the live ledger** (planned 2026-09-27). `20260914101000`..`101300` are on unmerged PR #793,
 so the pending-migration guard cannot see them; landing this higher stamp first would strand

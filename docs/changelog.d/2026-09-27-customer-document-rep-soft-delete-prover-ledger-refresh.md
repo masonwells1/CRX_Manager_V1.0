@@ -18,6 +18,11 @@ season files `20260914101000`..`101300` are not live yet. No SQL change.
 **Proof.** The prover passed (`CUSTOMER_DOCUMENT_REP_SOFT_DELETE_PROOF_PASS`, 96 migrations replayed, live shape
 CHECK installed, bad path refused).
 
+**Apply authority (Mason, 2026-09-27).** Asked whether this migration should still need his separate in-chat
+yes now that `main` carries the autonomous-landing rule (#804), Mason answered "auto is fine". Once the ordering
+hold lifts, it applies under that rule's gates with no separate ask. `CURRENT_STATE.md`, `KNOWN_ISSUES.md` and
+migration-history row 936 now say so.
+
 **Still to do before `20260921180000` applies.** Merge `main` once #793 lands. Drop `20260914100900` from the
 skip list when it is live. Confirm `20260914101300` in the live ledger (Mason's ordering hold). Then re-run
 the prover. Under the landing flow `main` adopted in #804, fixes stay on #800: push, wait for checks, relabel for one follow-up CodeRabbit review, and run `gpt-6-sol` last, on the head CodeRabbit approves.

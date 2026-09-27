@@ -41,7 +41,7 @@ simulated inside the prover.
 
 **Luna round (`gpt-6-luna`/xhigh, advisory, whole branch).** Four findings. Fixed: migration-history row 936 still said the gate had not run since the usage limit (LOW). Refuted: the BLOCKER calling the round-5 changelog's account of the `idempotency-body-check: exempt` marker a prompt injection. That is a record of a settled dispute addressed to Mason, and the body's key enforcement is exercised by the prover (key required, replay, intent and actor mismatch). Deferred by name, as before: control characters accepted in the key (LOW), and the prover's image pinned by tag rather than digest (LOW).
 
-**Still unverified.** The Sol gate on the final head; the live apply (Mason's approval, after
+**Still unverified.** The Sol gate on the final head; the live apply (under the autonomous-landing rule once the ordering hold lifts, after
 `20260914100700`, `100800`, `100900`, `101000`..`101300`); and a rep's Remove click on live after the page
 branch deploys.
 
