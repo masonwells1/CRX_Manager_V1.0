@@ -218,7 +218,7 @@ the section above are not enough — Playwright overwrites them with the staging
 - `E2E_SUPABASE_ANON_KEY`
 - `E2E_TEST_EMAIL` and `E2E_TEST_PASSWORD` (the staging test account)
 
-Playwright also refuses to start while any file under `tests/e2e/` still contains the production
+The default E2E Playwright configuration also refuses to start while any TypeScript file under `tests/e2e/` still contains the production
 Supabase address. Full setup and the `[E2E]` test-data rules are in
 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#e2e-tests-playwright).
 
@@ -499,8 +499,8 @@ npm run smoke -- --spec <rpc>  # Run the chain(s) covering one RPC (see scripts/
 against the database. Without `SUPABASE_DB_URL` (for the sweeps, also without `psql`) — the usual
 case — they only **print** the SQL: the sweeps exit 0, and the smoke runner exits 2 if any selected
 chain is psql-only (it skips that chain; with the URL set but no `psql`, a chain fails instead of
-printing). Either way, nothing has run yet. The check counts only once that SQL is actually executed (for example through the
-Supabase MCP `execute_sql` tool) and its result is read. For the sweeps, `npm run db-sweeps:strict`
+printing). In print-only mode nothing has run yet: the check counts only once that SQL is actually executed (for example through the
+Supabase MCP `execute_sql` tool) and its result is read. In live mode the runner has already executed it; do not run the same chain again. For the sweeps, `npm run db-sweeps:strict`
 refuses the print-only mode and exits 2 instead; an automated sweep run must use it. The smoke runner
 has no such switch, so an automated smoke check must run with `SUPABASE_DB_URL` and `psql` and
 confirm each chain reported its pass marker, never just a 0 exit.

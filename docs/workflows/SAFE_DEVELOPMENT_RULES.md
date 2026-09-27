@@ -64,7 +64,7 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 |------|------------------------|
 | NEVER skip delivery confirm->complete flow | Must go scheduled -> in_progress -> completed. Skipping breaks inventory. |
 | NEVER allow editing delivery items once in_progress or beyond | Items are only editable while status = 'scheduled'. Once started, items are locked. |
-| NEVER create a chemical-sale invoice without its order | Chemical-sale invoices link to their order via `order_id`. Field-application, blend-ticket and job invoices are separate paths that have no order (`order_id` is nullable) — see `docs/workflows/QUOTE_TO_DELIVERY.md`. |
+| NEVER create a chemical-sale invoice without its source order or blend ticket | Chemical-sale invoices link to their source via `order_id` or `blend_ticket_id`; `save_invoice` refuses an invoice with neither unless it is a draft miscellaneous charge (`20260904180000`). Field-application, blend-ticket and job invoices are separate paths that have no order (`order_id` is nullable) — see `docs/workflows/QUOTE_TO_DELIVERY.md`. |
 | NEVER bypass `check_period_open()` | Closed periods prevent backdated transactions. Bypassing corrupts financials. |
 | NEVER allow non-admin access to month-end, commissions, or settings | These are admin-only features. (Live exception, recorded in `RLS_SECURITY_GUIDE.md`: `comm_select` lets a sales rep read only their own commission rows. Widening or removing that is Mason's call.) |
 | NEVER skip a status transition step | Every lifecycle has defined transitions (see QUOTE_TO_DELIVERY.md). |

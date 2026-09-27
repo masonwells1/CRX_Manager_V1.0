@@ -232,9 +232,7 @@ below.
 > **Correction (2026-08-08 foundation ultra review):** the `payments` row count
 > below is not evidence the money loop is unexercised. `payments` is a **dead
 > legacy table** with zero writers; the live ledger is `allocation_sets` +
-> `prepay_credits`. On 2026-07-17 a real check was recorded against the owner's
-> own customer record — part allocated to one invoice and the rest booked as prepay
-> credit — and both halves reconcile exactly. Do not read
+> `prepay_credits`, so check payment activity there, never in `payments`. Do not read
 > `payments = 0` as missing money or as an unrun money loop.
 
 ## 2. Live operational snapshot

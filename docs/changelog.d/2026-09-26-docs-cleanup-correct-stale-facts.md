@@ -40,7 +40,8 @@ they could not verify were skipped and listed, not guessed.
   the two earmark smoke proofs moved next to the shelved migrations they test.
 - Public-repo hygiene: two real customer names and the raw commission-split JSON removed from
   `scripts/db-invariant-sweeps/FIN-README.md`, real payment figures removed from `CURRENT_STATE.md`,
-  and one archive log redacted (identity keys kept; the old text remains in git history).
+  and one archive log redacted (identity keys kept). Earlier commits still hold the removed text; purging it would mean rewriting
+  public history, a force-push that is Mason's decision, not part of this cleanup.
 - From the Codex GitHub App and CodeRabbit reviews: the Chicago-year claim is narrowed to the
   generators that use it, with a new `KNOWN_ISSUES` entry for the three that still read the UTC
   clock (quote, order, rebate claim); the `TESTING.md` manual checklist is read-only while no staging
