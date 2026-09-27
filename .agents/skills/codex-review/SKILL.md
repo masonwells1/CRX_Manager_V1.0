@@ -26,7 +26,7 @@ independent, and it is the one that guards money.
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
 | Every iterating review round | `gpt-6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — risky money / inventory / auth / RLS / migration / permission / Edge Function diff, once Luna is clean | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit approved the frozen head | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
 | Genuinely complex work where Luna is plainly out of its depth | `gpt-6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
@@ -392,12 +392,11 @@ one-line reason. This is still the advisory path — it mints no proof.
 
 ## Step 3B: Ship gate — exactly one Sol proof
 
-**Only after Step 3A is clean, and only for a risky diff** — the full `AGENTS.md` set: money /
-inventory / auth / RLS / migration / permission / Edge Function / other business-critical, **whether
-or not** the diff trips `RISKY_PATH_RES`. The push guard's path/content detector is a backstop, not
-the definition: it does not recognize every auth surface (e.g. a login-redirect edit in
-`src/pages/`), so "the push went through without asking" never means Sol was not required. For ordinary reversible work
-Step 3A is the whole review — do not spend a Sol round on it.
+**Only after Step 3A is clean, for EVERY change headed for `main`** (Mason's autonomous-landing
+rule, 2026-09-26 — both merge gates now refuse any merge into `main` without this proof, risky diff
+or not). Run it LAST: after CodeRabbit APPROVED the frozen head, immediately before the migration
+apply (if any) and the merge. The proof binds to that HEAD and to GitHub's real base and expires
+after 30 minutes, so a later commit, a moved base or a slow CodeRabbit round voids it.
 
 > ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
 >
@@ -527,41 +526,32 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
-freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge with
-`--match-head-commit <reviewed-head-sha>`**. Direct pushes to
-`main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
+freeze the candidate commit → apply `ready-for-coderabbit` → CodeRabbit APPROVED → Step 3B Sol proof LAST →
+apply the non-destructive migration, if any → merge with `--match-head-commit <reviewed-head-sha>`**.
+Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (standing policy, automation updated 2026-08-30):** automatic reviews are disabled.
-Finish the Codex review first, bring the branch current and green, freeze the release-candidate
-commit, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch workflow
+**CodeRabbit (Mason's autonomous-landing rule, 2026-09-26):** automatic reviews are disabled.
+Bring the branch current and green, freeze the release-candidate commit, record its head SHA, then
+apply `ready-for-coderabbit`. The trusted default-branch workflow waits out running checks,
 rechecks the exact head and PR/check state, records `coderabbit-review-requested`, then adds
-`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in. It waits up to six minutes
-for an authenticated formal review of that exact commit. A skipped status or empty reply artifact
-does not count. A timeout or uncertain dispatch fails while preserving dedupe labels; never clear
+`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in, observes an authenticated
+formal review of that exact commit, and releases the provider label. A skipped status or empty
+reply artifact does not count. A timeout or uncertain dispatch preserves dedupe labels; never clear
 them blindly to retry. After observing the actual review, re-apply `ready-for-coderabbit` to
-reconcile without another request. See `docs/reference/coderabbit-native-review.md` for setup and
-recovery. Read the review and fix any real issue before merging; nitpicks may be
-dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
-labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
-Codex-worthy, a newly frozen and recorded SHA, and a fresh delivery PR before the
-ready-label trigger. Normal delivery verifies the original opened head/base for
-the entire PR lifetime; close the previous PR with a `Replaced by #N` comment (closing keeps its
-branch, comments and findings; never leave it open "as the record"). The provider skipped
-same-PR incremental review with this configuration. Never use
-`@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
-complete reread. An approving GitHub review is **NOT** required to merge: Mason removed
-`required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A
-`CHANGES_REQUESTED` verdict still blocks, and both agent merge gates refuse to merge over one.
-Immediately before merge, verify live `main` protection still requires the branch current and
-every required check green, and confirm CodeRabbit actually reviewed the frozen candidate — a
-green status row is not review proof. When CodeRabbit HAS approved, its `commit_id` must equal
-the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
-for risky money/RLS/migration diffs. Both run — neither replaces the other.
+reconcile without another request. See `docs/reference/coderabbit-native-review.md`. Read the
+review and fix any real issue before merging; nitpicks may be dismissed with a one-line reason.
+**A fix goes on the SAME PR:** the push resets the workflow labels, the trusted synchronize run
+records the new candidate epoch, and once checks pass a relabel earns one follow-up review — no
+replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand, and
+reserve `@coderabbitai full review` for a deliberately justified complete reread. Both agent merge
+gates enforce the rule: CodeRabbit's latest verdict APPROVED on the exact `headRefOid`, the newest
+run of every reported check green with `mergeStateStatus` CLEAN, and the Step 3B Sol proof bound to
+that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
 
-**If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
-RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money
-patterns — `.claude/hooks/codex-push-guard.mjs` requires a fresh, HEAD-bound Codex proof and
-blocks any attempt to hand-write it. Mint it the sanctioned way; do NOT write the JSON yourself:
+**Minting the merge proof** — both merge gates require a fresh, HEAD- and base-bound Codex proof
+for every merge into `main` (and `.claude/hooks/codex-push-guard.mjs` still requires one for any
+risky push aimed at `main`), and block any attempt to hand-write it. Mint it the sanctioned way; do
+NOT write the JSON yourself:
 
 ```bash
 node scripts/write-codex-push-proof.mjs
@@ -573,7 +563,8 @@ ONLY on a terminal CLEAN token with a stable clean worktree does it write the HE
 (`.claude/session-state/codex-review-<sha>.json`) for you. The step-3 `tee` capture above is a
 human-readable transcript, not the proof — the transcript alone never satisfies the gate. If the
 wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify.
-Merging that PR deploys production, so it stays inside the standing push policy in `AGENTS.md`.
+Merging that PR deploys production; under Mason's autonomous-landing rule in `AGENTS.md` the agent
+merges it itself once CodeRabbit approved the head and this proof is fresh.
 
 ## General task handoff (not just review)
 
