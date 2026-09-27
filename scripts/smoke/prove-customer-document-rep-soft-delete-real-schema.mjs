@@ -48,22 +48,29 @@ const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260921180000_soft
 const SIG = 'public.soft_delete_customer_document(uuid,uuid,text)';
 const SMOKE_CHAIN = path.join(ROOT, 'scripts', 'smoke', 'smoke-customer-document-rep-soft-delete.sql');
 
-// Written but not applied live on 2026-09-21 (a read-only ledger check by
-// name found every other file before the candidate applied, including
-// 20260914100500 and 100600); replaying them would build a schema production
-// does not have. None of them touches customer_documents (asserted below).
+// Skipped files. Re-read against the live ledger 2026-09-27 06:48Z (read-only,
+// by name): 20260914100800 is live (20260927060531) and is REPLAYED now, so the
+// proof runs through production's receipt trigger. 20260914100900 is not live;
+// replaying it would build a schema production does not have. It does not
+// touch customer_documents (asserted below). Re-check this list against the
+// ledger before 20260921180000 applies (gpt-6-sol MED on #800).
 const PARKED = new Set([
-  '20260914100800_bind_transfer_invoice_intent.sql',
   '20260914100900_repair_commission_history_label_snapshots.sql',
   '20260914100700_customer_document_bytes_server_only.sql',
 ]);
-// The customer-document bytes candidate (#764, restamped 20260914100700 when
-// 20260914100500 applied and stranded its old 20260914100450 stamp) landed on
-// main parked. It is skipped while unapplied, like the rest; it does touch
-// customer_documents, but only its storage.objects policies and a
-// storage_path CHECK, which this function never reads. The check below is
-// what holds that to be true, and now runs for real.
+// 20260914100700 (the customer-document bytes change, #764) IS live
+// (20260926163005) but cannot replay here: it rewrites storage.objects
+// policies, and this container's stub storage schema cannot host them
+// (measured 2026-09-27: "permission denied for table objects"). So it stays
+// skipped, under the soundness check below, and its only customer_documents
+// change - customer_documents_storage_path_shape_check - is installed verbatim
+// from the file before seeding, so every fixture and the FIX run against the
+// real constraint.
 const OPTIONAL_PARKED = new Set(['20260914100700_customer_document_bytes_server_only.sql']);
+const SHAPE_CHECK_SOURCE = path.join(ROOT, 'supabase', 'migrations', '20260914100700_customer_document_bytes_server_only.sql');
+// Installed live by 20260914100800 on every idempotency_keys INSERT; this
+// function's receipt passes through it.
+const LIVE_RECEIPT_TRIGGER = 'trg_idempotency_keys_require_transfer_intent_20260908';
 
 const ADMIN = '5d000000-0000-4000-8000-00000000000a';
 const REP = '5d000000-0000-4000-8000-00000000000b';
@@ -415,6 +422,24 @@ function selected() {
   }
   return before.filter((f) => !PARKED.has(path.basename(f)));
 }
+/**
+ * Install 20260914100700's customer_documents CHECK exactly as that file
+ * writes it (the file itself cannot replay here - see OPTIONAL_PARKED).
+ * Fails closed unless the statement is found exactly once and ends up
+ * installed and validated.
+ */
+function installLiveShapeCheck() {
+  const sql = readFileSync(SHAPE_CHECK_SOURCE, 'utf8').replaceAll('\r\n', '\n');
+  const statements = sql.match(/ALTER TABLE public\.customer_documents\s+ADD CONSTRAINT customer_documents_storage_path_shape_check CHECK \([^;]*\);/g) ?? [];
+  assert.equal(statements.length, 1, `expected exactly one customer_documents_storage_path_shape_check ADD in ${path.basename(SHAPE_CHECK_SOURCE)}, found ${statements.length}; fix the extractor rather than skipping the constraint`);
+  psql(statements[0]);
+  assert.equal(
+    scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.customer_documents'::regclass AND conname = 'customer_documents_storage_path_shape_check' AND convalidated;`),
+    '1',
+    'the live storage_path shape CHECK is not installed and validated',
+  );
+  console.log('[prover] installed the live customer_documents_storage_path_shape_check verbatim from 20260914100700');
+}
 // Same replay repair the other real-schema provers use: live stores this one
 // body with CRLF line endings, and a later migration pins that exact body.
 function restoreLiveCrLfCloseRemainder() {
@@ -597,8 +622,20 @@ async function main() {
   }
   console.log(`[prover] replayed ${migrations.length} applied post-baseline migrations (parked files skipped)`);
   assert.equal(scalar(`SELECT count(*) FROM pg_proc WHERE proname = 'soft_delete_customer_document';`), '0', 'function must not exist before the candidate');
+  installLiveShapeCheck();
+  assert.equal(
+    scalar(`SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.idempotency_keys'::regclass AND tgname = '${LIVE_RECEIPT_TRIGGER}' AND tgenabled <> 'D';`),
+    '1',
+    `${LIVE_RECEIPT_TRIGGER} (live since 20260914100800) is not installed and enabled after replay, so this proof would not run the receipt through it`,
+  );
 
   seed();
+  // The installed shape CHECK must actually REFUSE the path shape this repo got
+  // wrong before ([SMOKE] in the safe name), or the fixtures above prove nothing.
+  const badPath = psql(`BEGIN; INSERT INTO public.customer_documents (id,customer_id,document_type,storage_path,filename,mime_type,size_bytes,uploaded_by,source) VALUES ('${MUTANT_DOC}','${CUSTOMER_MINE}','other','${docStoragePath(CUSTOMER_MINE, MUTANT_DOC, '[SMOKE]-bad.pdf')}','bad.pdf','application/pdf',1,'${ADMIN}','rep'); ROLLBACK;`, { allowFailure: true });
+  assert.notEqual(badPath.status, 0, 'the live storage_path shape CHECK accepted a [SMOKE] path');
+  assert.match(`${badPath.stdout}
+${badPath.stderr}`, /customer_documents_storage_path_shape_check/, 'the bad path was refused for the wrong reason');
 
   // 1. THE BUG, BEFORE.
   const repPlain = directSoftDelete(REP, DOC.before, false);
