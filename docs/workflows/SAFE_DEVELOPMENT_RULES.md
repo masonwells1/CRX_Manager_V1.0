@@ -36,7 +36,7 @@ Apply `docs/reference/coding-guidelines.md` to every code change. In particular,
 | Use `checkMutationResult()` after every `.update()` or `.delete()` | Catches silent RLS failures that return empty data with no error |
 | Use `assertRpcResult()` after RPC calls | Catches RPCs that return null due to permission denial |
 | Use `logActivity()` for important user actions | Feeds the activity timeline and keeps audit history |
-| Require and enforce `p_idempotency_key text DEFAULT NULL` on mutating RPCs; at callers send a persisted key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`) — ESLint rule `local-rules/idempotency-key-from-hook` rejects a fresh `generateIdempotencyKey()` at the RPC call site | Prevents retries or double-clicks from applying the same business action twice |
+| Require and enforce `p_idempotency_key text DEFAULT NULL` on mutating RPCs; at callers send a key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`), which is stable only while the hook instance is mounted (use durable intent storage or authoritative reconciliation when a retry can follow an unmount/remount) — ESLint rule `local-rules/idempotency-key-from-hook` rejects a fresh `generateIdempotencyKey()` at the RPC call site | Prevents retries or double-clicks from applying the same business action twice |
 | Create migration files for ALL database changes | Keeps the schema version-controlled and reproducible |
 | Run `npm run lint` after changes | Catches static-analysis and project-convention violations |
 | Run `npm run typecheck` after changes | Catches type mismatches before they become runtime bugs |

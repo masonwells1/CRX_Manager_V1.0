@@ -111,7 +111,7 @@ Quote sections and quote items are RPC-owned: browser roles may read them but mu
 - Commission records are created automatically during order creation.
 - Money must remain exact whole cents — follow "Money Handling" in `docs/workflows/SAFE_DEVELOPMENT_RULES.md`. Parse decimal input exactly instead of multiplying a binary float.
 - Always use `checkMutationResult()` after writes.
-- Always send a persisted idempotency key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`) for order creation to prevent double-submissions. ESLint (`local-rules/idempotency-key-from-hook`) rejects a fresh `generateIdempotencyKey()` call at the RPC call site, because a retry would send a different key.
+- Always send the idempotency key from `useIdempotencyKey()` (`src/hooks/useIdempotencyKey.ts`) for order creation to prevent double-submissions. The key is stable across re-renders and retries only while the hook instance is mounted; after an unmount/remount, use durable intent restoration or authoritative reconciliation. ESLint (`local-rules/idempotency-key-from-hook`) rejects a fresh `generateIdempotencyKey()` call at the RPC call site, because a retry would send a different key.
 
 ### What can go wrong
 - Creating an order from a quote that wasn't accepted
@@ -170,7 +170,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 - Drivers can report issues (issue_type + issue_notes fields).
 - Quick deliveries have `is_quick_delivery = true` flag and skip the quote/order flow.
 - Always call `logActivity()` on status transitions.
-- Always send a persisted `useIdempotencyKey()` key for `complete_delivery()`.
+- Always send a `useIdempotencyKey()` key for `complete_delivery()`. The key is stable across re-renders and retries only while the hook instance is mounted; after an unmount/remount, use durable intent restoration or authoritative reconciliation.
 
 ### What can go wrong
 - Trying to complete a delivery that's still in "scheduled" status
@@ -226,7 +226,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 - Payment allocation links specific payment amounts to specific invoice line items.
 - Prepay credits are applied one invoice at a time with `apply_prepay_to_invoice`. Bulk auto-apply (`apply_remaining_prepayments`, `batch_apply_all_prepayments`) is disabled and raises `PREPAY_BULK_APPLY_DISABLED` (migration `20260620200000`).
 - All payment activity is logged in `financial_audit_log`.
-- Use a persisted `useIdempotencyKey()` key for payment creation.
+- Use a `useIdempotencyKey()` key for payment creation. The key is stable across re-renders and retries only while the hook instance is mounted; after an unmount/remount, use durable intent restoration or authoritative reconciliation.
 
 ---
 
@@ -266,7 +266,7 @@ If you change one stage, check everything downstream:
 
 - [ ] Read the RPC source code before modifying any step
 - [ ] Use `checkMutationResult()` after every write
-- [ ] Use a persisted `useIdempotencyKey()` key (never a fresh `generateIdempotencyKey()` at the call site) for order creation, delivery completion, payment recording
+- [ ] Use a `useIdempotencyKey()` key (never a fresh `generateIdempotencyKey()` at the call site) for order creation, delivery completion and payment recording; treat it as instance-scoped unless the flow restores it from durable intent storage
 - [ ] Call `logActivity()` for status transitions
 - [ ] Test with all 4 app roles: admin, sales_rep, driver, applicator
 - [ ] Verify inventory levels after delivery completion

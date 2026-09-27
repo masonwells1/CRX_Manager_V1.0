@@ -257,8 +257,10 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 
 ## 🗂️ 5. Carried over by the 2026-09-26 docs cleanup (their only record was a removed doc)
 
-The source docs were deleted as finished history; each is recoverable from git history by the
-path named. Re-verify against the live app before acting — these were checked against `main` on
+The source docs are removed by the docs cleanup as finished history. Each item names its source
+(a path or an audit label). Recover the full write-up from `e81853970`, the last `main` commit that
+has every one of them: for a label, find the file with `git grep -l "<label>" e81853970 -- docs`;
+then read it with `git show e81853970:<path>`. Re-verify against the live app before acting — these were checked against `main` on
 2026-09-26, not against live data.
 
 **Owner decisions still open**

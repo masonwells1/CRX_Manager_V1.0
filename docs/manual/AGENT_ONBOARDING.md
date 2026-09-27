@@ -92,7 +92,7 @@ If a guard blocks you, the correct response is to **fix the underlying problem t
 | Broad **foundation safety** sweep | `codex-gauntlet` (foundation mode) / `review-workflow` | Wide and read-only; not scoped to your one change, so still run a focused review on what you actually touched |
 | **Two-model reconciliation** (Claude vs Codex disagree, or you want both) | `agent-pair-review` | Compares notes between models; doesn't apply fixes itself |
 
-Direct reviews are read-only. PR comment posting defaults to dry-run. None of these workflows may push, deploy, apply a live migration, mutate/delete live data, or expose secrets without the authorization `AGENTS.md` requires — for migrations that means Mason's in-chat OK, or a hands-free run he pre-authorized with autopilot armed (2026-07-13 policy); for deploys and deletion it always means his explicit go-ahead in this conversation.
+Direct reviews are read-only. PR comment posting defaults to dry-run. None of these workflows may push, deploy, apply a live migration, mutate/delete live data, or expose secrets without the authorization `AGENTS.md` requires. Under Mason's autonomous-landing rule (2026-09-26) an eligible NON-destructive migration (its grants routine, none widening access) applies in any session with no in-chat ask once the required review, check and migration-apply-guard gates pass. A destructive migration is refused for agents and Mason applies it himself; a migration that overwrites existing rows or widens access, an Edge Function deploy, data deletion, and changes to secrets, authentication, permissions (beyond a migration's routine grants), billing, domains or ownership always need his explicit go-ahead in this conversation.
 
 ---
 
