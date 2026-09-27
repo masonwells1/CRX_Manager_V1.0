@@ -531,13 +531,21 @@ try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
     const since = `--since=${new Date(sessionStartMs).toISOString()}`;
-    // Merge commits are skipped (2026-09-26): a merge of main into the branch
-    // authors no new work, and `git log --name-status` lists no files for a
+    // A CLEAN merge is not session work (2026-09-26): merging main into the
+    // branch authors nothing, and `git log --name-status` lists no files for a
     // merge, so a merge-only session was warned that "no ledger file was
     // touched" in a loop even though the branch's real commits carried one.
     // The merged-in commits carry their own ledger via the pre-commit guard.
-    const sessionCommits = runGit(["log", "--oneline", "--no-merges", since]).trim();
-    if (sessionCommits) {
+    // A merge whose result differs from EVERY parent carries edits authored
+    // while resolving it (Codex P2, PR #824), so it still counts: the combined
+    // diff (`diff-tree --cc`) lists exactly those files and is empty for a
+    // clean merge.
+    const nonMergeCommits = runGit(["log", "--oneline", "--no-merges", since]).trim();
+    const mergeResolutionFiles = runGit(["log", "--merges", "--format=%H", since])
+      .split("\n").map((s) => s.trim()).filter(Boolean)
+      .flatMap((sha) => runGit(["diff-tree", "--cc", "--no-commit-id", "--name-only", "-r", sha])
+        .split("\n").map((s) => s.trim()).filter(Boolean));
+    if (nonMergeCommits || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —
       // those have left the status listing entirely. An earlier version stat'd
@@ -562,6 +570,9 @@ try {
       const touched = [
         ...lines.map((l) => ({ path: porcelainPath(l), status: l.slice(0, 2) })),
         ...fromLog,
+        // Files edited while resolving a merge; "M" because a resolution never
+        // ADDS a changelog.d fragment of this session's own.
+        ...mergeResolutionFiles.map((p) => ({ path: toPosixPath(p), status: "M" })),
       ];
       // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
       const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);

@@ -87,6 +87,28 @@ try {
     `a merge-only session must not get the "no ledger" warning; got: ${mergeOnly.stdout}`);
   pass++;
 
+  // ── Session 1b: a merge that needed a hand-written conflict resolution is
+  //    real work (Codex P2, PR #824) → still warns when nothing was recorded ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base"], tmp, { past: true });
+  const s1b = "ledger-test-conflicted-merge";
+  snapshots.push(startSession(s1b));
+  const conflicted = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted.status, 0, "setup: the merge must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "hand-resolved: both sides combined\n");
+  git(["add", "base.txt"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const resolvedMerge = runStopWrap(s1b, tmp);
+  assert.match(resolvedMerge.stdout, LEDGER_WARNING,
+    "a merge carrying an authored conflict resolution with no ledger must still warn");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
