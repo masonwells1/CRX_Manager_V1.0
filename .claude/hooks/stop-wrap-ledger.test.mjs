@@ -1,0 +1,105 @@
+#!/usr/bin/env node
+// stop-wrap.mjs "Commits exist this session but no ledger file was touched".
+//
+// 2026-09-26 regression: a session whose only commit was a merge of main into
+// the feature branch was warned in a loop. `git log --name-status` lists no
+// files for a merge commit, so the branch's changelog entry (committed before
+// the session-start snapshot) was invisible. Merge commits author no new work
+// and are now skipped; a real commit without a ledger must still warn.
+
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const hooksDir = path.dirname(fileURLToPath(import.meta.url));
+const stopWrapPath = path.join(hooksDir, "stop-wrap.mjs");
+
+// Never spawn git (directly or via a hook under test) with an inherited GIT_DIR
+// — see applied-source-containment.test.mjs for the incident this prevents.
+const cleanEnv = { ...process.env };
+for (const name of [
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
+  "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
+]) delete cleanEnv[name];
+
+// Commits made "before the session" are backdated so `git log --since=<snapshot
+// mtime>` cannot pick them up regardless of clock granularity.
+const PAST = "2020-01-01T00:00:00Z";
+function git(args, cwd, { past = false } = {}) {
+  const env = past ? { ...cleanEnv, GIT_AUTHOR_DATE: PAST, GIT_COMMITTER_DATE: PAST } : cleanEnv;
+  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", env });
+  assert.equal(r.status, 0, `git ${args.join(" ")} failed: ${r.stderr}`);
+  return r.stdout;
+}
+function runStopWrap(sessionId, projectDir) {
+  return spawnSync(process.execPath, [stopWrapPath], {
+    encoding: "utf8",
+    input: JSON.stringify({ session_id: sessionId }),
+    env: { ...cleanEnv, CLAUDE_PROJECT_DIR: projectDir },
+  });
+}
+const snapDir = path.join(os.tmpdir(), "crx-claude-hooks");
+function startSession(sessionId) {
+  mkdirSync(snapDir, { recursive: true });
+  const p = path.join(snapDir, `session-${sessionId}.snapshot`);
+  writeFileSync(p, "", "utf8"); // clean tree at session start; mtime = now
+  return p;
+}
+const LEDGER_WARNING = /no ledger file was touched/;
+
+let pass = 0;
+const tmp = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-ledger-"));
+const snapshots = [];
+try {
+  git(["init", "-q", "-b", "main"], tmp);
+  git(["config", "user.email", "test@test"], tmp);
+  git(["config", "user.name", "test"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "base\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "init"], tmp, { past: true });
+
+  // Feature branch: real work plus its changelog entry, committed BEFORE the session.
+  git(["checkout", "-qb", "feat"], tmp);
+  mkdirSync(path.join(tmp, "docs", "changelog.d"), { recursive: true });
+  writeFileSync(path.join(tmp, "feature.txt"), "feature\n");
+  writeFileSync(path.join(tmp, "docs", "changelog.d", "2020-01-01-feature.md"),
+    "## 2020-01-01 — feature\n\nAdded the feature.\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feature with ledger"], tmp, { past: true });
+
+  // main moves on.
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "other.txt"), "other\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrelated main work"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+
+  // ── Session 1: the ONLY commit this session is a merge of main → no warning ──
+  const s1 = "ledger-test-merge-only";
+  snapshots.push(startSession(s1));
+  git(["merge", "--no-ff", "--no-edit", "main"], tmp);
+  const mergeOnly = runStopWrap(s1, tmp);
+  assert.equal(mergeOnly.status, 0, `stop-wrap exits 0: ${mergeOnly.stderr}`);
+  assert.ok(!LEDGER_WARNING.test(mergeOnly.stdout),
+    `a merge-only session must not get the "no ledger" warning; got: ${mergeOnly.stdout}`);
+  pass++;
+
+  // ── Session 2: a real commit without any ledger → still warns ──
+  const s2 = "ledger-test-real-commit";
+  snapshots.push(startSession(s2));
+  writeFileSync(path.join(tmp, "feature.txt"), "feature v2\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded change"], tmp);
+  const realCommit = runStopWrap(s2, tmp);
+  assert.match(realCommit.stdout, LEDGER_WARNING,
+    "a real commit with no ledger entry must still get the warning");
+  pass++;
+} finally {
+  rmSync(tmp, { recursive: true, force: true });
+  for (const p of snapshots) rmSync(p, { force: true });
+}
+
+console.log(`stop-wrap-ledger: ${pass} assertions passed`);

@@ -531,7 +531,12 @@ try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
     const since = `--since=${new Date(sessionStartMs).toISOString()}`;
-    const sessionCommits = runGit(["log", "--oneline", since]).trim();
+    // Merge commits are skipped (2026-09-26): a merge of main into the branch
+    // authors no new work, and `git log --name-status` lists no files for a
+    // merge, so a merge-only session was warned that "no ledger file was
+    // touched" in a loop even though the branch's real commits carried one.
+    // The merged-in commits carry their own ledger via the pre-commit guard.
+    const sessionCommits = runGit(["log", "--oneline", "--no-merges", since]).trim();
     if (sessionCommits) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —
