@@ -35,6 +35,13 @@ reviews:
   # existing required build/deployment contexts remain separate and unchanged.
   request_changes_workflow: true
   high_level_summary: true
+  # Put the summary in the walkthrough COMMENT, never in the PR description
+  # (2026-09-26, autonomous landing). Writing the description is a PR `edited`
+  # event, and ci.yml re-runs its ~11-minute required jobs on `edited`. So every
+  # review restarted CI under the lifecycle check that was waiting on it, and the
+  # check died "in_progress ... dispatch state was preserved" (PR #794 runs
+  # 36091053453/36091203653: the second run's actor was coderabbitai[bot]).
+  high_level_summary_in_walkthrough: true
   poem: false
   review_status: true
   collapse_walkthrough: false
@@ -85,7 +92,15 @@ reviews:
     # that exact head, then adds the separate provider label below. Keeping the
     # intent and provider labels separate prevents a review before validation.
     enabled: false
-    auto_incremental_review: false
+    # TRUE since 2026-09-26 so a fix on the SAME PR can get one fresh review
+    # instead of forcing a replacement PR. Per CodeRabbit's docs, after a PR is
+    # reviewed because of a positive label, later reviews happen only while this
+    # stays true; with it false a relabel at a new head was skipped with
+    # "incremental reviews are disabled". Work-in-progress pushes are still NOT
+    # reviewed, because the positive label below is attached only for the
+    # validated dispatch window: the trusted workflow removes it as soon as the
+    # review is observed, and every push resets it.
+    auto_incremental_review: true
     labels:
       - coderabbit-review-dispatch
     drafts: false
@@ -353,6 +368,14 @@ reviews:
           write to a generated column such as invoices.balance_cents. (5) Money
           rounding done in binary floating point. Otherwise PASS.
 
+      # STAYS error (2026-09-26). The autonomous-landing PR tried to make this a
+      # warning and lean on scripts/check-migration-hard-rules.mjs, but the exact-
+      # SHA Sol review (round 4, HIGH) showed that CI check reads the applied
+      # boundary from .claude/schema-registry.json, which can lag a live apply —
+      # so during the lag an applied migration could be edited with green CI.
+      # Until a required check can prove from current ledger evidence that a
+      # migration never ran, a false positive on a parked draft is the price:
+      # Mason clears it with "Ignore failed checks" in the walkthrough.
       - name: Edit to an already-applied migration
         mode: error
         instructions: >-

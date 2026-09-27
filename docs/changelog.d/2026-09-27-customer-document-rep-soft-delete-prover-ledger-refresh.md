@@ -20,4 +20,4 @@ CHECK installed, bad path refused).
 
 **Still to do before `20260921180000` applies.** Merge `main` once #793 lands. Drop `20260914100900` from the
 skip list when it is live. Confirm `20260914101300` in the live ledger (Mason's ordering hold). Then re-run
-the prover, run a fresh `gpt-6-sol` gate on the final head, and open one fresh PR replacing #800.
+the prover. Under the landing flow `main` adopted in #804, fixes stay on #800: push, wait for checks, relabel for one follow-up CodeRabbit review, and run `gpt-6-sol` last, on the head CodeRabbit approves.

@@ -30,7 +30,7 @@ function allow() {
   process.exit(0);
 }
 function deny(name) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (push / deploy / destructive delete / secret write). Autopilot suppresses ordinary permission prompts but NOT these — they need Mason's explicit OK. (Live migrations are gated separately: migration-apply-guard's proof gate, which also hard-refuses DESTRUCTIVE migrations while armed — Mason's settled 2026-07-13 policy.) Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `AUTOPILOT: "${name}" is in the never-auto-approve set (push / merge / deploy / destructive delete / secret write). Autopilot suppresses ordinary permission prompts but NOT these — they need Mason's explicit OK. Landing work is the one exception: a plain \`git push origin <work-branch>\` and a plain \`gh pr merge <number> --squash\` pass on to codex-push-guard and pr-merge-guard, which enforce Mason's 2026-09-26 landing rule; any other spelling of a push or merge lands here. (Live migrations are gated separately: migration-apply-guard's proof gate, which hard-refuses DESTRUCTIVE migrations for agents in every session.) Disarm with: node .claude/hooks/autopilot-arm.mjs --off` } }));
   process.exit(0);
 }
 
