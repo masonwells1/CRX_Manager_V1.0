@@ -3,7 +3,7 @@
 **Last verified: 2026-09-14 for the scoped invoice/job RPC contracts below; this is not a
 re-certification of every historical entry on this page.**
 **The migration ordering boundary is NEWER than that verification and has moved twice since.**
-**Number a new candidate from the boundary block at the top of `docs/reference/migration-history.md`, which is authoritative and moves as the cohort applies** — as of its 2026-09-22 addendum the effective high-water is `20260914100600`. Superseded values, kept only so an older note is recognisable: `20260911120000_bind_adjust_inventory_receipt_to_intent` (applied live 2026-09-20 under ledger version `20260920052149`, 1004 ledger rows, and named as "current" by an earlier revision of this paragraph), and before it
+**Number a new candidate from the boundary block at the top of `docs/reference/migration-history.md`, which is authoritative and moves as the cohort applies** — as of its 2026-09-27 capture the effective high-water is `20260914100800`. Superseded values, kept only so an older note is recognisable: `20260914100600` (the 2026-09-22 addendum), `20260911120000_bind_adjust_inventory_receipt_to_intent` (applied live 2026-09-20 under ledger version `20260920052149`, 1004 ledger rows, and named as "current" by an earlier revision of this paragraph), and before it
 `20260908130000` (applied 2026-09-15, ledger version `20260915033227`, 1002 rows). Two migrations
 applied on the morning of 2026-09-20: `20260908140000` under `20260920051333`, then
 `20260911120000` under `20260920052149`. **Do not reapply `20260908140000`.**
