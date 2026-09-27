@@ -36,7 +36,7 @@ npm run check:docs
 
 The git hooks also help: pre-commit runs fast checks on staged files, and pre-push runs private-artifact
 containment, `npm run typecheck`, and `npm run build`. Neither hook runs lint or the unit tests —
-CI does.
+CI does, whenever its `ci-scope` job routes the pull request to full CI (a docs-only change skips them).
 
 There is no browser (E2E) test gate today: the Playwright suite only runs against a staging project,
 which does not exist yet. See [TESTING.md](./TESTING.md#running-e2e-tests).

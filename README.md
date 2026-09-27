@@ -135,7 +135,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 
 - Every page is lazy-loaded; the page and route list is in [docs/reference/pages-routes.md](./docs/reference/pages-routes.md)
 - Unit tests (Vitest) live next to the code in `src/`; Playwright E2E specs live in `tests/e2e/` but cannot run until a staging Supabase project exists (see [TESTING.md](./TESTING.md))
-- CI blocks a merge on any ESLint warning, TypeScript error, failing unit test, or failed build
+- When a pull request is routed to full CI (any change beyond docs), CI blocks a merge on any ESLint warning, TypeScript error, failing unit test, or failed build
 - Git hooks: pre-commit runs fast checks on staged files; pre-push runs TypeScript and the production build (see the note under Commands)
 - **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
 - Current status, open problems, and dated counts: [docs/manual/CURRENT_STATE.md](./docs/manual/CURRENT_STATE.md) and [docs/manual/KNOWN_ISSUES.md](./docs/manual/KNOWN_ISSUES.md)

@@ -18,7 +18,7 @@ These six packets each need a business call (not a coding call). The packet bodi
 >   is applied live; all four CHECK constraints already allow `'wire'` (verified 2026-07-16).
 > - Packets 1 (vendor merges) and 2 (category remap): still open.
 
-**Lead recommendation:** the safest, highest-value first step is **Packet 3 (junk-data deletes)** and **Packet 4
+**Lead recommendation (historical, 2026-07-02 — packet 4 has since been decided and shipped (2026-07-21), so this is not a pending ask; the current open items are in the status line above):** the safest, highest-value first step was **Packet 3 (junk-data deletes)** and **Packet 4
 (due-date policy)** — packet 3 is pure cleanup of obviously-fake rows, and packet 4 unblocks the whole late-AR
 machine (parked migration A8 is waiting on it). The two merge packets (1, 2) re-bucket history, so take those
 only when you can sign off the exact spelling that is the "real" one.

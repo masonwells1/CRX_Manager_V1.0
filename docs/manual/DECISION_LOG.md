@@ -1786,8 +1786,8 @@ put to him: *should `Current` mean "not yet due" only, with a new `1-30 Days` co
 **Status.** Recorded only; **no code, SQL, or migration has been written.** [Update 2026-09-26: no
 longer true — Mason answered the mapping on 2026-08-26 (entry below) and
 `supabase/migrations/20260826222000_correct_ap_aging_due_date_buckets.sql` is applied live (ledger
-`20260901045346`). The scope note named next was never committed and does not exist.] Scope note for the
-implementing session: `.claude/handoffs/SCOPE-ap-aging-days-past-due.md`. Full finding: HIGH 1 in
+`20260901045346`). The scope note the original entry pointed to (`.claude/handoffs/SCOPE-ap-aging-days-past-due.md`)
+was never committed and does not exist; no scope note is available.] Full finding: HIGH 1 in
 `docs/audits/gauntlet/2026-08-23-section-09-purchase-orders-receiving-vendor-bills-ap-refresh.md`.
 
 ---

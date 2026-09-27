@@ -61,7 +61,7 @@ npm install
 
 This does two important things:
 1. Downloads all the JavaScript/TypeScript packages the app needs.
-2. Runs the `prepare` script (`scripts/install-git-hooks.mjs`), which points git at the tracked `.husky/` folder of hooks. Every `git commit` now runs the fast staged-file safety checks; typecheck/build run at pre-push and the full lint/test/build proof runs in CI.
+2. Runs the `prepare` script (`scripts/install-git-hooks.mjs`), which points git at the tracked `.husky/` folder of hooks. Every `git commit` now runs the fast staged-file safety checks; typecheck/build run at pre-push, and the full lint/test/build proof runs in CI whenever its `ci-scope` job routes the pull request to full CI (docs-only changes skip it).
 
 If `npm install` fails:
 - Check your Node.js version (`node --version`) — it should be 24 (see `.nvmrc`).

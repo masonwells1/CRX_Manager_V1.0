@@ -316,7 +316,7 @@ Before deploying any changes to production, run through this checklist:
 ### ✅ Local Testing
 
 - [ ] Code runs locally without errors (`npm run dev`)
-- [ ] Unit tests pass (`npm test`) — CI runs them again on the pull request
+- [ ] Unit tests pass (`npm test`) — CI runs them again when its `ci-scope` job routes the pull request to full CI
 - [ ] Production build works (`npm run build` then `npm run preview`)
 - [ ] No console errors in the browser (press F12 to check)
 

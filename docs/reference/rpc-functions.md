@@ -188,7 +188,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `increment_customer_prepay(p_customer_id, p_amount_cents, p_idempotency_key)` → void — internal helper that bumps a customer's prepay balance (called from payment/overpayment paths).
 
 ## Sequential Numbers (advisory locks)
-The year in every year-bearing number is the America/Chicago calendar year (`20260908140000`; invoices `20260914100100`, applied 2026-09-21).
+The `next_*_number` generators use the America/Chicago calendar year (`20260908140000`; invoices `20260914100100`, applied 2026-09-21). `generate_quote_number()`, `generate_order_number()` and `create_rebate_claim` still use the UTC year, so a quote, order or rebate claim made after 6 pm Chicago time on December 31 gets next year's number (`docs/manual/KNOWN_ISSUES.md`).
 - `next_delivery_number()` -> DEL-NNNNN (no year, 5 digits)
 - `next_po_number()` -> PO-YYYY-NNNN
 - `next_application_record_number()` -> APP-YYYY-NNNN
@@ -239,7 +239,7 @@ they belong rather than duplicated here: `get_monthly_summary()` under Financial
 - `get_customer_transaction_review()` — admin-only transaction audit report with active payment allocations and non-reversed write-offs. Same-date/type/reference rows use a hidden UUID tie-breaker plus an explicit row window, so every displayed/CSV/PDF running balance advances deterministically per transaction row.
 - `apply_remaining_prepayments(customer_id, performed_by, idempotency_key?)` — **DISABLED: always raises `PREPAY_BULK_APPLY_DISABLED`** (`20260620200000_prepay_bulk_apply_block_guard`); apply prepay per invoice through `apply_prepay_to_invoice` or `batch_apply_prepayments`. Originally it applied a customer's available prepay balance to oldest-unpaid posted invoices. Wave A.4 / migration 20260506180000 enforces `check_period_open` per-invoice (not just `CURRENT_DATE`). Any invoice in a closed period raises and rolls back the entire batch.
 - `batch_apply_prepayments(allocations jsonb, performed_by, idempotency_key?)` — atomic batch of explicit prepay-credit→invoice allocations with idempotency; loops `apply_prepay_to_invoice`. **Live migration `20260714185130` (ledger `20260715134618`)** makes the wrapper admin-only to align with the workspace route while retaining Wave A.4 per-invoice `check_period_open` enforcement.
-- `apply_prepay_to_invoice(credit_id, invoice_id, amount_cents, performed_by)` — atomic single allocation with `FOR UPDATE` locks, creates `prepay_applications` record, deducts from both balances, writes `financial_audit_log` entry
+- `apply_prepay_to_invoice(credit_id, invoice_id, amount_cents, performed_by?, idempotency_key?)` — atomic single allocation with `FOR UPDATE` locks, creates `prepay_applications` record, deducts from both balances, writes `financial_audit_log` entry
 - `calculate_billing_splits()` — calculate billing splits for an order
 - `check_customer_credit_limit()` — check if customer has exceeded credit limit
 - `mark_overdue_invoices()` — batch scan: sets posted invoices past due_date to 'overdue', logs to financial_audit_log, returns `{ invoices_marked_overdue, run_at }`
