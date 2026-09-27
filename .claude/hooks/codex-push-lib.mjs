@@ -2495,6 +2495,7 @@ export function ghMergeRequest(command) {
   let repo = "";
   let auto = false;
   let admin = false;
+  let matchHeadCommit = null;
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index];
     if (isValue[index]) continue;
@@ -2508,6 +2509,10 @@ export function ghMergeRequest(command) {
     const stripped = word;
     const lower = stripped.toLowerCase();
     if (lower.startsWith("--repo=")) { repo = stripped.slice("--repo=".length); continue; }
+    // `--match-head-commit` pins the merge to the head the gate checked: GitHub
+    // refuses the merge if the PR head moved in between (Sol HIGH, 2026-09-26).
+    // gh keeps the LAST value, so the last one read wins here too.
+    if (lower.startsWith("--match-head-commit=")) { matchHeadCommit = stripped.slice("--match-head-commit=".length); continue; }
     // `--auto=false` asks gh NOT to auto-merge, so that command lands the PR
     // immediately. Classifying it as auto exempted it from the green-pipeline
     // check and (since 2026-09-01) the approval check too — an exemption that is
@@ -2543,6 +2548,7 @@ export function ghMergeRequest(command) {
       // has to read it — advancing the index here as well would step past the
       // word AFTER the value.
       if (lower === "--repo") repo = words[index + 1] || "";
+      if (lower === "--match-head-commit") matchHeadCommit = words[index + 1] || "";
       continue;
     }
     const cluster = ghMergeShortCluster(stripped);
@@ -2557,7 +2563,8 @@ export function ghMergeRequest(command) {
     }
     if (index > mergeIndex && !stripped.startsWith("-") && !selector) selector = stripped;
   }
-  return { selector, repo, auto, admin };
+  // Present only when given, so every existing reading keeps its exact shape.
+  return matchHeadCommit === null ? { selector, repo, auto, admin } : { selector, repo, auto, admin, matchHeadCommit };
 }
 
 // gh parses with pflag, which accepts a short option in FOUR spellings: `-X PUT`
@@ -3538,12 +3545,61 @@ export function mcpMergeRequest(toolInput = {}) {
   return { selector: String(selector), repo, auto: false };
 }
 
-// Fully-green pipeline: mergeStateStatus CLEAN and every reported check
-// completed successfully / neutral / skipped. Zero reported checks fails closed
-// (the Vercel check is required on main — its absence means "not reported yet").
+// The NEWEST run of each check, the way GitHub's own required-check evaluation
+// reads a commit (2026-09-26, autonomous landing).
+//
+// `statusCheckRollup` keeps EVERY run at the head SHA, not one per check. A
+// lifecycle run that failed once — measured on PR #794: three FAILURE rows of
+// "CodeRabbit candidate lifecycle" followed by two SUCCESS rows — therefore stayed
+// in the list forever, `gh run rerun` replays the stale event and fails again, and
+// the only exit was Mason's own Merge click. Judging the newest run per check
+// matches GitHub, which reported that same PR mergeStateStatus CLEAN.
+//
+// Identity is workflow name + check name (two workflows can share a job name);
+// statuses are keyed by context. Recency is startedAt, then completedAt: a run
+// cancelled before it started can carry completedAt < startedAt (measured on
+// #794's "E2E Smoke Tests"). A CheckRun that has not COMPLETED — queued, waiting
+// or in progress, often with no startedAt yet — always ranks newest, so a queued
+// rerun can never hide behind an older success (Sol, 2026-09-26). An entry of
+// unknown shape is kept as its own identity so it still reaches the per-entry
+// test below and fails closed.
+export function newestCheckRollup(checks) {
+  if (!Array.isArray(checks)) return checks;
+  const newest = new Map();
+  checks.forEach((check, index) => {
+    let key;
+    if (check?.__typename === "CheckRun") key = `run\u0000${check.workflowName || ""}\u0000${check.name || ""}`;
+    else if (check?.__typename === "StatusContext") key = `status\u0000${check.context || ""}`;
+    else key = `unknown\u0000${index}`;
+    const unfinished = check?.__typename === "CheckRun" && String(check?.status || "").toUpperCase() !== "COMPLETED";
+    const stamp = unfinished ? [Infinity, Infinity] : [check?.startedAt, check?.completedAt].map((value) => {
+      const ms = Date.parse(String(value || ""));
+      return Number.isFinite(ms) ? ms : -Infinity;
+    });
+    const held = newest.get(key);
+    // A StatusContext is already GitHub's latest state for its context, so a
+    // repeated one is an anomaly with no trustworthy order (its time fields are
+    // often absent). The WORSE state wins there — an older success must never
+    // hide a newer failure by list order (Sol MED, 2026-09-26).
+    if (held && check?.__typename === "StatusContext") {
+      const failing = (entry) => String(entry?.state || "").toUpperCase() !== "SUCCESS";
+      if (failing(check) && !failing(held.check)) newest.set(key, { check, stamp });
+      return;
+    }
+    if (!held || stamp[0] > held.stamp[0] || (stamp[0] === held.stamp[0] && stamp[1] >= held.stamp[1])) {
+      newest.set(key, { check, stamp });
+    }
+  });
+  return [...newest.values()].map((entry) => entry.check);
+}
+
+// Fully-green pipeline: mergeStateStatus CLEAN and the newest run of every
+// reported check completed successfully / neutral / skipped. Zero reported checks
+// fails closed (the Vercel check is required on main — its absence means "not
+// reported yet").
 export function pullRequestChecksGreen(pullRequest) {
   if (String(pullRequest?.mergeStateStatus || "").toUpperCase() !== "CLEAN") return false;
-  const checks = pullRequest?.statusCheckRollup;
+  const checks = newestCheckRollup(pullRequest?.statusCheckRollup);
   if (!Array.isArray(checks) || checks.length === 0) return false;
   return checks.every((check) => {
     if (check?.__typename === "StatusContext") {
@@ -3595,6 +3651,68 @@ export function pullRequestApproved(pullRequest) {
 // CI, not a review, is what gates a landing now.
 export function pullRequestReviewBlocked(pullRequest) {
   return String(pullRequest?.reviewDecision || "").toUpperCase() === "CHANGES_REQUESTED";
+}
+
+// Autonomous-landing rule (Mason, 2026-09-26): an agent merges only when
+// CodeRabbit has reviewed the FINAL head with no unresolved objection. Read from
+// `gh pr view --json reviews` — `author.login` is the bare `coderabbitai` there
+// (the `[bot]` suffix is REST-only), and `commit.oid` is the commit the review
+// was submitted against.
+//
+// The latest CodeRabbit VERDICT decides: APPROVED, CHANGES_REQUESTED or
+// DISMISSED. COMMENTED reviews are skipped because a thread reply mints an empty
+// COMMENTED review at the current head, and that is a reply artifact, not a
+// verdict. With `request_changes_workflow: true` CodeRabbit approves only once its
+// comments are resolved and the latest commit was reviewed, so APPROVED at the
+// exact head is the "clean final review" signal; an approval at an older commit,
+// or one GitHub dismissed on a later push, does not count.
+//
+// The name cannot be claimed by a person: `coderabbitai` is CodeRabbit's own
+// GitHub organization login, so no user account can hold it.
+export function coderabbitApprovedHead(pullRequest) {
+  const headSha = String(pullRequest?.headRefOid || "");
+  const reviews = pullRequest?.reviews;
+  if (!/^[0-9a-f]{40}$/i.test(headSha) || !Array.isArray(reviews)) return false;
+  const verdicts = reviews
+    .filter((review) => String(review?.author?.login || "").toLowerCase().replace(/\[bot\]$/, "") === "coderabbitai")
+    .filter((review) => ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(String(review?.state || "").toUpperCase()))
+    .map((review) => ({ review, at: Date.parse(String(review?.submittedAt || "")) }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((left, right) => left.at - right.at);
+  const latest = verdicts[verdicts.length - 1]?.review;
+  return Boolean(latest)
+    && String(latest.state).toUpperCase() === "APPROVED"
+    && String(latest?.commit?.oid || "").toLowerCase() === headSha.toLowerCase();
+}
+
+// The API path for `gh api` calls about a merge request's repository. `gh pr
+// merge --repo` accepts OWNER/REPO, HOST/OWNER/REPO or a URL; `gh api` takes a
+// path, so reduce it to OWNER/REPO. No --repo means the checkout's own remote,
+// which gh's {owner}/{repo} placeholder resolves. Anything unrecognizable is null
+// so the caller fails closed.
+export function ghApiRepoPath(repo) {
+  if (repo === undefined || repo === null || repo === "") return "repos/{owner}/{repo}";
+  const parts = String(repo).trim().replace(/^https?:\/\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "").split("/");
+  const [owner, name] = parts.slice(-2);
+  const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+  if (parts.length < 2 || parts.length > 3 || !SEGMENT.test(owner || "") || !SEGMENT.test(name || "")) return null;
+  return `repos/${owner}/${name}`;
+}
+
+// True only when GitHub reports that `headSha` already contains `baseSha` — the
+// pull request is not behind the base it will merge onto (Sol HIGH, round 7).
+// The Sol proof reviews the head's diff against the merge base; if main moved on
+// since, the merge result also carries base-only commits nobody reviewed together
+// with this change, so a proof bound to (head, base) would vouch for a tree it
+// never saw. Uses GitHub's compare API, not local git, so it works from any
+// checkout whether or not the base commit was fetched. Throws on a failed call;
+// the caller must treat that as "not contained".
+export function headContainsBaseOnGitHub({ baseSha, headSha, repo, gh }) {
+  const SHA = /^[0-9a-f]{40}$/i;
+  const repoPath = ghApiRepoPath(repo);
+  if (!repoPath || !SHA.test(String(baseSha || "")) || !SHA.test(String(headSha || ""))) return false;
+  const behindBy = String(gh(["api", `${repoPath}/compare/${baseSha}...${headSha}`, "--jq", ".behind_by"])).trim();
+  return behindBy === "0";
 }
 
 export { RISKY_PATH_RES, RISKY_CONTENT_RE };
