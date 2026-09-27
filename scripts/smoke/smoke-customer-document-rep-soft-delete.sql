@@ -134,8 +134,8 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: a rep removed a document of a customer assigned to someone else';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
-    IF v_refusal LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_refusal NOT LIKE '%CUSTOMER_DOCUMENT_NOT_FOUND%' THEN
+    IF starts_with(v_refusal, 'SMOKE_FAIL') THEN RAISE; END IF;
+    IF strpos(v_refusal, 'CUSTOMER_DOCUMENT_NOT_FOUND') = 0 THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong refusal for another rep''s document: %', v_refusal;
     END IF;
   END;
@@ -148,8 +148,8 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: an already-removed document was removed twice';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
-    IF v_refusal LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_refusal NOT LIKE '%CUSTOMER_DOCUMENT_NOT_FOUND%' THEN
+    IF starts_with(v_refusal, 'SMOKE_FAIL') THEN RAISE; END IF;
+    IF strpos(v_refusal, 'CUSTOMER_DOCUMENT_NOT_FOUND') = 0 THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong refusal for an already-removed document: %', v_refusal;
     END IF;
   END;
@@ -160,8 +160,8 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: a removal ran without an idempotency key';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
-    IF v_refusal LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_refusal NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN
+    IF starts_with(v_refusal, 'SMOKE_FAIL') THEN RAISE; END IF;
+    IF strpos(v_refusal, 'IDEMPOTENCY_KEY_REQUIRED') = 0 THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong refusal for a missing key: %', v_refusal;
     END IF;
   END;
@@ -170,8 +170,8 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: a removal ran with a blank idempotency key';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
-    IF v_refusal LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_refusal NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN
+    IF starts_with(v_refusal, 'SMOKE_FAIL') THEN RAISE; END IF;
+    IF strpos(v_refusal, 'IDEMPOTENCY_KEY_REQUIRED') = 0 THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong refusal for a blank key: %', v_refusal;
     END IF;
   END;
@@ -184,8 +184,8 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: a removal ran with no authenticated actor';
   EXCEPTION WHEN raise_exception THEN
     v_refusal := SQLERRM;
-    IF v_refusal LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_refusal NOT LIKE '%AUTH_REQUIRED%' THEN
+    IF starts_with(v_refusal, 'SMOKE_FAIL') THEN RAISE; END IF;
+    IF strpos(v_refusal, 'AUTH_REQUIRED') = 0 THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong refusal with no actor: %', v_refusal;
     END IF;
   END;

@@ -23,6 +23,22 @@ yes now that `main` carries the autonomous-landing rule (#804), Mason answered "
 hold lifts, it applies under that rule's gates with no separate ask. `CURRENT_STATE.md`, `KNOWN_ISSUES.md` and
 migration-history row 936 now say so.
 
+**Luna round (`gpt-6-luna`/xhigh, advisory, whole branch after the `main` merge): 7 findings.**
+- *Fixed (LOW):* the registered chain matched refusal tokens with `LIKE`, where `_` is a one-character wildcard. It
+  now uses `starts_with` / `strpos`. The prover re-ran: PASS, and the chain still fails against the mutant.
+- *Refuted with live evidence (HIGH):* the claim that a role inheriting `authenticated` could forge `auth.uid()`.
+  A read-only live query (2026-09-27) found exactly two members: `authenticator` (`inherit_option = false`, the
+  API's login role, whose password the platform holds) and `postgres` (which already owns this function and
+  every table). Nobody gains anything. This is the same platform-wide item previously deferred to the grants audit.
+- *Deferred (MED):* the helper preflight matches the operation/actor/fingerprint comparisons as substrings of the
+  helper's source. It is a drift tripwire on a postgres-owned, owner-only helper. The RPC also re-checks a
+  replayed receipt's `document_id` and `customer_id` against the call and re-authorizes the rep, and the prover
+  drives the real helper.
+- *Deferred (LOW):* the chain runs as `postgres` with claim GUCs rather than `SET ROLE authenticated`. The prover
+  covers invocation as `authenticated`.
+- *Deferred by name, as before (LOW):* control characters in the key, the cross-operation error naming the other
+  operation, and the image pinned by tag.
+
 **Still to do before `20260921180000` applies.** Merge `main` once #793 lands. Drop `20260914100900` from the
 skip list when it is live. Confirm `20260914101300` in the live ledger (Mason's ordering hold). Then re-run
 the prover. Under the landing flow `main` adopted in #804, fixes stay on #800: push, wait for checks, relabel for one follow-up CodeRabbit review, and run `gpt-6-sol` last, on the head CodeRabbit approves.
