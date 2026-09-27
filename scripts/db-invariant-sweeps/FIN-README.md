@@ -117,7 +117,10 @@ them here so they're fixed before that, not after.
 ## Schema facts verified live (pg_catalog/information_schema, 2026-06-10)
 
 - `invoices.balance_cents` is GENERATED ALWAYS AS
-  `(total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents)`.
+  `(total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents)`,
+  plus `credit_applied_cents` for a credit memo and minus it otherwise [Update 2026-09-27:
+  the credit term was added by `20260711021000_credit_apply_balance_lever.sql` after this
+  section was verified; re-verified live 2026-09-27].
   Status CHECK: draft, unposted, posted, paid, overdue, voided, cancelled.
   Type CHECK: chemical_sale, field_application, misc_charge, credit_memo.
   Credit memos are stored with **negative** `total_amount_cents`

@@ -74,9 +74,10 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
    rows, vendor `we`, ~5 bad emails, 8 SEED commission batches, PO-2026-0008/0015,
    5 empty deliveries, 1 E2E invoice).
 6. **Send ~10 real vendor bills + Anthropic API key** — unblocks the D1 extraction pilot.
-7. **Supabase Pro / PITR decision + run the first `/backup-db`** — FREE plan today;
-   only ONE in-DB snapshot run existed (verified live 2026-07-16) and no off-repo dump has been
-   taken via `/backup-db` yet. Also gates leaked-password protection (L4).
+7. **Supabase Pro / PITR decision + refresh the local `/backup-db` JSON dump** — FREE plan today;
+   only ONE in-DB snapshot run existed (verified live 2026-07-16). For the local `/backup-db` JSON dump,
+   at the 2026-09-27 check the local marker (`backups/LATEST-OK.json`) was over a month old, while the separate weekly off-site encrypted backup was current.
+   Also gates leaked-password protection (L4).
 8. **Backup restore drill** — one-time restore to a throwaway project to prove recovery works.
 9. **Create staging Supabase project + GitHub secrets** — unblocks the parked E2E CI lane.
 10. **Unused-index decision (from 2026-05-11)** — 159 unused-index findings awaiting a
@@ -331,7 +332,7 @@ Current live state belongs in `docs/manual/CURRENT_STATE.md`; this table is a da
 | jobs / deliveries | 4 / **106** (2026-07-13 snapshot had these reversed) |
 | blend_tickets | 0 |
 | negative inventory rows | 18 (re-base DEFERRED by Mason 2026-07-16) |
-| In-DB backup runs | 1 (weekly pg_cron live) — off-site `/backup-db` dump: none yet |
+| In-DB backup runs | 1 as of 2026-07-16 (weekly pg_cron live). 2026-09-27: local `/backup-db` JSON dump stale (over a month old); weekly off-site encrypted backup current |
 | Production | croprxsolutions.app — `main` merges deploy via PR only (branch protection) |
 
 ## ✅ Verified done in the 2026-07-16 pass (don't re-do)

@@ -137,7 +137,7 @@ To exempt a specific file from a PreToolUse hook, add the marker comment named i
 
 ### Correction-mined guards (added 2026-07-01)
 
-Built from a workflow that mined the last 50 sessions (524 Mason-typed messages → 70 corrections → 12 recurring themes). Each targets something Mason repeatedly had to correct. All are **fail-open / off-by-default** — a read error or missing state file never blocks work. Lessons also live as auto-loading `memory/` files. Tests: `npm run test:correction-guards` — the chain of hook, script and check suites defined for that script in `package.json` (it began as `stop-verify-lib.test.mjs`, `worktree-awareness-lib.test.mjs`, `autopilot-lib.test.mjs` and `guards.test.mjs`, which it still runs).
+Built from a workflow that mined the last 50 sessions (524 Mason-typed messages → 70 corrections → 12 recurring themes). Each targets something Mason repeatedly had to correct. Failure behavior is guard-specific. Most are **fail-open / off-by-default**: for those, a read error or missing state file never blocks work. Some are fail-closed gates instead — for example `codex-push-guard.mjs` blocks a risky push to `main` whenever a fresh HEAD- and base-bound Codex proof is missing, and a missing proof is never permission to proceed. Lessons also live as auto-loading `memory/` files. Tests: `npm run test:correction-guards` — the chain of hook, script and check suites defined for that script in `package.json` (it began as `stop-verify-lib.test.mjs`, `worktree-awareness-lib.test.mjs`, `autopilot-lib.test.mjs` and `guards.test.mjs`, which it still runs).
 
 | Hook | Event | What it does | Correction it prevents / escape hatch |
 |------|-------|--------------|----------------------------------------|

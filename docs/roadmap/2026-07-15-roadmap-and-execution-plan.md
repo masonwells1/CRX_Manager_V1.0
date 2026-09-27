@@ -65,7 +65,7 @@ Native iOS/Android apps · multi-tenancy now · ML demand forecasting · autonom
 
 | Area | Verdict | Reasoning |
 |---|---|---|
-| Dead structure: `setup-blend-tickets-storage` dead edge fn, the stale `scripts/.staging-migrations/workflow-fix-parked/u12,u13` folders (deleted 2026-07-15), wire-vs-retire packet items. (The `#40` RPC was first listed here but is marked **KEEP** per Mason 2026-07-16; it stays and is not to be retired.) | **REFACTOR (small, now)** | Confirmed dead; deleting reduces junior-model confusion. Each is a 1-ticket cleanup with an easy proof |
+| Dead structure: `setup-blend-tickets-storage` dead edge fn. (The stale `scripts/.staging-migrations/workflow-fix-parked/u12,u13` folders were deleted 2026-07-15. The Packet 5 "wire it up or retire it" structures, including the `#40` RPC, are **KEEP** per Mason 2026-07-16 and are not retirement candidates.) | **REFACTOR (small, now)** | Confirmed dead; deleting the edge function reduces junior-model confusion. A 1-ticket cleanup with an easy proof |
 | Schema registry + docs drift (registry stale, plan docs contradict live state) | **REFACTOR (process, now)** | Stale references are the #1 way lower models get misled |
 | `apply_prepay_to_invoice` hand-decrement (trigger also recomputes) | **DEFER** | Same end state today; drop only after more prod watching |
 | Migration history squash (H2) | **DEFER to quiet window** | Valuable but risky; needs its own ceremony |
@@ -83,9 +83,9 @@ Native iOS/Android apps · multi-tenancy now · ML demand forecasting · autonom
 2. ~~**Use the app for a real billing cycle**~~ — *2026-09-26: DONE — the first real cycle completed 2026-07-17 and the money-audit re-run ran as the 2026-08-08 foundation ultra review (`docs/manual/CURRENT_STATE.md` §1, `TODO.md` §1 item 2).*
 3. **Create a Stripe account and hand over API keys** (~15 min) — unblocks A1 now and the portal later.
 4. **Label-data load + approve EPA backfill** — compliance/WPS/spray-safety features render blank until then.
-5. **Decision packets** (from `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3): junk-data deletes, vendor-name merges, category remap, "wire" payment method, #107 auto-draft-on-applicator policy, D3 commission halves.
+5. **Decision packets** (from `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3): junk-data deletes, vendor-name merges, category remap, #107 auto-draft-on-applicator policy, D3 commission halves.
 6. **Send ~10 real vendor bills + Anthropic API key** — unblocks D1 pilot.
-7. **Supabase Pro upgrade decision** — once real money flows, PITR + leaked-password protection stop being optional (FREE plan today; weekly dumps are the only recovery). Also: **refresh the database backup** with `/backup-db` and confirm it re-stamps — *(2026-09-26: a dump exists but is stale; the local `backups/LATEST-OK.json` still read `2026-08-09`)*.
+7. **Supabase Pro upgrade decision** — once real money flows, PITR + leaked-password protection stop being optional (FREE plan today; weekly dumps are the only recovery). Also: **refresh the local JSON dump** with `/backup-db` and confirm it re-stamps — *(at the 2026-09-27 check the local marker (`backups/LATEST-OK.json`) was over a month old, while the separate weekly off-site encrypted backup was current)*.
 8. **Create the staging Supabase project + GitHub secrets** — unblocks the parked E2E CI lane.
 
 ---
@@ -123,7 +123,7 @@ Native iOS/Android apps · multi-tenancy now · ML demand forecasting · autonom
 
 ## 6. The first 5 tasks Mason should run (in order)
 
-1. **"Close out the gauntlet"** — one session: `/regen-schema-registry`, re-run §5–§8 fresh to confirm the fixes that landed live on 2026-07-15, update the ledger, land anything that survives (T1–T3). Also say **"back up the database"** — *(2026-09-26: the last dump, `backups/LATEST-OK.json`, is dated `2026-08-09` and needs refreshing)*.
+1. **"Close out the gauntlet"** — one session: `/regen-schema-registry`, re-run §5–§8 fresh to confirm the fixes that landed live on 2026-07-15, update the ledger, land anything that survives (T1–T3). Also say **"back up the database"** — *(the local dump needs refreshing: at the 2026-09-27 check the local marker (`backups/LATEST-OK.json`) was over a month old, while the separate weekly off-site encrypted backup was current)*.
 2. **"Fix my negative inventory products" — DEFERRED** — *(2026-09-26: DEFERRED by Mason 2026-07-16 and not in the active queue; only when Mason asks or a delivery fails on it. Then: bring physical counts and the session walks the adjustment workflow.)*
 3. ~~**Run a real billing cycle yourself**~~ — *2026-09-26: DONE — the first real cycle completed 2026-07-17 and the money-audit re-run ran as the 2026-08-08 foundation ultra review (`docs/manual/CURRENT_STATE.md` §1, `TODO.md` §1 item 2). No further cycle is owed on this item.*
 4. **Create the Stripe account** (~15 min) and start ticket T6 (ACH pay-now links) — the single highest-ROI feature on the board.
