@@ -12,9 +12,12 @@ ledger version `20260904023121`) was the boundary earlier in that sequence. The 
 `max(version)` from that read are deliberately not repeated here — see the rule in the current header
 below; they live in `docs/reference/migration-history.md`.
 
-**Last verified: 2026-09-21 against the live ledger (read-only ledger query, which confirmed by name that
+**Last verified: 2026-09-26 against the live ledger (a read-only ledger query that day confirmed by name
+that `20260914100700`, the customer-document fix, applied live and that only `20260914100800` and
+`20260914100900` are still not applied; a 2026-09-27 re-read returned the same row count, name count and
+`max(version)`). The earlier 2026-09-21 read-only ledger query confirmed by name that
 `20260914100100` through `20260914100400` — including the next-invoice-number year fix — were applied
-live that day, that `20260914100500`, `100600`, `100800` and `100900` are still not, and that the
+live that day, that `20260914100500`, `100600`, `100800` and `100900` were then still not, and that the
 customer-document candidate (then `20260914100450`) has never been applied; entries below that still call
 the first four "parked" predate that read. A 2026-09-22 UTC read-only ledger read confirmed by name that
 `20260914100500` and `100600` have since applied, so the customer-document candidate was restamped

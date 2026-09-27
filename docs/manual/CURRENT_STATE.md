@@ -25,8 +25,10 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-21 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1008 rows / 1001 distinct names, `max(version)` `20260921141901`). Four
+**Last verified: 2026-09-26 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1011 rows / 1004 distinct names, `max(version)` `20260926163005`; a
+2026-09-27 re-read returned the same three figures; detail in the 2026-09-26 update below). The
+earlier 2026-09-21 read found 1008 rows / 1001 distinct names, `max(version)` `20260921141901`. Four
 commission-cohort files applied live on 2026-09-21 between 14:14 and 14:19 UTC —
 `20260914100100_next_invoice_number_year_chicago` (`20260921141423`),
 `20260914100200_commission_history_report_replay_guard` (`20260921141451`),
