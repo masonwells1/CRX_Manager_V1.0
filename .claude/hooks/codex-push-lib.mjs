@@ -2894,6 +2894,16 @@ const NESTED_MAX_COMMANDS = 32;
 // 2026-09-25). No real program invocation carries 64 option words before the
 // command it runs.
 const NESTED_SCAN_WINDOW = 64;
+// Returned by a per-program scan that reached NESTED_SCAN_WINDOW with words
+// still left to read. Padding 70 repeated `--norc` / `/d` / `-NoProfile` words
+// pushed a real `-c` / `/c` / `-Command` past the window, the scan saw no inner
+// command, and all three guards allowed an administrator merge (probe of the
+// open question in PR #795, 2026-09-27). The caller refuses the command
+// (tooDeep) rather than inspect part of it.
+const SCAN_WINDOW_EXCEEDED = Symbol("scan window exceeded");
+function windowExceeded(argvWords, end) {
+  return end < argvWords.length;
+}
 // Long bash options that consume the next word as their value, so the word
 // after them is not the command even when it looks like one.
 const POSIX_SHELL_VALUE_LONGS = new Set(["--rcfile", "--init-file"]);
@@ -2949,7 +2959,7 @@ function posixShellInner(argvWords, start) {
     }
     return sawC ? word : null;
   }
-  return null;
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : null;
 }
 
 // `cmd /c …`, `cmd /d /s /k …`, `cmd /c"…"`: everything after /c, /k or /r.
@@ -2964,7 +2974,7 @@ function cmdInner(rawWords, argvWords, start) {
     }
     if (!argvWords[index].startsWith("/")) return [];
   }
-  return [];
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
 }
 
 // `-Name:value` carries its value in the same word. Returns the value, or null
@@ -3012,7 +3022,7 @@ function powershellInner(rawWords, argvWords, start, commandPosition) {
       index += 1;
     }
   }
-  return [];
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
 }
 
 function evaluatorInner(rawWords, argvWords, start) {
@@ -3061,6 +3071,7 @@ function processStarterInner(argvWords, start) {
     }
     flat.push(word);
   }
+  if (windowExceeded(argvWords, end)) return SCAN_WINDOW_EXCEEDED;
   const command = flat.join(" ").replace(/,/g, " ").replace(/\s+/g, " ").trim();
   return command ? [command] : [];
 }
@@ -3096,7 +3107,13 @@ function nestedCommandsOneLevel(command, { grouping }) {
     grouped += "{}()".includes(char) ? " ; " : char;
   }
   if (grouping && grouped !== text) inner.push({ text: grouped, grouped: true });
-  const add = (values) => { for (const value of values) inner.push({ text: value, grouped: false }); };
+  const add = (values) => {
+    if (values === SCAN_WINDOW_EXCEEDED) {
+      inner.push({ text: "", grouped: false, windowExceeded: true });
+      return;
+    }
+    for (const value of values) inner.push({ text: value, grouped: false });
+  };
   for (const segment of splitCommandSegments(text)) {
     const rawWords = splitShellWordsRaw(segment);
     // PowerShell's parser reads an en dash, em dash or horizontal bar as `-`, so
@@ -3110,7 +3127,8 @@ function nestedCommandsOneLevel(command, { grouping }) {
       const is = (names) => wordIsProgram(rawWords, argvWords, index, names);
       if (is(POSIX_SHELLS)) {
         const found = posixShellInner(argvWords, index + 1);
-        if (found) add([found]);
+        if (found === SCAN_WINDOW_EXCEEDED) add(found);
+        else if (found) add([found]);
       } else if (is(CMD_SHELLS) || is(POWERSHELLS) || is(EXPRESSION_EVALUATORS)) {
         // These run the REST of the line, so their inner command already holds
         // every later word of this segment; the next level unwraps whatever
@@ -3124,7 +3142,7 @@ function nestedCommandsOneLevel(command, { grouping }) {
             ? powershellInner(rawWords, argvWords, index + 1, isCommandPosition(argvWords, index))
             : evaluatorInner(rawWords, argvWords, index + 1);
         add(found);
-        if (found.length) break;
+        if (found === SCAN_WINDOW_EXCEEDED || found.length) break;
       } else if (is(PROCESS_STARTERS)) {
         add(processStarterInner(argvWords, index + 1));
       }
@@ -3136,7 +3154,7 @@ function nestedCommandsOneLevel(command, { grouping }) {
 function finishNested(inner, text) {
   return inner
     .map((entry) => ({ ...entry, text: String(entry.text).trim() }))
-    .filter((entry) => entry.text && entry.text !== text);
+    .filter((entry) => entry.windowExceeded || (entry.text && entry.text !== text));
 }
 
 // Text built at run time — a `$` variable or substitution, or a backtick — that a
@@ -3192,6 +3210,7 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
     const next = [];
     for (const text of frontier) {
       for (const entry of nestedCommandsOneLevel(text, { grouping })) {
+        if (entry.windowExceeded) return { commands: found, tooDeep: true, computed };
         if (!entry.grouped && RUNTIME_TEXT_RE.test(entry.text) &&
             (outerMentionsGhOrGit || programBuiltAtRuntime(entry.text))) {
           computed = true;
@@ -3392,8 +3411,9 @@ export function ghCommandUnreadableDenial(prefix, command) {
 export function nestedTooDeepDenial(prefix) {
   return (
     `${prefix}: this command nests shells or evaluators more deeply than the guard will unwrap ` +
-    `(more than ${NESTED_MAX_DEPTH} levels or ${NESTED_MAX_COMMANDS} inner commands), so it is refused rather than ` +
-    "partly inspected. Run the inner command directly."
+    `(more than ${NESTED_MAX_DEPTH} levels or ${NESTED_MAX_COMMANDS} inner commands), or gives a shell, ` +
+    `PowerShell or Start-Process more than ${NESTED_SCAN_WINDOW} option words before the command it runs, so it ` +
+    "is refused rather than partly inspected. Run the inner command directly."
   );
 }
 

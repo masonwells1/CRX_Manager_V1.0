@@ -3374,6 +3374,33 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   assert.equal(expandNestedCommands(deep).tooDeep, true, "more than the maximum depth is reported as too deep");
   assert.equal(expandNestedCommands(`bash -c "${ADMIN}"`).tooDeep, false, "ordinary nesting is not");
   assert.match(nestedTooDeepDenial("PR MERGE GATE"), /^PR MERGE GATE: .*refused/s, "the too-deep denial names the gate");
+
+  // Option padding past the scan window (2026-09-27): 70 repeated harmless
+  // options pushed the real -c / /c / -Command out of view and all three guards
+  // allowed the admin merge. A scan that runs out of window is now refused.
+  const pad = (word, count) => Array(count).fill(word).join(" ");
+  for (const command of [
+    `bash ${pad("--norc", 70)} -c "${ADMIN}"`,
+    `bash ${pad("-x", 70)} -c "${ADMIN}"`,
+    `sh ${pad("-e", 70)} -c "${ADMIN}"`,
+    `cmd ${pad("/d", 70)} /c "${ADMIN}"`,
+    `pwsh ${pad("-NoProfile", 70)} -Command "${ADMIN}"`,
+    `powershell ${pad("-NonInteractive", 70)} -Command "${ADMIN}"`,
+    `pwsh ${pad("-NoLogo", 70)} "${ADMIN}"`,
+    `Start-Process ${pad("-NoNewWindow", 70)} gh pr merge 1 --admin`,
+  ]) {
+    assert.equal(expandNestedCommands(command).tooDeep, true, `option padding past the window is refused: ${command.slice(0, 40)}…`);
+  }
+  for (const command of [
+    `bash ${pad("-x", 10)} -c "npm test"`,
+    `pwsh ${pad("-NoProfile", 60)} -Command "Get-Date"`,
+    `bash scripts/build.sh ${pad("arg", 80)}`,
+    `git status ${pad("--short", 80)}`,
+    `echo ${pad("word", 200)}`,
+  ]) {
+    assert.equal(expandNestedCommands(command).tooDeep, false, `ordinary options or arguments are not: ${command.slice(0, 40)}…`);
+  }
+  assert.match(nestedTooDeepDenial("PR MERGE GATE"), /option words/, "the denial explains the padding case");
 }
 
 // ── gh aliases and unknown gh commands (2026-09-24) ──────────────────────────
