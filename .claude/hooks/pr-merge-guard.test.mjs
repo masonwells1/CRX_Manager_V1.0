@@ -7,10 +7,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  coderabbitApprovedHead,
   ghApiMergeRequest,
   ghApiMutates,
+  ghApiRepoPath,
   ghMergeRequest,
+  headContainsBaseOnGitHub,
   mcpMergeRequest,
+  newestCheckRollup,
   proofSearchDirs,
   pullRequestApproved,
   pullRequestChecksGreen,
@@ -226,6 +230,95 @@ ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [{ __
 ok(pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [greenCheck, { __typename: "CheckRun", status: "COMPLETED", conclusion: "SKIPPED" }] }), "skipped check tolerated");
 ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [{ __typename: "StatusContext", state: "PENDING" }] }), "pending status context fails");
 
+// ── newest run per check (autonomous landing, 2026-09-26) ────────────────────
+// The rollup keeps EVERY run at the head SHA. PR #794's real rollup, trimmed:
+// three FAILED lifecycle runs followed by two SUCCESS ones, with GitHub itself
+// reporting mergeStateStatus CLEAN. The old every-row rule refused it forever.
+const lifecycle = (conclusion, startedAt, completedAt) => ({
+  __typename: "CheckRun", workflowName: "CodeRabbit final review gate", name: "CodeRabbit candidate lifecycle",
+  status: "COMPLETED", conclusion, startedAt, completedAt,
+});
+const pr794Rollup = [
+  lifecycle("FAILURE", "2026-09-25T03:36:40Z", "2026-09-25T03:40:57Z"),
+  lifecycle("FAILURE", "2026-09-25T03:41:00Z", "2026-09-25T03:41:10Z"),
+  lifecycle("FAILURE", "2026-09-25T03:41:13Z", "2026-09-25T03:41:21Z"),
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  lifecycle("SUCCESS", "2026-09-25T04:10:13Z", "2026-09-25T04:10:24Z"),
+  { __typename: "CheckRun", workflowName: "CI -- Lint, Type Check, Test, Build", name: "E2E Smoke Tests",
+    status: "COMPLETED", conclusion: "CANCELLED", startedAt: "2026-09-25T03:42:18Z", completedAt: "2026-09-25T03:42:17Z" },
+  { __typename: "CheckRun", workflowName: "CI -- Lint, Type Check, Test, Build", name: "E2E Smoke Tests",
+    status: "COMPLETED", conclusion: "SKIPPED", startedAt: "2026-09-25T03:55:18Z", completedAt: "2026-09-25T03:55:18Z" },
+  { __typename: "StatusContext", context: "Vercel", state: "SUCCESS", startedAt: "2026-09-25T03:22:19Z" },
+];
+ok(pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: pr794Rollup }),
+  "PR #794's real rollup: older failed lifecycle runs no longer outvote the newest green run");
+eq(newestCheckRollup(pr794Rollup).length, 3, "one entry per (workflow, check) and per status context");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  lifecycle("FAILURE", "2026-09-25T04:10:13Z", "2026-09-25T04:10:24Z"),
+] }), "the other direction: a NEWER failure still blocks, whatever succeeded before it");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  { ...lifecycle("", "2026-09-25T04:10:13Z", null), status: "IN_PROGRESS" },
+] }), "a newer run still in progress blocks");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  lifecycle("FAILURE", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  { ...lifecycle("SUCCESS", "2026-09-25T04:10:13Z", "2026-09-25T04:10:24Z"), workflowName: "Some other workflow" },
+] }), "a same-name job in ANOTHER workflow cannot clear a failure");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [greenCheck, { weird: true }] }),
+  "an entry of unknown shape still fails closed");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  lifecycle("FAILURE", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  { ...lifecycle("SUCCESS", null, null) },
+] }), "an undated success cannot displace a dated failure");
+// Sol, 2026-09-26: a QUEUED rerun has no startedAt yet. It must not lose to an
+// older success of the same check, even when GitHub still reports CLEAN.
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+  { ...lifecycle("", null, null), status: "QUEUED", conclusion: null },
+] }), "a queued rerun with no start time still blocks over an older success");
+// Sol MED, round 3: a repeated StatusContext has no trustworthy order, so the
+// WORSE state wins — in either list order.
+for (const order of [["SUCCESS", "FAILURE"], ["FAILURE", "SUCCESS"], ["SUCCESS", "PENDING"]]) {
+  ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: order.map((state) => ({ __typename: "StatusContext", context: "Vercel", state })) }),
+    `a repeated status context with ${order.join(" then ")} is not green`);
+}
+ok(pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  { __typename: "StatusContext", context: "Vercel", state: "SUCCESS" }, { __typename: "StatusContext", context: "Vercel", state: "SUCCESS" },
+] }), "a repeated all-success status context is still green");
+ok(!pullRequestChecksGreen({ mergeStateStatus: "CLEAN", statusCheckRollup: [
+  { ...lifecycle("", null, null), status: "WAITING", conclusion: null },
+  lifecycle("SUCCESS", "2026-09-25T04:05:04Z", "2026-09-25T04:05:17Z"),
+] }), "order in the list does not matter: an unfinished run always ranks newest");
+
+// ── CodeRabbit approved the exact head (autonomous landing, 2026-09-26) ──────
+const HEAD = "890b41dcb233ad8c3f45c6dd9d3e14d38388135a";
+const OLD = "48e85fbb6c90837d94cc08bff660b352ca2ee6b0";
+const cr = (state, oid, submittedAt, body = "") => ({ author: { login: "coderabbitai" }, state, commit: { oid }, submittedAt, body });
+ok(coderabbitApprovedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }),
+  "PR #794's real shape: an empty-body APPROVED at the head is a real approval");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", OLD, "2026-09-25T03:40:38Z")] }),
+  "an approval of an OLDER commit does not cover the head");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [
+  cr("APPROVED", HEAD, "2026-09-25T03:40:38Z"), cr("CHANGES_REQUESTED", HEAD, "2026-09-25T03:50:00Z"),
+] }), "a later objection at the head wins over an earlier approval");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [
+  cr("APPROVED", HEAD, "2026-09-25T03:40:38Z"), cr("DISMISSED", HEAD, "2026-09-25T03:50:00Z"),
+] }), "a dismissed approval is not an approval");
+ok(coderabbitApprovedHead({ headRefOid: HEAD, reviews: [
+  cr("CHANGES_REQUESTED", OLD, "2026-09-25T02:00:00Z"), cr("APPROVED", HEAD, "2026-09-25T03:40:38Z"),
+  cr("COMMENTED", HEAD, "2026-09-25T04:00:00Z"),
+] }), "a fix on the same PR: the old objection is superseded, and a later thread-reply COMMENTED artifact is not a verdict");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [
+  { ...cr("APPROVED", HEAD, "2026-09-25T03:40:38Z"), author: { login: "masonwells1" } },
+] }), "only CodeRabbit's approval counts here");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [cr("COMMENTED", HEAD, "2026-09-25T03:40:38Z", "**Actionable comments posted: 0**")] }),
+  "a COMMENTED summary is delivery, not a clean final verdict");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [] }), "no review at all denies");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD }), "a PR view that never asked for reviews denies (fail closed)");
+ok(!coderabbitApprovedHead({ headRefOid: "", reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }), "an unusable head denies");
+ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "not-a-date")] }), "an undated verdict is ignored");
+
 // ── hook decision paths that need no gh (stdin spawn) ────────────────────────
 const HOOK = path.join(__dirname, "pr-merge-guard.mjs");
 function runHook(payload) {
@@ -382,14 +475,54 @@ const gateRequestSource = guardSource.slice(
 ok(gateRequestSource.length > 0, "gateRequest() is present to inspect");
 eq(
   (gateRequestSource.match(/\bhardGateGh\(/g) || []).length,
-  3,
-  "gateRequest()'s three gh calls — PR resolve, changed files, full diff — all spend the shared budget",
+  1,
+  "gateRequest()'s one gh call — the PR resolve, which now also carries reviews — spends the shared budget " +
+  "(the two diff reads went away with the risky/non-risky split: every main merge needs the proof)",
 );
 eq(
   (gateRequestSource.match(/(?<![A-Za-z])gh\(/g) || []).length,
   0,
   "no hard gate calls gh() directly, around the budget",
 );
+// Sol HIGH, round 7: the second hard gh call — GitHub's compare of base...head —
+// is handed hardGateGh itself, so it spends the same budget, and its denial sits
+// before the proof scan's single allow point.
+ok(
+  /headContainsBaseOnGitHub\(\{\s*baseSha,\s*headSha,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\)/.test(gateRequestSource),
+  "the base-containment check runs through the budgeted hardGateGh",
+);
+ok(
+  gateRequestSource.indexOf("if (!headContainsBase)") > 0
+    && gateRequestSource.indexOf("if (!headContainsBase)") < gateRequestSource.indexOf("advisoryQueue.push(request)"),
+  "a head behind its base is denied before the merge's allow point",
+);
+
+// headContainsBaseOnGitHub / ghApiRepoPath — driven in-process with an injected gh.
+{
+  const B = "b".repeat(40);
+  const H = "a".repeat(40);
+  const calls = [];
+  const fakeGh = (answer) => (args) => { calls.push(args); if (answer instanceof Error) throw answer; return answer; };
+  ok(headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("0\n") }), "behind_by 0 means the head contains the base");
+  eq(calls.at(-1), ["api", `repos/{owner}/{repo}/compare/${B}...${H}`, "--jq", ".behind_by"],
+    "no --repo asks about the checkout's own remote, base...head in GitHub's order");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("3") }), "a head 3 commits behind its base is refused");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("") }), "an empty answer is refused (fail closed)");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh("null") }), "a missing behind_by is refused");
+  let threw = false;
+  try { headContainsBaseOnGitHub({ baseSha: B, headSha: H, gh: fakeGh(new Error("HTTP 404")) }); } catch { threw = true; }
+  ok(threw, "a failed call throws, and the caller treats that as not contained");
+  const before = calls.length;
+  ok(!headContainsBaseOnGitHub({ baseSha: "main", headSha: H, gh: fakeGh("0") }), "a non-sha base is refused without asking GitHub");
+  eq(calls.length, before, "no call was made for a malformed sha");
+  headContainsBaseOnGitHub({ baseSha: B, headSha: H, repo: "masonwells1/CRX_Manager_V1.0", gh: fakeGh("0") });
+  ok(calls.at(-1)[1].startsWith("repos/masonwells1/CRX_Manager_V1.0/compare/"), "--repo OWNER/REPO is honoured");
+  eq(ghApiRepoPath("github.com/masonwells1/CRX_Manager_V1.0"), "repos/masonwells1/CRX_Manager_V1.0", "HOST/OWNER/REPO reduces to OWNER/REPO");
+  eq(ghApiRepoPath("https://github.com/masonwells1/CRX_Manager_V1.0.git"), "repos/masonwells1/CRX_Manager_V1.0", "a URL reduces to OWNER/REPO");
+  eq(ghApiRepoPath("owner/re po"), null, "an unrecognizable repo is null, so the gate fails closed");
+  eq(ghApiRepoPath("a/b/c/d"), null, "too many segments is null");
+  ok(!headContainsBaseOnGitHub({ baseSha: B, headSha: H, repo: "a/b/c/d", gh: fakeGh("0") }), "an unusable --repo is refused");
+}
 ok(
   /function\s+listWorktreesFromProjectDir\(\)\s*\{\s*if \(!hardGateBudget\.admit\(\)\) deny\(/.test(guardSource),
   "the proof scan's git call spends the shared budget too",
@@ -422,6 +555,43 @@ ok(
   "the CHANGES_REQUESTED denial is NOT gated on request.auto - --auto must never merge over an objection",
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
+
+// ── Mason's autonomous-landing rule (2026-09-26), pinned at the call sites ────
+// gateRequest() needs a real gh, so its wiring is pinned here and the predicates
+// are exercised behaviourally above.
+ok(/"--json",\s*"[^"]*\breviews\b[^"]*"/.test(gateRequestSource),
+  "the PR resolve asks GitHub for reviews, so the CodeRabbit verdict comes from the same snapshot");
+ok(/if\s*\(\s*request\.auto\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
+  "--auto into main is denied outright, for every diff");
+ok(/if\s*\(\s*!coderabbitApprovedHead\(\s*pr\s*\)\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
+  "a merge without CodeRabbit's approval of the exact head is denied");
+ok(!/request\.auto[^\n]*coderabbitApprovedHead|coderabbitApprovedHead[^\n]*request\.auto/.test(gateRequestSource),
+  "the CodeRabbit requirement is not exempt for any merge mode");
+ok(/if\s*\(\s*!pullRequestChecksGreen\(\s*pr\s*\)\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
+  "the green-pipeline denial is unconditional (no --auto exemption left)");
+ok(!/riskyFiles|contentIsRisky|advisoryQueue\.push\(request\);\s*return;\s*\}\s*\/\/[^\n]*risky/i.test(gateRequestSource),
+  "no risky/non-risky split survives: there is no allow point before the Sol proof check");
+eq((gateRequestSource.match(/advisoryQueue\.push\(request\)/g) || []).length, 1,
+  "exactly one allow point, and it sits behind the proof scan");
+ok(gateRequestSource.indexOf("advisoryQueue.push(request)") > gateRequestSource.indexOf("proofValid(data, headSha"),
+  "the single allow point comes after the exact-head Sol proof validated");
+
+// ── every agent merge pins the checked head (Sol HIGH, 2026-09-26) ───────────
+// A push landing between this gate's checks and GitHub's merge would otherwise
+// be merged unreviewed; `--match-head-commit` makes GitHub refuse a moved head.
+const SHA = "890b41dcb233ad8c3f45c6dd9d3e14d38388135a";
+eq(ghMergeRequest(`gh pr merge 42 --squash --match-head-commit ${SHA}`)?.matchHeadCommit, SHA, "the pin is read (spaced)");
+eq(ghMergeRequest(`gh pr merge 42 --match-head-commit=${SHA} --squash`)?.matchHeadCommit, SHA, "the pin is read (=)");
+eq(ghMergeRequest(`gh pr merge 42 --match-head-commit aaaa --match-head-commit ${SHA}`)?.matchHeadCommit, SHA,
+  "gh keeps the LAST value, and so does the parser");
+eq(ghMergeRequest(`gh pr merge 42 --body --match-head-commit --squash`)?.matchHeadCommit, undefined,
+  "a pin spelled inside another option's VALUE is data, not a pin");
+eq(ghMergeRequest("gh pr merge 42 --squash"), { selector: "42", repo: "", auto: false, admin: false },
+  "an unpinned merge keeps its exact old shape (no pin field)");
+ok(/String\(request\.matchHeadCommit[^)]*\)\.toLowerCase\(\)\s*!==\s*String\(pr\.headRefOid[^)]*\)\.toLowerCase\(\)\)\s*\{\s*deny\(/.test(gateRequestSource),
+  "gateRequest denies any merge whose pin is missing or differs from the head it checked");
+ok(gateRequestSource.indexOf("request.matchHeadCommit") < gateRequestSource.indexOf("advisoryQueue.push(request)"),
+  "the pin is checked before the allow point");
 
 // ── the two 2026-09-08 Codex sol findings, pinned at their call sites ─────────
 // Both are wiring, not parsing: the shared helpers are exercised behaviourally in

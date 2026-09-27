@@ -42,11 +42,15 @@
 //   production. See TARGET below.
 //
 // AUTHORIZATION
-//   Passing the gate is a FLOOR, not authorization. In an ordinary interactive
-//   session Mason's explicit in-chat OK is still required before running this with
-//   --confirm; only a pre-authorized hands-free run with autopilot armed may skip
-//   the per-migration ask (settled 2026-07-13), and destructive migrations never
-//   apply autonomously at all. That policy is enforced inside the rule book.
+//   Mason's autonomous-landing rule (2026-09-26): a NON-destructive migration whose
+//   final exact-SHA Sol review and CodeRabbit review are clean applies with no
+//   per-migration ask, in any session, once the rule book passes — both reviewer
+//   proofs and a fresh content-bound gpt-6-sol/high proof, all under 30 minutes.
+//   A DESTRUCTIVE migration (DELETE/TRUNCATE of business rows, DROP of data-bearing
+//   tables/columns) stays Mason's: the rule book refuses it through this script in
+//   every session. There is deliberately no override flag — a flag the agent can
+//   pass itself cannot prove Mason approved that exact migration (Sol HIGH,
+//   2026-09-26) — so a destructive migration is parked and handed to Mason.
 
 import { readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -113,6 +117,10 @@ if (!filePath) {
 }
 
 const confirm = argv.includes("--confirm");
+rejectedFlag("--mason-approved-destructive",
+  "apply-migration-file: --mason-approved-destructive does not exist. A destructive migration never applies " +
+  "through an agent-run command: a flag the agent can pass itself cannot prove Mason approved that exact " +
+  "migration. Park it and hand it to Mason.");
 const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 
 // ── TARGET: pinned, not a parameter ────────────────────────────────────────
@@ -331,7 +339,7 @@ console.log("APPLY GATE PASSED — ordering, autopilot state, destructive-conten
 if (!confirm) {
   console.log("");
   console.log("DRY RUN — nothing was transmitted. Re-run with --confirm to apply for real.");
-  console.log("Remember: the gate is a floor, not authorization. Interactive sessions still need Mason's in-chat OK.");
+  console.log("Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, whose PR's final Sol and CodeRabbit reviews are clean, may now be applied with --confirm.");
   process.exit(0);
 }
 

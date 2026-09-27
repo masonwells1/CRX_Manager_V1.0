@@ -447,19 +447,22 @@ ok(
 // must be measured at the CALL SITES. Measuring the definition would compare the
 // wrong thing and pass no matter where the call lands.
 //
-// Since Codex round 8 the two allow points QUEUE the request and a single call
-// site after the request loop drains the queue. So the pins are: both allow
-// points still push (or one path silently skips the check), the one call site
-// sits after the loop, and the queue is the same object on both ends.
+// Since Codex round 8 the allow point QUEUES the request and a single call site
+// after the request loop drains the queue. Since Mason's autonomous-landing rule
+// (2026-09-26) every main merge needs the exact-SHA Sol proof, so there is ONE
+// allow point, behind that proof — the old non-risky allow point, which returned
+// before the proof section, is gone. The pins are: exactly one push, after every
+// hard gate; the one call site sits after the loop.
 const claudeQueuePushes = [...guardSource.matchAll(/advisoryQueue\.push\(request\);/g)].map((m) => m.index);
 const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request, advisoryDeadlineMs\);/g)].map((m) => m.index);
 const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
-const claudeProofAt = guardSource.indexOf("require the fresh, bound Codex proof");
+const claudeProofAt = guardSource.indexOf("every main merge → require the fresh, bound Sol proof");
+const claudeCodeRabbitAt = guardSource.indexOf("if (!coderabbitApprovedHead(pr))");
 const claudeRequestLoopAt = guardSource.indexOf("for (const request of requests) gateRequest(request);");
 eq(
   claudeQueuePushes.length,
-  2,
-  "the Claude guard queues the advisory at BOTH allow points (non-risky, and risky-with-valid-proof) — one push site means the other path silently skips the check",
+  1,
+  "the Claude guard has exactly ONE allow point — a second would be a merge path that skips the Sol proof",
 );
 eq(
   claudeAdvisoryCalls.length,
@@ -479,19 +482,12 @@ ok(
   /const advisoryDeadlineMs = Date\.now\(\) \+ CODEX_ADVISORY_BUDGET_MS;/.test(guardSource),
   "the Claude guard computes one shared deadline for the whole queue",
 );
-// The proof gate is reachable only on the RISKY path, so only the second push
-// site sits after it — the first returns ALLOW before the proof section exists
-// to run. Asserting "every push follows the proof gate" would be wrong, not
-// stricter: it would demand the non-risky path wait on a gate that never applies.
-const claudeRiskyClassifyAt = guardSource.indexOf("risky-diff classification");
-ok(claudeRiskyClassifyAt > 0, "the Claude guard's risky-diff classification is present to order");
+// Every merge now reaches the proof gate, so the single allow point must follow
+// it — and the CodeRabbit exact-head approval check — as well as the green gate.
+ok(claudeCodeRabbitAt > 0, "the Claude guard's CodeRabbit exact-head approval check is present to order");
 ok(
-  claudeQueuePushes[0] > claudeRiskyClassifyAt,
-  "MUST RUN LAST: the non-risky allow point follows the risky-diff classification, which denies (fail closed) when the diff cannot be read",
-);
-ok(
-  claudeQueuePushes[1] > claudeProofAt,
-  "MUST RUN LAST: the risky allow point follows the exact-SHA proof gate",
+  claudeQueuePushes[0] > claudeProofAt && claudeQueuePushes[0] > claudeCodeRabbitAt,
+  "MUST RUN LAST: the allow point follows the CodeRabbit approval check and the exact-SHA proof gate",
 );
 
 // ── the lookup is BOUNDED, on both guards ────────────────────────────────────
