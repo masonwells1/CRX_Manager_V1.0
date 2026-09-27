@@ -28,6 +28,16 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { evaluateMigrationApply } from "./migration-apply-lib.mjs";
+import { hookDeadlineMs } from "./codex-push-lib.mjs";
+
+// Both manifests give this hook 15 seconds (.claude/settings.json and
+// .codex/hooks.json). A hook killed at its timeout emits nothing, and emitting
+// nothing ALLOWS — so the network-bound landing gate gets a deadline inside that
+// window, measured from process start, and refuses when it would run past it
+// (Sol HIGH, 2026-09-26). The reserve covers the Windows launcher and writing the
+// verdict.
+const HOOK_TIMEOUT_MS = 15_000;
+const HOOK_RESERVE_MS = 3_000;
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -63,6 +73,7 @@ try {
     projectId: input.project_id,
     projectDir,
     cwd: payload?.cwd || input.cwd || process.cwd(),
+    landingDeadlineMs: hookDeadlineMs(HOOK_TIMEOUT_MS, HOOK_RESERVE_MS),
   });
 } catch (err) {
   // A crash in the rule book must not wave a live migration through.

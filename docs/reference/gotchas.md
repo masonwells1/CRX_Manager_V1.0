@@ -311,25 +311,25 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
-CodeRabbit review was submitted. Say so rather than treating green as clean. This matters more
-since 2026-09-02, not less: Mason removed the required approving review from `main`, so a
-misleading green CodeRabbit status is no longer backstopped by a missing approval keeping the PR
-blocked. Nothing but this check stands between "CodeRabbit never actually ran" and a merge. Since
-2026-08-30 the normal trigger
+CodeRabbit review was submitted. Say so rather than treating green as clean. GitHub no longer
+requires an approving review on `main` (removed 2026-09-02), so since 2026-09-26 the agent merge
+gates themselves require CodeRabbit's APPROVED verdict on the exact head — a green CodeRabbit
+status row never satisfies them. Since 2026-08-30 the normal trigger
 is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
 accidental duplicate. Native attempts retain a trusted head/base receipt even after a reset.
 For pending or uncertain delivery, preserve requested/dispatch state and check the actual formal
 review. After late delivery, reapply `ready-for-coderabbit` to reconcile the existing request;
 do not remove and re-add the provider label. A retained same-head attempt cannot be retried as
-unspent merely by clearing labels: use a fresh candidate after verifying earlier delivery, or
-open a fresh PR and close the old one with a `Replaced by #N` comment (closing keeps its
-ambiguous out-of-band evidence; do not leave it open). Only the workflow's verified cleanup
-before any provider call permits a same-head retry. Follow
+unspent merely by clearing labels: a relabel of that head reconciles against its receipt and never
+dispatches again. Since 2026-09-26 a fix goes on the SAME PR — the push records a new candidate
+epoch, and a relabel of the new head earns one follow-up review; a fresh PR is needed only for the
+rare cases the reference names (e.g. a same-head review with no receipt of this epoch). Only the
+workflow's verified cleanup before any provider call permits a same-head retry. Follow
 `docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
-`CHANGES_REQUESTED` verdict. An approving review is not required (removed 2026-09-02); when one
-*does* exist, require the native receipt's head SHA, that authenticated `APPROVED` review's `commit_id`, and
-the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
+`CHANGES_REQUESTED` verdict. An agent merge needs CodeRabbit's `APPROVED` review (Mason's
+autonomous-landing rule, 2026-09-26): require the native receipt's head SHA, that authenticated
+`APPROVED` review's `commit_id`, and the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
 the expected base; native delivery validates both head and base commits. The generic Actions-authored marker is dedupe evidence, not an
 independent trust identity.
 

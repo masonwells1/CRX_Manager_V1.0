@@ -69,13 +69,12 @@ app repo, are still allowed.
   drifted above the unrelated `unsupportedGraphql` check. Moved to the `if (ghRequest)`
   gating point, which is what it describes (and where its twin sits in
   `.claude/hooks/pr-merge-guard.mjs`).
-- `.claude/hooks/pr-merge-guard.mjs`: the red-pipeline denial told a caller carrying
-  `--disable-auto` to "use `gh pr merge --auto`" — the opposite of the intent, since
-  that flag CANCELS a queued auto-merge and lands nothing. `ghMergeRequest` now records
-  `disableAuto` (positionally, ParseBool semantics, last value wins, value positions are
-  data) and the denial branches its remedy sentence. **The gate itself is unchanged**:
-  the stand-down Mason removed on 2026-09-21 is not restored, `auto` stays false, and a
-  cancellation is still checked like any other merge. The field is wording only.
+- `.claude/hooks/pr-merge-guard.mjs`: this branch originally branched the red-pipeline
+  denial so a `--disable-auto` caller was not told to "use `gh pr merge --auto`". That
+  change was **dropped** when merging main on 2026-09-27: #804 had already rewritten the
+  denial to "wait for the checks to finish, fix any that failed, and retry" and refuses
+  `--auto` outright, so the misleading sentence no longer exists anywhere. See
+  `2026-09-27-push-guard-drops-disable-auto-wording.md`.
 
 ### Verified
 

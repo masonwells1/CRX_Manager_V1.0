@@ -5,6 +5,10 @@ const REQUESTED_LABEL = 'coderabbit-review-requested';
 const DISPATCH_LABEL = 'coderabbit-review-dispatch';
 const NATIVE_RECEIPT_PREFIX = '<!-- crx-coderabbit-native-dispatch:v1 ';
 const CANDIDATE_BIRTH_PREFIX = '<!-- crx-coderabbit-candidate-birth:v1 ';
+// A later candidate on the SAME pull request (autonomous landing, 2026-09-26):
+// recorded by the trusted run for the push/reopen/retarget that created it.
+const CANDIDATE_EPOCH_PREFIX = '<!-- crx-coderabbit-candidate-epoch:v1 ';
+const EPOCH_ACTIONS = new Set(['synchronize', 'reopened', 'edited']);
 const REVIEW_COMMAND = '@coderabbitai review';
 const ACTIONS_BOT_LOGIN = 'github-actions[bot]';
 const CODERABBIT_BOT_LOGIN = 'coderabbitai[bot]';
@@ -13,6 +17,9 @@ const GATE_CHECK_NAME = 'final-review-gate';
 // Policy since #706: closing keeps the superseded PR's branch, commits, comments
 // and findings; leaving it open buried real work under stale copies.
 const FRESH_PR_GUIDANCE = 'open a fresh delivery PR at the corrected head and close this one with a "Replaced by #N" comment';
+// The ordinary case since 2026-09-26: a fix pushed to the same PR becomes a new
+// candidate epoch and earns one review through the ready label.
+const NEW_EPOCH_GUIDANCE = 'wait for this PR\'s own trusted synchronize run to record the current head, then re-apply the ready label once its checks pass';
 // Keep the old display name for completed trusted runs created before activation.
 const TRUSTED_GATE_CHECK_NAMES = new Set([GATE_CHECK_NAME, 'coderabbit candidate snapshot', 'coderabbit candidate lifecycle']);
 const RESET_ACTIONS = new Set([
@@ -29,6 +36,10 @@ const ACCEPTABLE_CHECK_CONCLUSIONS = new Set(['success', 'neutral', 'skipped']);
 const DEFAULT_QUIET_PERIOD_MS = 30_000;
 const DEFAULT_MERGEABILITY_POLL_ATTEMPTS = 4;
 const DEFAULT_MERGEABILITY_POLL_MS = 2_000;
+// Waiting out running checks is OFF unless the workflow sets checkSettleAttempts;
+// see awaitSettledChecks. The trusted workflow sets 80 x 15s = 20 minutes, which
+// covers ci.yml's ~11-minute "Lint, Type Check, Test, Build" with room to spare.
+const DEFAULT_CHECK_SETTLE_POLL_MS = 15_000;
 // How long to wait for CodeRabbit to acknowledge the posted command before
 // declaring the request unheard. Sized from measured behaviour on this repo, not
 // guessed: acknowledged requests replied in 6s and 11s, while unacknowledged ones
@@ -294,6 +305,26 @@ async function resetLabels({ github, owner, repo, pullNumber, core, reason }) {
   return { status: 'reset', reason };
 }
 
+// Take the provider label back as soon as a review of this head is observed
+// (autonomous landing, 2026-09-26). `.coderabbit.yaml` now sets
+// auto_incremental_review: true so a fix on the SAME PR can earn a follow-up
+// review; CodeRabbit only acts while the positive `coderabbit-review-dispatch`
+// label is attached, so leaving it on after delivery would let every later
+// work-in-progress push buy an unvalidated review. Dedupe no longer rests on the
+// labels once a review exists: the head's native receipt stays on the PR, a
+// relabel of this head reconciles against that receipt (reconcileDeliveredReceipt)
+// and never dispatches again, and a new head gets its own candidate epoch.
+//
+// A failed removal is a warning, not a failure: the labels then linger until the
+// next push resets them, which is the old behaviour.
+async function releaseDeliveredDispatch({ github, owner, repo, pullNumber, core, headSha }) {
+  const failures = await removeLabelsIndependently(github, owner, repo, pullNumber,
+    [DISPATCH_LABEL, REQUESTED_LABEL, READY_LABEL]);
+  if (failures.length > 0) {
+    core.warning(`CodeRabbit reviewed ${headSha}, but the provider label could not be released (${failures.join('; ')}); a later push may be reviewed before it is validated.`);
+  }
+}
+
 async function resetCandidate({
   github, owner, repo, pullNumber, core, reason,
 }) {
@@ -504,8 +535,33 @@ async function awaitCodeRabbitAcknowledgement({
 // dismissed reviews, COMMENTED reviews, staleness and CODEOWNERS, and any
 // divergence would surface as this gate refusing candidates the merge gate allows
 // — or, worse, allowing ones it denies. One source, one answer.
+// ONE deliberate exception to "read the same field the merge gates read"
+// (Mason's autonomous-landing rule, 2026-09-26). When the only outstanding
+// objection is CodeRabbit's own, recorded against an OLDER commit, the whole point
+// of the requested review is to re-examine the fix for it on this same PR — that
+// is how a fix earns its follow-up review without a replacement PR. Refusing it
+// deadlocked: CodeRabbit's CHANGES_REQUESTED only clears when CodeRabbit reviews
+// again, and the gate would not let it. A human reviewer's objection, or
+// CodeRabbit's objection AT this head, still refuses, and the merge gates still
+// deny any merge while reviewDecision is CHANGES_REQUESTED.
+function staleCodeRabbitObjectionOnly(reviews, headSha) {
+  const latestVerdict = new Map();
+  for (const review of [...reviews].sort((left, right) => Number(left?.id || 0) - Number(right?.id || 0))) {
+    const state = normalize(review?.state);
+    if (!['approved', 'changes_requested', 'dismissed'].includes(state)) continue;
+    const login = normalize(review?.user?.login);
+    if (!login) return false;
+    latestVerdict.set(login, review);
+  }
+  const objections = [...latestVerdict.values()].filter((review) => normalize(review.state) === 'changes_requested');
+  return objections.length > 0 && objections.every((review) => normalize(review.user?.login) === CODERABBIT_BOT_LOGIN
+    && normalize(review.user?.type) === 'bot'
+    && /^[a-f0-9]{40}$/.test(String(review.commit_id || ''))
+    && String(review.commit_id) !== String(headSha));
+}
+
 async function collectReviewDecisionBlockers({
-  github, owner, repo, pullNumber, core,
+  github, owner, repo, pullNumber, core, headSha = null,
 }) {
   let decision;
   try {
@@ -533,6 +589,18 @@ async function collectReviewDecisionBlockers({
   }
 
   if (normalize(decision) === 'changes_requested') {
+    if (/^[a-f0-9]{40}$/.test(String(headSha || ''))) {
+      try {
+        const reviews = await github.paginate(github.rest.pulls.listReviews,
+          { owner, repo, pull_number: pullNumber, per_page: 100 });
+        if (Array.isArray(reviews) && staleCodeRabbitObjectionOnly(reviews, headSha)) {
+          core.notice(`The only outstanding objection is CodeRabbit's, on a commit older than ${headSha}; the requested review re-examines the fix on this same PR.`);
+          return [];
+        }
+      } catch (error) {
+        core.warning(`Could not read the reviews behind CHANGES_REQUESTED: ${error.message}`);
+      }
+    }
     return ['a reviewer has requested changes (reviewDecision=CHANGES_REQUESTED), so this pull request cannot merge and a review request would be spent on it'];
   }
   return [];
@@ -919,35 +987,130 @@ async function recordCandidateBirth({ github, context, core }) {
   return { status: 'birth_recorded', duplicate: false };
 }
 
+function candidateEpochBody({ action, headSha, baseSha, executionSha, runId, repoId, repoFullName, pullNumber, prCreatedAt }) {
+  return `${CANDIDATE_EPOCH_PREFIX}${JSON.stringify({ action, headSha, baseSha, executionSha, runId, repoId, repoFullName, pullNumber, prCreatedAt })} -->`;
+}
+
+function parseCandidateEpoch(comment) {
+  if (normalize(comment?.user?.login) !== ACTIONS_BOT_LOGIN
+    || normalize(comment?.user?.type) !== 'bot'
+    || !String(comment.body || '').startsWith(CANDIDATE_EPOCH_PREFIX)) return null;
+  try {
+    const epoch = JSON.parse(comment.body.slice(CANDIDATE_EPOCH_PREFIX.length, -4));
+    if (comment.body !== candidateEpochBody(epoch)
+      || !EPOCH_ACTIONS.has(epoch.action)
+      || !/^[a-f0-9]{40}$/.test(epoch.headSha || '')
+      || !/^[a-f0-9]{40}$/.test(epoch.baseSha || '')
+      || !/^[a-f0-9]{40}$/.test(epoch.executionSha || '')
+      || ![epoch.runId, epoch.repoId, epoch.pullNumber].every(isPositiveSafeInteger)
+      || !isNonBlankString(epoch.repoFullName)
+      || !isPositiveSafeInteger(Number(comment.id))
+      || !Number.isFinite(Date.parse(epoch.prCreatedAt))
+      || !Number.isFinite(Date.parse(comment.created_at))
+      || Date.parse(epoch.prCreatedAt) > Date.parse(comment.created_at)
+      || comment.updated_at !== comment.created_at) return null;
+    return { ...epoch, recordedAt: Date.parse(comment.created_at), commentId: Number(comment.id) };
+  } catch { return null; }
+}
+
+// SAME-PR FOLLOW-UP REVIEWS (autonomous landing, 2026-09-26). The native design
+// bound every review to the head/base the `opened` webhook captured, for the
+// whole life of the PR, so each fix round needed a replacement PR — the
+// field-invoice fix went through about fourteen. The reason was attribution: a
+// late review of an OLD candidate must never be credited to a new request.
+//
+// That reason is kept; only its unit shrinks from "the PR" to "the candidate
+// epoch". The trusted run for the event that created a new candidate — a push
+// (`synchronize`), a `reopened`, or a base retarget (`edited` with a base change)
+// — records that event's own head and base, exactly as `opened` records the
+// birth: taken from the webhook, never re-read from the REST API, and checked
+// later against the immutable run name. Receipts, provider-label events and
+// history edits before the current epoch belong to earlier candidates and are
+// ignored; inside the epoch the old one-candidate rules apply unchanged. A review
+// is still credited only for its exact head, after this epoch's own receipt.
+async function recordCandidateEpoch({ github, context, core }) {
+  const pull = context.payload.pull_request;
+  const repository = context.payload.repository;
+  const action = context.payload.action;
+  if (!EPOCH_ACTIONS.has(action) || pull.state !== 'open' || pull.base?.ref !== repository.default_branch
+    || repository.default_branch !== 'main') {
+    return { status: 'ignored', reason: 'no_production_candidate_epoch' };
+  }
+  const epoch = {
+    action, headSha: pull.head?.sha, baseSha: pull.base?.sha, executionSha: context.sha,
+    runId: context.runId, repoId: repository.id, repoFullName: `${context.repo.owner}/${context.repo.repo}`,
+    pullNumber: pull.number, prCreatedAt: pull.created_at,
+  };
+  const body = candidateEpochBody(epoch);
+  const probeAt = new Date().toISOString();
+  if (!parseCandidateEpoch({ id: 1, body, created_at: probeAt, updated_at: probeAt,
+    user: { login: ACTIONS_BOT_LOGIN, type: 'Bot' } })) {
+    throw new Error(`the ${action} webhook did not identify a valid candidate epoch`);
+  }
+  const { owner, repo } = context.repo;
+  const response = await github.rest.issues.createComment({ owner, repo, issue_number: pull.number, body });
+  if (!parseCandidateEpoch(response.data)) throw new Error('candidate epoch post could not be verified');
+  core.notice(`Recorded candidate epoch ${action} for head ${epoch.headSha}; a ready label on this head can request one review.`);
+  return { status: 'epoch_recorded' };
+}
+
+// The CURRENT candidate context: the newest trusted birth or epoch record. It
+// must describe exactly the live head and base, and it is verified against the
+// immutable name of the trusted run that wrote it.
 async function inspectCandidateBirth({ github, owner, repo, pullNumber, headSha, baseSha, selfRunId, core, comments }) {
-  const candidates = comments.filter((comment) => normalize(comment.user?.login) === ACTIONS_BOT_LOGIN
+  const births = comments.filter((comment) => normalize(comment.user?.login) === ACTIONS_BOT_LOGIN
     && String(comment.body || '').startsWith(CANDIDATE_BIRTH_PREFIX));
-  const birth = candidates.length === 1 ? parseCandidateBirth(candidates[0]) : null;
+  const birth = births.length === 1 ? parseCandidateBirth(births[0]) : null;
   if (!birth || birth.pullNumber !== pullNumber || birth.repoFullName !== `${owner}/${repo}`) {
     throw new Error(`immutable original candidate birth is missing or unverifiable; after the trusted opened workflow is available, ${FRESH_PR_GUIDANCE}`);
   }
-  if (birth.headSha !== headSha || birth.baseSha !== baseSha) {
-    throw new Error(`candidate head or base changed since PR creation; ${FRESH_PR_GUIDANCE}`);
+  // Every Actions-authored epoch-shaped comment must parse; a malformed or edited
+  // one is refused rather than skipped, the same fail-closed rule as the birth.
+  const epochComments = comments.filter((comment) => normalize(comment.user?.login) === ACTIONS_BOT_LOGIN
+    && String(comment.body || '').startsWith(CANDIDATE_EPOCH_PREFIX));
+  const epochs = epochComments.map(parseCandidateEpoch);
+  if (epochs.some((epoch) => !epoch || epoch.pullNumber !== pullNumber || epoch.repoFullName !== `${owner}/${repo}`
+    || epoch.repoId !== birth.repoId || epoch.prCreatedAt !== birth.prCreatedAt)) {
+    throw new Error(`a candidate epoch record is malformed or belongs to another pull request; ${FRESH_PR_GUIDANCE}`);
   }
+  const birthCommentId = Number(births[0].id);
+  const newestEpoch = epochs.filter((epoch) => epoch.commentId > birthCommentId)
+    .sort((left, right) => right.commentId - left.commentId)[0] || null;
+  if (epochs.length > 0 && !newestEpoch) {
+    throw new Error(`a candidate epoch predates the PR's own birth record; ${FRESH_PR_GUIDANCE}`);
+  }
+  const current = newestEpoch || birth;
+  if (current.headSha !== headSha || current.baseSha !== baseSha) {
+    throw new Error(newestEpoch || epochs.length
+      ? `the newest recorded candidate is not the live head/base; ${NEW_EPOCH_GUIDANCE}`
+      : `candidate head or base changed since PR creation and no trusted epoch records it yet; ${NEW_EPOCH_GUIDANCE}`);
+  }
+  const action = newestEpoch ? newestEpoch.action : 'opened';
   const [response, trusted] = await Promise.all([
-    github.rest.actions.getWorkflowRun({ owner, repo, run_id: birth.runId }),
+    github.rest.actions.getWorkflowRun({ owner, repo, run_id: current.runId }),
     resolveTrustedGateWorkflowProvenance({ github, owner, repo, selfRunId, core }),
   ]);
   const origin = response.data;
   const originalPull = origin.pull_requests?.find((pull) => Number(pull.number) === pullNumber);
-  if (trusted.error || origin.id !== birth.runId || origin.workflow_id !== trusted.workflowId
+  if (trusted.error || origin.id !== current.runId || origin.workflow_id !== trusted.workflowId
     || origin.path !== '.github/workflows/coderabbit-final-review.yml' || origin.path !== trusted.workflowPath
-    || origin.display_title !== `CodeRabbit gate opened PR ${pullNumber} head ${headSha} base ${baseSha} execution ${birth.executionSha}`
-    || origin.event !== 'pull_request_target' || ![headSha, baseSha, birth.executionSha].includes(origin.head_sha)
+    || origin.display_title !== `CodeRabbit gate ${action} PR ${pullNumber} head ${headSha} base ${baseSha} execution ${current.executionSha}`
+    || origin.event !== 'pull_request_target' || ![headSha, baseSha, current.executionSha].includes(origin.head_sha)
     || originalPull?.head?.sha !== headSha || originalPull?.base?.sha !== baseSha
     || origin.repository?.id !== birth.repoId || origin.repository?.full_name !== birth.repoFullName
-    || origin.actor?.id !== birth.creatorId || origin.status !== 'completed' || origin.conclusion !== 'success'
+    || (!newestEpoch && origin.actor?.id !== birth.creatorId)
+    || origin.status !== 'completed' || origin.conclusion !== 'success'
     || !Number.isFinite(Date.parse(origin.created_at)) || !Number.isFinite(Date.parse(origin.updated_at))
     || Date.parse(birth.prCreatedAt) > Date.parse(origin.created_at)
-    || birth.recordedAt < Date.parse(origin.created_at) || birth.recordedAt > Date.parse(origin.updated_at)) {
-    throw new Error('candidate birth did not match its trusted original workflow candidate');
+    || current.recordedAt < Date.parse(origin.created_at) || current.recordedAt > Date.parse(origin.updated_at)) {
+    throw new Error(newestEpoch
+      ? 'candidate epoch did not match its trusted workflow run'
+      : 'candidate birth did not match its trusted original workflow candidate');
   }
-  return birth;
+  // `epochStart` is where THIS candidate's history begins. The opened birth keeps
+  // the whole-PR scope it always had; an epoch starts at its own record, on the
+  // second-precision clock GitHub's timeline events use.
+  return { ...current, action, epochStart: newestEpoch ? Math.floor(newestEpoch.recordedAt / 1000) * 1000 : -Infinity };
 }
 
 // A receipt records an attempt, never merge authorization. Independently check
@@ -1004,11 +1167,21 @@ async function inspectNativeAttemptHistory({ github, owner, repo, pullNumber, he
     // no comment is used as authorization, and no provider permission rule is assumed.
     const birth = await inspectCandidateBirth({ github, owner, repo, pullNumber, headSha, baseSha,
       selfRunId, core, comments });
-    const dispatches = events.filter((event) => event.event === 'labeled' && event.label?.name === DISPATCH_LABEL);
-    const receipts = comments.map(parseNativeDispatchReceipt).filter(Boolean);
-    if (events.some((event) => ['base_ref_changed', 'base_ref_force_pushed', 'head_ref_force_pushed'].includes(event.event))
+    // Scope everything to the CURRENT candidate epoch (see recordCandidateEpoch).
+    // Anything earlier belongs to a previous candidate of this PR. An event whose
+    // timestamp cannot be read is never excluded — it stays in scope and fails
+    // closed below.
+    const beforeEpoch = (value) => {
+      const at = Date.parse(String(value || ''));
+      return Number.isFinite(at) && at < birth.epochStart;
+    };
+    const epochEvents = events.filter((event) => !beforeEpoch(event.created_at));
+    const dispatches = epochEvents.filter((event) => event.event === 'labeled' && event.label?.name === DISPATCH_LABEL);
+    const receipts = comments.map(parseNativeDispatchReceipt).filter(Boolean)
+      .filter((receipt) => receipt.requestedAfter >= birth.epochStart);
+    if (epochEvents.some((event) => ['base_ref_changed', 'base_ref_force_pushed', 'head_ref_force_pushed'].includes(event.event))
       || receipts.some((receipt) => receipt.headSha !== birth.headSha || receipt.baseSha !== birth.baseSha)) {
-      throw new Error(`the PR candidate was retargeted, rewritten or changed; ${FRESH_PR_GUIDANCE}`);
+      throw new Error(`the PR candidate was retargeted, rewritten or changed within the current candidate; ${NEW_EPOCH_GUIDANCE}`);
     }
     let activeEvents = 0;
     for (const event of dispatches) {
@@ -1073,8 +1246,20 @@ async function reconcileLabelEvent({
       // Labels can be managed by triage collaborators. They record dedupe state,
       // not who authorized this review. Only the ready-event route below supplies
       // this head after verifying its actor and live candidate.
-      if (!authorizedReadyHeadSha || authorizedReadyHeadSha !== headSha
-        || authorizedReadyBaseSha !== pullRequest.base.sha) {
+      if (!authorizedReadyHeadSha) {
+        // NOT a failure since 2026-09-26. A metadata edit or an unrelated label
+        // event cannot reconcile a dispatch, and it still changes nothing here —
+        // the dispatch state is preserved exactly as before. But reporting it red
+        // left a FAILED lifecycle row on the frozen head that no rerun could clear
+        // (it replays the same stale event), and that row was what stranded every
+        // agent merge (PR #726/#794). A green lifecycle row never attests review
+        // delivery; the merge gates read CodeRabbit's exact-head approval directly.
+        core.notice(`A CodeRabbit dispatch for ${headSha} is still in flight; this event cannot reconcile it and changed nothing. Re-apply ${READY_LABEL} to reconcile once the review lands.`);
+        return { status: 'pending', headSha, reason: 'native_reconciliation_requires_authorized_ready' };
+      }
+      if (authorizedReadyHeadSha !== headSha || authorizedReadyBaseSha !== pullRequest.base.sha) {
+        // A READY event whose own head/base no longer matches the live PR is a
+        // genuine refusal: the authorization it carries was for another candidate.
         core.setFailed(`Native review reconciliation requires a fresh authorized ${READY_LABEL} action for head ${headSha}; dispatch state was preserved.`);
         return { status: 'blocked', headSha, reason: 'native_reconciliation_requires_authorized_ready' };
       }
@@ -1099,10 +1284,12 @@ async function reconcileLabelEvent({
       }
       await removeLabelIfPresent(github, owner, repo, pullNumber, READY_LABEL);
       if (reviewed.changesRequested) {
-        core.setFailed(`CodeRabbit delivered a review for ${headSha} and requested changes; dispatch state was preserved.`);
+        await releaseDeliveredDispatch({ github, owner, repo, pullNumber, core, headSha });
+        core.setFailed(`CodeRabbit delivered a review for ${headSha} and requested changes. Fix the findings and push; the new head can earn one follow-up review through ${READY_LABEL} on this same PR.`);
         return { status: 'blocked', headSha, reviewed: true };
       }
       if (reviewed.reviewed) {
+        await awaitSettledChecks({ github, owner, repo, pullNumber, headSha, config, core, selfRunId });
         // Re-read the candidate and its provenance-bound checks before
         // accepting the review; a push or label removal can race this event.
         const [confirmationPullRequest, checkBlockers, reviewDecisionBlockers] = await Promise.all([
@@ -1113,7 +1300,7 @@ async function reconcileLabelEvent({
             settle: config.settle || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))),
           }),
           collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId }),
-          collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+          collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha }),
         ]);
         const confirmationLabels = pullRequestLabelNames(confirmationPullRequest);
         const confirmationReasons = validateAuthorizationState(confirmationPullRequest, defaultBranch);
@@ -1130,8 +1317,12 @@ async function reconcileLabelEvent({
         const finalHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId, core,
           activeReceipt: dispatch.receipt });
         if (!finalHistory.verified) confirmationReasons.push(finalHistory.error.message);
+        const candidateMoved = confirmationPullRequest.head.sha !== headSha || confirmationPullRequest.base.sha !== baseSha;
+        if (finalHistory.verified && !candidateMoved) {
+          await releaseDeliveredDispatch({ github, owner, repo, pullNumber, core, headSha });
+        }
         if (confirmationReasons.length > 0) {
-          core.setFailed(`CodeRabbit reviewed dispatched head ${headSha}, but ${confirmationReasons.join('; ')}. The dispatch state was preserved and no second review will be posted.`);
+          core.setFailed(`CodeRabbit reviewed dispatched head ${headSha}, but ${confirmationReasons.join('; ')}. The receipt was kept and no second review will be posted for this head.`);
           return { status: 'blocked', headSha, reviewed: true };
         }
         core.notice(`CodeRabbit reviewed dispatched frozen head ${headSha}; duplicate event ignored.`);
@@ -1350,6 +1541,73 @@ async function collectCheckBlockers({ github, owner, repo, headSha, config, core
   });
 }
 
+// Checks still running on `headSha`, named. Nothing here DECIDES anything — an
+// empty answer only ends the wait in awaitSettledChecks, and the ordinary
+// collectCheckBlockers validation still judges every result afterwards. A
+// required check that has not reported at all yet counts as running.
+async function pendingCheckNames({ github, owner, repo, headSha, config, selfRunId }) {
+  const [checkRuns, statuses] = await Promise.all([
+    github.paginate(github.rest.checks.listForRef, { owner, repo, ref: headSha, filter: 'latest', per_page: 100 }),
+    github.paginate(github.rest.repos.listCommitStatusesForRef, { owner, repo, ref: headSha, per_page: 100 }),
+  ]);
+  if (!Array.isArray(checkRuns) || !Array.isArray(statuses)) return [];
+  const ignored = (config.ignoredChecks || []).filter((policy) => !ignoredCheckConfigBlocker(policy));
+  const runs = checkRuns.filter((check) => check && typeof check === 'object'
+    && actionRunId(check.details_url) !== Number(selfRunId)
+    && !ignored.some((policy) => checkRunMatchesIgnoredPolicy(check, policy)));
+  const newestStatuses = [...newestByIdentity(statuses.filter((status) => status && typeof status === 'object'),
+    (status) => `${status.context}|creator:${status.creator?.login || 'unknown'}`, ['created_at', 'updated_at']).values()]
+    .filter((status) => !ignored.some((policy) => statusMatchesIgnoredPolicy(status, policy)));
+  const pending = [
+    ...runs.filter((check) => check.status !== 'completed').map((check) => check.name),
+    ...newestStatuses.filter((status) => normalize(status.state) === 'pending').map((status) => status.context),
+  ];
+  for (const required of config.requiredChecks || []) {
+    const name = normalize(required?.name);
+    const reported = required?.source === 'status'
+      ? newestStatuses.some((status) => normalize(status.context) === name)
+      : runs.some((check) => normalize(check.name) === name);
+    if (name && !reported) pending.push(required.name);
+  }
+  return [...new Set(pending)];
+}
+
+// WAIT for running checks instead of failing on them (autonomous landing,
+// 2026-09-26). The lifecycle check used to fail the moment it saw any check in
+// progress — and CodeRabbit writing its summary into the PR description was an
+// `edited` event that re-ran ci.yml's ~11-minute required jobs, so the review it
+// had just delivered was judged against checks that could not have finished
+// (PR #794, runs 36091053453 and 36091203653). Fixed at the source in
+// .coderabbit.yaml (summary goes in the walkthrough comment), and made robust
+// here: any legitimate rerun is now waited out, up to the configured budget.
+//
+// This only DELAYS. It returns nothing and grants nothing; the caller's ordinary
+// validation runs afterwards exactly as before and still blocks on anything that
+// is not green. A head change or an unreadable snapshot ends the wait early so
+// that validation can report it. Disabled unless the workflow configures
+// `checkSettleAttempts`, so a caller that never asked for waiting keeps the old,
+// immediate behaviour.
+async function awaitSettledChecks({ github, owner, repo, pullNumber, headSha, config, core, selfRunId, settle }) {
+  const attempts = Number.isSafeInteger(config.checkSettleAttempts) && config.checkSettleAttempts > 0
+    ? config.checkSettleAttempts : 0;
+  const pollMs = config.checkSettlePollMs ?? DEFAULT_CHECK_SETTLE_POLL_MS;
+  const wait = settle || config.settle || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let pending;
+    try {
+      const live = (await github.rest.pulls.get({ owner, repo, pull_number: pullNumber })).data;
+      if (live.head.sha !== headSha) return;
+      pending = await pendingCheckNames({ github, owner, repo, headSha, config, selfRunId });
+    } catch (error) {
+      core.warning(`Stopped waiting for running checks on ${headSha}: ${error.message}`);
+      return;
+    }
+    if (pending.length === 0) return;
+    if (attempt === 0) core.notice(`Waiting for ${pending.join(', ')} to finish on ${headSha} before judging the candidate.`);
+    if (pollMs > 0) await wait(pollMs);
+  }
+}
+
 async function nativeCandidateReasons({ github, context, core, config, headSha, baseSha, dispatched }) {
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
@@ -1361,7 +1619,7 @@ async function nativeCandidateReasons({ github, context, core, config, headSha, 
       settle: config.settle || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))),
     }),
     collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId: context.runId }),
-    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha }),
   ]);
   const reasons = validateAuthorizationState(pullRequest, context.payload.repository.default_branch);
   const labels = pullRequestLabelNames(pullRequest);
@@ -1414,9 +1672,11 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
     await confirmProviderAbsent();
     // Relabelling a PR whose candidate can never be revalidated only repeats this block.
     const nextStep = String(reason).includes(FRESH_PR_GUIDANCE)
-      ? `Apply ${READY_LABEL} on the fresh PR once its checks pass`
-      : `Re-apply ${READY_LABEL} after correcting the blocker`;
-    core.setFailed(`CodeRabbit was not dispatched (${reason}); unspent state was cleared after verified cleanup. ${nextStep}; a new commit is unnecessary.`);
+      ? `Apply ${READY_LABEL} on the fresh PR once its checks pass; a new commit is unnecessary`
+      : String(reason).includes(NEW_EPOCH_GUIDANCE)
+        ? `No replacement PR is needed. If this PR predates candidate epochs or its synchronize run failed, push a new commit so the trusted run records it`
+        : `Re-apply ${READY_LABEL} after correcting the blocker; a new commit is unnecessary`;
+    core.setFailed(`CodeRabbit was not dispatched (${reason}); unspent state was cleared after verified cleanup. ${nextStep}.`);
     return { status: 'blocked', headSha, reason };
   } catch (error) {
     if (cleanupStarted) {
@@ -1440,12 +1700,87 @@ async function recoverUndispatchedNativeReceipt({ github, context, core, attempt
   }
 }
 
+// A relabel of a head that ALREADY has this epoch's native receipt. Since
+// releaseDeliveredDispatch takes the labels back once a review is observed, this
+// is the ordinary way to re-check a delivered review — for example after a
+// required check that was still running at delivery has gone green. It never
+// dispatches: the receipt is the dedupe record, and every attribution rule of the
+// label-driven reconciliation applies unchanged (verified receipt, one provider
+// label event after it inside this epoch, a review of this exact head submitted
+// after the receipt).
+async function reconcileDeliveredReceipt({ github, context, core, config, attemptState, headSha, baseSha, settle }) {
+  const { owner, repo } = context.repo;
+  const pullNumber = context.payload.pull_request.number;
+  const dispatch = await inspectNativeDispatchReceipt({
+    github, owner, repo, pullNumber, headSha, baseSha, selfRunId: context.runId, core,
+  });
+  if (!dispatch.verified) {
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
+      reason: `this head already has a native attempt that cannot be verified (${dispatch.error.message}); ${FRESH_PR_GUIDANCE}` });
+  }
+  const history = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha, selfRunId: context.runId,
+    core, activeReceipt: dispatch.receipt });
+  if (!history.verified) {
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
+      reason: `this head already has a native attempt whose history is ambiguous (${history.error.message})` });
+  }
+  const reviewed = await inspectExactHeadCodeRabbitReview({
+    github, owner, repo, pullNumber, headSha, requestedAfter: dispatch.receipt.requestedAfter,
+  });
+  if (!reviewed.verified) {
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
+      reason: `could not verify whether CodeRabbit reviewed ${headSha} (${reviewed.error.message})` });
+  }
+  if (!reviewed.reviewed) {
+    const failures = await removeLabelsIndependently(github, owner, repo, pullNumber, [READY_LABEL, REQUESTED_LABEL]);
+    if (failures.length) core.warning(`Could not clear the ready state: ${failures.join('; ')}`);
+    core.setFailed(`CodeRabbit was already asked to review ${headSha} and no review of it has been observed yet; no second review will be requested for this head. Re-apply ${READY_LABEL} once the review lands.`);
+    return { status: 'pending', headSha, reviewed: false };
+  }
+  await awaitSettledChecks({ github, owner, repo, pullNumber, headSha, config, core, selfRunId: context.runId, settle });
+  const [live, checkBlockers, reviewDecisionBlockers] = await Promise.all([
+    getPullRequestWithResolvedMergeability({
+      github, owner, repo, pullNumber,
+      attempts: config.mergeabilityPollAttempts ?? DEFAULT_MERGEABILITY_POLL_ATTEMPTS,
+      pollMs: config.mergeabilityPollMs ?? DEFAULT_MERGEABILITY_POLL_MS,
+      settle,
+    }),
+    collectCheckBlockers({ github, owner, repo, headSha, config, core, selfRunId: context.runId }),
+    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha }),
+  ]);
+  const reasons = validateAuthorizationState(live, context.payload.repository.default_branch);
+  if (live.head.sha !== headSha) reasons.push('pull request head changed while reconciling the CodeRabbit review');
+  if (live.base.sha !== baseSha) reasons.push('pull request base changed while reconciling the CodeRabbit review');
+  if (reviewed.changesRequested) reasons.push('CodeRabbit requested changes on this exact head');
+  reasons.push(...checkBlockers, ...reviewDecisionBlockers);
+  const failures = await removeLabelsIndependently(github, owner, repo, pullNumber, [READY_LABEL, REQUESTED_LABEL]);
+  if (failures.length) core.warning(`Could not clear the ready state: ${failures.join('; ')}`);
+  if (reasons.length) {
+    core.setFailed(`CodeRabbit reviewed ${headSha}, but ${reasons.join('; ')}. No second review will be requested for this head.`);
+    return { status: 'blocked', headSha, reviewed: true };
+  }
+  core.notice(`CodeRabbit's review of frozen head ${headSha} was reconciled from its receipt; no review was requested. Findings still require disposition; this is not merge clearance.`);
+  return { status: 'reviewed', headSha, reviewed: true };
+}
+
 async function dispatchNativeReview({ github, context, core, config, attemptState, expectedHeadSha, settle }) {
   attemptState.nativeDispatchStarted = true;
   const { owner, repo } = context.repo;
   const pullNumber = context.payload.pull_request.number;
   const baseSha = context.payload.pull_request.base.sha;
   const candidateArgs = { github, context, core, config, headSha: expectedHeadSha, baseSha };
+  // A head that already carries a native receipt is RECONCILED, never dispatched
+  // again. This used to be refused outright ("potentially spent native attempt;
+  // open a fresh delivery PR") further down.
+  const priorComments = await github.paginate(github.rest.issues.listComments,
+    { owner, repo, issue_number: pullNumber, per_page: 100 });
+  if (!Array.isArray(priorComments)) {
+    return recoverUndispatchedNativeReceipt({ github, context, core, attemptState,
+      reason: 'the pull request comments could not be listed before dispatch' });
+  }
+  if (priorComments.some((comment) => parseNativeDispatchReceipt(comment)?.headSha === expectedHeadSha)) {
+    return reconcileDeliveredReceipt({ github, context, core, config, attemptState, headSha: expectedHeadSha, baseSha, settle });
+  }
   // A prior same-head review lacks attribution to this new head/base request.
   // Require a fresh head instead of laundering it through a new ready event.
   const existing = await inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha: expectedHeadSha });
@@ -1542,6 +1877,8 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
       core.setFailed(`Native review history is ambiguous (${history.error.message}); dispatch state was preserved.`);
       return { status: 'blocked', headSha: expectedHeadSha, reason: 'ambiguous_native_history' };
     }
+    await awaitSettledChecks({ github, owner, repo, pullNumber, headSha: expectedHeadSha, config, core,
+      selfRunId: context.runId, settle });
     const finalValidation = await nativeCandidateReasons({ ...candidateArgs, dispatched: true });
     const finalReasons = finalValidation.reasons;
     if (finalValidation.invalidCandidate) return resetCandidate({ github, owner, repo, pullNumber, core,
@@ -1550,8 +1887,9 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
     const finalHistory = await inspectNativeAttemptHistory({ github, owner, repo, pullNumber, headSha: expectedHeadSha,
       selfRunId: context.runId, core, activeReceipt: receipt });
     if (!finalHistory.verified) finalReasons.push(finalHistory.error.message);
+    if (finalHistory.verified) await releaseDeliveredDispatch({ github, owner, repo, pullNumber, core, headSha: expectedHeadSha });
     if (finalReasons.length) {
-      core.setFailed(`CodeRabbit delivered a review for ${expectedHeadSha}, but ${finalReasons.join('; ')}. Dispatch state was preserved.`);
+      core.setFailed(`CodeRabbit delivered a review for ${expectedHeadSha}, but ${finalReasons.join('; ')}. The receipt was kept, so no second review will be requested for this head; re-apply ${READY_LABEL} to re-check it once the blocker clears.`);
       return { status: 'blocked', headSha: expectedHeadSha, reviewed: true };
     }
     core.notice(`CodeRabbit delivered a formal review for frozen head ${expectedHeadSha}. Findings still require disposition; this is not merge clearance.`);
@@ -1584,7 +1922,7 @@ async function runGate({ github, context, core, config, attemptState }) {
   const dispatchLabelRemoved = action === 'unlabeled'
     && normalize(context.payload.label?.name) === DISPATCH_LABEL;
   if (RESET_ACTIONS.has(action) || baseBranchChanged || requestedLabelRemoved || dispatchLabelRemoved) {
-    return resetCandidate({
+    const reset = await resetCandidate({
       github,
       owner,
       repo,
@@ -1598,6 +1936,14 @@ async function runGate({ github, context, core, config, attemptState }) {
             ? 'pull_request_target.unlabeled.dispatch_marker'
             : `pull_request_target.${action}`,
     });
+    // A push, reopen or retarget makes a NEW candidate on this same PR. Record it
+    // only after a clean reset, so an epoch never describes a candidate whose old
+    // request state could still be live.
+    const newCandidate = action === 'synchronize' || action === 'reopened' || baseBranchChanged;
+    if (config.nativeDispatch === true && newCandidate && reset?.status === 'reset') {
+      await recordCandidateEpoch({ github, context, core });
+    }
+    return reset;
   }
 
   if (action === 'edited') {
@@ -1791,6 +2137,12 @@ async function runGate({ github, context, core, config, attemptState }) {
     }
   }
 
+  // A ready label applied while a check is still running used to be refused on
+  // the spot — and the refusal removed the label, so no review was ever
+  // requested (PR #780). Wait the running checks out first; the validation below
+  // still judges every result.
+  await awaitSettledChecks({ github, owner, repo, pullNumber, headSha: expectedHeadSha, config, core,
+    selfRunId: context.runId, settle });
   const [checkBlockers, reviewDecisionBlockers] = await Promise.all([
     collectCheckBlockers({
       github,
@@ -1801,7 +2153,7 @@ async function runGate({ github, context, core, config, attemptState }) {
       core,
       selfRunId: context.runId,
     }),
-    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha: expectedHeadSha }),
   ]);
   const blockers = [...checkBlockers, ...reviewDecisionBlockers];
   if (blockers.length > 0) {
@@ -1842,7 +2194,7 @@ async function runGate({ github, context, core, config, attemptState }) {
     // Re-read after the quiet period: a reviewer can submit CHANGES_REQUESTED
     // during it, and this confirmation pass exists precisely to catch state that
     // moved between the first snapshot and the post.
-    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+    collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha: expectedHeadSha }),
   ]);
   const confirmationReasons = validatePullRequest(
     confirmationPullRequest,
@@ -1931,7 +2283,7 @@ async function runGate({ github, context, core, config, attemptState }) {
       // only in the two earlier snapshots left a window — the mergeability poll and
       // the marker write both happen after them — in which an objection could land
       // and still cost a review slot.
-      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha: expectedHeadSha }),
     ]);
   } catch (finalSnapshotError) {
     let cleanupNote = '';
@@ -2234,7 +2586,7 @@ async function runGate({ github, context, core, config, attemptState }) {
         core,
         selfRunId: context.runId,
       }),
-      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core }),
+      collectReviewDecisionBlockers({ github, owner, repo, pullNumber, core, headSha: expectedHeadSha }),
     ]);
   } catch (settledSnapshotError) {
     // The review IS requested and acknowledged at this point — that cannot be
@@ -2442,6 +2794,7 @@ module.exports = {
   reviewCommandBody,
   nativeDispatchReceiptBody,
   candidateBirthBody,
+  candidateEpochBody,
   run,
   validateAuthorizationState,
   validatePullRequest,

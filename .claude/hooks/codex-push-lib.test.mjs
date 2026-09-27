@@ -2856,9 +2856,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // `--disable-auto`, in every spelling, is an ordinary merge request that the
   // gate vets (Mason, 2026-09-21 — the stand-down it used to get became a bypass).
   for (const command of ["gh pr merge 123 --disable-auto", 'gh pr merge 123 --disable-a""uto']) {
-    // `disableAuto` is recorded for the DENIAL WORDING only — `auto` stays false,
-    // which is what keeps the green-pipeline and other checks running.
-    assert.deepEqual(ghMergeRequest(command), { selector: "123", repo: "", auto: false, admin: false, disableAuto: true },
+    assert.deepEqual(ghMergeRequest(command), { selector: "123", repo: "", auto: false, admin: false },
       `--disable-auto parses as an ordinary merge request: ${command}`);
   }
   assert.equal(ghApiMergeRequest('gh api --met""hod=PUT repos/o/r/pulls/123/merge')?.selector, "123",
