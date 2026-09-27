@@ -1,15 +1,15 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-09-26 for the migration ledger only (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1011 rows / 1004 distinct names, `max(version)` `20260926163005`). Every
+**Last verified:** 2026-09-27 for the migration ledger only (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1012 rows / 1005 distinct names, `max(version)` `20260927060531`). Every
 other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-09-26)
+## Current state at a glance (2026-09-27)
 
-- **Effective ordering high-water: `20260914100700_customer_document_bytes_server_only`** (ledger
-  version `20260926163005`, applied live 2026-09-26). The effective ordering high-water is the
+- **Effective ordering high-water: `20260914100800_bind_transfer_invoice_intent`** (ledger
+  version `20260927060531`, applied live 2026-09-27). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -20,27 +20,29 @@ ships or quarterly, whichever comes first.
   `20260914100300_refuse_stale_commission_payment_recipient` (`20260921141740`),
   `20260914100400_enforce_commission_payment_business_date` (`20260921141901`),
   `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`),
-  `20260914100600_latest_commission_recipient_label` (`20260922020038`), and
-  `20260914100700_customer_document_bytes_server_only` (`20260926163005`).
-- **Written but NOT applied (parked on `main`):** `20260914100800_bind_transfer_invoice_intent` and
-  `20260914100900_repair_commission_history_label_snapshots`. Applying either goes through the
-  `AGENTS.md` live-migration approval gate. While they wait on `main`, the pending-migration guard holds any later-stamped file
-  behind them.
+  `20260914100600_latest_commission_recipient_label` (`20260922020038`),
+  `20260914100700_customer_document_bytes_server_only` (`20260926163005`), and
+  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`).
+- **Written but NOT applied (parked on `main`):** `20260914100900_repair_commission_history_label_snapshots`.
+  Applying it goes through the `AGENTS.md` › Safety and Protected Delivery migration rules. While it
+  waits on `main`, the pending-migration guard refuses a later-stamped file that steps over it unless
+  that file carries an explicit `ahead-of-pending` marker.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
-- **Schema registry:** `.claude/schema-registry.json` is stamped `generated_at` `2026-09-20` with
-  `migrations_high_water` `20260920052149`, so it does **not** yet record the seven applies above.
-  Open PR #799 regenerates it from live.
+- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-09-26 by
+  merged PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100` through
+  `100700` but **not** `20260914100800`. Refresh it before relying on it for ordering.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
-  2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-22), and migration
+  2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
+  of 2026-09-22 Chicago), and migration
   `20260914100700` (which removes every browser Storage policy on the bucket) applied 2026-09-26.
   Its preflight refuses to run if the bucket holds any object, so no stored document could be served
   by a link minted under the old policies. It does not rule out a signed upload token minted just
   before the apply, which would stay valid until it expired. Still open: sales reps cannot remove a document; PR #800 carries a parked
   fix migration that needs Mason's apply approval (details in the PR description).
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
-  hours. On 2026-09-26 the one open PR that carries an owner decision is #800 (above).
+  hours. #800 (above) waits on Mason's apply approval.
 
 ## Migration and rollout record (condensed, point-in-time)
 
@@ -59,7 +61,7 @@ home. Per-migration pins, proofs and postflight live in `docs/reference/migratio
 (row 930, ledger `20260920052149`, 2026-09-20; landed on `main` by PR #739 — #664, which first
 carried the file, closed unmerged — and the `20260908140000_number_generators_year_chicago` six-generator year fix for issue #617 applied
 just before it under `20260920051333`), `20260914100400` (2026-09-21), `20260914100600`
-(2026-09-22) and `20260914100700` (2026-09-26). Counters such as row counts and `max(version)`
+(2026-09-22), `20260914100700` (2026-09-26) and `20260914100800` (2026-09-27). Counters such as row counts and `max(version)`
 move with every apply by any lane; a stale count is expected drift, not evidence of a problem.
 
 **The 2026-09-14 commission cohort.** The set was restamped together on 2026-09-05 and again on
@@ -72,9 +74,9 @@ writers, replaces both commission helpers and all four source-document writers i
 and uses a transaction-local marker plus three owner-only compatibility triggers so a cached
 pre-cutover body is refused and retried); and make balance-report recipient labels follow the
 latest earned-state observation at the requested cutoff, including paid-only rows. `100100`
-through `100600` are applied. The two still parked:
-- `20260914100800_bind_transfer_invoice_intent` (formerly `20260908130800`) is the transfer intent
-  wrapper. Its first-apply prerequisite, `20260914100500`, is now satisfied.
+through `100600` are applied, and so is the transfer intent wrapper that followed them,
+`20260914100800_bind_transfer_invoice_intent` (formerly `20260908130800`; applied 2026-09-27, ledger
+`20260927060531`). The one still parked:
 - `20260914100900_repair_commission_history_label_snapshots` (renumbered from `20260905020100`, and
   briefly `20260908130900` on PR #638's closed branch) appends corrected labels for 34 un-settled
   opening commission snapshots. It is last on purpose: it refuses to run once any commission payment
@@ -84,8 +86,7 @@ through `100600` are applied. The two still parked:
 in-chat approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply checks confirmed the
 authenticated-only SECURITY DEFINER wrapper, the private impl with no client EXECUTE, and the
 enabled `guard_create_inventory_hold_insert_20260913` trigger. The exposure look-back (run
-2026-09-15) found all 29 holds ever created (newest 2026-04-28) were made by staff who are active
-admins today; it cannot show whether the NULL `p_force` path or the inactive-profile path was ever
+2026-09-15) found every hold ever created was made by staff who are active admins today; it cannot show whether the NULL `p_force` path or the inactive-profile path was ever
 used, because `p_force` is not stored and profile state is read as of today. The related
 manual-hold same-key race is `RESOLVED 2026-09-15` in `docs/manual/KNOWN_ISSUES.md`; the
 pre-apply preflight detail is history row 927.
@@ -154,7 +155,7 @@ and `20260903230000_commission_report_snapshot_contract`; PR #599 (2026-09-11, `
   high-water before any governed apply (sha256 pins: history rows 872–877).
 - **2026-08-10** — `20260810183629_reconcile_pending_commission_snapshots` (ledger `20260810235207`)
   had been applied with no file in git; it was recovered byte-for-byte from the ledger and is on
-  `main`. Three whole-cent migrations (rows 868–870) applied with Mason's approval; a 2026-08-19
+  `main` as `20260810235207_reconcile_pending_commission_snapshots.sql`. Three whole-cent migrations (rows 868–870) applied with Mason's approval; a 2026-08-19
   re-check found 8 validated `*_whole_cents_chk` constraints and 4 deferred columns
   (`DECISION_LOG.md`). No live row was modified; CodeRabbit's "use bigint cents" finding on PR #354
   was closed won't-fix with a hard guard substituted
@@ -173,7 +174,7 @@ and `20260903230000_commission_report_snapshot_contract`; PR #599 (2026-09-11, `
 ## Open-PR landing queue
 
 The 2026-09-11 backlog plan (`docs/plans/2026-09-11-open-pr-backlog-plan.md`) and its queue are
-finished; its guard-policy window ran to 2026-09-25. Of its rows, #599, #630, #646 and #651 merged; #624, #626,
+finished; its guard-policy window ran to 2026-09-25. Of its rows, #599, #630, #646 and #650 merged; #624, #626,
 #634, #635, #638, #647, #449 and #544 closed (#635 was replaced by the merged #764, and #544 by
 issue #747). #605, #612 and #631 are still open. Its follow-up about locked
 pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff recovery steps are in
@@ -184,7 +185,7 @@ pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff re
 - **2026-09-22 → 2026-09-26 (customer documents served only through the server):** the
   `customer-document-files` Edge Function was deployed live as v1 on 2026-09-22 UTC with Mason's
   in-chat approval (ACTIVE; signed-out calls refused; preflight answers the production origin); the
-  Documents tab that calls it merged in PR #764 (`d0be12d53`, 2026-09-22); and migration
+  Documents tab that calls it merged in PR #764 (`d0be12d53`, 2026-09-23 UTC, the evening of 2026-09-22 Chicago); and migration
   `20260914100700_customer_document_bytes_server_only` applied 2026-09-26 (ledger
   `20260926163005`). See "Current state at a glance" above.
 
@@ -365,7 +366,7 @@ The three headline items:
   label images) — deferred; flagged as a safety trap if done carelessly.
 
 No longer in flight: the customer-document byte boundary is complete (Edge Function v1 live
-2026-09-22, frontend merged in PR #764 on 2026-09-22, migration `20260914100700` applied
+2026-09-22, frontend merged in PR #764 on 2026-09-23 UTC, migration `20260914100700` applied
 2026-09-26). The one open follow-up, letting sales reps remove a document, is parked in open
 PR #800.
 
@@ -377,10 +378,12 @@ PR #800.
   automatically — there is no separate deploy step. Since the `protect-main`
   ruleset landed (2026-07-14) nobody can push to `main` directly. Landing
   follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
-  branch, the Codex review tier the change needs (plus the final exact-SHA Sol
-  review for risky work), PR, required checks, resolved agent findings, a
-  resolved CodeRabbit review of the frozen head, then an exact-head merge. The
-  merge is the deploy.
+  branch, PR, Luna review rounds, required checks, CodeRabbit APPROVED on the
+  final head, a fresh exact-SHA Sol review run last (every merge, since
+  2026-09-26), then an exact-head merge. The merge is the deploy; a
+  non-destructive migration (its grants routine, none widening access) is applied through the proof
+  gate under the same conditions; one that deletes or overwrites data or widens
+  access waits for Mason (`AGENTS.md` › Safety and Protected Delivery).
 - **Supabase plan:** FREE — no point-in-time recovery (PITR). The weekly
   in-database backup plus the off-site weekly GitHub Action dump are the
   only database recovery mechanisms. (The nightly Personal DR task backs up

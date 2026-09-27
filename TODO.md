@@ -1,12 +1,13 @@
-# CRX Manager — Combined TODO (statuses last corrected 2026-09-26)
+# CRX Manager — Combined TODO (statuses last corrected 2026-09-27)
 
 The single combined list of everything still open, in priority order.
 Built 2026-07-16 from a full docs review with subagent verification of every
 "done" and "open" claim against the code on disk and the live database. Items were added
-through 2026-09-03, and stale statuses were corrected on 2026-09-26. A live count inside an
+through 2026-09-26 (§5 carried over by the docs cleanup), and stale statuses were corrected on
+2026-09-26 and 2026-09-27. A live count inside an
 item is as of the date that item states.
 
-- Shipped history → `docs/changelog.d/` (one file per change; `docs/CHANGELOG.md` holds entries up to 2026-08-27)
+- Shipped history → `docs/changelog.d/` (one file per change; `docs/CHANGELOG.md` holds entries up to 2026-08-26)
 - Full detail on parked findings/migrations → `docs/manual/KNOWN_ISSUES.md` (canonical for agents)
 - Strategic direction + engineering ticket board → `docs/roadmap/2026-07-15-roadmap-and-execution-plan.md`
 
@@ -61,11 +62,12 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 4. **Label data load + EPA backfill approval** — 0 of ~604 products have full
    label data; ~105 of 204 stored EPA reg numbers are wrong. The `/label-data-quality`
    tool (shipped) makes this data-entry. Gates the whole compliance track. A June 2026 filled
-   research draft (`docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv`, removed 2026-09-26)
-   can be recovered from git history as a starting point: `git show e81853970:docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv` (the last `main` commit before the removal).
+   research draft (`docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv`, removed in the docs
+   cleanup) can be recovered as a starting point: `git show e81853970:docs/plans/CRX-label-data-FILLED-DRAFT-2026-06-14.csv`.
 5. **Decision packets** (details in `docs/loops/owner-decisions-2026-07.md` + KNOWN_ISSUES §3).
    **Decided 2026-07-16:** due dates = Net 30 + override (build spec in
-   `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`, removed 2026-09-26, in git history) · dead structures = KEEP
+   `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`, removed in the docs cleanup; recover with
+   `git show e81853970:docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`) · dead structures = KEEP
    (planned features) · "wire" = already live (stale packet) · junk data = keep test
    entities tagged `[E2E]` (tagging done live).
    **Still open:** vendor-name merges · category remap · #107 auto-draft-on-applicator
@@ -144,8 +146,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > zero settlement events, and no live `[E2E]` fixture writes. Source merged in PR #592 (2026-09-08).
 >
 > Full spec, acceptance criteria, and the fallback if the window has closed:
-> `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md` (removed 2026-09-26 — the feature is live;
-> it remains in git history, and its one unrun acceptance check is in §5 "Proof still owed").
+> `docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md` (removed in the docs cleanup — the
+> feature is live; recover with `git show e81853970:docs/plans/commission-history-as-of-reporting-spec-2026-09-03.md`,
+> and its one unrun acceptance check is in §5 "Proof still owed").
 >
 > **ANSWERED 2026-09-03 — treat this as a financial-reporting requirement, not a convenience.**
 > Asked what he uses it for, Mason said: *"year end, checking what I owed and reconciling payouts —
@@ -168,7 +171,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 - **Offline Stage 1B real-phone proof (T5/N3)** — browser rollout is live; run the
   on-device proof (lost-response recovery, two-tab replay, office resolution) with `[E2E]` fixtures.
 - **Dead-structure retirement batch (T4)** — now only the `setup-blend-tickets-storage`
-  edge fn (still deployed v18 ACTIVE, zero callers — needs an approved retirement session).
+  edge fn (still deployed and ACTIVE, zero callers — needs an approved retirement session).
   The #40 RPC + other dead structures are **KEEP per Mason 2026-07-16** (planned features).
 - ~~**Invoice due dates — APPROVED 2026-07-16**~~ — **SHIPPED 2026-07-21** (PR #195):
   investigation showed the A8 stamping/aging machinery was already live; shipped the two real
@@ -214,7 +217,7 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   `inventory_transactions` and `receiving_records` still carry no cost columns). Its parking gate —
   supplier-pricing Phases 1a/1b shipped — was met in July; it needs Mason's go to schedule.
   Plan: `docs/plans/2026-07-16-inventory-costing-plan.md`.
-- **H2 migration-baseline squash** (1,011 live ledger rows on 2026-09-26) — quiet window only. A
+- **H2 migration-baseline squash** (1,012 live ledger rows on 2026-09-27) — quiet window only. A
   clean-rebuild baseline for new projects now exists (`supabase/baselines/`, high-water
   `20260727174805`, checked by `npm run test:schema-baseline`); the old migration files stay as the audit trail.
 - **Offline deferred list** — signature/photo persistence, notification replay, cross-tab
@@ -280,14 +283,15 @@ path named. Re-verify against the live app before acting — these were checked 
   basemap is the fallback).
 - **Per-product margin targets** (2026-08-09 pricing audit): how to seed margin targets across ~600 SKUs
   (the recommendation then was to derive them from historical selling prices).
-- **Integrity-report flags from 2026-08-01**: Inventory Ledger (10 products whose on-hand does not match
-  the transaction ledger) and Delivery-Invoice Qty Parity (157 delivered-but-not-invoiced order+product
-  pairs). Decide whether these are real billing/ledger gaps or whether the parity check should exclude
-  intentionally deferred-billing orders. The Pre-booked check's only flag was an inactive test product.
+- **Integrity-report flags from 2026-08-01**: the Inventory Ledger check (products whose on-hand does
+  not match the transaction ledger) and the Delivery-Invoice Qty Parity check (delivered-but-not-invoiced
+  order+product pairs) both failed. Re-run the integrity report for current figures, then decide whether
+  these are real billing/ledger gaps or whether the parity check should exclude intentionally
+  deferred-billing orders. The Pre-booked check's only flag was an inactive test product.
 - **Junk-customer line items** (detail for §1 item 5, flag list 2026-07-05; re-verify links live first):
-  zero-link rows with id prefixes `73672cfe`, `b4d71a33` (a PO-bucket row), `e8508e65` and `b6a1d451`
-  (inactive duplicates). The inactive `d8bd091a` row has linked orders and commissions — merge it into its
-  active twin, do not delete it. The active `987c3722` row is your call.
+  the rows with no linked records can be deleted on your OK; an inactive duplicate that has linked
+  records should be merged into its active twin, not deleted; and an active row is your call. The row list is in
+  `git show e81853970:docs/loops/business-workflow-junk-customer-flags.md`.
 
 **Owner smoke test**
 - Click-test the three act-from-the-list write buttons on real data (open since 2026-06-24): Quotes list
@@ -323,9 +327,9 @@ Current live state belongs in `docs/manual/CURRENT_STATE.md`; this table is a da
 
 | Metric | Value |
 |---|---|
-| Live migrations | 1,011 ledger rows, latest `20260926163005` (read-only ledger query 2026-09-26; 791 on 2026-07-16) |
-| Edge functions | 8 functions in `supabase/functions/` (2026-09-26, not counting `_shared`): the 7 below plus `customer-document-files` (deployed v1 2026-09-22 per `DEPLOYMENT.md`). Versions as of 2026-07-16: create-user v23, process-blend-ticket v25, process-document v18, send-email v17, reset-user-password v15, epa-lookup v4, setup-blend-tickets-storage v18 ← retirement pending |
-| Schema registry | Generated 2026-09-20, high-water `20260920052149` — 7 migrations behind live (applied 2026-09-21 → 2026-09-26) |
+| Live migrations | 1,012 ledger rows, latest `20260927060531` (read-only ledger query 2026-09-27; 791 on 2026-07-16) |
+| Edge functions | 8 functions in `supabase/functions/` (2026-09-26, not counting `_shared`), including `customer-document-files` (deployed v1 2026-09-22 per `DEPLOYMENT.md`); `setup-blend-tickets-storage` retirement pending. For deployed versions, run the read-only Supabase `list_edge_functions` tool |
+| Schema registry | Regenerated 2026-09-26 by PR #820, high-water `20260926163005` — 1 migration behind live (`20260914100800`, applied 2026-09-27) |
 | customers / products | 153 / 604 |
 | fields / quotes / orders | 5 / 3 / 63 |
 | invoices | 10 (8 draft, 2 posted) |

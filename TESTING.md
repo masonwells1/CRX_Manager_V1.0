@@ -496,8 +496,10 @@ npm run smoke -- --spec <rpc>  # Run the chain(s) covering one RPC (see scripts/
 
 **Two modes.** With `SUPABASE_DB_URL` set and `psql` on the PATH, `npm run db-sweeps` and
 `npm run smoke -- --spec <rpc>` run their SQL (`--list` only lists chains and never runs any)
-against the database. Without them (the usual case), they only **print** the SQL and exit 0 — nothing
-has run yet. The check counts only once that SQL is actually executed (for example through the
+against the database. Without `SUPABASE_DB_URL` (for the sweeps, also without `psql`) — the usual
+case — they only **print** the SQL: the sweeps exit 0, and the smoke runner exits 2 if any selected
+chain is psql-only (it skips that chain; with the URL set but no `psql`, a chain fails instead of
+printing). Either way, nothing has run yet. The check counts only once that SQL is actually executed (for example through the
 Supabase MCP `execute_sql` tool) and its result is read. For the sweeps, `npm run db-sweeps:strict`
 refuses the print-only mode and exits 2 instead; an automated sweep run must use it. The smoke runner
 has no such switch, so an automated smoke check must run with `SUPABASE_DB_URL` and `psql` and

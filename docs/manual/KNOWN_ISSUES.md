@@ -1,16 +1,19 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-26 against the live migration ledger** (a read-only snapshot of the ledger
-taken that day). Every entry's status (open, or fixed/applied/closed) was re-checked on 2026-09-26
-against that snapshot and against `main`; the detailed evidence inside an entry keeps its own date and
+taken that day; the `20260914100800` apply below was read live on 2026-09-27). Every entry's status
+(open, or fixed/applied/closed) was re-checked on 2026-09-26 against that snapshot and against `main`,
+except where an entry says otherwise; the detailed evidence inside an entry keeps its own date and
 was not all re-measured.
 
 - **Applied live:** the September commission cohort `20260914100100` through `20260914100600`
-  (`100100`–`100400` on 2026-09-21, `100500` and `100600` on 2026-09-22), and the customer-document
-  fix `20260914100700_customer_document_bytes_server_only` (2026-09-26, ledger `20260926163005`).
-- **Still parked (written, not applied):** `20260914100800_bind_transfer_invoice_intent` and
-  `20260914100900_repair_commission_history_label_snapshots` — see the PARKED entry below. Other parked
-  files (for example PR #800's customer-document fix) are named in their own entries.
+  (`100100`–`100400` on 2026-09-21, `100500` and `100600` on 2026-09-22), the customer-document
+  fix `20260914100700_customer_document_bytes_server_only` (2026-09-26, ledger `20260926163005`), and
+  the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent` (2026-09-27, ledger
+  `20260927060531`).
+- **Still parked (written, not applied):** `20260914100900_repair_commission_history_label_snapshots`
+  — see the PARKED entry below. Other parked files (for example PR #800's customer-document fix) are
+  named in their own entries.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -30,9 +33,9 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 
-Each item was re-checked against `main` on 2026-09-26 before its source doc was deleted; the source path
-is named so the full write-up can be recovered from git history. Owner decisions from the same sweep went
-to `TODO.md` §5. Re-verify against the live app before fixing.
+Each item was re-checked against `main` on 2026-09-26. Each source doc named below is removed in the
+docs cleanup; recover it from git history with `git show e81853970:<path>`. Owner decisions from the
+same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
 
 - **Field Mode driver receipt gap (latent; RLS fix declined 2026-06-14).** The `customers_select` driver
   branch (`20260510070000`) shows a customer only when the delivery's `scheduled_date >= today - 1`. A driver
@@ -41,9 +44,10 @@ to `TODO.md` §5. Re-verify against the live app before fixing.
   stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`,
   `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`.)
 - **Public photo buckets (owner security decision, open since 2026-06-15).** `delivery-photos`,
-  `receiving-photos` and `team-note-attachments` are `public=true` and served through `getPublicUrl`
-  (`DeliveryDetail.tsx`, `FieldStop.tsx`, `NotePhotoUpload.tsx`), so anyone holding a URL has permanent
-  unauthenticated access to customer delivery photos. Paths are non-enumerable and type/size are capped
+  `receiving-photos` and `team-note-attachments` are `public=true` (checked live 2026-09-27). Delivery and
+  team-note photos are served through `getPublicUrl` (`DeliveryDetail.tsx`, `FieldStop.tsx`,
+  `NotePhotoUpload.tsx`); `receiving-photos` has no app reference but is still publicly readable by URL. So
+  anyone holding a URL has permanent unauthenticated access to those photos. Paths are non-enumerable and type/size are capped
   (`20260615182721`). Decide: keep public, or make private and switch to `createSignedUrl`.
   (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`.)
 - **Field-app access-scope lows (June 2026 parity ledger).** (1) `fields_select` (`20260214210000`) lets every
@@ -81,10 +85,12 @@ to `TODO.md` §5. Re-verify against the live app before fixing.
   at 9pt font, so multi-line section notes overprint the items table; `src/lib/yearEndSummaryPdf.ts` sets the
   YoY "Change" colour in `didDrawCell` (after the cell is drawn), so it never shows — move it to `didParseCell`.
   (Source: `docs/archive/2026-spring/2026-05-30-whole-codebase-audit.md`.)
-- **Edge Function alerting fails quiet (LOW).** `create-user`, `reset-user-password` and `send-email` only use
-  `captureEdgeException`, which logs `[SENTRY_MISCONFIG]` and drops the alert when `SENTRY_DSN` is unset.
-  Calling `validateSentryDsnOrThrow()` at module boot would make it fail loud; that needs `SENTRY_DSN`
-  confirmed on those functions and three live Edge Function deploys (Mason's approval).
+- **Edge Function alerting fails quiet (LOW).** All eight Edge Functions (`create-user`,
+  `customer-document-files`, `epa-lookup`, `process-blend-ticket`, `process-document`, `reset-user-password`,
+  `send-email`, `setup-blend-tickets-storage`) only use `captureEdgeException`, which logs
+  `[SENTRY_MISCONFIG]` and drops the alert when `SENTRY_DSN` is unset; none calls
+  `validateSentryDsnOrThrow()`. Calling it at module boot would make them fail loud; that needs `SENTRY_DSN`
+  confirmed on each function and eight live Edge Function deploys (Mason's approval).
   (Source: `docs/archive/2026-spring/2026-05-30-p2p3-sprint-handoff.md`.)
 - **CRM Phase 5 (AI receptionist) preconditions.** (1) `get_customer_prep_card` is not service-role callable
   (its in-body authz needs an active user profile), so the receptionist needs an additive server-only entry
@@ -95,16 +101,17 @@ to `TODO.md` §5. Re-verify against the live app before fixing.
   must every stored customer fact cite a `customer_interaction`?
   (Source: `docs/loops/crm-relationship-intelligence-ledger.md`.)
 
-## PARKED — the last two commission-cohort migrations: `20260914100800_bind_transfer_invoice_intent` and `20260914100900_repair_commission_history_label_snapshots` (written, NOT applied as of 2026-09-26)
+## PARKED — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots` (written, NOT applied as of 2026-09-27)
 
-Neither file is applied (live-ledger snapshot, 2026-09-26). Everything they depend on in the cohort
-(`20260914100100`–`100600`) is live, including the Chicago-date cutover `20260914100500` (applied
-2026-09-22), so the transfer wrapper's first-apply prerequisite is met. Read the boundary block at the
-top of `docs/reference/migration-history.md` before any apply. The description below was moved here
-from the old file header on 2026-09-26.
+`20260914100900` is the only cohort file not applied. The transfer intent wrapper
+`20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 under ledger version
+`20260927060531` (read live that day), and everything else in the cohort (`20260914100100`–`100700`)
+is live. Read the boundary block at the top of `docs/reference/migration-history.md` before any
+apply. The description below was moved here from the old file header on 2026-09-26; the parts about
+`20260914100800` are the pre-apply record, kept as history.
 
-A seventh unapplied candidate, the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent`
-(formerly `20260908130800`), sorts between `20260914100600` and the repair; it must apply after the
+(Historical, pre-apply.) The transfer intent wrapper `20260914100800_bind_transfer_invoice_intent`
+(formerly `20260908130800`) sorts between `20260914100600` and the repair; it had to apply after the
 Chicago-date cutover `20260914100500` (formerly `20260905200400`), its first-apply prerequisite.
 The label repair (`20260914100900`, renumbered from `20260905020100` on 2026-09-05 so it runs last, and restamped with the set on 2026-09-14;
 on PR #638's branch it briefly sat at `20260908130000` and `20260908130900`) stays after the transfer wrapper so it still runs last. It
@@ -112,7 +119,9 @@ addresses 34 un-settled opening snapshots that hold an order UUID and unknown cu
 available canonical labels, and is intentionally blocked if settlement history exists. Because it
 now runs last, that refusal can no longer halt the settlement-recipient guard or the date fixes.
 
-The parked transfer wrapper refuses to run at any isolation level but READ COMMITTED, then takes
+(Historical, pre-apply record of `20260914100800`; it applied live 2026-09-27 under
+`20260927060531`, so "parked", "must fix before apply" and "until an approved apply" below describe
+the state before that apply.) The parked transfer wrapper refuses to run at any isolation level but READ COMMITTED, then takes
 ACCESS EXCLUSIVE on the receipt table, which drains every transaction that has already read or
 written it. Its 5-second lock timeout bounds only the wait for that lock; the lock is then held
 until commit, so the rest of the file must commit within 3 seconds for queued receipt reads and
@@ -158,8 +167,7 @@ archive. They are listed here so the open part of this file shows them. None was
 - **Commission whole-cent enforcement (owner decision).** `commissions.order_profit` and
   `quotes.total_cost` still have no whole-cent CHECK (checked in `supabase/migrations/` 2026-09-26;
   `commissions.commission_amount` gained one in `20260903150100`). Whether to add them, and whether to
-  re-derive the one `pending` commission with a $0.01 stale basis (measured 2026-08-18), is Mason's
-  call. (Archive: CLOSED 2026-08-18 RETRACTED commission entry.)
+  re-derive a pending commission's stale basis (see the archived entry), is Mason's call. (Archive: CLOSED 2026-08-18 RETRACTED commission entry.)
 - **`profiles` TRUNCATE.** `authenticated` held `TRUNCATE` and `TRIGGER` directly on `public.profiles`,
   and a TRUNCATE would not fire the row-level directory sync trigger (recorded 2026-07-29). (Archive:
   0d.)
@@ -215,9 +223,10 @@ document exists, so no one has hit it yet. Fixing it is a policy or RPC design c
 
 **Fix written, NOT applied (checked 2026-09-26).** Open PR #800 (it replaced the closed PR #785) carries
 the parked migration `20260921180000_soft_delete_customer_document_rpc` (on the PR branch, not on
-`main`) — a `SECURITY DEFINER` soft-delete RPC with an idempotency key, no policy change — and the page change that
-calls it. The migration needs Mason's explicit apply approval, and the page change merges only after
-the apply. Until then a rep's Remove on the live Documents tab (shipped in PR #764) is refused.
+`main`) — a `SECURITY DEFINER` soft-delete RPC with an idempotency key, no policy change — plus its
+provers. The Documents-tab change that calls the RPC is not written yet and ships separately after the
+apply (`CustomerDocuments.tsx` still updates the row directly). The migration needs Mason's explicit
+apply approval. Until then a rep's Remove on the live Documents tab (shipped in PR #764) is refused.
 
 ## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
 
@@ -250,8 +259,8 @@ time.
   forward `CREATE OR REPLACE` pinning the live body `9a503e54…` → a new body `841eeded…`. Stamped
   deliberately below the eight pending `20260914100*` migrations, since the pending-set guard in
   `.claude/hooks/migration-pending-lib.mjs` refuses an apply while an **older** migration is pending.
-  **Stale as of 2026-09-26:** `20260914100100`–`100700` have since applied live (only `100800` and
-  `100900` remain parked), so this stamp now sorts below the live ordering high-water and the file
+  **Stale as of 2026-09-27:** `20260914100100`–`100800` have since applied live (only `100900`
+  remains parked), so this stamp now sorts below the live ordering high-water and the file
   would need a restamp before any apply.
 - Superseded: the earlier branch `claude/bind-adjust-inventory-receipt-delivery-20260917` HEAD
   `143da828f` (unpushed) **still cannot be applied** — it edits an applied migration, and its
@@ -488,7 +497,7 @@ of them gates a safety warning:
 `computeSeason(jobDate ? new Date(jobDate + 'T00:00:00') : new Date())` selects which season's
 `field_crop_history` row to read for the earliest harvest date, and that drives the
 **pre-harvest-interval (PHI) warning** on a chemical application. `jobDate` defaults to
-`localToday()` (`:344`), i.e. the browser clock. At the October 1 boundary a user outside Chicago
+`localToday()` (`:388`, line as of 2026-09-26), i.e. the browser clock. At the October 1 boundary a user outside Chicago
 can therefore query the WRONG season's harvest row; the query is written to degrade silently
 ("No harvest row => no warning"), so the failure mode is a **suppressed PHI warning**, not a visible
 error. Narrow window and pre-existing, but it is a safety path, not a report filter, and a user
@@ -496,11 +505,11 @@ cannot see that anything was skipped.
 
 **The cosmetic ones** — report/dialog defaults the user can change in the UI:
 `ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
-`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:94,98`,
+`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
 `SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
 pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
 
-`FieldApplicationInvoice.tsx:520` is **fine** — it inherits `transactionDate`, which is now the
+`FieldApplicationInvoice.tsx:533` (line as of 2026-09-26) is **fine** — it inherits `transactionDate`, which is now the
 Chicago business date.
 
 Deliberately NOT changed alongside the invoice-date work: that change is about what gets STORED and
@@ -894,7 +903,8 @@ containing `e`, `p` or `r` (which covers `-pe`), landed in `26e8a40d9` (#530). I
 guard has no `GIT_EXTERNAL_DIFF`/`GIT_PAGER` handling, and `gh` is still in its read-only command list.
 The table below is the 2026-09-02 measurement.
 
-Reported by the Codex connector on PR #530 and **not fixed there.** All three are the same shape as
+Reported by the Codex connector on PR #530 and **not fixed there** at the time (item 1 was later
+closed by #530's final merge — see the update above). All three are the same shape as
 the four that PR closes, and all three are **already open on `main` today** — no diff in #530 causes
 them. They are recorded here as pre-existing known-open, not as a regression.
 
@@ -1289,7 +1299,8 @@ the branch stays until then.
 **Branch retention (updated 2026-09-26):** F1 (PR #584, merged 2026-09-04) and F2 (PR #583, merged
 2026-09-03) have landed, so of the three audit branches only F3's `claude/control-file-coverage-a41c`
 (on origin at `b985e919b`) is still needed. `codex/section1-security-hardening-20260725` is also still
-on origin; the F2 entry in the archive says to keep it.
+on origin. F2 landed (PR #583), so the original retention rule no longer requires this branch;
+deleting it is Mason's call.
 
 ## OPEN 2026-09-01 — agents share Mason's admin identity, so the manual merge override can only be fenced off by command matching, never truly withheld
 
@@ -2238,7 +2249,7 @@ draft/unposted-invoice writer can still beat close's invoice-completeness scan.
 
 ---
 
-## 1. July gauntlet follow-ups — no open HIGH findings (updated 2026-09-26); owner data-cleanup decisions and LOW items remain
+## 1. July gauntlet follow-ups — no open HIGH findings (updated 2026-09-26); owner data-cleanup decisions, LOW items and one moot MEDIUM remain
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
@@ -2271,9 +2282,10 @@ Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-s
 ## 2. Parked migrations (written, not applied)
 
 The current parked set is recorded in `docs/reference/migration-history.md` (rows marked LOCAL
-CANDIDATE … NOT APPLIED) and in the PARKED entry at the top of this file. The rows below are older
-files that still need a warning; rows that have since been applied, resolved or retired moved to the
-archive on 2026-09-26.
+CANDIDATE … NOT APPLIED) and in the PARKED entry at the top of this file. The rows below still need a
+warning: two superseded staging files that must not be applied, one open finding about the dispatch
+sync triggers, the shelved earmark engine, and a reminder to check other worktrees. Other rows that
+have since been applied, resolved or retired moved to the archive on 2026-09-26.
 
 | File | Purpose | Why parked | What unblocks it |
 |---|---|---|---|
@@ -2287,7 +2299,7 @@ archive on 2026-09-26.
 
 ## 3. Pending owner decisions
 
-From `docs/loops/owner-decisions-2026-07.md` (6 packets, live counts pulled 2026-07-02). **2026-07-16 in-chat outcomes:** packet 3 (junk deletes) — Mason keeps test entities for E2E/Playwright use, un-commingled: the two untagged test customers were renamed with the `[E2E]` prefix (live UPDATE, verified); true-junk deletes (8 gibberish `RTJ Recipe…` blend recipes, zero-link customer rows, vendor `we`, bad emails) remain PENDING explicit line-item approval. Packet 4 (due dates) — **DECIDED: Net 30 default + Net 15 / due-on-receipt / custom-date override**; approved build spec: `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`. Packet 5 / finding #40 wire-vs-retire — **SETTLED: KEEP** (planned features; do not retire the orphaned RPC, CropPrograms pages, or per-acre tier columns). Packet 6 ("wire" payment method) — **RESOLVED, was stale**: migration `20260702152000_payment_method_wire.sql` is applied live; all four payment_method CHECK constraints already allow `'wire'` (verified live 2026-07-16). Remaining genuinely-open packets: 1 (vendor-name merges) and 2 (category remap).
+From `docs/loops/owner-decisions-2026-07.md` (6 packets, live counts pulled 2026-07-02). **2026-07-16 in-chat outcomes:** packet 3 (junk deletes) — Mason keeps test entities for E2E/Playwright use, un-commingled: the two untagged test customers were renamed with the `[E2E]` prefix (live UPDATE, verified); true-junk deletes (8 gibberish `RTJ Recipe…` blend recipes, zero-link customer rows, vendor `we`, bad emails) remain PENDING explicit line-item approval. Packet 4 (due dates) — **DECIDED: Net 30 default + Net 15 / due-on-receipt / custom-date override**; approved build spec: `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md` (removed in the docs cleanup; recover it from git history with `git show e81853970:docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`). Packet 5 / finding #40 wire-vs-retire — **SETTLED: KEEP** (planned features; do not retire the orphaned RPC, CropPrograms pages, or per-acre tier columns). Packet 6 ("wire" payment method) — **RESOLVED, was stale**: migration `20260702152000_payment_method_wire.sql` is applied live; all four payment_method CHECK constraints already allow `'wire'` (verified live 2026-07-16). Remaining genuinely-open packets: 1 (vendor-name merges) and 2 (category remap).
 
 1. **Vendor/manufacturer name merges** (e.g. "Van Diest" vs "Van Deist") — re-buckets AP spend/rebate history; needs Mason's call on which spelling is canonical.
 2. **Category remap** of the 19 live `products.category` values into functional-class + use-timing — re-buckets historical sales reports on rename.
@@ -2323,8 +2335,8 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
   Full detail and recommendations: `docs/audits/2026-08-04-crm-functional-and-coverage-audit.md`.
 
 - ~~**Per-line-item custom split billing (field-app)**~~ — **no longer deferred. SHIPPED 2026-07-21 (PR #164)
-  and live with the flag ON; see §0 (per-line split billing, now in the archive) for the current status and the one remaining gap (it has never been
-  used).**
+  and live with the flag ON; see §0 (per-line split billing, now in the archive) for the current status (it has never been
+  used); open gaps are listed under "OPEN — smaller items" near the top of this file.**
 - **EPA label backfill** — ~105 of 204 distinct stored EPA registration numbers point at the wrong product (confirmed, `docs/CHANGELOG.md` 2026-07-10 entry). The in-app `/label-data-quality` tool to fix them shipped 2026-07-10; the actual backfill (doing the data-entry) is still pending — it's a data-entry job, not a code task.
 - **OCR REI/PHI auto-fill** — deliberately deferred as a safety trap (label OCR for re-entry-interval/pre-harvest-interval data needs human verification before it can be trusted for compliance).
 - **Grower portal §7-§10** — deferred, internal-only direction for now. `docs/ROADMAP.md` line ~57 (A2, "Grower portal v1") and line ~112 (G9, portal MVP) both still say TODO/VISION.
@@ -2367,7 +2379,7 @@ The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). The
 - **ExcelJS workbook tests can exceed the 5s default timeout on a cold cache** — a *different* root cause from the page-render flake above, so the `waitFor` fix does not apply. The first ExcelJS load inside a worker is multi-second (7.0s measured 2026-08-25 on the first `vitest` run after a fresh `npm ci` in a new worktree) versus ~350ms once warm, so whichever test triggers that load sits right on the 5s cap and swings by an order of magnitude. Because `.husky/pre-commit` runs the full suite, a cold-cache miss hard-blocks an unrelated commit — the exact pressure toward the forbidden `--no-verify`. Fix: an explicit generous per-test timeout as the third argument to `it(...)`, never a higher global `testTimeout` (that would relax the 5s contract for the whole suite). All three ExcelJS test files now carry one — `productPricingWorkbook.test.ts` (20s/45s), `supplierPricingWorkbook.test.ts` (20s), and `productPricingSupplierEvidenceWorkbook.test.ts` (30s, added 2026-08-25 after it flaked in PR #476). Every ExcelJS load in these files happens inside a test body (no `beforeAll`/module-scope load), and tests run in file order, so the first test in each file absorbs the cold cost — that is why covering the first test per file is sufficient for the pre-commit gate. Residual: a manually filtered run (`vitest -t "…"`) that selects a *later* test in a file makes that test pay the cold load under the 5s cap; filtered runs do not gate commits, so this is accepted rather than blanket-timed-out.
 - **PWA (installed app) needs two reloads after a production deploy** to pick up a new service-worker chunk — expected behavior, not a bug to chase.
 - **Prepay bulk-apply (`apply_remaining_prepayments` / `batch_apply_all_prepayments`) is hard-disabled in production** (`RAISE 'PREPAY_BULK_APPLY_DISABLED'`, migration `20260620200000`) rather than properly fixed — the real fix needs the shelved reserved-pool redesign (§2/§4). Per-invoice `apply_prepay_to_invoice` is unaffected.
-- **`commission_payments.total_amount` is a legacy numeric-dollar column and remains tracked debt until the full approval gate is proven** — current posting compares the header and item totals directly in the same numeric-dollar unit; only `financial_audit_log.total_impact_cents` converts the posted total to cents. Verify exact numeric arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK before treating it as an approved compatibility exception. Converting historical payment headers/items safely is a dedicated money-schema migration, not part of the gauntlet cutover; do not casually retype or rewrite it while re-emitting posting guards. **(Updated 2026-09-26: `20260903150100`, applied live 2026-09-03, added `commission_payments_total_amount_whole_cents_chk` and `commission_payment_items_amount_whole_cents_chk`; whether they are validated on live was not checked. The numeric-dollar to bigint-cents conversion is still the open part.)**
+- **`commission_payments.total_amount` is a legacy numeric-dollar column and remains tracked debt until the full approval gate is proven** — current posting compares the header and item totals directly in the same numeric-dollar unit; only `financial_audit_log.total_impact_cents` converts the posted total to cents. Verify exact numeric arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK before treating it as an approved compatibility exception. Converting historical payment headers/items safely is a dedicated money-schema migration, not part of the gauntlet cutover; do not casually retype or rewrite it while re-emitting posting guards. **(Updated 2026-09-26: `20260903150100`, applied live 2026-09-03, added `commission_payments_total_amount_whole_cents_chk` and `commission_payment_items_amount_whole_cents_chk`; both are validated on live (checked 2026-09-27). The numeric-dollar to bigint-cents conversion is still the open part.)**
 - **Renaming or deactivating a profile still referenced by an unfinished quote/job commission split now fails closed at the next validator touch** (quote edit/conversion, job invoicing) with `COMMISSION_SPLIT_INVALID: recipient … does not match exactly one active user` — since migration `20260722134252` (gauntlet §7). This is deliberate (Mason chose reject-at-creation over silent unpayable commissions, 2026-07-22): the fix is to update the affected split to a current active user (or restore the profile), not to weaken the validator. Codex proposed an automatic profile→split reconciliation build; declined as scope creep for a zero-affected-rows preventive guard. Since migrations `20260722144121`/`20260722150432` (same day): profile names are admin-only to change, two active users cannot share a name, and NO profile — admin actions included — may acquire a name still referenced by a split with future money (`COMMISSION_RECIPIENT_NAME_RESERVED`); update the splits first. Durable follow-up (parked task): store profile ids inside splits instead of names, which retires this whole name-identity guard family. **(Updated 2026-09-26: storing profile ids shipped live 2026-07-22 as `20260722174029_commission_split_recipient_ids`; retiring the name-reuse guard is still parked — see §4b.)**
 - See `docs/reference/gotchas.md` for the full list of non-obvious schema/RPC quirks (idempotency column names, generated columns, tables without `updated_at`, etc.) — this file does not duplicate that content.
 
@@ -2459,8 +2471,9 @@ bytes stay in Storage, so recovery is possible only through an out-of-app servic
 
 **Applied live 2026-09-21** (live-ledger snapshot 2026-09-26: `20260921141423`
 `20260914100100_next_invoice_number_year_chicago`). With the six sibling generators (applied
-2026-09-20, below), the whole year-label family now uses the Chicago date, so the 31 December 2026
-deadline is met. The "Mason applies it himself", "nothing about it has been applied" and "before
+2026-09-20, below), the `next_*_number` family now uses the Chicago date, so the 31 December 2026
+deadline is met for it (three other generators still do not — see the OPEN 2026-09-26 entry on quote,
+order and rebate-claim numbers). The "Mason applies it himself", "nothing about it has been applied" and "before
 applying" text below is the pre-apply record.
 
 **Migration file:** `supabase/migrations/20260914100100_next_invoice_number_year_chicago.sql`.
@@ -2549,9 +2562,9 @@ The `20260914100100`..`20260914100900` cohort still sorts above it and is clear 
 field-app season files only `20260908190000` now sorts BELOW it and must be restamped, while
 `20260912165758`, `20260913040359` and `20260913152700` already sort above it. Read the boundary
 block in `docs/reference/migration-history.md` before ordering anything.**
-**Superseded 2026-09-26:** `20260914100100`–`100700` have since applied live; only `100800` and
-`100900` are still parked. The field-app season files were last carried on PR #754, which closed
-unmerged.
+**Superseded 2026-09-27:** `20260914100100`–`100800` have since applied live; only `100900` is
+still parked. The field-app season files, restamped `20260914101000`–`101300`, are carried by open
+PR #793 (it replaced PR #754, closed unmerged 2026-09-21); they are not on `main`.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
@@ -3192,8 +3205,9 @@ against live `prosrc`). Both were true when written.
 "not applied live and not merged: the live apply needs Mason's in-chat approval, a same-session
 apply-guard proof, and the exact-SHA `gpt-5.6-sol` verdict, and this item stays OPEN until that
 lands." All three were obtained on 2026-09-04 and the migration applied; the item is RESOLVED per
-the heading above. **The branch-retention note still stands on its own terms:**
-`codex/section1-security-hardening-20260725` is retained per the note below and must not be deleted.
+the heading above. **Branch retention (updated 2026-09-26):** the note that kept
+`codex/section1-security-hardening-20260725` moved to the F3 OPEN entry at the top of this file; F2
+landed (PR #583), so the original retention rule no longer requires this branch; deleting it is Mason's call.
 
 (The F3 finding and the branch-retention note that followed here were moved on 2026-09-26 to their
 own OPEN entry at the top of this file.)
@@ -4506,8 +4520,8 @@ The concurrent-checkout entry above stays OPEN; this fix does not touch it.
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `supabase/migrations/20260807220323_log_customer_fact_rpc.sql` | `log_customer_fact` RPC: retry-safe, role-gated, actor-pinned CRM fact intake replacing the direct `customer_facts` insert in `CustomerFacts.tsx` | **APPLIED LIVE 2026-08-07** as version 20260807220323 (authored 20260807120000). History row 856. Frontend cutover to the RPC landed in the same change. | Done — both Codex charters CLEAN, postflight ACL assertions passed at apply. |
-| `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` (removed 2026-09-26) | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |
-| `docs/audits/nightly-debug/parked-migrations/PARKED-07-seed-admin-security-OWNER-ACTION.md` (removed 2026-09-26) | Flagged `seed-admin` edge function as an unauthenticated admin-mint endpoint | — | **RESOLVED** — `seed-admin` no longer exists in `supabase/functions/` (confirmed on disk this pass; `docs/reference/gotchas.md` line ~118 notes it was deleted 2026-06-16 as a security cleanup). |
+| `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` (removed in the docs cleanup; recover it from git history with `git show e81853970:<path>`) | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |
+| `docs/audits/nightly-debug/parked-migrations/PARKED-07-seed-admin-security-OWNER-ACTION.md` (removed in the docs cleanup; recover it from git history with `git show e81853970:<path>`) | Flagged `seed-admin` edge function as an unauthenticated admin-mint endpoint | — | **RESOLVED** — `seed-admin` no longer exists in `supabase/functions/` (confirmed on disk this pass; `docs/reference/gotchas.md` line ~118 notes it was deleted 2026-06-16 as a security cleanup). |
 | `scripts/.staging-migrations/workflow-fix-parked/u12/*`, `.../u13/*` | Draft patches for Applicator "My Day" (U12) and dispatch-assignment unification (U13) | **Verified superseded and removed locally in this ticket.** `docs/loops/business-workflow-fix-ledger.md` confirms both U12 and U13 **SHIPPED LIVE 2026-07-06/07** under different migration names (`20260707010000`/`20260707011000` for U12, `20260707020000` for U13) — not the deleted draft filenames (`20260706060000`, `20260706100000`). | Do not re-apply the removed drafts. |
 | `scripts/.staging-migrations/workflow-waves-parked/SUPERSEDED-dispatch-backfill.sql` (was `PARKED-dispatch-backfill.sql`, renamed 2026-07-29) | One-time backfill of `job_location_dispatches` for legacy-assigned open jobs | **RETIRED 2026-07-29 — no longer parked, DO NOT APPLY.** The legacy population it was written for is gone and the live sync triggers cover the ordinary assignment paths. Verified read-only against live 2026-07-29: its own count query returns 0 rows (same as when parked on 2026-07-10), **no** open assigned job is missing a dispatch row at all (0 across every assignee, not just qualifying ones), and `trg_sync_job_location_dispatch_on_applicator_change` on `jobs` + `trg_sync_job_location_dispatch_on_field_insert` on `job_fields` are both live. It is **not** claimed that a gap can never reopen — see the dispatch trigger-coverage row below. | Nothing — it is not waiting on Mason. Do **not** re-run the count query "just in case" and apply it: this is a business-data write. If a dispatch row is ever genuinely missing, diagnose the trigger, do not resurrect this backfill. |
 | `supabase/migrations/20260807215532_profile_role_lock_covers_insert.sql` | Extends `_guard_profile_role_lock` to `BEFORE INSERT OR UPDATE` so a logged-in non-admin cannot re-insert their own `profiles` row with `role = 'admin'` (§0d follow-up; closes the admin self-escalation path) | **APPLIED LIVE 2026-08-07** as version 20260807215532 (authored 20260807153000). Predicate `profile-role-lock-insert-arm.sql` verified 2 rows red → 0 green post-apply. History row 855. | Done — both Codex charters CLEAN; live non-admin escalation-insert probe blocked with PROFILE_INSERT_LOCK at apply. |
@@ -5122,7 +5136,7 @@ not happened** — checked directly rather than inferred from the empty split ta
 would not touch those: live as of 2026-07-27, `field_app_locations` = 0 rows, `field_app_location_shares` = 0,
 and of 4 total `jobs` none is `invoiced` and no `invoices` row carries a `job_id`. So no field-application
 invoice of any kind has been produced yet, split or not.)*
-Owner-facing detail was in `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md` (shipped; removed 2026-09-26, in git history).
+Owner-facing detail was in `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md` (shipped; removed in the docs cleanup; recover it from git history with `git show e81853970:docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`).
 
 **Resolved 2026-07-21 — Supplier Pricing Phase 1a rollout gap.** The governed
 Product-page and XLSX pricing paths are live, the final lifecycle migration is
@@ -5133,8 +5147,8 @@ with JWT enforcement and rejects supplier price/product lists before OCR.
 
 **SUPERSEDED 2026-09-26 — kept as the historical record only.** These paragraphs used to sit at the top
 of this file as stacked status headers. The current status is the header at the top. In particular the
-first paragraph below is stale: `20260914100100`–`100700` have all applied live, and only `100800` and
-`100900` remain parked (see the PARKED entry at the top of this file).
+first paragraph below is stale: `20260914100100`–`100800` have all applied live, and only `100900`
+remains parked (see the PARKED entry at the top of this file).
 
 Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`
 and the separate transfer wrapper below) remain unapplied;

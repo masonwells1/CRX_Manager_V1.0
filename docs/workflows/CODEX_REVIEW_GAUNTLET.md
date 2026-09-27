@@ -37,7 +37,7 @@ Use this when reviewing a branch, commit, or uncommitted work before push.
 5. Verify every BLOCKER and HIGH finding against source, migration, constraint, test, smoke, or live database evidence.
 6. Fix confirmed BLOCKER and HIGH issues.
 7. Add one prevention action for every confirmed BLOCKER and HIGH bug.
-8. Re-run the same Codex review scope until the verdict is `SHIP` or `SHIP-WITH-FOLLOWUPS`. These iterating rounds run on Luna (see the two review tiers in `AGENTS.md`): no BLOCKER or HIGH may remain, and every MED/LOW is fixed, refuted with evidence, or named as a deferral. A risky diff then needs one fresh Sol review of the exact final head, run last — any later commit voids it (`.claude/commands/codex-gauntlet.md` Step 3).
+8. Re-run the same Codex review scope until the verdict is `SHIP` or `SHIP-WITH-FOLLOWUPS`. These iterating rounds run on Luna (see the two review tiers in `AGENTS.md`): no BLOCKER or HIGH may remain, and every MED/LOW is fixed, refuted with evidence, or named as a deferral. Every merge into `main` then needs one fresh independent Sol high-effort review of the exact candidate SHA, run last — a later commit or moved base voids it (`AGENTS.md`; `.claude/commands/codex-gauntlet.md` Step 3).
 9. Stop and report the verdict. The gauntlet does not push, deploy, or apply production changes; landing follows `.claude/commands/ship.md` and the hard gates in `AGENTS.md`.
 
 ### Foundation Audit Mode

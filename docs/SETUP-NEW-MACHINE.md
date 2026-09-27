@@ -191,7 +191,7 @@ Memory files (Claude's persistent notes about you and the project) live at:
 C:\Users\<your-username>\.claude\projects\<encoded-checkout-path>\memory\
 ```
 
-The folder name is the checkout's full path with `:`, `\`, `_`, and `.` turned into `-`. On Mason's
+The folder name is the checkout's full path with every character that is not a letter or digit turned into `-`. On Mason's
 machine the checkout is `C:\CRX_Manager`, so the folder is `C--CRX-Manager`.
 
 These are NOT in the repo. If you want your home machine's memory to follow you:

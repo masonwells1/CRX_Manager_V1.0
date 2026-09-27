@@ -661,8 +661,10 @@ loss; it is covered and mutation-tested.
   lesson, independent of this lock.
 - The durable boundary is unchanged and is not in this repository: GitHub `protect-main` branch
   protection, required checks, and formal review. Repository hooks are defense in depth.
-  [Update 2026-09-26: "formal review" is no longer a GitHub requirement — the 2026-09-02 entry
-  removed the required review; required checks are the merge gate.]
+  [Update 2026-09-27: the 2026-09-02 entry removed the required review, but it is back — the
+  2026-09-26 autonomous-landing entry makes the merge gates require CodeRabbit's APPROVED verdict on
+  the exact head, and the `protect-main` ruleset again requires one current approving review (read
+  2026-09-27).]
 
 ## 2026-09-01 — the guarded surface is NARROWED to hook/registration files; whether the lock survives at all is an open owner decision
 
@@ -809,7 +811,9 @@ entries in `docs/changelog.d/` from the same day.
 override; the merge gates no longer require `reviewDecision === "APPROVED"` and only refuse
 `CHANGES_REQUESTED`. Still true from this entry: `enforce_admins` is off, both gates hard-deny
 `gh pr merge --admin`, and the separate-credential fix stays declined. See the 2026-09-02 "required
-review on `main` is removed" entry above.**
+review on `main` is removed" entry above. [Update 2026-09-27: approval is required again — since
+the 2026-09-26 autonomous-landing entry the merge gates require CodeRabbit's APPROVED verdict on the
+exact head, and the `protect-main` ruleset again requires one current approving review.]**
 
 **Source:** Mason's in-chat request on 2026-09-01 ("add manual override as option in my github
 account to get around the has to have a review"), and his choice of the "override + agent lockout"
@@ -1187,9 +1191,11 @@ owner applies `ready-for-coderabbit`; a default-branch workflow validates that e
 posts exactly `@coderabbitai review` once with a hidden SHA marker. The generic Actions-authored
 marker prevents duplicate requests but is not a separate security identity. Before merge, its SHA,
 CodeRabbit's authenticated approval `commit_id`, and the live PR head must be identical.
-[Update 2026-09-26: the approval half is superseded — since the 2026-09-02 entry, `main` requires no
-approving review and the merge gates refuse only a `CHANGES_REQUESTED` verdict. The label workflow
-(`.github/workflows/coderabbit-final-review.yml`) still posts the review request.]
+[Update 2026-09-27: the approval half was dropped on 2026-09-02 and restored on 2026-09-26 — the
+merge gates again require CodeRabbit's APPROVED verdict on the exact head (2026-09-26
+autonomous-landing entry), and the `protect-main` ruleset again requires one current approving
+review. The label workflow (`.github/workflows/coderabbit-final-review.yml`) still posts the review
+request.]
 **Why:** Manual comment posting was easy to forget or repeat, while automatic PR/push reviews spent
 the shared budget before changes were deployable.
 **What this forbids/implies:** Do not post the normal command by hand. New commits and reopened/draft
@@ -1219,8 +1225,10 @@ commit, require approval from someone other than the last pusher, and enforce th
 administrators. CodeRabbit's formal approval is the normal merge-unlock path; existing build and
 deployment checks remain separate. [Update 2026-09-26: that protection change was undone —
 administrator enforcement was turned off on 2026-09-01 and the required review was removed on
-2026-09-02 (see those entries). `main` now needs no approval; the required checks are the merge gate
-and an unresolved `CHANGES_REQUESTED` still blocks. The frozen-candidate review practice stands.] If a finding or base update creates a new commit, restart checks
+2026-09-02 (see those entries). Since the 2026-09-26 autonomous-landing entry, approval is required
+again: the merge gates require CodeRabbit's APPROVED verdict on the exact head, the `protect-main`
+ruleset requires one current approving review, the required checks must pass, and an unresolved
+`CHANGES_REQUESTED` still blocks. Administrator enforcement stays off.] If a finding or base update creates a new commit, restart checks
 and request one follow-up incremental review of that corrected candidate. Do not use
 `@coderabbitai resume`, which restarts automatic review, and use `@coderabbitai full review` only
 when a complete reread is deliberately justified. This decision supersedes the automatic-review
@@ -1608,8 +1616,9 @@ and an independent `gpt-5.6-sol` high-effort second opinion. Closes the PR #432 
 4. **Local pre-commit results are advisory, not independent certification.** The ~14 scripts the
    gate executes are writable by the same identity that runs them. The durable boundary is the one
    already outside agent reach: the `protect-main` ruleset, the three required GitHub checks, and
-   CodeRabbit review on every PR. [Update 2026-09-26: CodeRabbit is no longer a merge requirement —
-   since 2026-09-02 no approving review is required; an unresolved `CHANGES_REQUESTED` still blocks.]
+   CodeRabbit review on every PR. [Update 2026-09-27: CodeRabbit stopped being a merge requirement on
+   2026-09-02 and became one again on 2026-09-26 — the merge gates require its APPROVED verdict on the
+   exact head, and the `protect-main` ruleset again requires one current approving review.]
 5. **Local proof is proportionate and external proof remains complete.** Pre-commit now keeps the
    staged-file safeguards that fail fast on ledger omissions, private artifacts, SQL/frontend
    anti-patterns, Claude/Codex manifest drift, and dependency changes. Full lint, typecheck,
@@ -1774,8 +1783,10 @@ red X and withheld approval but did not disable the merge button because GitHub 
 approvals. Mason's 2026-08-28 decision above replaced that posture with one required current
 approval, stale-review dismissal, last-pusher separation, and administrator enforcement.
 [Update 2026-09-26: that 2026-08-28 posture was itself undone — administrator enforcement off
-2026-09-01, required review removed 2026-09-02. `main` again requires zero approvals; a
-`CHANGES_REQUESTED` verdict still blocks through the merge gates.]
+2026-09-01, required review removed 2026-09-02. Since 2026-09-26 the `protect-main` ruleset again
+requires one current approving review (stale approvals are dismissed on push, no last-pusher rule,
+administrator enforcement still off), the merge gates require CodeRabbit's APPROVED verdict on the
+exact head, and a `CHANGES_REQUESTED` verdict still blocks.]
 
 **Also settled: the dashboard is inert and must not be used.** CodeRabbit config sources do not
 merge. The repo `.coderabbit.yaml` outranks the repository and organization UI settings, and any
@@ -1927,8 +1938,8 @@ which is unchanged. This entry covers the **configuration** half of the work ope
 The merge-gate enforcement half is parked — see "What is deliberately not here" below.
 [Update 2026-09-26: `AGENTS.md` no longer carries a standing CodeRabbit policy section; it lists a
 CodeRabbit review of the frozen head as one step of the protected path in `.claude/commands/ship.md`.
-Since 2026-09-02 GitHub requires no approving review, so that review is held by convention; only an
-unresolved `CHANGES_REQUESTED` blocks a merge.]
+From 2026-09-02 to 2026-09-26 that review was held by convention; since the 2026-09-26
+autonomous-landing entry the merge gates require CodeRabbit's APPROVED verdict on the exact head.]
 
 **The problem.** CodeRabbit was refusing reviews for two *different* reasons, and the distinction
 matters because only one of them is fixable with money:
@@ -3060,9 +3071,10 @@ money/migration/bash-safety/RLS guards. Do not rebuild factory-style governance 
 asking; if autonomous batching is wanted later, design it around the existing `/ship` pipeline with
 hooks that fail OPEN for coordination (never fail-closed on ordinary work). All factory entries below
 this one are historical. [Update 2026-09-26: the safety-net list has since changed — risky-diff
-proofs are now exact-SHA `gpt-6-sol` / `high` (2026-09-23 entry), and since 2026-09-02 no approving
-review is required to merge: the required CI checks are the merge gate, CodeRabbit review is held by
-convention, and an unresolved `CHANGES_REQUESTED` still blocks. The no-factory rule stands.]
+proofs are now exact-SHA `gpt-6-sol` / `high` (2026-09-23 entry), and since the 2026-09-26
+autonomous-landing entry every merge needs that Sol review last, CodeRabbit's APPROVED verdict on the
+exact head, and green required checks; an unresolved `CHANGES_REQUESTED` still blocks. The
+no-factory rule stands.]
 
 ---
 
@@ -3338,7 +3350,9 @@ for CodeRabbit to the `protect-main` ruleset once its exact check name is confir
 config commit 943e5688.) [Update 2026-09-26: that follow-up is reversed, not open — on 2026-09-02
 Mason chose to keep CodeRabbit running but stop letting it block a merge, and the ruleset carries no
 CodeRabbit check. That removed the GitHub approval/check requirement only: the landing path in
-`.claude/commands/ship.md` Step 8 still requires the `ready-for-coderabbit` review of the frozen head. Automatic reviews were turned off on 2026-08-28 (frozen candidates only). The
+`.claude/commands/ship.md` still requires the `ready-for-coderabbit` review of the frozen head, and
+since the 2026-09-26 autonomous-landing entry the merge gates again require CodeRabbit's APPROVED
+verdict on the exact head. Automatic reviews were turned off on 2026-08-28 (frozen candidates only). The
 "Standing CodeRabbit review policy" section no longer exists in `AGENTS.md`.]
 
 ## 2026-07-17 — SETTLED: save_customer edits are assigned-rep-or-admin only (no office-manager carve-out)
@@ -3441,15 +3455,17 @@ in chat; destructive migrations always stop regardless of arming.
 
 ## 2026-07-13 — SUPERSEDED (was "SETTLED & ACTIVE"): Codex standing push/merge authorization (mirror of Claude's) — not the live-migration entry
 
-**SUPERSEDED 2026-07-30 and 2026-08-14 — kept as history; for the live-migration rule `AGENTS.md`
-cites as "the 2026-07-13 entry", read the entry directly above this one.** What changed: (1) a risky
+**SUPERSEDED 2026-07-30 and 2026-08-14 — kept as history; for the 2026-07-13 live-migration rule,
+read the entry directly above this one (itself superseded by the 2026-09-26 autonomous-landing
+entry).** What changed: (1) a risky
 main-bound diff no longer needs a Claude review or `.claude/session-state/claude-review-push.json` —
 the Codex production guard (`.codex/hooks/production-action-guard.mjs`) instead demands an exact-SHA
 Sol proof from `scripts/write-codex-push-proof.mjs` (switched to Sol by the 2026-07-30 entry; now
 `gpt-6-sol` / `high` per the 2026-09-23 entry). (2) Codex's Supabase access is write-enabled (the
 2026-08-14 entry), not read-only. (3) The follow-up below is done: the `protect-main` ruleset now
-requires `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation`, and branches must
-be up to date. Still true: nobody pushes directly to `main`; Codex lands ordinary work through
+requires `Vercel`, `Lint, Type Check, Test, Build`, and `SQL Migration Validation`, and the classic
+branch protection on `main` also requires the two CI checks and that branches be up to date. (4) The
+2026-09-26 autonomous-landing entry now governs when an agent may merge. Still true: nobody pushes directly to `main`; Codex lands ordinary work through
 branch → PR → green checks → merge, and the unchanged boundaries (no force-push, no deleting `main`)
 stand.
 
@@ -3480,9 +3496,11 @@ doesn't survive a DB-level disaster).
 
 ## 2026-07-10 — Live migration apply is hands-free, gated by the apply-guard proof
 
-[Update 2026-09-26: despite the heading, this is not a standing no-approval rule. An interactive
-session still needs Mason's in-chat OK (see the body and `AGENTS.md`); only an armed autopilot run
-under the 2026-07-13 "pre-authorized runs may apply live migrations" entry is hands-free.]
+[Update 2026-09-27: superseded by the 2026-09-26 autonomous-landing entry. An agent now applies a
+NON-destructive migration itself, in any session, once its PR has CodeRabbit's APPROVED verdict on
+the final head, a clean exact-SHA Sol review and green checks, through this entry's proof gate (both
+reviewer proofs and a fresh content-bound Sol proof). A destructive, data-overwriting or
+access-widening migration still waits for Mason (`AGENTS.md` › Safety and Protected Delivery).]
 
 **Decision:** Applying a live migration no longer needs an in-chat approval popup, but it is
 still hard-gated: an agent may only call `apply_migration` after producing a fresh

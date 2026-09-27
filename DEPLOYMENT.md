@@ -17,10 +17,14 @@ page summarises it and does not replace it.
   automatically. Vercel keeps every earlier deployment, so a bad deploy can be rolled back with one
   click (see [Rollback](#rollback)).
 - **Database changes and Edge Functions do not deploy with the merge.** A migration is applied to
-  the live database, and an Edge Function is deployed, as separate steps — each needs Mason's
-  explicit approval in the current conversation (see `AGENTS.md` › Safety and Protected Delivery). The
-  only exception is a non-destructive migration in a hands-free run Mason pre-authorized with an
-  armed autopilot flag and a fresh proof and Codex verdict; it never covers an Edge Function deploy.
+  the live database, and an Edge Function is deployed, as separate steps (see `AGENTS.md` › Safety
+  and Protected Delivery). Since 2026-09-26 an agent applies a **non-destructive** migration itself,
+  through the migration-apply-guard proof gate, once its pull request has CodeRabbit's approval of
+  the final head, a clean exact-SHA Sol review and green required checks. A destructive migration
+  (one that deletes rows or drops data) is refused for agents by the apply gate in every session:
+  the agent parks it and Mason applies it himself. A migration that overwrites existing rows or
+  widens access, and every Edge Function deploy, still need Mason's explicit approval in the
+  current conversation.
 
 ## Before you open the pull request
 
@@ -34,7 +38,9 @@ npm run build
 npm run check:docs
 ```
 
-The git hooks also help: pre-commit runs fast checks on staged files, and pre-push runs private-artifact
+The git hooks also help: pre-commit runs fast checks (the SQL and frontend validators and the ledger
+check on staged files, plus a private-artifact containment scan that also covers untracked and
+modified files), and pre-push runs private-artifact
 containment, `npm run typecheck`, and `npm run build`. Neither hook runs lint or the unit tests —
 CI does, whenever its `ci-scope` job routes the pull request to full CI (a docs-only change skips them).
 
@@ -80,7 +86,9 @@ function; that folder list is the authoritative inventory. Today there are eight
 `reset-user-password`, `send-email`, and `setup-blend-tickets-storage`. `customer-document-files`
 was first deployed as v1 on 2026-09-22 UTC, and migration
 `20260914100700_customer_document_bytes_server_only` (which makes customer-document bytes reachable
-only through that function) was applied live on 2026-09-26; keep the function deployed.
+only through that function) was applied live on 2026-09-26. That migration is done and must not
+be re-applied. Keep the function deployed: undeploying `customer-document-files` breaks the
+Documents tab, because nothing else can serve those files.
 
 Deploying or redeploying a function is a live change that needs Mason's explicit OK; use the
 `deploy-edge-function` workflow, which runs the pre-flight checks and a post-deploy smoke test.
@@ -154,13 +162,14 @@ request, and merge once CI passes. Never push the revert straight to `main`.
 
 ## Continuous Integration (CI)
 
-GitHub Actions runs three workflows from `.github/workflows/`:
+GitHub Actions runs four workflows from `.github/workflows/`:
 
 | Workflow | When it runs | What it does |
 |---|---|---|
-| `ci.yml` | Every pull request into `main` and every push to `main` | The main gate: lint, type check, unit tests with coverage, the production build, SQL migration validation, the documentation check, guard-hook regression tests, and the Phase 3C private-artifact containment check (plus a Windows leg of that check). **No browser test runs** — see the note below. |
+| `ci.yml` | Every pull request into `main` and every push to `main` | The main gate: lint, type check, unit tests with coverage, the production build, SQL migration validation, the documentation check, guard-hook regression tests, and the Phase 3C private-artifact containment check (plus a Windows leg that re-runs the containment and guard-hook tests). **No browser test runs** — see the note below. |
 | `phase3-private-artifact-containment.yml` | Pull requests into `main` | Standalone containment check for private supplier-pricing artifacts, run from the trusted base branch. |
 | `coderabbit-final-review.yml` | Pull-request events (labels, new commits, and so on) | The CodeRabbit final-review gate: when a frozen candidate is labelled `ready-for-coderabbit`, it rechecks the head and required checks and then asks CodeRabbit for one formal review. See `docs/reference/coderabbit-native-review.md`. |
+| `daily-landing-summary.yml` | Daily on a schedule (and on manual dispatch) | Posts Mason's plain-English daily summary of what merged, what was applied, and what waits on him to one GitHub issue, so GitHub emails it. |
 
 Two older workflows, `production-migration.yml` and `production-approval-canary.yml`, were
 **removed** on 2026-08-31 when the production migration approval gate was retired — see

@@ -15,7 +15,8 @@ they could not verify were skipped and listed, not guessed.
 - `docs/reference/migration-history.md` (machine-read by the session-start hook and fleet status):
   `20260914100500`, `100600` and `100700` now read APPLIED LIVE with their ledger versions. The
   hook's reader (`localCandidateMigrationPathsFromHistory`) returned 5 parked migrations on
-  `origin/main` and returns exactly `100800` and `100900` on this branch — the real parked set. The
+  `origin/main` and returns exactly `100800` and `100900` on this branch — the real parked set as of
+  2026-09-26 (`100800` was applied live on 2026-09-27, ledger `20260927060531`). The
   boundary header is current and stale "not applied" sections applied since June are corrected.
 - `docs/manual/KNOWN_ISSUES.md`: one current header; 45 resolved/closed entries moved, text intact,
   to a "Resolved and closed (archive)" part at the end; ~60 status corrections with evidence. Every
@@ -23,8 +24,9 @@ they could not verify were skipped and listed, not guessed.
 - `docs/manual/CURRENT_STATE.md`: ~500 lines of stacked superseded headers removed; correct applied
   vs parked migration state and effective ordering high-water; the finished open-PR queue replaced.
 - `docs/manual/DECISION_LOG.md`: 8 entries marked SUPERSEDED and 28 dated update notes; nothing
-  deleted. The two 2026-07-13 entries are now unambiguous, and `AGENTS.md` names the live-migration one.
-- `AGENTS.md`: the landing-path summary now names the `ready-for-coderabbit` step, matching `ship.md`.
+  deleted. The two 2026-07-13 entries are now unambiguous.
+- `AGENTS.md`: not changed by this part. Its earlier edits here were superseded by the autonomous-landing
+  text from #804, which this branch took verbatim when main was merged in.
 - Reference docs: `database-schema.md` (~25 column/status/tier fixes), `rpc-functions.md` (54
   browser-called RPCs added, dropped functions removed), `pages-routes.md` (rebuilt from the router;
   95/95 routes match), `code-patterns.md`, `agent-guardrails.md` (~20 hook-behaviour corrections).
@@ -55,5 +57,6 @@ non-admins never see commissions while live `comm_select` lets reps read their o
 `is_driver()` / `is_applicator()` search_path without `pg_temp`; hardcoded fallback test passwords in
 role specs; stale comments in `.claude/hooks/stop-wrap.mjs` and `BatchAdjustModal.tsx`;
 `.claude/commands/rollback.md` and `scripts/log-session.mjs` still writing to `docs/CHANGELOG.md`;
-duplicate row numbers in `migration-history.md` (not renumbered). Open PRs #793, #799 and #800 edit
-some of the same files and will need a rebase after whichever lands first.
+duplicate row numbers in `migration-history.md` (not renumbered). Open PRs #793 and #800 edit some of
+the same files and will need a rebase after whichever lands first (#799 was closed). #804 and #820
+merged on 2026-09-27 and were merged into this branch before review.

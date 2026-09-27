@@ -147,12 +147,18 @@ The only sanctioned way to apply a migration to the live database:
 
 1. Run `/migration-review` on the migration file. It dispatches the security/drift
    reviewers and, if clean, stamps the apply-guard proof for this exact file content.
-2. For SQL/RLS/money changes, a fresh independent `gpt-6-sol` high-effort Codex review of
-   this exact migration content is also required — the Sol gate in `AGENTS.md`; a clean
+2. Every migration also needs a fresh independent `gpt-6-sol` high-effort Codex review of
+   this exact migration content — the content-bound Sol proof in `AGENTS.md`; a clean
    Luna round does not count (the `/migration-review` flow mints it; the apply-guard checks it).
-3. Get authorization: in an ordinary interactive session, Mason's explicit in-chat OK.
-   In a Mason-pre-authorized hands-free run with autopilot armed, the proof gate itself
-   is the authorization (settled 2026-07-13) — destructive migrations are never autonomous.
+3. Authorization (`AGENTS.md`, Mason's autonomous-landing rule, 2026-09-26): when CodeRabbit
+   has APPROVED the frozen final head, a fresh exact-SHA Sol review of that head is clean, and
+   every required check is green, the agent applies the change's NON-destructive migration
+   (its GRANT/REVOKE lines routine, none widening access) through the migration-apply-guard proof gate (both reviewer proofs and a fresh content-bound
+   Sol proof, each under 30 minutes), in any session, no ask. A DESTRUCTIVE migration (one that
+   deletes rows or drops data) needs Mason's explicit approval in the current conversation, and
+   the apply gate refuses it for agents in every session: park it and hand it to Mason
+   (`docs/manual/OWNER_PLAYBOOK.md`). The gate holds two more kinds for Mason the same way: a
+   migration that overwrites existing rows, and one that widens access (a non-routine grant).
 4. Apply through the gated file-bytes caller: dry run with
    `node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql` (transmits nothing),
    then the same command with `--confirm`. It asks the same rule book as the apply-guard hook
