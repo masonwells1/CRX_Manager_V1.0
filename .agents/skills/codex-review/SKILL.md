@@ -1,6 +1,6 @@
 ---
 name: codex-review
-description: Run an independent Codex code review DIRECTLY via the headless `codex` CLI — no copy-paste. Iterating rounds run on `gpt-5.6-luna` at xhigh (the default since 2026-09-20); `gpt-5.6-sol` at high is reserved for the once-at-the-end ship gate. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting findings back into this session automatically. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
+description: Run an independent Codex code review DIRECTLY via the headless `codex` CLI — no copy-paste. Iterating rounds run on `gpt-6-luna` at xhigh (the default since 2026-09-20); `gpt-6-sol` at high is reserved for the once-at-the-end ship gate. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting findings back into this session automatically. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
 ---
 
 # Codex Review (direct CLI — no paste loop)
@@ -10,18 +10,24 @@ separate ephemeral reviewer, get structured findings back into this session, and
 replacing the manual prompt-doc + copy-paste handoff in `codex-cross-review`. The reviewer is
 always pinned explicitly and isolated from the builder session.
 
-### Which tier reviews (Mason's standing decision, 2026-09-20)
+### Which tier reviews (Mason's standing decision, 2026-09-20; re-pinned to GPT-6 on 2026-09-23)
 
-**Luna** (`gpt-5.6-luna`) at `xhigh` is the DEFAULT reviewer for every iterating round, on every
-kind of work. **Sol** (`gpt-5.6-sol`) at `high` is NOT the everyday reviewer any more — it is the
-once-at-the-end ship gate, and it runs after Luna comes back clean, not alongside it. **Terra**
-is the builder.
+**Luna** (`gpt-6-luna`) at `xhigh` is the DEFAULT reviewer for every iterating round, on every
+kind of work. **Sol** (`gpt-6-sol`) at `high` is NOT the everyday reviewer any more — it is the
+once-at-the-end ship gate, and it runs after Luna comes back clean, not alongside it. **Luna is
+also the builder** (`scripts/codex-build.mjs`): Terra and Spark are not usable on GPT-6 here, so
+the old three-tier split collapsed and Terra was retired (Mason, 2026-09-23). Every Codex role, pin,
+and effort is listed in `docs/reference/codex-model-tuning.md`.
+
+Because Luna both builds and reviews, a Luna round on Codex-built code is the model checking its
+own work. That is accepted for ordinary reversible changes — the Sol gate below is still fully
+independent, and it is the one that guards money.
 
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
-| Every iterating review round | `gpt-5.6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — risky money / inventory / auth / RLS / migration / permission / Edge Function diff, once Luna is clean | `gpt-5.6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
-| Genuinely complex work where Luna is plainly out of its depth | `gpt-5.6-sol` / `high` early | Step 3A form with the Sol pin | No |
+| Every iterating review round | `gpt-6-luna` / `xhigh` | Step 3A (advisory) | **No** |
+| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit approved the frozen head | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Genuinely complex work where Luna is plainly out of its depth | `gpt-6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
 one-line reason to Mason when it does, in chat and in any run ledger. Do not reach for it by
@@ -47,7 +53,7 @@ reflex — Luna-first is the point.
 > (`migration-apply-lib.mjs` `REQUIRED_CODEX_MODEL`, `codex-push-lib.mjs` `proofValid`). **Never
 > route an iterating Luna round through Step 3B.** Luna reviews advisory-only, via Step 3A.
 >
-> The guards still hard-require `gpt-5.6-sol` at `high`. That is deliberate and was left
+> The guards still hard-require `gpt-6-sol` at `high`. That is deliberate and was left
 > untouched on purpose: it is what enforces "Luna until clean, then exactly one Sol" in code
 > rather than in an agent's memory. Do not "fix" the guards to accept Luna.
 
@@ -314,7 +320,7 @@ echo "changed files in payload: $NFILES"
 # full transcript: the transcript echoes the whole prompt back, and the prompt itself contains the
 # tail canary and example `LUNA_REVIEW:` lines — so a transcript grep passes on the echo alone.
 timeout 1800 "$CODEX" exec --skip-git-repo-check --ephemeral --ignore-user-config --sandbox read-only \
-  -C "$WORK" -m gpt-5.6-luna -c 'model_reasoning_effort="xhigh"' -o "$WORK/luna-final.txt" \
+  -C "$WORK" -m gpt-6-luna -c 'model_reasoning_effort="xhigh"' -o "$WORK/luna-final.txt" \
   < "$WORK/PROMPT.md" 2>&1 | tee "$WORK/luna-review.txt" | tail -80
 CODEX_RC=${PIPESTATUS[0]}                # capture NOW — the next command overwrites PIPESTATUS
 echo "codex exit: $CODEX_RC"             # 124 = timed out; any non-zero = NO review
@@ -380,18 +386,17 @@ carrying one accepted nit, which pressures an operator into either looping forev
 gate. List each deferral explicitly when you report SHIP-WITH-FOLLOWUPS, then proceed to Step 3B.
 
 **Escape hatch.** For genuinely complex work where Luna is plainly out of its depth, swap
-`-m gpt-5.6-luna -c 'model_reasoning_effort="xhigh"'` for
-`-m gpt-5.6-sol -c 'model_reasoning_effort="high"'` in the command above and tell Mason the
+`-m gpt-6-luna -c 'model_reasoning_effort="xhigh"'` for
+`-m gpt-6-sol -c 'model_reasoning_effort="high"'` in the command above and tell Mason the
 one-line reason. This is still the advisory path — it mints no proof.
 
 ## Step 3B: Ship gate — exactly one Sol proof
 
-**Only after Step 3A is clean, and only for a risky diff** — the full `AGENTS.md` set: money /
-inventory / auth / RLS / migration / permission / Edge Function / other business-critical, **whether
-or not** the diff trips `RISKY_PATH_RES`. The push guard's path/content detector is a backstop, not
-the definition: it does not recognize every auth surface (e.g. a login-redirect edit in
-`src/pages/`), so "the push went through without asking" never means Sol was not required. For ordinary reversible work
-Step 3A is the whole review — do not spend a Sol round on it.
+**Only after Step 3A is clean, for EVERY change headed for `main`** (Mason's autonomous-landing
+rule, 2026-09-26 — both merge gates now refuse any merge into `main` without this proof, risky diff
+or not). Run it LAST: after CodeRabbit APPROVED the frozen head, immediately before the migration
+apply (if any) and the merge. The proof binds to that HEAD and to GitHub's real base and expires
+after 30 minutes, so a later commit, a moved base or a slow CodeRabbit round voids it.
 
 > ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
 >
@@ -461,7 +466,7 @@ cd "$(git rev-parse --show-toplevel)"
 mkdir -p .claude/session-state
 # $SCOPE is the flag chosen in Step 1 (unquoted so "--base main" splits into two args).
 "$CODEX" review $SCOPE \
-  -c 'model="gpt-5.6-sol"' \
+  -c 'model="gpt-6-sol"' \
   -c 'model_reasoning_effort="high"' \
   --title "CRX review ($SCOPE): $(git rev-parse --abbrev-ref HEAD)" \
   -c approval_policy=never \
@@ -490,12 +495,14 @@ The failure classes `AGENTS.md` keeps Codex pointed at:
 - (5) Lifecycle violations in the workflow documents routed by `AGENTS.md` (especially quote/order/delivery/invoice/return state machines).
 
 Notes:
-- Every review pins its model and effort explicitly — `gpt-5.6-luna`/`xhigh` for an advisory
-  Step 3A round, `gpt-5.6-sol`/`high` for a Step 3B gate proof. Never inherit the model or
-  effort from user configuration: the CLI's configured default is a model this CLI version
-  cannot run, and an unpinned call fails on the model rather than on anything real. The Step 3B
-  gate proof is `gpt-5.6-sol`/`high` only — Luna, Terra, Spark and Claude cannot substitute for
-  it, and the guards enforce that. Record the model and effort on every security/money proof.
+- Every review pins its model and effort explicitly — `gpt-6-luna`/`xhigh` for an advisory
+  Step 3A round, `gpt-6-sol`/`high` for a Step 3B gate proof. Never inherit the model or
+  effort from user configuration: an unpinned call silently inherits whatever `~/.codex/config.toml`
+  happens to say, so the tier that reviewed becomes a property of the workstation rather than of
+  this contract — and the proof records the pinned constant, so an inherited model would not even
+  be visible in it. Pin it, always, on every path. The Step 3B
+  gate proof is `gpt-6-sol`/`high` only — Luna and Claude cannot substitute for it, and the
+  guards enforce that. Record the model and effort on every security/money proof.
 - A trailing `rmcp … DELETE returned HTTP 404` line is harmless MCP-session cleanup — ignore it.
 - This fires the synced `.codex/hooks.json` hooks (SessionStart/Stop) — expected, they're trusted.
 
@@ -518,42 +525,33 @@ Notes:
 ## Step 5: Hand back to the push gate
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
-clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → finish checks →
-freeze the candidate commit → apply `ready-for-coderabbit` → resolve one CodeRabbit review → merge with
-`--match-head-commit <reviewed-head-sha>`**. Direct pushes to
-`main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
+clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
+freeze the candidate commit → apply `ready-for-coderabbit` → CodeRabbit APPROVED → Step 3B Sol proof LAST →
+apply the non-destructive migration, if any → merge with `--match-head-commit <reviewed-head-sha>`**.
+Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (standing policy, automation updated 2026-08-30):** automatic reviews are disabled.
-Finish the Codex review first, bring the branch current and green, freeze the release-candidate
-commit, record its head SHA, then apply `ready-for-coderabbit`. The trusted default-branch workflow
+**CodeRabbit (Mason's autonomous-landing rule, 2026-09-26):** automatic reviews are disabled.
+Bring the branch current and green, freeze the release-candidate commit, record its head SHA, then
+apply `ready-for-coderabbit`. The trusted default-branch workflow waits out running checks,
 rechecks the exact head and PR/check state, records `coderabbit-review-requested`, then adds
-`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in. It waits up to six minutes
-for an authenticated formal review of that exact commit. A skipped status or empty reply artifact
-does not count. A timeout or uncertain dispatch fails while preserving dedupe labels; never clear
+`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in, observes an authenticated
+formal review of that exact commit, and releases the provider label. A skipped status or empty
+reply artifact does not count. A timeout or uncertain dispatch preserves dedupe labels; never clear
 them blindly to retry. After observing the actual review, re-apply `ready-for-coderabbit` to
-reconcile without another request. See `docs/reference/coderabbit-native-review.md` for setup and
-recovery. Read the review and fix any real issue before merging; nitpicks may be
-dismissed with a one-line reason. A fix or base update that changes the commit clears the workflow
-labels and requires restarted checks, a refreshed exact-HEAD Codex proof when the corrected diff is
-Codex-worthy, a newly frozen and recorded SHA, and a fresh delivery PR before the
-ready-label trigger. Normal delivery verifies the original opened head/base for
-the entire PR lifetime; close the previous PR with a `Replaced by #N` comment (closing keeps its
-branch, comments and findings; never leave it open "as the record"). The provider skipped
-same-PR incremental review with this configuration. Never use
-`@coderabbitai resume`, and reserve `@coderabbitai full review` for a deliberately justified
-complete reread. An approving GitHub review is **NOT** required to merge: Mason removed
-`required_pull_request_reviews` from `main` on 2026-09-02, so CI is the merge gate. A
-`CHANGES_REQUESTED` verdict still blocks, and both agent merge gates refuse to merge over one.
-Immediately before merge, verify live `main` protection still requires the branch current and
-every required check green, and confirm CodeRabbit actually reviewed the frozen candidate — a
-green status row is not review proof. When CodeRabbit HAS approved, its `commit_id` must equal
-the PR's final `headRefOid`. The Codex proof below remains an additional hard gate
-for risky money/RLS/migration diffs. Both run — neither replaces the other.
+reconcile without another request. See `docs/reference/coderabbit-native-review.md`. Read the
+review and fix any real issue before merging; nitpicks may be dismissed with a one-line reason.
+**A fix goes on the SAME PR:** the push resets the workflow labels, the trusted synchronize run
+records the new candidate epoch, and once checks pass a relabel earns one follow-up review — no
+replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand, and
+reserve `@coderabbitai full review` for a deliberately justified complete reread. Both agent merge
+gates enforce the rule: CodeRabbit's latest verdict APPROVED on the exact `headRefOid`, the newest
+run of every reported check green with `mergeStateStatus` CLEAN, and the Step 3B Sol proof bound to
+that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
 
-**If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
-RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money
-patterns — `.claude/hooks/codex-push-guard.mjs` requires a fresh, HEAD-bound Codex proof and
-blocks any attempt to hand-write it. Mint it the sanctioned way; do NOT write the JSON yourself:
+**Minting the merge proof** — both merge gates require a fresh, HEAD- and base-bound Codex proof
+for every merge into `main` (and `.claude/hooks/codex-push-guard.mjs` still requires one for any
+risky push aimed at `main`), and block any attempt to hand-write it. Mint it the sanctioned way; do
+NOT write the JSON yourself:
 
 ```bash
 node scripts/write-codex-push-proof.mjs
@@ -565,7 +563,8 @@ ONLY on a terminal CLEAN token with a stable clean worktree does it write the HE
 (`.claude/session-state/codex-review-<sha>.json`) for you. The step-3 `tee` capture above is a
 human-readable transcript, not the proof — the transcript alone never satisfies the gate. If the
 wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify.
-Merging that PR deploys production, so it stays inside the standing push policy in `AGENTS.md`.
+Merging that PR deploys production; under Mason's autonomous-landing rule in `AGENTS.md` the agent
+merges it itself once CodeRabbit approved the head and this proof is fresh.
 
 ## General task handoff (not just review)
 
@@ -573,7 +572,7 @@ To delegate a *task* (not a diff review) to Codex — e.g. "have Codex independe
 reproduce this bug" or a research spike — use `exec` instead of `review`:
 
 ```bash
-"$CODEX" exec --model gpt-5.6-luna -c 'model_reasoning_effort="xhigh"' --sandbox read-only -C "$(git rev-parse --show-toplevel)" "your task here" 2>&1 | tail -60
+"$CODEX" exec --model gpt-6-luna -c 'model_reasoning_effort="xhigh"' --sandbox read-only -C "$(git rev-parse --show-toplevel)" "your task here" 2>&1 | tail -60
 ```
 
 Use `--sandbox read-only` for investigation; only escalate to `workspace-write` if Codex

@@ -111,7 +111,7 @@ assert.deepEqual(
     "--ephemeral",
     "--ignore-user-config",
     "--model",
-    "gpt-5.6-sol",
+    "gpt-6-sol",
     "-c",
     'model_reasoning_effort="high"',
     "-c",
@@ -762,7 +762,7 @@ assert.ok(proof.timestamp, "proof carries a timestamp");
 assert.equal(proofValid(proof, HEAD, now), true, "minted proof validates against codex-push-guard's proofValid");
 // …and against the guard's full check including the base it gates on.
 assert.equal(proofValid(proof, HEAD, now, BASE), true, "minted proof validates against the exact head AND base");
-assert.equal(proofValid({ ...proof, model: "gpt-5.6-terra" }, HEAD, now, BASE), false, "non-Sol proof is rejected");
+assert.equal(proofValid({ ...proof, model: "gpt-6-luna" }, HEAD, now, BASE), false, "non-Sol proof is rejected");
 assert.equal(proofValid({ ...proof, reasoning_effort: "medium" }, HEAD, now, BASE), false, "non-high proof is rejected");
 // …and be rejected for the wrong head / moved base / stale / bad verdict.
 assert.equal(proofValid(proof, "b".repeat(40), now), false, "wrong head_sha → invalid");

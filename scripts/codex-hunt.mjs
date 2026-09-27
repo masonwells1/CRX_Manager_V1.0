@@ -17,8 +17,12 @@
  *   length limit, however large the slice's file list grows.
  *
  * HARDENED INVOCATION — `codex exec` with:
- *   --model gpt-5.3-codex-spark : pin the cheap read-only hunter model; the
- *       gate/glance steps use overnight-codex-gate.mjs (gpt-5.6-sol) instead.
+ *   --model gpt-6-luna : pin the cheap read-only hunter model; the gate/glance
+ *       steps use overnight-codex-gate.mjs (gpt-6-sol) instead. Re-pinned
+ *       2026-09-23: the previous pin, `gpt-5.3-codex-spark`, is refused outright
+ *       by the API ("not supported"), so every hunt slice failed on the model
+ *       before it read a line of code. There is no `gpt-6-spark`; Luna is the
+ *       cheap tier in the GPT-6 class.
  *   --ignore-user-config : do NOT load ~/.codex/config.toml. That strips the
  *       Supabase / Vercel / GitHub / Sentry marketplace plugins off this run.
  *       Auth still resolves from CODEX_HOME, so the model still works.
@@ -80,9 +84,9 @@ function resolveCodex() {
 const codex = resolveCodex()
 // Prompt goes on STDIN (codex reads instructions from stdin when no positional
 // prompt is given), so there is no argv length limit.
-// Model is pinned to the read-only spark hunter — `--ignore-user-config` drops any
-// workstation default, so an unpinned run would fall to the CLI's built-in model.
-const args = ['exec', '--ignore-user-config', '--model', 'gpt-5.3-codex-spark', '--sandbox', 'read-only', '--ephemeral', '-C', repoRoot]
+// Model is pinned to the cheap read-only hunter tier — `--ignore-user-config` drops
+// any workstation default, so an unpinned run would fall to the CLI's built-in model.
+const args = ['exec', '--ignore-user-config', '--model', 'gpt-6-luna', '--sandbox', 'read-only', '--ephemeral', '-C', repoRoot]
 
 const res = spawnSync(codex, args, {
   input: prompt,                         // prompt via stdin — no argv length cap

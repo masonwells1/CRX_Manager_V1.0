@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase } from "./hold-latch-lib.mjs";
-import { isMachineGenerated, authoredByMason } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, authoredByMason, hasAuthoredText } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -36,11 +36,6 @@ if (isMachineGenerated(payload?.prompt)) emit();
 // as a stripped block.
 const prompt = authoredByMason(payload?.prompt);
 
-// Nothing left after stripping → this prompt is entirely someone else's words.
-// It is not Mason's turn to speak, so it must NEITHER latch a hold NOR clear
-// one: a sibling session must not be able to release a hold Mason latched.
-if (!prompt.trim()) emit();
-
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const stateDir = path.join(projectDir, ".claude", "session-state");
 const holdPath = path.join(stateDir, "hold.json");
@@ -64,6 +59,14 @@ if (isHoldPhrase(prompt)) {
     "(From hold-latch — build-actions are blocked until he resumes.)",
   ].join("\n"));
 }
+
+// Not Mason's turn → this prompt is entirely someone else's words, so it must
+// NOT clear a hold: a sibling session must not be able to release a hold Mason
+// latched. Checked AFTER the latch on purpose (2026-09-24): latching reads the
+// union of both strip orders (a "stop" either keeps must halt), while "Mason
+// spoke" needs both orders to agree, so a halt only one order keeps is still
+// honored above instead of being dropped here.
+if (!hasAuthoredText(payload?.prompt)) emit();
 
 // Not a hold phrase → clear any existing latch.
 if (wasHeld()) {

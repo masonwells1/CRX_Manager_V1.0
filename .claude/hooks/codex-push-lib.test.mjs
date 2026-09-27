@@ -1372,7 +1372,7 @@ const base = "c".repeat(40);
 const codexProof = {
   codex_ran: true,
   verdict: "clean",
-  model: "gpt-5.6-sol",
+  model: "gpt-6-sol",
   reasoning_effort: "high",
   head_sha: sha,
   base_sha: base,
@@ -1383,7 +1383,7 @@ assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 100
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now + 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, head_sha: "" }, sha, now), false);
-assert.equal(proofValid({ ...codexProof, model: "gpt-5.6-terra" }, sha, now), false);
+assert.equal(proofValid({ ...codexProof, model: "gpt-6-luna" }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, reasoning_effort: "medium" }, sha, now), false);
 assert.equal(
   proofValid({ ...codexProof, verdict: "blockers-fixed" }, sha, now),

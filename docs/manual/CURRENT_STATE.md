@@ -99,8 +99,10 @@ high-water `20260904185900` (since superseded — see the 2026-09-08 capture bel
 overload at body md5 `8acf34542105a90212ddb0a5e7c5d272` — that file's own candidate pin, superseding
 the F06 md5 `18d08d5f40aea91fe13ac3e5a686c549` recorded further down this page — and the live body
 carries that file's `JOB_ACRES_NOT_FINITE` refusal.
-**Last verified: 2026-09-21 for the migration ledger (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1008 rows / 1001 distinct names, `max(version)` `20260921141901`). Four
+**Last verified: 2026-09-26 for the migration ledger (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1011 rows / 1004 distinct names, `max(version)` `20260926163005`; a
+2026-09-27 re-read returned the same three figures; detail in the 2026-09-26 update below). The
+earlier 2026-09-21 read found 1008 rows / 1001 distinct names, `max(version)` `20260921141901`. Four
 commission-cohort files applied live on 2026-09-21 between 14:14 and 14:19 UTC —
 `20260914100100_next_invoice_number_year_chicago` (`20260921141423`),
 `20260914100200_commission_history_report_replay_guard` (`20260921141451`),
@@ -112,7 +114,15 @@ registry has not been regenerated since those four applies. **Update, read-only 
 UTC:** `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`) and
 `20260914100600_latest_commission_recipient_label` (`20260922020038`) have since applied, so the
 effective ordering high-water is now `20260914100600`; `20260914100700` (the customer-document
-candidate), `20260914100800` and `20260914100900` are not applied.** Carried forward from the 2026-09-20
+candidate), `20260914100800` and `20260914100900` are not applied. **Update, read-only ledger read
+2026-09-26 UTC:** `20260914100700_customer_document_bytes_server_only` applied live under
+`20260926163005` (1011 rows / 1004 distinct names), so the effective ordering high-water is now
+`20260914100700` and only `100800` and `100900` wait; the schema registry was regenerated from live
+introspection that day and records all seven 09-14 applies (boundary detail:
+`docs/reference/migration-history.md`). **Update, read-only ledger read 2026-09-27 UTC:**
+`20260914100800_bind_transfer_invoice_intent` applied live under `20260927060531` (1012 rows / 1005
+distinct names), so the effective ordering high-water is now `20260914100800` and only `100900` waits;
+the schema registry has not been regenerated for that apply.** Carried forward from the 2026-09-20
 read (1004 rows / 997 distinct names, `max(version)` `20260920052149`): two
 applies that morning, the `20260908140000` six-generator year fix (issue #617) under
 `20260920051333` and then `20260911120000_bind_adjust_inventory_receipt_to_intent` (#664) under
@@ -124,11 +134,13 @@ status enums, 94 tables without `updated_at`, 119 parsed CHECK IN-lists, 221 ski
 applied boundary (`20260915033227` to `20260920052149`) and that morning's two applies joining the
 applied-migration name list. The registry's applied migration list also still includes the
 routine-only `20260904160000_invoice_date_fallbacks_chicago` (ledger version `20260904130047`) and
-`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). The current effective
-ordering high-water is the newest applied row's effective stamp:
+`20260904180000_invoice_season_follows_invoice_date` (`20260904152221`). **Superseded 2026-09-26:
+the current effective ordering high-water is `20260914100700` (see the 2026-09-26 update above and
+the live-ledger capture in `docs/reference/migration-history.md`).** At the 2026-09-20 read, the
+effective ordering high-water was
 **`20260911120000_bind_adjust_inventory_receipt_to_intent`** (row 930, ledger version
 `20260920052149`, applied live 2026-09-20 via #664; verified live read-only 2026-09-20, 1004 ledger
-rows). A candidate must now sort above the `20260911120000` name-stamp.
+rows), and a candidate then had to sort above the `20260911120000` name-stamp.
 
 **Superseded boundary — row 927's 09-15 apply.** Until the 09-20 applies the high-water was
 **`20260908130000_bind_create_inventory_hold_receipt_to_intent`** (ledger version
@@ -159,10 +171,17 @@ seven restamped `20260914100100`..`20260914100900` candidates, `20260908130000`,
 `bind_transfer_invoice_intent` is applied. That 09-14 observation is itself superseded twice:
 `20260908130000` applied live 2026-09-15 under ledger version `20260915033227`, and
 `20260911120000_bind_adjust_inventory_receipt_to_intent` applied live 2026-09-20 under ledger version
-`20260920052149`, which now holds the boundary. A read-only re-read on 2026-09-20 found 1004 ledger
-rows immediately after that apply.)
+`20260920052149`, which held the boundary until later applies moved it (current boundary:
+`20260914100700` as of 2026-09-26). A read-only re-read on 2026-09-20 found 1004 ledger rows
+immediately after that apply.)
 
 **Live re-read 2026-09-06 15:39-15:42 UTC (read-only production queries against project `rhyzpcqhnizqbxphqdkr`) for the `20260908130000_bind_create_inventory_hold_receipt_to_intent` candidate's preconditions; ledger row count at that read: 999 (point-in-time, not a fact).** That read confirmed the live `create_inventory_hold` body hash, its argument list with defaults, the absence of the private impl name, both receipt binding columns, the grants, and ZERO unexpired `create_inventory_hold` receipts. It did NOT change the ordering high-water then in effect: an earlier draft of this file claimed the bare-name `refuse_null_job_field_acres` row does not move the authored-NAME boundary, which is WRONG and was corrected on `main` — the ordering guard synthesizes `<version>_<name>` for a bare-name row, so it does move. The candidate was restamped above that 2026-09-08 high-water and was applied live on 2026-09-15 (see below).
+
+**Superseded 2026-09-26: the status in this paragraph and the next is historical.** Read-only
+ledger reads confirm `20260914100100`–`20260914100400` applied live 2026-09-21, `20260914100500` and
+`20260914100600` on 2026-09-22, `20260914100700` on 2026-09-26, and the transfer intent wrapper
+`20260914100800` on 2026-09-27. Only the label repair `20260914100900` remains unapplied. The live Chicago-date
+cutover that `100800` required is now in place. What follows describes the pre-apply plan.
 
 Six local commission follow-ups (`20260914100200` through `20260914100900`, with no `20260905200500` file) are not applied. The
 six-file set was restamped together on 2026-09-05 evening and again on 2026-09-14 (from
@@ -243,7 +262,9 @@ source files formerly missing from `main`,
 `20260914100400`, `20260914100500` and `20260914100600`, with no `20260905200500` file; the intent
 wrapper is `20260914100800` (formerly `20260908130800`) and the repair remains last at
 `20260914100900`). All of them sort above the applied high-water
-`20260908120000_close_pr535_live_gaps`; none is applied.
+`20260908120000_close_pr535_live_gaps`; none was applied at the time. (Superseded 2026-09-26: all of them
+except `20260914100800` and `20260914100900` have since applied live; see the note above the
+six-follow-up paragraph.)
 
 **Corrected 2026-09-08 against a live `list_migrations` read.** An earlier version of this paragraph
 called `20260904185900` a pending "#582 candidate" sitting above the live high-water. Every clause of
@@ -786,12 +807,13 @@ The three headline items:
 - **OCR REI/PHI extraction** (re-entry interval / pre-harvest interval from
   label images) — deferred; flagged as a safety trap if done carelessly.
 
-Also in flight, 2026-09-21: the customer-document byte boundary (PR #635's successor). The
+Landed 2026-09-26: the customer-document byte boundary (PR #635's successor). The
 `customer-document-files` Edge Function was **deployed live as v1 on 2026-09-22 UTC** with Mason's
-in-chat approval (ACTIVE; signed-out calls refused; preflight answers the production origin), and migration
-`20260914100700_customer_document_bytes_server_only.sql` is **not applied**. Until both are live,
-live Storage still lets a document's uploader, and admins, sign download links that outlive the
-document's removal. Live holds no customer documents yet. Order and detail: `KNOWN_ISSUES.md`.
+in-chat approval, the page that calls it is on `main` (#764), and migration
+`20260914100700_customer_document_bytes_server_only.sql` **applied live 2026-09-26** (ledger version
+`20260926163005`). A read-only post-apply check found no Storage policy left on the
+`customer-documents` bucket and the path-shape CHECK in place, so document bytes now move only
+through the Edge Function. Live held no customer documents at the time. Detail: `KNOWN_ISSUES.md`.
 
 ## 5. Environment facts
 

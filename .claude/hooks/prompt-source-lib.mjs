@@ -97,26 +97,75 @@ export function isMachineGenerated(prompt) {
 // "stop" / "pause" / "hold on" / scope-only wording still fires exactly as
 // before, including when it shares a message with a stripped block.
 //
-// Order matters: fences first (a fence may contain a bare envelope tag that
-// would otherwise swallow the rest), then inline code (`stop-wrap.mjs`), then
-// envelopes, then blockquotes.
+// Order matters, and the order below was corrected on 2026-09-21 (#504b).
+//
+// The original order ran fences FIRST, so that a fence containing a bare
+// envelope OPEN tag could not trip the unterminated-envelope rule below and
+// swallow the rest of the prompt. That protected a prompt Mason wrote, and
+// broke one he received: an unterminated ``` fence INSIDE a peer envelope ran
+// past the peer's own closing tag and consumed everything after it — including
+// the "stop" Mason typed below the peer's message. A real halt then matched
+// nothing. Fail-OPEN on the halt path, which is the wrong direction.
+//
+// So CLOSED envelopes come out first, whole: a peer's unfinished markdown
+// cannot reach past the closing tag that ends that peer's own turn. Fences run
+// next, on what is left, which still shields a quoted open tag from the
+// unterminated-envelope rule — the case the original order existed for. Then
+// inline code (`stop-wrap.mjs`), then any UNCLOSED envelope, then blockquotes.
+//
+// That order alone has its own hole (2026-09-24 review): an open tag Mason
+// quotes in code pairs with a real peer's closing tag further down, and his
+// "stop" between them is cut out. The original code-first order handles that
+// shape. authoredByMason() therefore runs BOTH orders and keeps what either
+// keeps — see the note above it.
+//
+// Residual, accepted deliberately: a peer that writes a fake closing tag inside
+// its own message ends its envelope early, so peer words after the fake tag are
+// read as Mason's and can latch a hold he did not ask for. That is the
+// fail-SAFE direction (a spurious pause costs a round-trip; a missed "stop"
+// does not stop), and it is how this file already behaved before #504b. It
+// stays fail-safe even when the peer follows its fake tag with an unterminated
+// fence, because stripFencedCode() gives an unclosed fence's lines back instead
+// of dropping the rest of the prompt.
 
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
 const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
 
-// ``` / ~~~ fenced blocks, line-based so an unterminated fence drops to the end.
-function stripFencedCode(text) {
+// ``` / ~~~ fenced blocks, line-based. Only a fence that CLOSES is removed.
+//
+// An unterminated fence keeps its lines (2026-09-24, #504b follow-up). It used
+// to drop everything to the end of the prompt, and a dangling fence can be left
+// over after stripClosedEnvelopes() by text Mason did not write — a peer's fake
+// closing tag followed by a fence, or a quoted open tag in Mason's own fence
+// pairing with a real peer's close. Either way it swallowed the "stop" Mason
+// typed below: fail-OPEN on the halt path. Keeping the lines is fail-SAFE —
+// at worst code or peer text is read as Mason's and latches a spurious hold.
+//
+// `giveBack: false` restores the old drop-to-end behaviour. Only
+// hasAuthoredText() uses it, because there the safe direction is reversed:
+// see the note on that function.
+function stripFencedCode(text, { giveBack = true } = {}) {
   const kept = [];
   let openFence = null;
+  let pending = [];
   for (const line of text.split("\n")) {
     const m = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line);
     if (openFence === null) {
-      if (m) { openFence = m[1][0]; continue; }
+      if (m) { openFence = m[1][0]; pending = [line]; continue; }
       kept.push(line);
     } else if (m && m[1][0] === openFence) {
       openFence = null; // closing line is dropped with the block
+      pending = [];
+    } else {
+      pending.push(line);
     }
+  }
+  // Never closed: give the lines back rather than dropping them. The opener
+  // line comes back as-is; the rest is re-scanned so a CLOSED inner fence of
+  // the other marker (``` inside ~~~ or vice versa) is still removed.
+  if (openFence !== null && giveBack) {
+    kept.push(pending[0], stripFencedCode(pending.slice(1).join("\n")));
   }
   return kept.join("\n");
 }
@@ -124,11 +173,22 @@ function stripFencedCode(text) {
 const INLINE_CODE_RE = /`+[^`\n]*`+/g;
 const BLOCKQUOTE_LINE_RE = /^[ \t]{0,3}>.*$/gm;
 
-function stripEnvelopes(text) {
+// Closed blocks anywhere in the prompt: an open tag through its matching close.
+// Non-greedy, so two envelopes in one prompt are two separate removals and what
+// Mason typed BETWEEN them survives.
+function stripClosedEnvelopes(text) {
   let out = text;
   for (const tag of NON_AUTHORED_TAG_NAMES) {
-    // Closed blocks anywhere in the prompt.
     out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+  }
+  return out;
+}
+
+// What is left over once every closed envelope is gone: a truncated envelope
+// with no close, and any orphaned closing tag.
+function stripUnclosedEnvelopes(text) {
+  let out = text;
+  for (const tag of NON_AUTHORED_TAG_NAMES) {
     // A truncated/unterminated envelope: everything from the open tag onward.
     out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
     // Any orphaned closing tag left behind.
@@ -137,22 +197,87 @@ function stripEnvelopes(text) {
   return out;
 }
 
+// Envelopes first: a peer's unfinished markdown cannot reach past the closing
+// tag that ends the peer's own turn.
+function stripEnvelopesFirst(text) {
+  let out = stripClosedEnvelopes(text);
+  out = stripFencedCode(out);
+  out = out.replace(INLINE_CODE_RE, " ");
+  out = stripUnclosedEnvelopes(out);
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// Code first (the pre-#504b order): an envelope tag Mason QUOTES in a fence or
+// inline code is gone before it can pair with a real peer's closing tag and
+// cut out what he typed between them.
+function stripCodeFirst(text) {
+  let out = stripFencedCode(text);
+  out = out.replace(INLINE_CODE_RE, " ");
+  out = stripUnclosedEnvelopes(stripClosedEnvelopes(out));
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// The parser exactly as it was before #794: an unclosed fence drops to the end,
+// and each tag's closed, unclosed and orphaned forms are removed before the
+// next tag. Used only by hasAuthoredText() as a floor for clearing a hold.
+function stripPre794(text) {
+  let out = stripFencedCode(text, { giveBack: false });
+  out = out.replace(INLINE_CODE_RE, " ");
+  for (const tag of NON_AUTHORED_TAG_NAMES) {
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    out = out.replace(new RegExp(`<\\/${tag}\\s*>`, "gi"), " ");
+  }
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
+// Each order loses Mason's words in a shape the other handles (2026-09-24,
+// #504b review): envelopes-first loses a "stop" between a quoted open tag and
+// a real peer message; code-first loses one below a peer's unfinished fence.
+// So both run, and anything EITHER order keeps counts as his. That is the
+// fail-safe union — at worst text one order would strip is read as Mason's and
+// latches a spurious hold; a halt either order preserves always latches.
 export function authoredByMason(prompt) {
   const text = String(prompt || "");
   if (!text) return "";
-  let out = stripFencedCode(text);
-  out = out.replace(INLINE_CODE_RE, " ");
-  out = stripEnvelopes(out);
-  out = out.replace(BLOCKQUOTE_LINE_RE, " ");
-  return out;
+  const envelopesFirst = stripEnvelopesFirst(text);
+  const codeFirst = stripCodeFirst(text);
+  if (envelopesFirst.trim() === codeFirst.trim()) return envelopesFirst;
+  return `${envelopesFirst}\n${codeFirst}`;
 }
 
 // True when the prompt still carries words Mason typed after stripping. A prompt
 // that is ENTIRELY not-his (a bare peer message) is not his turn to speak: it
 // must neither latch a hold nor clear one.
+//
+// This is the INTERSECTION of the two orders, deliberately not the union that
+// authoredByMason() returns (2026-09-24 review). Deciding "Mason spoke" is what
+// lets a prompt CLEAR a hold, so it must be conservative in the other
+// direction: a peer that merely quotes its own closing tag leaves text in one
+// order only, and under the union that peer-only message released a hold Mason
+// latched. Requiring BOTH orders to keep text means a sibling session can
+// never clear his hold by how it formats its own message.
+//
+// It also requires the pre-#794 parser (stripPre794) to keep text (2026-09-26,
+// Codex review of #794). Giving an
+// unclosed fence's lines back is fail-safe for LATCHING, but for clearing it
+// is the unsafe direction: a peer message with a fake closing tag followed by
+// a dangling fence had its tail given back in BOTH orders, so it cleared a hold
+// the old parser kept. With this third check, clearing is never easier than it
+// was before #794.
 export function hasAuthoredText(prompt) {
-  return authoredByMason(prompt).trim() !== "";
+  const text = String(prompt || "");
+  if (!text) return false;
+  return (
+    stripEnvelopesFirst(text).trim() !== "" &&
+    stripCodeFirst(text).trim() !== "" &&
+    stripPre794(text).trim() !== ""
+  );
 }
 
+// Keep this a pointer, not a second copy of the policy: the full hard-gate list
+// lives in AGENTS.md › Safety and Protected Delivery and the landing steps in
+// .claude/commands/ship.md Step 8. A shorter restated list here once told agents
+// only three actions were gated (2026-09-25 guidance review).
 export const PUSH_POLICY =
-  "LANDING POLICY: Mason authorized auto-landing regular code on main (2026-06-16; mechanics updated 2026-07-14) — once the pipeline is green (review clean + tests + the pre-push hook's typecheck/build), land via branch → PR → required Vercel check → merge; direct pushes to main are impossible for everyone (protect-main ruleset); Vercel rollback is one click. In an ARMED hands-free run (autopilot flag), pushes/merges instead PARK for Mason's morning review — the armed-mode deny rules win over this standing authorization. HARD GATES that ALWAYS need Mason's explicit OK in the current conversation: deploying an edge function, deleting data, and — in an interactive session — applying a live migration. Settled exception (Mason 2026-07-13): in a hands-free run he pre-authorized (autopilot armed), a NON-destructive migration may apply through the migration-apply-guard proof + Codex gates without a per-migration ask; destructive migrations (DELETE/TRUNCATE business rows, DROP data-bearing tables/columns) are hard-refused while armed. Never commit unrelated files.";
+  "LANDING POLICY: Mason's autonomous-landing rule (2026-09-26): branch → PR → required checks green → ready-for-coderabbit → CodeRabbit APPROVED on the exact head (fixes stay on the same PR) → exact-SHA Sol proof LAST → apply the change's NON-destructive migration, if any → exact-head merge, all with no in-chat ask, as detailed in .claude/commands/ship.md Step 8; direct pushes to main are impossible. The merge and apply gates enforce it in every session; an ARMED hands-free run passes only a plain branch push and a plain `gh pr merge <n>` on to those gates. HARD GATES — every one in AGENTS.md › Safety and Protected Delivery (force-push, DESTRUCTIVE migration or live-data change outside a reviewed migration, Edge Function or out-of-band production change, data deletion, secrets, authentication, permissions, billing, domains, ownership) — need Mason's explicit OK in the current conversation; destructive migrations (DELETE/TRUNCATE business rows, DROP data-bearing tables/columns) are refused for agents even then, armed or not, until he says yes. Never commit unrelated files.";

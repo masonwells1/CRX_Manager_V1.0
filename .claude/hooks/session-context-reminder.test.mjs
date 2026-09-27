@@ -22,15 +22,17 @@ function run(source) {
 }
 
 const startup = run("startup");
-assert.match(startup, /read AGENTS\.md/);
-assert.match(startup, /load only the workflow and reference documents/);
+assert.match(startup, /do not re-read AGENTS\.md or CLAUDE\.md/);
+assert.doesNotMatch(startup, /Silently read AGENTS\.md/);
+assert.match(startup, /Load only the workflow and reference documents/);
 assert.match(startup, /Mason cannot read code or safely review a diff/);
 assert.match(startup, /Before multi-file work.*get his approval after a short plan/);
 assert.match(startup, /continue routine implementation without repeated pauses/);
 assert.match(startup, /Every hard-gated live action listed in AGENTS\.md/);
-assert.match(startup, /each live migration.*current approval immediately beforehand/);
-assert.match(startup, /armed hands-free migration path waives per-migration approval/);
-assert.match(startup, /never for a destructive migration/);
+assert.match(startup, /each destructive migration.*current approval immediately beforehand/);
+// Mason's autonomous-landing rule (2026-09-26) — the conditions travel with it.
+assert.match(startup, /NON-destructive migration and the merge need no ask once CodeRabbit approved the exact head, the exact-SHA Sol proof is clean and checks are green/);
+assert.doesNotMatch(startup, /armed hands-free migration path waives/);
 // Keep the full rulebook task-routed instead of injecting it into every session.
 assert.doesNotMatch(startup, /SAFE_DEVELOPMENT_RULES/);
 // Leave room for precise gate wording while keeping procedures out of startup context.

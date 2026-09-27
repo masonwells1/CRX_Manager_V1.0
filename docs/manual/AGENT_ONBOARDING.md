@@ -3,7 +3,7 @@
 **Last verified: 2026-09-04**
 **Update triggers: when a new recurring failure class is identified or the guard system changes.**
 
-You are a new coding agent — possibly a smaller or cheaper model than whoever wrote this doc — starting your first session in CRX Manager. This file is the front door. It assumes you've already read the short shared contract in `AGENTS.md` and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
+You are a new coding agent starting your first session in CRX Manager. This file is the front door. It assumes you've already read the short shared contract in `AGENTS.md` and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
 
 CRX Manager is a **live production app** for a real agricultural chemical distributor. Real customers, real invoices, real money. Treat every mistake as one that could hit a real business tomorrow morning.
 
@@ -61,7 +61,7 @@ These are not code bugs — they're *how an agent convinced itself something was
 
 - **Parallel-session blindness.** Mason frequently runs multiple sessions/worktrees at once. Claiming something "isn't shipped yet" or "needs a fix" without checking whether a sibling session already did it wastes work and can cause conflicting migrations. Countermeasure: check the worktree-awareness SessionStart output, run `/fleet` if unsure, and check git ancestry (`git fetch origin` + `git rev-list --left-right --count origin/main...HEAD`) before claiming something is or isn't live.
 
-- **Stale schema registry.** `.claude/schema-registry.json` powers 4 of the schema-aware hooks and 2 review subagents. If SessionStart warns it's behind a registry-relevant migration, working against it means your status/generated-column/RLS checks are checking against outdated facts. Countermeasure: regenerate it via the `regen-schema-registry` skill (live Supabase introspection → `--from-introspection` mode) before doing schema-aware work. Trap: running `node scripts/regenerate-schema-registry.mjs` with no arguments is "stamp" mode — it only bumps the date and refreshes nothing.
+- **Stale schema registry.** `.claude/schema-registry.json` powers the schema-aware hooks, the session staleness check, and the schema-aware review subagents. If SessionStart warns it's behind a registry-relevant migration, working against it means your status/generated-column/RLS checks are checking against outdated facts. Countermeasure: regenerate it via the `regen-schema-registry` skill (live Supabase introspection → `--from-introspection` mode) before doing schema-aware work. Trap: running `node scripts/regenerate-schema-registry.mjs` with no arguments is "stamp" mode — it only bumps the date and refreshes nothing.
 
 - **Doc-count drift.** Never hardcode counts of migrations, pages, or functions into always-loaded agent files (`AGENTS.md`, `CLAUDE.md`) — they go stale immediately and `npm run check:docs` will catch the drift. Countermeasure: put volatile counts only in `docs/reference/` files that the check validates, or don't hardcode them at all.
 
