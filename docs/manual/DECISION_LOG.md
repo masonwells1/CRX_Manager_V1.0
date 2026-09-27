@@ -1,11 +1,78 @@
 # Decision Log
 
-Last verified: 2026-09-26 (autonomous landing entry added)
+Last verified: 2026-09-27 (fewer prompts / automatic CodeRabbit entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-26 — Fewer permission prompts; CodeRabbit reviews every PR automatically; GitHub requires its approval again
+
+**Source:** Mason, in-chat 2026-09-26: "give permissions more freely to both codex and claude … i do
+want to make sure we get an adversarial review, and we have alot of coderabbit usage now, so i want
+it used alot more often." He approved the plan ("yes"), confirmed the instruction edits explicitly,
+chose **"A"** twice (GitHub-enforced CodeRabbit approval; keep a prompt on production-gate files),
+and on 2026-09-27 had the ruleset change made in his browser. Built first as PR #822, then rebuilt on
+top of the autonomous-landing entry below (#804), which had landed the same morning with
+overlapping merge-gate work.
+
+**Evidence (2026-09-12 to 09-26, desktop app logs joined to transcripts).** Mason saw 209 Claude
+permission prompts and approved every one; 186 (89%) were the `ask` tier on guard/tooling files;
+6 were real production moments. `ask` rules prompt in every mode, including `bypassPermissions`; the
+desktop app ignores the project `defaultMode: "dontAsk"`. Codex runs `approval_policy = "never"` and
+showed Mason no permission prompts.
+
+**Decision.**
+1. **Claude `ask` tier = what Mason can judge, plus production gates.** Kept: edge-function and
+   Vercel production deploys, deployment protection, GitHub-MCP and Desktop Commander / filesystem
+   MCP writers, the two Claude settings files, and — Mason's "A", after exact-SHA `gpt-6-sol`
+   reviews and the Codex GitHub App kept finding gaps — **every file whose uncommitted local edit
+   could change what reaches production before any PR review sees it**: every hook that gates a tool
+   EXECUTION in either manifest (Bash / PowerShell / MCP / `*` matchers), every repository module
+   they load, Codex's `codex-hook-adapter.mjs` and `hooks.json`, the two proof writers, the
+   private-artifact containment check the git hooks run (a leak to the public repo cannot be
+   recalled), `.husky/**` and `.github/workflows/**` (a branch-pushed workflow runs with a write
+   `GITHUB_TOKEN` before review). `scripts/check-agent-guidance.mjs` DERIVES that set from the
+   manifests and the import graph and fails CI if any file lacks its prompt (28 files at
+   introduction). Removed: write-time content guards, tests, routers, `package.json`,
+   `.coderabbit.yaml`, `.codex/config.toml` and the other check scripts — they act only once
+   committed, inside PR review. A prompt naming a gate file is something Mason CAN judge ("did I ask
+   for safety-gate work?"). `gh pr merge` moves to `allow`; the merge gates below are its hard stop.
+   `scripts/agent-manifest-parity.mjs` reads only each manifest's `hooks` block, so these `ask` rules
+   are not mistaken for hook wiring.
+2. **CodeRabbit reviews every non-draft PR automatically**, on open and on every push, never
+   pausing (`auto_review.enabled: true`, no label restriction, `auto_pause_after_reviewed_commits:
+   0`). The `ready-for-coderabbit` route from the entry below stays installed and is now the
+   fallback for a head CodeRabbit skipped or was rate limited on. Proven on PR #822: CodeRabbit
+   reviewed it with no label or command. Supersedes the "automatic reviews disabled" part of the
+   2026-08-28, 2026-08-30 and autonomous-landing entries.
+3. **GitHub requires CodeRabbit's approval again.** The `protect-main` ruleset's pull-request rule
+   moved to `required_approving_review_count: 1` and `dismiss_stale_reviews_on_push: true` (no bypass
+   actors), verified via `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27.
+   Only CodeRabbit can supply the approval today: `masonwells1` is the only collaborator and authors
+   every PR (no self-approval), GitHub Actions cannot approve, and every approval on the last 40
+   closed PRs came from `coderabbitai[bot]`. With the autonomous-landing merge gates (CodeRabbit's
+   latest verdict APPROVED on the exact head, `--auto` refused), an unreviewed PR cannot land even if
+   a local gate were weakened. Supersedes the 2026-09-02 removal. Cost Mason accepted: if CodeRabbit
+   is down nothing merges until he sets the count to 0 by hand (`OWNER_PLAYBOOK.md`).
+4. **Adversarial review:** unchanged from the entry below — Luna rounds and an exact-SHA Sol proof on
+   every change — plus CodeRabbit and the Codex GitHub App on every PR automatically.
+5. **Codex hooks re-trusted (Mason's machine).** Codex silently skips a repository hook whose
+   definition changed since it was trusted; on 2026-09-26, 17 of 24 CRX Codex hooks were skipped —
+   every Write/Edit content guard, the three MCP guards, `production-action-guard`,
+   `review-proof-guard`, `hold-latch-guard` and both routers — while Codex ran with no approvals.
+   Re-trusted via the app-server (`hooks/list` + `config/batchWrite`, the `/hooks` action); a probe
+   then showed the production gate denying force-pushes and `--admin` merges. **After any
+   `.codex/hooks.json` change, re-check trust** (`codex app-server` → `hooks/list`).
+6. The tracked `.codex/config.toml` Supabase MCP entry, dead since 2026-08-10, is `enabled = false`
+   (the 2026-08-14 write-scope decision is unchanged; Codex uses `codex_apps/supabase`).
+
+**Residuals, stated.** Agents run `gh` with Mason's admin login, so a hand-assembled `gh api` call
+could in principle change the ruleset; only the auto-mode classifier stands in the way on the Claude
+side (Codex's production gate denies unrecognized mutating `gh api` calls). A non-admin token for
+agents is the real fix and is Mason's to authorize. Shell writes to the migration proof writer and
+its helpers are not blocked by `review-proof-guard`; only native edits prompt.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

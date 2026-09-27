@@ -24,15 +24,14 @@ reviews:
   # switch that gives the `mode: error` checks below any force at all: per
   # CodeRabbit's docs, an error-mode check only holds a PR when this is enabled.
   #
-  # Mason approved the hard final-review gate on 2026-08-28. GitHub now requires
-  # one approval, dismisses stale approvals after a new commit, requires approval
-  # from someone other than the last pusher, and requires the branch to be up to
-  # date. Since 2026-09-01 those rules are NO LONGER enforced for administrators:
-  # Mason has a manual override for a stuck review (see DECISION_LOG). CodeRabbit
-  # remains the normal merge-unlock path, and agents are barred from the override
-  # by the merge guards, but this file should not claim admins are bound.
-  # CodeRabbit's formal approval is therefore the normal merge-unlock path; the
-  # existing required build/deployment contexts remain separate and unchanged.
+  # Since 2026-09-27 (Mason's decision, DECISION_LOG 2026-09-26) the `protect-main`
+  # ruleset requires one approving review of the latest push and dismisses stale
+  # approvals on push, with no bypass actors, so the rule binds every account.
+  # CodeRabbit's formal approval is how a PR becomes mergeable, and GitHub - not
+  # only a local hook - enforces it; the agent merge gates additionally require
+  # that CodeRabbit's latest verdict is APPROVED on the exact head. The required
+  # build/deployment contexts remain separate. If CodeRabbit is down or stuck,
+  # only Mason changes the ruleset (steps in docs/manual/OWNER_PLAYBOOK.md).
   request_changes_workflow: true
   high_level_summary: true
   # Put the summary in the walkthrough COMMENT, never in the PR description
@@ -85,27 +84,21 @@ reviews:
   # reviewed today. The exclusion work, and the repository-walking test that
   # enforces this rule, are parked in PR #441.
 
+  # Automatic review of every non-draft PR, on open and on every push. Mason's
+  # call, 2026-09-26 ("we have a lot of CodeRabbit usage now, so I want it used
+  # a lot more"), replacing the label-dispatch rationing: every PR now gets an
+  # outside review no agent can forget, and the merge gates (DECISION_LOG
+  # 2026-09-26, autonomous landing) require CodeRabbit's APPROVED verdict on the
+  # exact head, which a review of every push supplies. Drafts stay unreviewed,
+  # so opening a draft is how work-in-progress opts out. The
+  # `ready-for-coderabbit` label route still works but is no longer needed.
   auto_review:
-    # Do not spend a review on PR creation or work-in-progress pushes. Once the
-    # candidate is frozen, checks are green, and the separate Codex review is
-    # clean, apply `ready-for-coderabbit`. The trusted GitHub workflow validates
-    # that exact head, then adds the separate provider label below. Keeping the
-    # intent and provider labels separate prevents a review before validation.
-    enabled: false
-    # TRUE since 2026-09-26 so a fix on the SAME PR can get one fresh review
-    # instead of forcing a replacement PR. Per CodeRabbit's docs, after a PR is
-    # reviewed because of a positive label, later reviews happen only while this
-    # stays true; with it false a relabel at a new head was skipped with
-    # "incremental reviews are disabled". Work-in-progress pushes are still NOT
-    # reviewed, because the positive label below is attached only for the
-    # validated dispatch window: the trusted workflow removes it as soon as the
-    # review is observed, and every push resets it.
+    enabled: true
     auto_incremental_review: true
-    labels:
-      - coderabbit-review-dispatch
+    # 0 = never pause. The default (5) silently stops reviewing a PR after five
+    # reviewed pushes, which is exactly when a long fix loop most needs one.
+    auto_pause_after_reviewed_commits: 0
     drafts: false
-    # Normal dispatch uses the trusted workflow. GitHub label managers can also
-    # attach this label; its presence alone never proves authorization.
     description_keyword: ""
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in

@@ -403,7 +403,13 @@ test('the workflow binds the CodeRabbit exclusion to the trusted status creator'
   assert.doesNotMatch(workflow, /ignoredChecks:\s*\[\s*['"]CodeRabbit['"]\s*\]/);
 });
 
-test('CodeRabbit native review is disabled until the distinct dispatch label is attached', () => {
+// Mason, 2026-09-26 (DECISION_LOG, fewer prompts / more CodeRabbit): CodeRabbit
+// reviews every non-draft PR on open and on every push. This replaced the
+// label-only dispatch pinned here before; the dispatch workflow stays installed
+// and still works when a label is applied. Pinned so automatic review cannot be
+// switched off, paused, or silently narrowed to labelled PRs without this test
+// being changed on purpose.
+test('CodeRabbit reviews every non-draft PR automatically, on open and on every push', () => {
   const config = fs.readFileSync(path.join(__dirname, '..', '..', '.coderabbit.yaml'), 'utf8');
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
@@ -413,13 +419,13 @@ test('CodeRabbit native review is disabled until the distinct dispatch label is 
   const autoReviewStart = config.indexOf('  auto_review:');
   const autoReview = config.slice(autoReviewStart, config.indexOf('  path_instructions:', autoReviewStart));
   assert.notEqual(autoReviewStart, -1);
-  assert.match(autoReview, /^\s*enabled:\s*false\b/m);
-  // TRUE since 2026-09-26 so a fix on the SAME PR can earn one follow-up review.
-  // Work-in-progress pushes stay unreviewed because the positive label below is
-  // attached only while a validated dispatch is in flight (releaseDeliveredDispatch).
+  assert.match(autoReview, /^\s*enabled:\s*true\b/m);
   assert.match(autoReview, /^\s*auto_incremental_review:\s*true\b/m);
-  assert.match(autoReview, /^\s*labels:\s*\r?\n\s*- coderabbit-review-dispatch\b/m);
-  assert.doesNotMatch(autoReview, /- ready-for-coderabbit\b/);
+  assert.match(autoReview, /^\s*auto_pause_after_reviewed_commits:\s*0\b/m);
+  assert.match(autoReview, /^\s*drafts:\s*false\b/m);
+  // A positive `labels:` list would restrict automatic review to labelled PRs.
+  assert.doesNotMatch(autoReview, /^\s*labels:/m);
+  assert.match(config, /^\s*high_level_summary_in_walkthrough:\s*true\b/m);
   assert.match(workflow, /nativeDispatch:\s*true\b/);
 });
 

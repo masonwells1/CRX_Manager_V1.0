@@ -526,13 +526,15 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
-freeze the candidate commit → apply `ready-for-coderabbit` → CodeRabbit APPROVED → Step 3B Sol proof LAST →
+freeze the candidate commit → CodeRabbit APPROVED → Step 3B Sol proof LAST →
 apply the non-destructive migration, if any → merge with `--match-head-commit <reviewed-head-sha>`**.
 Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
-**CodeRabbit (Mason's autonomous-landing rule, 2026-09-26):** automatic reviews are disabled.
-Bring the branch current and green, freeze the release-candidate commit, record its head SHA, then
-apply `ready-for-coderabbit`. The trusted default-branch workflow waits out running checks,
+**CodeRabbit (Mason's autonomous-landing rule, 2026-09-26; automatic review since 2026-09-26):**
+CodeRabbit reviews every non-draft PR automatically, on open and on every push, and GitHub's
+`protect-main` ruleset requires one approving review of the latest push. Bring the branch current
+and green and freeze the release-candidate commit. **Only if CodeRabbit did not review that exact
+head** (rate limited or skipped), record its head SHA and apply `ready-for-coderabbit`. The trusted default-branch workflow waits out running checks,
 rechecks the exact head and PR/check state, records `coderabbit-review-requested`, then adds
 `coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in, observes an authenticated
 formal review of that exact commit, and releases the provider label. A skipped status or empty

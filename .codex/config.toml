@@ -1,5 +1,10 @@
 [mcp_servers.supabase]
-url = "https://mcp.supabase.com/mcp?project_ref=rhyzpcqhnizqbxphqdkr&read_only=false&features=database,debugging,development,functions,docs"
+# Disabled 2026-09-26: this entry's OAuth grant has been dead since 2026-08-10
+# (docs/manual/KNOWN_ISSUES.md) and it failed "requires OAuth reauthentication"
+# on every Codex start. Codex's real Supabase traffic uses the built-in
+# codex_apps/supabase connector. Re-enable only after `codex mcp login supabase`.
+enabled = false
+url ="https://mcp.supabase.com/mcp?project_ref=rhyzpcqhnizqbxphqdkr&read_only=false&features=database,debugging,development,functions,docs"
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 required = false

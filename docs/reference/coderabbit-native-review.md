@@ -1,5 +1,12 @@
 # CodeRabbit native review requests
 
+> **Now the fallback route (2026-09-26).** CodeRabbit reviews every non-draft PR automatically, on
+> open and on every push (`.coderabbit.yaml` › `auto_review`; `docs/manual/DECISION_LOG.md`
+> 2026-09-26, fewer prompts / more CodeRabbit), and GitHub's `protect-main` ruleset requires one
+> approving review of the latest push. Use the label route below only when CodeRabbit was rate
+> limited on, or skipped, the exact head you need reviewed. Statements below that automatic reviews
+> are disabled describe the configuration before that date.
+
 The operator applies `ready-for-coderabbit` after the candidate is frozen,
 current, green and independently reviewed. The privileged `pull_request_target`
 workflow runs trusted default-branch code and checks the actor's permission,

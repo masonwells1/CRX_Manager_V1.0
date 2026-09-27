@@ -12,9 +12,9 @@ environment safety, and production readiness.
 `protect-main` ruleset, so **direct pushes to `main` are impossible for everyone** — Claude,
 Codex, and Mason alike. The landing path is:
 
-**push a branch → open a PR → finish required checks → freeze the candidate →
-apply `ready-for-coderabbit` → let the default-branch workflow record its receipt and add `coderabbit-review-dispatch` once →
-read and resolve that final review → merge with
+**push a branch → open a PR (CodeRabbit reviews every non-draft push automatically) → finish
+required checks → freeze the candidate → read and resolve CodeRabbit's review of that exact head
+(if it skipped the head, apply `ready-for-coderabbit` to request one) → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
 
@@ -129,8 +129,10 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 2. Open a PR.
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
-4. Once required checks are green, freeze the candidate, record its head SHA, then apply
-   **`ready-for-coderabbit`**. The default-branch workflow waits out running checks, rechecks the
+4. Once required checks are green, freeze the candidate and record its head SHA. CodeRabbit
+   reviews every non-draft push automatically (since 2026-09-26) and GitHub requires one approving
+   review of the latest push. Only if CodeRabbit did not review that exact head (rate limited or
+   skipped), apply **`ready-for-coderabbit`**. The default-branch workflow waits out running checks, rechecks the
    exact head, draft/conflict/auto-merge state, actor permission, required checks, and every
    reported non-CodeRabbit check before recording a trusted head/base receipt and adding
    `coderabbit-review-dispatch` once, then releases that provider label once the review lands.
