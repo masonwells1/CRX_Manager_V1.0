@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { accessChangeCheck, readMigrationHistory } from "./migration-access-lib.mjs";
+import { accessChangeCheck, dataRewriteCheck, readMigrationHistory } from "./migration-access-lib.mjs";
 
 let pass = 0;
 // Default: an empty history, i.e. nothing in these snippets existed before.
@@ -194,6 +194,85 @@ routine(`DROP VIEW public.widget_totals;
 CREATE VIEW public.widget_totals AS SELECT 2 AS n;
 REVOKE ALL ON public.widget_totals FROM anon;
 GRANT SELECT ON public.widget_totals TO authenticated;`, "drop + create of a view that locks anon out again", { history: VIEW_HISTORY });
+
+// ── Sol round 11: a SECURITY DEFINER body that reaches logins/files/secrets ───
+const secdef = (body, security = "SECURITY DEFINER") => `CREATE OR REPLACE FUNCTION public.whoami(p_id uuid)
+RETURNS text LANGUAGE plpgsql ${security} SET search_path = public, pg_temp AS $fn$
+BEGIN
+  -- a comment naming auth.users is not a reference
+${body}
+END $fn$;
+REVOKE ALL ON FUNCTION public.whoami(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.whoami(uuid) TO authenticated;`;
+masons(secdef("  RETURN (SELECT email FROM auth.users WHERE id = p_id);"), "auth.users",
+  "Sol's case: an authenticated-callable SECURITY DEFINER body reading auth.users");
+masons(secdef("  INSERT INTO storage.objects (bucket_id, name) VALUES ('docs', p_id::text);"), "storage.objects",
+  "a SECURITY DEFINER body writing storage.objects");
+masons(secdef("  PERFORM vault.create_secret('x', 'y');"), "vault.create_secret", "a SECURITY DEFINER body writing a secret");
+routine(secdef("  IF p_id IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION 'no'; END IF;\n  RETURN auth.role();"),
+  "auth.uid()/auth.role() in a SECURITY DEFINER body, even after FROM");
+routine(secdef("  RETURN (SELECT email FROM auth.users WHERE id = p_id);", "SECURITY INVOKER"),
+  "a SECURITY INVOKER body runs with the caller's own rights");
+masons(`CREATE FUNCTION public.odd() RETURNS int LANGUAGE sql SECURITY DEFINER BEGIN ATOMIC SELECT 1; END;`,
+  "cannot read", "a SECURITY DEFINER body in a form the check cannot read");
+
+// ── Sol round 11 (Mason 2026-09-27, "Data rewrites wait"): overwriting rows ────
+let rewrites = 0;
+const rewriteOk = (sql, message, options = { history: [] }) => {
+  const verdict = dataRewriteCheck(sql, options);
+  assert.equal(verdict.rewrites, false, `${message} — expected ROUTINE, got: ${verdict.reason}`);
+  rewrites++;
+};
+const rewriteMasons = (sql, fragment, message, options = { history: [] }) => {
+  const verdict = dataRewriteCheck(sql, options);
+  assert.equal(verdict.rewrites, true, `${message} — expected MASON'S`);
+  assert.ok(String(verdict.reason).includes(fragment), `${message} — reason ${JSON.stringify(verdict.reason)} lacks ${JSON.stringify(fragment)}`);
+  rewrites++;
+};
+rewriteMasons("UPDATE public.invoices SET total_amount_cents = 0;", "invoices (UPDATE)", "Sol's case: overwrite every invoice total");
+rewriteMasons("DO $$ BEGIN UPDATE order_items oi SET cost_cents = 0 WHERE oi.id IS NOT NULL; END $$;", "order_items", "an UPDATE inside a DO block");
+rewriteMasons("WITH x AS (UPDATE ONLY public.payments AS p SET amount_cents = 1 RETURNING p.id) SELECT count(*) FROM x;", "payments", "an UPDATE in a CTE");
+rewriteMasons("INSERT INTO public.settings (key, value) VALUES ('a', 'b') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;",
+  "ON CONFLICT DO UPDATE", "an upsert overwrites existing rows");
+rewriteMasons("MERGE INTO public.products p USING staging s ON p.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name;", "MERGE", "MERGE");
+rewriteMasons("ALTER TABLE public.invoices ALTER COLUMN total_amount_cents TYPE integer USING total_amount_cents::integer;", "TYPE",
+  "a column type conversion rewrites existing values");
+rewriteOk("INSERT INTO public.settings (key, value) VALUES ('a', 'b') ON CONFLICT (key) DO NOTHING;", "adding rows is routine");
+rewriteOk("ALTER TABLE public.invoices ADD COLUMN note text DEFAULT '';", "adding a column is routine");
+rewriteOk(`CREATE TABLE public.widgets (id bigint, n int);
+INSERT INTO public.widgets VALUES (1, 1);
+UPDATE public.widgets SET n = 2;
+ALTER TABLE public.widgets ALTER COLUMN n TYPE bigint;`, "a table this migration creates has no existing rows");
+rewriteOk("CREATE TRIGGER t BEFORE UPDATE ON public.invoices FOR EACH ROW EXECUTE FUNCTION public.touch();", "a trigger definition is not an update");
+rewriteOk("ALTER TABLE public.lines ADD CONSTRAINT fk FOREIGN KEY (invoice_id) REFERENCES public.invoices(id) ON UPDATE SET NULL;", "ON UPDATE SET NULL is not an update");
+rewriteOk("SELECT id FROM public.invoices FOR UPDATE;", "SELECT ... FOR UPDATE is not an update");
+rewriteOk("COMMENT ON TABLE public.invoices IS 'UPDATE invoices SET x = 1';", "an UPDATE in a string literal is not a statement");
+
+// Functions run while applying.
+const WRITER = `CREATE OR REPLACE FUNCTION public.backfill_totals() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN UPDATE public.invoices SET total_amount_cents = 0; END $$;`;
+const READER = `CREATE OR REPLACE FUNCTION public._assert_shape() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF to_regprocedure('public.backfill_totals()') IS NULL THEN RAISE EXCEPTION 'missing backfill_totals()'; END IF;
+END $$;`;
+rewriteMasons(`${WRITER}\nSELECT public.backfill_totals();`, "backfill_totals() while applying, which changes existing rows",
+  "calling a writer defined in this migration");
+rewriteMasons(`${WRITER}\nCREATE FUNCTION public.run_all() RETURNS void LANGUAGE sql AS $$ SELECT public.backfill_totals() $$;\nDO $$ BEGIN PERFORM public.run_all(); END $$;`,
+  "run_all() → backfill_totals()", "a writer reached through another function");
+rewriteOk(`${WRITER}\n${READER}\nSELECT public._assert_shape();`, "a read-only assertion that NAMES a writer in a string");
+rewriteOk(`${WRITER}\nDO $$ BEGIN IF to_regprocedure('public.x()') IS NULL THEN ALTER FUNCTION public.backfill_totals() RENAME TO old_backfill; END IF; END $$;`,
+  "ALTER FUNCTION f() inside a DO block names the function, it does not call it");
+rewriteOk(`${WRITER}\nDO $$ DECLARE c jsonb; BEGIN FOR c IN SELECT value FROM jsonb_array_elements($checks$[{"signature":"public.backfill_totals()"}]$checks$) LOOP NULL; END LOOP; END $$;`,
+  "a name inside a DO block's own dollar-quoted string is not a call");
+rewriteMasons("SELECT public.backfill_totals();", "backfill_totals() while applying",
+  "a writer defined in an earlier migration", { history: [file("20260101000000_fn", WRITER)] });
+rewriteOk("SELECT public.backfill_totals();", "a function the history shows is read-only",
+  { history: [file("20260101000000_fn", WRITER.replace("UPDATE public.invoices SET total_amount_cents = 0;", "PERFORM 1;"))] });
+rewriteMasons("SELECT public.backfill_totals();", "without the migration history", "no history: an earlier public function is unknown", {});
+rewriteOk("SELECT set_config('x', 'y', true), now();", "built-in functions are not migration functions", {});
+rewriteMasons(`CREATE OR REPLACE FUNCTION public.clean() RETURNS void LANGUAGE plpgsql AS $$ BEGIN EXECUTE format('UPDATE %I SET x = 1', 't'); END $$;
+SELECT public.clean();`, "dynamic SQL", "a called function running dynamic SQL");
+pass += rewrites;
 
 // readMigrationHistory: only files that sort before the current one, oldest first.
 {

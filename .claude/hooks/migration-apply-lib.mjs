@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { accessChangeCheck, readMigrationHistory } from "./migration-access-lib.mjs";
+import { accessChangeCheck, dataRewriteCheck, readMigrationHistory } from "./migration-access-lib.mjs";
 import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
@@ -865,18 +865,32 @@ export function evaluateMigrationApply({
         `and hand it to Mason. Do NOT disarm autopilot, rename, split or rewrite the SQL to route around ` +
         `this (an EXPIRED flag also refuses, deliberately).`);
     }
-    // PERMISSIONS are Mason's too (Sol HIGH, round 9; Mason's in-chat choice
-    // 2026-09-26: "Routine auto, widening waits"). The routine lock-down lines
-    // on objects this migration creates apply by themselves; anything that
-    // widens access or changes access that already exists does not.
-    // Fail CLOSED: a classifier error counts as an access change.
-    // A REPLACED object's earlier access is rebuilt from the migration files that
-    // sort before this one (Sol HIGH #2, round 10). If they cannot be read, the
-    // check runs without history, and a grant on an object that may already
-    // exist then waits for Mason.
+    // The migration files that sort before this one: the history the next two
+    // checks read (Sol rounds 10-11). If they cannot be read, both run without
+    // it and anything that depends on it waits for Mason.
     let history;
     try { history = migrationSourceFile ? readMigrationHistory(path.dirname(migrationSourceFile), path.basename(migrationSourceFile)) : undefined; }
     catch { history = undefined; }
+    // OVERWRITING existing rows is Mason's too (Sol HIGH, round 11; Mason's
+    // in-chat choice 2026-09-27: "Data rewrites wait"). Fail CLOSED.
+    let rewrite;
+    try { rewrite = dataRewriteCheck(migQuery, { history }); }
+    catch (e) { rewrite = { rewrites: true, reason: `data-rewrite check error (${e && e.message ? e.message : e}) — failing closed` }; }
+    if (rewrite.rewrites) {
+      return block(
+        `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" changes existing data — ${rewrite.reason}. ` +
+        `Under Mason's autonomous-landing rule (2026-09-27, "Data rewrites wait") a migration that overwrites ` +
+        `existing rows (UPDATE, INSERT ... ON CONFLICT DO UPDATE, MERGE, a column type conversion, or a function ` +
+        `run while applying that does any of these) is his, like one that deletes them. PARK it with a ` +
+        `plain-English explanation of which rows change and how, and hand it to Mason. Do NOT split or rewrite ` +
+        `the SQL to route around this.`);
+    }
+    // PERMISSIONS are Mason's too (Sol HIGH, round 9; Mason's in-chat choice
+    // 2026-09-26: "Routine auto, widening waits"). The routine lock-down lines
+    // on objects this migration creates apply by themselves; anything that
+    // widens access or changes access that already exists does not. A REPLACED
+    // object's earlier access is rebuilt from the history (Sol HIGH #2, round 10).
+    // Fail CLOSED: a classifier error counts as an access change.
     let access;
     try { access = accessChangeCheck(migQuery, { history }); }
     catch (e) { access = { changesAccess: true, reason: `access-check error (${e && e.message ? e.message : e}) — failing closed` }; }
@@ -887,7 +901,7 @@ export function evaluateMigrationApply({
         `on objects the same migration creates apply without him; anything that widens access or changes ` +
         `access that already exists (a GRANT to anon/PUBLIC, a GRANT or REVOKE on an existing object, ` +
         `ALTER/DROP POLICY, disabling row-level security, roles, owners, the auth/storage/vault schemas, ` +
-        `dynamic SQL) is his. PARK it with a plain-English explanation of what access changes, and hand it ` +
+        `a SECURITY DEFINER body that reaches them, dynamic SQL) is his. PARK it with a plain-English explanation of what access changes, and hand it ` +
         `to Mason. Do NOT split or rewrite the SQL to route around this.`);
     }
   }

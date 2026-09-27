@@ -25,7 +25,8 @@ comment that emails him.
    the `rls-security-reviewer` + `migration-drift-reviewer` proof and a fresh content-bound Sol proof,
    minted by `scripts/write-apply-proofs.mjs`, each under 30 minutes.
 3. **Still Mason's, always:** destructive migrations (DELETE/TRUNCATE of business rows, DROP of
-   data-bearing tables or columns — `destructiveMigrationCheck`), Edge Function deploys, and
+   data-bearing tables or columns — `destructiveMigrationCheck`), migrations that overwrite
+   existing rows (item 6), Edge Function deploys, and
    secrets, authentication, billing and permissions changes.
 4. Mason gets a short plain-English daily summary of what merged, what was applied, and what is
    waiting on him (`.github/workflows/daily-landing-summary.yml`).
@@ -47,6 +48,20 @@ comment that emails him.
    38 routine and 22 his; a real locked-down helper replaced and granted to `authenticated` waits.
    Known limit: the `metabase_ro` reporting role's default read was set outside the migrations,
    so an object older than that default is assumed to have it.
+6. **Overwriting data waits too (2026-09-27).** Sol's round-11 review found that a migration could
+   overwrite existing rows (e.g. `UPDATE invoices SET total_amount_cents = 0`) and apply by itself,
+   because item 3 only named deleting, and that a SECURITY DEFINER function could be rewritten to
+   read the login table without any grant changing. Shown the measured cost of each option, Mason
+   chose **"Data rewrites wait"**: a migration that overwrites existing rows — an apply-time
+   UPDATE, INSERT ... ON CONFLICT DO UPDATE, MERGE or column type conversion on a table it did not
+   create, or a function it runs while applying (followed through the functions that one calls)
+   that changes rows — waits for him, like one that deletes them (`dataRewriteCheck`); and a
+   SECURITY DEFINER body that reaches the `auth`, `storage` or `vault` schemas (other than
+   `auth.uid()`-style identity calls) waits for him (`accessChangeCheck`). Adding rows or columns
+   stays routine. Measured on the last 60 real migrations: 35 apply by themselves, 25 wait for him
+   (10 destructive, 4 data rewrites, 11 access). He did not choose the stricter option of making
+   every rewrite of a privileged function wait (only about 8 of 60 would then apply by themselves);
+   other logic changes inside functions stay with the two reviewers and the Sol apply proof.
 
 **What this supersedes.** The parts of the **2026-06-16 standing push policy** that limited
 unattended landing, the **2026-07-13 hands-free migration policy** (its proof gate now applies in

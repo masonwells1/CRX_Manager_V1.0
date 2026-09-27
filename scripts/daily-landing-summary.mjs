@@ -35,7 +35,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { destructiveMigrationCheck } from "../.claude/hooks/live-testdata-lib.mjs";
-import { accessChangeCheck } from "../.claude/hooks/migration-access-lib.mjs";
+import { accessChangeCheck, dataRewriteCheck } from "../.claude/hooks/migration-access-lib.mjs";
 
 const ISSUE_TITLE = "Daily landing summary";
 const MASON = "masonwells1";
@@ -110,6 +110,14 @@ export function waitingReasons({ labels = [], files = [] }) {
       reasons.push(`its database change ${migrationName(path.basename(name))} deletes data (${plainText(verdict.reason, 100)}), which stays yours to approve`);
       continue;
     }
+    // Overwriting existing rows is his too (2026-09-27, "Data rewrites wait").
+    // Without history, a call to an earlier public function counts as unknown.
+    let rewrite;
+    try { rewrite = dataRewriteCheck(added); } catch { rewrite = { rewrites: true, reason: "could not be classified" }; }
+    if (rewrite.rewrites) {
+      reasons.push(`its database change ${migrationName(path.basename(name))} changes existing data (${plainText(rewrite.reason, 120)}), which stays yours to approve`);
+      continue;
+    }
     // Permission changes are his too (2026-09-26). The patch shows only this
     // PR's added lines, so for an EDITED file the check may miss objects the
     // file created earlier — that errs toward listing it, never toward hiding it.
@@ -175,7 +183,7 @@ export function buildSummary({ now, hours, merged, changes, landedMigrations, wa
     "_How this is put together: merges come straight from GitHub. \"Applied\" lists only the explicit " +
     "\"Applied live: <database change>\" records the agents post on a merged pull request (or write in a change " +
     "note) after applying one; this job has no database access, so it cannot double-check the live database " +
-    "itself. What stays yours: database changes that delete data, Edge Function deploys, and anything about " +
+    "itself. What stays yours: database changes that delete or overwrite data, Edge Function deploys, and anything about " +
     "secrets, logins, billing or permissions._");
   return lines.join("\n");
 }

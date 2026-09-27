@@ -483,6 +483,40 @@ for (const [label, autopilot] of [["UNARMED", null], ["ARMED", armed()]]) {
     codexProof: { ...goodCodex, queryHash: routineHash },
   }), { query: ROUTINE_SQL, landingGate: () => ({ ok: true }) }),
     "routine lock-down on a new function applies with perfect proofs and a ready PR");
+
+  // Sol round 11 (Mason 2026-09-27, "Data rewrites wait"): overwriting existing
+  // rows is refused like deleting them, whatever the proofs.
+  const REWRITE = "UPDATE public.invoices SET total_amount_cents = 0;\n";
+  const rewriteHash = createHash("sha256").update(REWRITE).digest("hex");
+  denies(evaluate(fixture({
+    migrationFile: REWRITE,
+    proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: rewriteHash },
+    codexProof: { ...goodCodex, queryHash: rewriteHash },
+  }), { query: REWRITE, landingGate: () => ({ ok: true }) }),
+    "changes existing data", "an UPDATE of existing rows is refused even with perfect proofs and a ready PR");
+
+  // Sol round 10: the gate reads the migration HISTORY beside the file. An
+  // earlier (already applied) migration locked f away from authenticated, so
+  // replacing f and granting it to authenticated is refused; the same SQL with no
+  // such history is the routine lock-down of a new function.
+  const REPLACE_SQL = "CREATE OR REPLACE FUNCTION public.f(p uuid) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n" +
+    "REVOKE ALL ON FUNCTION public.f(uuid) FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION public.f(uuid) TO authenticated;\n";
+  const replaceHash = createHash("sha256").update(REPLACE_SQL).digest("hex");
+  const replaceFixture = (earlier) => {
+    const root = fixture({
+      migrationFile: REPLACE_SQL,
+      proof: { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: replaceHash },
+      codexProof: { ...goodCodex, queryHash: replaceHash },
+    });
+    // Named after the snapshot's applied baseline, so the pending-set check has nothing older waiting.
+    if (earlier) writeFileSync(path.join(root, "supabase", "migrations", "20260101000000_baseline.sql"), earlier, "utf8");
+    return root;
+  };
+  denies(evaluate(replaceFixture("CREATE FUNCTION public.f(p uuid) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n" +
+    "REVOKE ALL ON FUNCTION public.f(uuid) FROM PUBLIC, anon, authenticated;\n"), { query: REPLACE_SQL, landingGate: () => ({ ok: true }) }),
+    "did not have before", "replacing a locked-down function and granting it to authenticated is refused (history read from disk)");
+  allows(evaluate(replaceFixture(null), { query: REPLACE_SQL, landingGate: () => ({ ok: true }) }),
+    "the same replace with no earlier definition is a new function's routine lock-down");
 }
 denies(
   evaluate(

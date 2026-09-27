@@ -35,6 +35,12 @@
 // any role ends the migration with access it did not have before. That earlier
 // access is rebuilt from the migration history (see priorFromHistory); without
 // the history it is unknown, which counts as Mason's.
+//
+// Sol round 11 (Mason's in-chat choice 2026-09-27, "Data rewrites wait"):
+//   * a SECURITY DEFINER function whose BODY names a login/file/secret object
+//     (auth/storage/vault, other than calling auth.uid() and the like) is his —
+//     that body runs with the owner's rights for every caller;
+//   * dataRewriteCheck() — a migration that OVERWRITES existing rows is his too.
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -660,6 +666,130 @@ function replacedObjectWidening(statements, history) {
   return null;
 }
 
+// ── FUNCTION BODIES (Sol round 11) ───────────────────────────────────────────
+
+// Every CREATE FUNCTION/PROCEDURE in `text` (comments outside bodies already
+// removed): its key, input arity, raw body, and whether it is SECURITY DEFINER.
+// `body` is null when it cannot be located, which callers treat as unreadable.
+function functionDefinitions(text) {
+  const defs = [];
+  const re = new RegExp(String.raw`\bcreate\s+(?:or\s+replace\s+)?(?:function|procedure)\s+(${QNAME})\s*\(`, "gi");
+  let m;
+  while ((m = re.exec(text))) {
+    const open = m.index + m[0].length - 1;
+    const params = parenBody(text, open);
+    const def = { key: objectKey(m[1]), arity: inputArity(params), body: null, securityDefiner: true };
+    defs.push(def);
+    if (params === null) break;
+    const start = open + params.length + 2;
+    const rest = text.slice(start);
+    const semicolon = rest.indexOf(";");
+    const dollar = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(rest);
+    let header;
+    let tail = "";
+    let end = start;
+    if (dollar && (semicolon === -1 || dollar.index < semicolon)) {
+      const bodyStart = dollar.index + dollar[0].length;
+      const close = rest.indexOf(dollar[0], bodyStart);
+      if (close === -1) break;
+      header = rest.slice(0, dollar.index);
+      def.body = rest.slice(bodyStart, close);
+      const after = rest.slice(close + dollar[0].length);
+      const stop = after.indexOf(";");
+      tail = stop === -1 ? after : after.slice(0, stop);
+      end = start + close + dollar[0].length;
+    } else {
+      // `AS '...'` — a single-quoted body with '' escapes.
+      const quoted = /\bas\s+'/i.exec(rest);
+      if (quoted && (semicolon === -1 || quoted.index < semicolon)) {
+        let j = quoted.index + quoted[0].length;
+        let body = "";
+        while (j < rest.length) {
+          if (rest[j] === "'" && rest[j + 1] === "'") { body += "'"; j += 2; continue; }
+          if (rest[j] === "'") break;
+          body += rest[j++];
+        }
+        header = rest.slice(0, quoted.index);
+        def.body = body;
+        const after = rest.slice(j + 1);
+        const stop = after.indexOf(";");
+        tail = stop === -1 ? after : after.slice(0, stop);
+        end = start + j + 1;
+      } else {
+        header = semicolon === -1 ? rest : rest.slice(0, semicolon);
+      }
+    }
+    def.securityDefiner = /\bsecurity\s+definer\b/i.test(`${header} ${tail}`);
+    re.lastIndex = Math.max(end, re.lastIndex);
+  }
+  return defs;
+}
+
+// Writes to existing rows in a function body — including inside dynamic-SQL
+// strings, which are deliberately left visible.
+function rowWrite(body) {
+  const text = stripCommentsQuoteAware(body).replace(/\s+/g, " ");
+  if (new RegExp(String.raw`\bupdate\s+(?:only\s+)?${QNAME}(?:\s*\*)?\s+(?:(?:as\s+)?${IDENT}\s+)?set\b`, "i").test(text)) return "changes existing rows (UPDATE)";
+  if (/\bdelete\s+from\b/i.test(text)) return "deletes rows (DELETE)";
+  if (/\btruncate\b/i.test(text)) return "empties a table (TRUNCATE)";
+  if (/\bon\s+conflict\b[^;]*?\bdo\s+update\b/i.test(text)) return "overwrites existing rows (INSERT ... ON CONFLICT DO UPDATE)";
+  if (/\bmerge\s+into\b/i.test(text)) return "may overwrite existing rows (MERGE)";
+  if (DYNAMIC_SQL_RE.test(text)) return "runs dynamic SQL that could change existing rows";
+  return null;
+}
+
+// Statements whose function calls do not run against rows at apply time.
+const NO_APPLY_TIME_CALLS_RE = /^(?:create\s+(?:or\s+replace\s+)?(?:function|procedure|(?:constraint\s+)?trigger|policy|(?:recursive\s+)?view|(?:unique\s+)?index)|alter\s+(?:function|procedure|routine|policy)|drop|grant|revoke|comment)\b/i;
+const CALL_RE = new RegExp(String.raw`(${QNAME})\s*\(`, "g");
+// A name right after one of these words is being NAMED (ALTER FUNCTION f(...),
+// INSERT INTO t (cols), REFERENCES t(id), ON t (col)), not called.
+const NAMED_NOT_CALLED_RE = /\b(?:function|procedure|routine|aggregate|trigger|on|table|into|from|join|update|references|index|view|type|sequence|exists|only)\s*$/i;
+
+// Function calls in `text` (string literals already blanked by the caller).
+function callsIn(text) {
+  const names = [];
+  for (const m of text.matchAll(CALL_RE)) {
+    if (!NAMED_NOT_CALLED_RE.test(text.slice(Math.max(0, m.index - 40), m.index))) names.push(m[1]);
+  }
+  return names;
+}
+
+// Apply-time text still holds DO blocks, and a DO body may carry its own
+// dollar-quoted STRINGS ($checks$[...]$checks$). Blank those, keeping the DO
+// body itself visible. Text run through EXECUTE is dynamic SQL, which the
+// access check already hands to Mason.
+function blankNestedDollarStrings(text) {
+  let out = "";
+  let i = 0;
+  const open = [];
+  const tagRe = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/g;
+  while (i < text.length) {
+    tagRe.lastIndex = i;
+    const m = tagRe.exec(text);
+    if (!m) { out += text.slice(i); break; }
+    out += text.slice(i, m.index);
+    const tag = m[0];
+    if (open.length && open[open.length - 1] === tag) {
+      open.pop();
+      out += tag;
+      i = m.index + tag.length;
+    } else if (/\bdo\s*(?:language\s+\w+\s*)?$/i.test(out)) {
+      open.push(tag);
+      out += tag;
+      i = m.index + tag.length;
+    } else {
+      const close = text.indexOf(tag, m.index + tag.length);
+      out += "''";
+      i = close === -1 ? text.length : close + tag.length;
+    }
+  }
+  return out;
+}
+
+// Login-identity helpers a SECURITY DEFINER body may call without reaching
+// logins, files or secrets.
+const HARMLESS_AUTH_CALL_RE = /\bauth\s*\.\s*(?:uid|role|jwt|email)\s*\(/gi;
+
 // Every migration file in `dir` that sorts before `currentName`, oldest first,
 // as [{name, text}] — the history accessChangeCheck() rebuilds earlier access from.
 export function readMigrationHistory(dir, currentName) {
@@ -668,6 +798,108 @@ export function readMigrationHistory(dir, currentName) {
     .filter((name) => /\.sql$/i.test(name) && name < current)
     .sort()
     .map((name) => ({ name, text: readFileSync(path.join(dir, name), "utf8") }));
+}
+
+// DATA REWRITES (Sol HIGH, round 11; Mason 2026-09-27, "Data rewrites wait").
+// Deleting data was already his; overwriting it is now his too: an apply-time
+// UPDATE, INSERT ... ON CONFLICT DO UPDATE, MERGE or column type conversion on a
+// table this migration did not create, or an apply-time call to a function
+// (defined here or in an earlier migration, followed through the functions it
+// calls) whose body changes rows. Adding new rows or new columns stays routine.
+// Without `history`, a call to an earlier `public.` function is unknown and
+// counts as his.
+export function dataRewriteCheck(sql, { history } = {}) {
+  let commentFree;
+  let applyTime;
+  try {
+    commentFree = stripCommentsQuoteAware(String(sql || ""));
+    applyTime = stripCommentsQuoteAware(stripFunctionBodiesOnly(String(sql || "")), { intoDollarBodies: true });
+  } catch {
+    return { rewrites: true, reason: "the SQL could not be read for changes to existing rows" };
+  }
+  const statements = splitStatements(blankStringLiterals(blankNestedDollarStrings(applyTime)));
+  const created = createdObjects(statements);
+  const hit = (reason) => ({ rewrites: true, reason });
+  const existing = (raw) => !created.tables.has(objectKey(raw));
+
+  for (const statement of statements) {
+    const update = new RegExp(String.raw`\bupdate\s+(?:only\s+)?(${QNAME})(?:\s*\*)?\s+(?:(?:as\s+)?${IDENT}\s+)?set\b`, "i").exec(statement);
+    if (update && existing(update[1])) return hit(`it changes existing rows in ${objectKey(update[1])} (UPDATE)`);
+    if (/\bon\s+conflict\b.*\bdo\s+update\b/i.test(statement)) {
+      const into = new RegExp(String.raw`\binsert\s+into\s+(${QNAME})`, "i").exec(statement);
+      if (!into || existing(into[1])) return hit(`it overwrites existing rows in ${into ? objectKey(into[1]) : "a table"} (INSERT ... ON CONFLICT DO UPDATE)`);
+    }
+    const merge = new RegExp(String.raw`\bmerge\s+into\s+(${QNAME})`, "i").exec(statement);
+    if (merge && existing(merge[1])) return hit(`it may overwrite existing rows in ${objectKey(merge[1])} (MERGE)`);
+    const alter = new RegExp(String.raw`^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(${QNAME})(.*)$`, "i").exec(statement);
+    if (alter && existing(alter[1]) && new RegExp(String.raw`\balter\s+(?:column\s+)?${IDENT}\s+(?:set\s+data\s+)?type\b`, "i").test(alter[2])) {
+      return hit(`it converts the existing values of a column in ${objectKey(alter[1])} (ALTER COLUMN ... TYPE)`);
+    }
+  }
+
+  // Functions this migration defines, then (lazily) the latest definition of each
+  // function name in the history, per argument count.
+  const here = new Map();
+  for (const def of functionDefinitions(commentFree)) {
+    if (!here.has(def.key)) here.set(def.key, new Map());
+    here.get(def.key).set(def.arity, def.body);
+  }
+  let historyIndex = null;
+  const fromHistory = (key) => {
+    if (!Array.isArray(history)) return undefined;
+    if (!historyIndex) {
+      historyIndex = new Map();
+      const nameRe = new RegExp(String.raw`\bcreate\s+(?:or\s+replace\s+)?(?:function|procedure)\s+(${QNAME})\s*\(`, "gi");
+      history.forEach((file, index) => {
+        for (const m of String(file.text || "").matchAll(nameRe)) {
+          const name = objectKey(m[1]);
+          if (!historyIndex.has(name)) historyIndex.set(name, new Set());
+          historyIndex.get(name).add(index);
+        }
+      });
+    }
+    const files = historyIndex.get(key);
+    if (!files) return undefined;
+    const bodies = new Map();
+    for (const index of [...files].sort((a, b) => a - b)) {
+      let text;
+      try { text = stripCommentsQuoteAware(String(history[index].text || "")); } catch { return new Map([[null, null]]); }
+      for (const def of functionDefinitions(text)) if (def.key === key) bodies.set(def.arity, def.body);
+    }
+    return bodies;
+  };
+
+  const calls = [];
+  for (const statement of statements) {
+    if (NO_APPLY_TIME_CALLS_RE.test(statement)) continue;
+    for (const raw of callsIn(statement)) calls.push({ raw, via: [] });
+  }
+  const seen = new Set();
+  while (calls.length) {
+    const { raw, via } = calls.shift();
+    const key = objectKey(raw);
+    if (seen.has(key) || via.length > 8) continue;
+    seen.add(key);
+    // Earlier overloads stay in play; a definition here replaces the same arity.
+    const earlier = fromHistory(key);
+    const bodies = earlier || here.has(key) ? new Map([...(earlier || []), ...(here.get(key) || [])]) : undefined;
+    const named = [...via, `${key}()`].join(" → ");
+    if (!bodies) {
+      if (!Array.isArray(history) && /^\s*"?public"?\s*\./i.test(raw)) {
+        return hit(`it runs ${named} while applying, and without the migration history this check cannot tell whether that changes existing rows`);
+      }
+      continue; // a built-in or extension function
+    }
+    for (const body of bodies.values()) {
+      if (body === null) return hit(`it runs ${named} while applying, and that function's body cannot be read`);
+      const write = rowWrite(body);
+      if (write) return hit(`it runs ${named} while applying, which ${write}`);
+      // Literals blanked: a name inside a string (an assertion message, a
+      // to_regprocedure() argument) is not a call.
+      for (const raw of callsIn(blankStringLiterals(stripCommentsQuoteAware(body)))) calls.push({ raw, via: [...via, `${key}()`] });
+    }
+  }
+  return { rewrites: false };
 }
 
 // `history`: the earlier migration files from readMigrationHistory(). Leave it
@@ -753,6 +985,16 @@ export function accessChangeCheck(sql, { history } = {}) {
     if (!targets) return hit(`it ${verb === "grant" ? "grants" : "revokes"} access schema-wide or on a non-table object`);
     const existing = targets.find((target) => !isCreatedHere(target, created));
     if (existing) return hit(`it ${verb === "grant" ? "grants" : "revokes"} access on ${existing.key}, which this migration did not create`);
+  }
+  // A SECURITY DEFINER body runs with the owner's rights for every caller, so
+  // one that reaches logins, files or secrets is Mason's (Sol HIGH, round 11).
+  for (const def of functionDefinitions(stripCommentsQuoteAware(String(sql || "")))) {
+    if (!def.securityDefiner) continue;
+    if (def.body === null) return hit(`it defines ${def.key} with elevated rights (SECURITY DEFINER) in a form this check cannot read`);
+    const reference = protectedSchemaReference(stripCommentsQuoteAware(def.body).replace(HARMLESS_AUTH_CALL_RE, "(").replace(/\s+/g, " "));
+    if (reference) {
+      return hit(`${def.key} runs with elevated rights (SECURITY DEFINER) and its body touches ${reference[1].toLowerCase()}.${reference[2].replace(/"/g, "")} (logins, file access or secrets)`);
+    }
   }
   const widened = replacedObjectWidening(statements, history);
   if (widened) return hit(widened);
