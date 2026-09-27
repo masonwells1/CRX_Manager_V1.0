@@ -2938,7 +2938,10 @@ function unappliedLocalCandidateTimestamps(history: string, appliedNames: string
       && (migrationSlug(name) === migrationSlug(basename) || name.startsWith(`${stamp}_`)));
     // A same-stamp file whose own name is on an applied row (as-is, or renumbered as
     // `<version>_<stem>`) is already accounted for; only the rest compete for bare rows.
-    const namedByRow = (stem: string) => appliedNames.some((applied) => applied === stem || applied.endsWith(`_${stem}`));
+    // Only the exact stem or one complete 14-digit version before it: a suffix match would let a
+    // different migration such as `<version>_fix_<stem>` count as naming this file.
+    const namedByRow = (stem: string) => appliedNames.some((applied) => applied === stem
+      || (/^\d{14}_/.test(applied) && applied.slice(15) === stem));
     const unresolvedStampPeers = peers
       .filter((name) => name.startsWith(`${stamp}_`) && !namedByRow(name.replace(/\.sql$/i, '')))
       .length;
@@ -3114,6 +3117,9 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     expect([...unappliedLocalCandidateTimestamps(history, ['20260905210000_a', '20260905210000'], [a, b])]).toEqual([]);
     expect([...unappliedLocalCandidateTimestamps(history, ['20260905210000_b', '20260905210000'], [a, b])]).toEqual([]);
     expect([...unappliedLocalCandidateTimestamps(history, ['20260910000000_20260905210000_b', '20260905210000'], [a, b])]).toEqual([]);
+    // A near-miss name is a different migration, not a renumbered `b`, so the bare row stays ambiguous.
+    expect(() => unappliedLocalCandidateTimestamps(history, ['20260910000000_fix_20260905210000_b', '20260905210000'], [a, b]))
+      .toThrow(/Unknown local-candidate applied attribution/);
     // But a named row for the OTHER file alone leaves this candidate pending, not settled.
     expect([...unappliedLocalCandidateTimestamps(history, ['20260905210000_b'], [a, b])]).toEqual(['20260905210000']);
     // With no applied evidence at all the candidate is simply pending.
