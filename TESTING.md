@@ -494,6 +494,15 @@ npm run smoke -- --list        # List the rolled-back smoke chains
 npm run smoke -- --spec <rpc>  # Run the chain(s) covering one RPC (see scripts/smoke/README.md)
 ```
 
+**Two modes.** With `SUPABASE_DB_URL` set and `psql` on the PATH, `npm run db-sweeps` and
+`npm run smoke -- --spec <rpc>` run their SQL (`--list` only lists chains and never runs any)
+against the database. Without them (the usual case), they only **print** the SQL and exit 0 — nothing
+has run yet. The check counts only once that SQL is actually executed (for example through the
+Supabase MCP `execute_sql` tool) and its result is read. For the sweeps, `npm run db-sweeps:strict`
+refuses the print-only mode and exits 2 instead; an automated sweep run must use it. The smoke runner
+has no such switch, so an automated smoke check must run with `SUPABASE_DB_URL` and `psql` and
+confirm each chain reported its pass marker, never just a 0 exit.
+
 The sweeps are read-only. The smoke chains always roll back, but they run against the live
 database and are not free of side effects: sequence numbers they consume stay consumed, they take
 brief row locks, and `smoke-auto-expire-draw-skip.sql` briefly locks and expires real quotes inside
