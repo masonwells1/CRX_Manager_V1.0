@@ -30,7 +30,8 @@ showed Mason no permission prompts.
    reviews and the Codex GitHub App kept finding gaps — **every file whose uncommitted local edit
    could change what reaches production before any PR review sees it**: every hook that gates a tool
    EXECUTION in either manifest (Bash / PowerShell / MCP / `*` matchers), every repository module
-   they load, Codex's `codex-hook-adapter.mjs` and `hooks.json`, the two proof writers, the
+   they load, Codex's `codex-hook-adapter.mjs` and `hooks.json`, the proof writers
+   (`write-codex-push-proof.mjs`, `write-apply-proofs.mjs`, `run-claude-review.mjs`), the
    private-artifact containment check the git hooks run (a leak to the public repo cannot be
    recalled), `.husky/**` and `.github/workflows/**` (a branch-pushed workflow runs with a write
    `GITHUB_TOKEN` before review). `scripts/check-agent-guidance.mjs` DERIVES that set from the

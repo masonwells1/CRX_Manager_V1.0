@@ -215,7 +215,9 @@
       "Edit(scripts/write-apply-proofs.mjs)",
       "Write(scripts/write-apply-proofs.mjs)",
       "Edit(scripts/write-codex-push-proof.mjs)",
-      "Write(scripts/write-codex-push-proof.mjs)"
+      "Write(scripts/write-codex-push-proof.mjs)",
+      "Edit(scripts/run-claude-review.mjs)",
+      "Write(scripts/run-claude-review.mjs)"
     ],
     "deny": [
       "Bash(git push --force:*)",

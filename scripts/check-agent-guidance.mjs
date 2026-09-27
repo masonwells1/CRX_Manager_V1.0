@@ -368,6 +368,10 @@ const productionGateRoots = new Set([
   ".codex/hooks/codex-hook-adapter.mjs",
   "scripts/write-codex-push-proof.mjs",
   "scripts/write-apply-proofs.mjs",
+  // Writes the Claude-review proof (Sol, 2026-09-27): no merge gate consumes it
+  // today, but a proof writer is exactly the kind of file whose local edit acts
+  // before review.
+  "scripts/run-claude-review.mjs",
   "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
 ]);
 record(productionGateRoots.has(".claude/hooks/pr-merge-guard.mjs") && productionGateRoots.has(".codex/hooks/production-action-guard.mjs"), "production-gate roots are derived from the hook manifests", [...productionGateRoots].join(", "));
