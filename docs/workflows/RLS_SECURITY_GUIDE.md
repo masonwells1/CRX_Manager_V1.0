@@ -34,7 +34,7 @@ All five, with the four **app roles** — the ones every policy below branches o
 
 ## Helper Functions
 
-These SQL functions check the current user's role. They are `SECURITY DEFINER` and `STABLE`, meaning they run with elevated privileges and are cached per-query. Each also requires the caller's profile to be active (`is_active = true`).
+These SQL functions check the current user's role. They are `SECURITY DEFINER` and `STABLE`, meaning they run with elevated privileges and return the same result for the same arguments within one statement, which lets the planner avoid repeated calls (PostgreSQL does not promise to cache them). Each also requires the caller's profile to be active (`is_active = true`).
 
 ```sql
 is_admin()       -- Returns TRUE if current user has role = 'admin'

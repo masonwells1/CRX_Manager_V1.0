@@ -67,11 +67,11 @@ shape (`recipient is required`) so the write path cannot reproduce them.
 Percentages sum to 100, so commission TOTALS are right, but the recipient is
 unattributable — any commission calculated from these defaults pays "nobody".
 
-| identity_key | customer | raw |
+| identity_key | customer | split shape |
 |---|---|---|
-| `customer:0c703cb9-7bdf-4900-87f7-4952ef1df2d1` | Test Farm Alpha | `{"splits":[{"recipient":"","percentage":100}]}` |
-| `customer:144763fa-bb50-489e-bc26-29c09c2c8356` | (real customer — name omitted, public repo) | `{"splits":[{"recipient":"","percentage":100}]}` |
-| `customer:679200b6-a56d-4fb0-8c20-8a72f2a2366f` | (real customer — name omitted, public repo) | `{"splits":[{"recipient":"","percentage":100}]}` |
+| `customer:0c703cb9-7bdf-4900-87f7-4952ef1df2d1` | Test Farm Alpha | one split, empty recipient, 100% |
+| `customer:144763fa-bb50-489e-bc26-29c09c2c8356` | (real customer — name omitted, public repo) | one split, empty recipient, 100% |
+| `customer:679200b6-a56d-4fb0-8c20-8a72f2a2366f` | (real customer — name omitted, public repo) | one split, empty recipient, 100% |
 
 Disposition: fix the data (set a real recipient or clear the split to
 `{"splits":[]}`) via the normal save_customer path, then remove this baseline

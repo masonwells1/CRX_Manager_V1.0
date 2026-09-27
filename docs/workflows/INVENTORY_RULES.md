@@ -180,7 +180,7 @@ When the flag is true, the row surfaces on `/integrity-cleanup` under the "Phant
 
 ### Status values
 `draft`, `submitted`, `partially_received`, `fully_received`, `cancelled`.
-The normal path is `draft` → `submitted` → `partially_received` → `fully_received`; `cancelled` is a separate end state, not a step after `fully_received`.
+The normal path is `draft` → `submitted` → `fully_received`, passing through `partially_received` only when the PO is received in more than one shipment (one `receive_po_items()` call that receives everything goes straight to `fully_received`). `cancelled` is a separate end state, not a step after `fully_received`.
 
 ### Tables
 - `purchase_orders` — PO header (po_number format: PO-YYYY-NNNN via `next_po_number()`)

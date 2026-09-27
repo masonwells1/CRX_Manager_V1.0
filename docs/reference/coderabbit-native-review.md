@@ -130,26 +130,9 @@ of this repair.
 2026-09-13 as commit `6c128a79a`, and the first normal ready-label request
 through the default-branch workflow was observed on PR #682 on 2026-09-14
 (`ready-for-coderabbit` → `coderabbit-review-dispatch` → an `APPROVED`
-CodeRabbit review). The one-time bootstrap authorization below is not needed
-again; only the rollback paragraph at the end still applies.
-
-The old default-branch workflow cannot attach the new provider label, while the
-repair PR must receive a real review before merge. Finish a concrete PR and
-obtain Mason's exact one-time authorization to create
-`coderabbit-review-dispatch` and apply it once to that frozen repair PR.
-
-Before that action, independently verify the head/base, clean/current branch,
-non-draft/conflict-free state, auto-merge off, all required checks with trusted
-provenance, no outstanding changes request, exact-SHA protected Sol review and
-resolved GitHub Codex findings. Use trusted current-main code or direct read-only
-GitHub metadata; never execute PR code with a write credential.
-
-CodeRabbit documents that it reads the feature branch's YAML. Observe the real
-review for that SHA, resolve its findings, refresh every changed/stale gate, and
-only then use the normal protected merge path. After merge, observe one normal
-ready-label request through the trusted default-branch workflow. Until those
-observations exist, distinguish local verification, bootstrap review and live
-workflow verification in the status report.
+CodeRabbit review). The one-time bootstrap is complete and must not be repeated;
+its procedure was removed on 2026-09-26 and is recoverable from Git history. Only the
+rollback rule below still applies.
 
 Rollback uses a scoped protected revert. A revert does not cancel already
 dispatched reviews; inspect and preserve their evidence before another request.

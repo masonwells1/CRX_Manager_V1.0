@@ -207,14 +207,7 @@ When the sidebar structure changes, grep `tests/e2e/role-*.spec.ts` for sidebar 
 
 ### Dialog Handling in Serial Suites
 
-Use `page.once('dialog')` (not `page.on`) in serial suites to prevent listener leaks between steps:
-
-```typescript
-page.once('dialog', dialog => dialog.accept());
-await page.click('button:has-text("Delete")');
-```
-
-**Note:** The app no longer uses browser-native `confirm()` / `alert()` / `prompt()` dialogs (they are forbidden by `docs/workflows/SAFE_DEVELOPMENT_RULES.md`); confirmations are in-app `ConfirmModal` / `ReasonModal` components. Use standard Playwright button clicks:
+The app no longer uses browser-native `confirm()` / `alert()` / `prompt()` dialogs (they are forbidden by `docs/workflows/SAFE_DEVELOPMENT_RULES.md`); confirmations are in-app `ConfirmModal` / `ReasonModal` components. Use standard Playwright button clicks:
 
 ```typescript
 await page.click('button:has-text("Confirm")');

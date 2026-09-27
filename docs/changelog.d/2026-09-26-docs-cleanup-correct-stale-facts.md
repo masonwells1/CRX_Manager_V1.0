@@ -1,6 +1,6 @@
-## 2026-09-26 — Docs cleanup, part 2: correct stale and wrong facts in the living docs
+## 2026-09-26 — Docs cleanup, part 1 of 3: correct stale and wrong facts in the living docs
 
-Part 2 of Mason's full docs cleanup (part 1 removed 275 finished records). This part corrects the
+Part 1 of 3 of Mason's full docs cleanup (parts 2 and 3 delete 277 files: 275 finished records plus the 2 docs this part folds into others). This part corrects the
 docs agents and the owner rely on, so they match current code, config, git history and the live
 migration ledger. No rule or policy was changed; where a doc disagreed with enforced behaviour it
 was brought into line, and policy questions were reported instead of decided.
@@ -34,10 +34,16 @@ they could not verify were skipped and listed, not guessed.
   Node 24, what pre-commit / pre-push / CI actually run, protected-main landing, secret names only.
 - Plans, roadmap, loops and `TODO.md`: current status banners; supplier-pricing Stage C recorded as
   shipped (PR #282), not parked; `docs/plans/2026-08-18-product-data-model-GAMEPLAN.md` folded into
-  the MASTER-RECORD and removed; `docs/PROMPT_TEMPLATES.md` folded into `OWNER_PLAYBOOK.md` and removed;
+  the MASTER-RECORD and `docs/PROMPT_TEMPLATES.md` folded into `OWNER_PLAYBOOK.md` (both source files are removed in part 2);
   the two earmark smoke proofs moved next to the shelved migrations they test.
-- Public-repo hygiene: two real customer names removed from `scripts/db-invariant-sweeps/FIN-README.md`
-  and one archive log (identity keys kept; names remain in git history).
+- Public-repo hygiene: two real customer names and the raw commission-split JSON removed from
+  `scripts/db-invariant-sweeps/FIN-README.md`, real payment figures removed from `CURRENT_STATE.md`,
+  and one archive log redacted (identity keys kept; the old text remains in git history).
+- From the Codex GitHub App and CodeRabbit reviews: the Chicago-year claim is narrowed to the
+  generators that use it, with a new `KNOWN_ISSUES` entry for the three that still read the UTC
+  clock (quote, order, rebate claim); the `TESTING.md` manual checklist is read-only while no staging
+  project exists; the finished CodeRabbit bootstrap procedure is removed; smaller accuracy fixes in
+  the QA, inventory, RLS, UI-pattern, roadmap and `TODO.md` docs.
 
 **Proof observed:** `check:docs`, `check:agent-guidance`, `check:agent-workflows`,
 `check:phase3-private-artifacts` and `test:correction-guards` exit 0; `npm test` 380/380 files

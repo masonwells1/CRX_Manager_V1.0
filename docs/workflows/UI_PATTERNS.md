@@ -10,15 +10,19 @@ Follow `.claude/skills/new-page/SKILL.md` — it is the maintained step-by-step 
 
 1. **Create the page component** in `src/pages/` as a `default` export (required for lazy loading).
 2. **Add the lazy import** in `src/App.tsx`:
+
    ```typescript
    const MyNewPage = lazy(() => import('./pages/MyNewPage'));
    ```
+
 3. **Add a route object** to the `RouteShell` children array in `src/App.tsx`. The app uses
    `createBrowserRouter` route objects, not `<Route>` JSX, and suspense is centralized in
    `RouteShell` (do not add a per-route `<Suspense>`). Paths there are relative:
+
    ```tsx
    { path: 'my-new-page', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><MyNewPage /></ProtectedRoute> },
    ```
+
 4. **Add the `PAGE_PERMISSIONS` entry (REQUIRED)** in `src/lib/pagePermissions.ts`. Without it
    `ProtectedRoute` redirects users away and `pagePermissions.test.ts` fails.
 5. **Add the sidebar link** in `src/components/layout/Sidebar.tsx`, in the right role tree
@@ -49,6 +53,7 @@ useEffect(() => {
     const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name, assigned_tier')
+      .eq('is_active', true) // customers are deactivated with is_active = false; there is no deleted_at column
       .order('farm_name');
 
     if (error) {

@@ -19,7 +19,8 @@
 > path is unchanged by this retirement, as is #514's general migration-apply content binding and SQL
 > parser hardening, which have consumers outside the deleted automation and were deliberately kept.
 >
-> Canonical decision: `docs/manual/DECISION_LOG.md`, 2026-08-31 entry.
+> Canonical decision: `docs/manual/DECISION_LOG.md`, 2026-08-31 entry. The current rule for any
+> live migration is `AGENTS.md` › Safety and Protected Delivery.
 >
 > Model names in the body are those in force when it was written (the `gpt-5.6-sol` gate). The current
 > review models are in `docs/reference/codex-model-tuning.md`.

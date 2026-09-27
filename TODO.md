@@ -51,10 +51,11 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
    worksheet: `docs/operations/2026-06-10-negative-inventory-rebase-worksheet.md`.
    Deliveries are flowing despite it, so nothing is hard-blocked today. Don't re-raise
    as the top action — revisit only when Mason asks or a delivery actually fails on it.
-2. **Run a real billing cycle in the app** — order → delivery → invoice → post →
-   payment. Live DB showed **0 payments** on 2026-07-16 (10 invoices: 8 draft / 2 posted).
-   Deliveries ARE flowing now (106 live). Afterward ask for the money-audit re-run
-   (`/foundation-ultra-review`) — all prior money audits were vacuously clean on empty data.
+2. ~~**Run a real billing cycle in the app**~~ — **DONE 2026-07-17.** A real payment was
+   recorded and allocated through `allocation_sets` + `prepay_credits`, and both halves
+   reconcile (`docs/manual/CURRENT_STATE.md` §1). `payments` is a dead legacy table, so its
+   zero count never meant the loop was unrun. The money-audit re-run it was waiting for ran as
+   the 2026-08-08 foundation ultra review. Nothing further is owed on this item.
 3. **Create a Stripe account** (~15 min) and hand over API keys — unblocks A1
    ACH pay-now links (the #1 competitive gap) and later portal payments.
 4. **Label data load + EPA backfill approval** — 0 of ~604 products have full
