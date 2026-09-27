@@ -791,7 +791,9 @@ for (const input of ["{bad", "", '{"tool_name":"Bash","tool_in', "[]", "null", "
   assert.equal(result.stderr, "", `${label}: no stderr`);
   const response = JSON.parse(result.stdout);
   assert.match(response.systemMessage || "", /review-proof-guard.*SKIPPED/, `${label}: loud warning`);
-  assert.equal(response.hookSpecificOutput, undefined, `${label}: carries no allow/deny decision`);
+  // Exactly one key: no decision (an "allow" would skip the prompt; `continue:false`
+  // would halt every call), and the Codex adapter forwards only a bare systemMessage.
+  assert.deepEqual(Object.keys(response), ["systemMessage"], `${label}: warning only, no decision`);
 }
 // A readable, harmless call stays silent, so the warning means only "could not check".
 assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command: "ls" } }, "readable harmless call");

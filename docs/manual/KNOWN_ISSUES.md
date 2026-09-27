@@ -1741,7 +1741,9 @@ permission prompt. `.codex/hooks/codex-hook-adapter.mjs` forwards that warning-o
 warn channel (stderr) instead of passing it to Codex as hook output. Proof: `review-proof-guard.test.mjs`
 pins all six unreadable shapes plus a silent readable call; `codex-hook-adapter.test.mjs` pins the
 forwarding; a run through the real adapter showed the warning on stderr, a silent `ls`, and a
-proof-file write still denied. The reasoning below still decides the direction and must survive.
+proof-file write still denied. **Residual:** on Codex the warning goes to stderr, the same channel the
+schema-registry warnings use. Whether the Codex app shows exit-0 hook stderr has not been observed,
+so on Codex it may still be quiet in practice. The reasoning below still decides the direction and must survive.
 The original entry follows.
 
 `review-proof-guard.mjs` begins:

@@ -20,5 +20,12 @@ write to `.claude/session-state/claude-review-push.json` is still denied. `revie
 and `codex-hook-adapter.test.mjs` pass with the new cases, all 35 `.claude/hooks` and `.codex/hooks`
 test files pass, and `npm run test:agent-workflows` passes.
 
+An independent pre-review (no BLOCKER/HIGH/MED) led to three follow-ups in this change. The test now
+requires the warning to be the only key. The message says the guard received unreadable input, not
+that it is not running. `docs/reference/agent-guardrails.md` documents the behavior and the adapter's
+forwarding.
+
 **Not verified:** how the Claude Code or Codex desktop apps display the warning when a real harness
 sends malformed input. That cannot be triggered on purpose, so only the hook's output was observed.
+On Codex in particular, the warning reaches only stderr. If the Codex app does not show exit-0 hook
+stderr, the fail-open is still quiet there (recorded as a residual in `docs/manual/KNOWN_ISSUES.md`).

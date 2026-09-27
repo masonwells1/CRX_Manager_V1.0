@@ -32,7 +32,7 @@ function deny(reason) {
 // decision — an "allow" here would skip the normal permission prompt.
 function skippedCheck(why) {
   process.stdout.write(JSON.stringify({
-    systemMessage: `⚠ review-proof-guard could not read this tool call (${why}), so its check was SKIPPED and the call was not inspected. If this repeats, the guard is not running — report it.`,
+    systemMessage: `⚠ review-proof-guard could not read this tool call (${why}), so its check was SKIPPED and the call was not inspected. If this repeats, the guard is not receiving readable input — report it.`,
   }));
   process.exit(0);
 }
