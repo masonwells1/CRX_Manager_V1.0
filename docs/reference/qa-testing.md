@@ -2,27 +2,29 @@
 
 ## Role-Based Testing Matrix
 
-Test every feature as each role:
+Test every feature as each role. Page access follows the route role gates in `src/App.tsx`
+(re-checked 2026-09-27): "No page access" means the route rejects that role, although related rows
+may still appear inside pages the role can open, as RLS allows.
 
 | Feature | Admin | Sales Rep | Driver | Applicator |
 |---------|-------|-----------|--------|------------|
 | Dashboard KPIs | Full view | Full view | Deliveries only | Jobs only |
-| Products CRUD | Full | Read only | No access | Read only |
-| Customers CRUD | Full | Own assigned | Via delivery only | Read only |
+| Products CRUD | Full | Read only | No page access | No page access |
+| Customers CRUD | Full | Own assigned | Via delivery only | No page access |
 | Quotes CRUD | Full | Own only | No access | No access |
 | Orders CRUD | Full | Create/Read | No access | No access |
-| Inventory | Full | Read + holds | Read only | No access |
+| Inventory | Full | Read + holds | No page access | No access |
 | Deliveries | Full | Create/Edit/Cancel | Own + confirm/complete/photos/issues/quick delivery | No access |
 | Purchase Orders | Full | Read/Receive | No access | No access |
 | Blend Tickets | Full | Upload/review | No access | No access |
 | Jobs | Full | Create/Edit | No access | Own assigned + record applied info |
-| Vehicles | Full | Read only | No access | Read only |
+| Vehicles | Full | No page access | No access | No page access |
 | Application Records | Full | Read | No access | Read |
 | Invoices | Full | Read/Create | No access | No access |
 | Payments | Full | Read/Create | No access | No access |
 | Month-End Close | Full | No access | No access | No access |
 | Commission Payments | Full | No access | No access | No access |
-| Fields | Full | Own customer | No access | Read only |
+| Fields | Full | Own customer | No access | No page access |
 | Reports | Full | Limited | No access | No access |
 | Team Board | Full (own notes) | Full (own notes) | Full (own notes) | Full (own notes) |
 | Settings | Full | No access | No access | No access |

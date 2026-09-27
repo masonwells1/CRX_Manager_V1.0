@@ -201,7 +201,7 @@ E2E (end-to-end) tests open a real browser and test the full application — log
 - **Login/Logout:** Can users log in and out?
 - **Customer Management:** Can you create, view, and search for customers?
 - **Permissions:** Can users access the pages they're supposed to?
-- **Every page:** Each lazy-loaded page is covered by the page-loading/basic-functionality inventory
+- **Page loading:** The page-loading/basic-functionality inventory covers selected lazy-loaded pages; it is not a complete inventory of every page
 
 ### Before You Can Run Them
 
@@ -485,7 +485,7 @@ npm run test:e2e:headed   # Watch tests run in browser
 npm run test:e2e:report   # View test report
 npm run test:e2e:smoke    # Only the @smoke-tagged E2E tests
 ```
-(All E2E commands need the staging settings described above.)
+(All E2E test-running commands need the staging settings described above; `test:e2e:report` only opens an existing report.)
 
 ### Live-database checks
 ```bash

@@ -82,7 +82,7 @@ VITE_MAPBOX_TOKEN=<your Mapbox token>
 VITE_SENTRY_DSN=<your Sentry DSN>
 ```
 
-⚠️ **The `service_role` key must NEVER be in `.env`** — it only belongs in Edge Function environment variables in the Supabase dashboard. The `env-guard` hook will block any attempt to put it in `src/`.
+⚠️ **The `service_role` key must NEVER be in `.env`.** Hosted Supabase injects it into Edge Functions automatically as `SUPABASE_SERVICE_ROLE_KEY`, so there is nothing to set (see `DEPLOYMENT.md`); never add it as a custom secret. The `env-guard` hook will block any attempt to put it in `src/`.
 
 If you don't have these values, grab them from:
 - Supabase URL + anon key: Supabase dashboard → Project settings → API

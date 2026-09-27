@@ -179,7 +179,8 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   PDFs print the invoice override. The approved due-dates spec is now fully complete.
 - ~~**Per-line-item custom split billing (field-app)**~~ — **SHIPPED AND LIVE 2026-07-21** (PR #164;
   migrations `20260720213000` / `20260720214000` / `20260720233000` are in the live ledger; the
-  `per_line_split_billing_enabled` flag has been ON since 2026-07-21 — KNOWN_ISSUES §0). Default splits
+  `per_line_split_billing_enabled` flag was set ON on 2026-07-21 and read ON, its row unchanged since then,
+  at a read-only live check on 2026-09-27 — KNOWN_ISSUES §0). Default splits
   from field ownership, override %/price per invoice line, one invoice per customer, unpost reversible,
   $0 recorded-but-unsent. **Still open — its first real-invoice proof:** still unused (no split invoices at
   the read-only 2026-09-26 check; the 2026-07-17 billing cycle predates the feature). Check the
