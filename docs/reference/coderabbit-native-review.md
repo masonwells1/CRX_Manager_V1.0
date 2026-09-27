@@ -7,8 +7,9 @@
 > limited on, or skipped, the exact head you need reviewed. Statements below that automatic reviews
 > are disabled describe the configuration before that date.
 
-The operator applies `ready-for-coderabbit` after the candidate is frozen,
-current, green and independently reviewed. The privileged `pull_request_target`
+When CodeRabbit did not review the frozen head, the operator applies
+`ready-for-coderabbit` once the candidate is frozen, current, green and
+independently reviewed. The privileged `pull_request_target`
 workflow runs trusted default-branch code and checks the actor's permission,
 head, branch, draft/conflict state, auto-merge, check provenance and outstanding
 review decision. After its quiet period and final checks, it records
