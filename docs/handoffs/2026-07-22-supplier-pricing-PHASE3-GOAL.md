@@ -5,18 +5,19 @@
 > 2026-07-29): migration `20260729213733_supplier_pricing_phase3c_return_policy_classification` is in
 > the live ledger (21 products `no_return`, 2 `returnable`, the rest `unknown` by owner decision;
 > family grouping stays parked — `docs/reference/database-schema.md`, "Supplier Pricing Phase 3
-> Stage C"). The "parked" wording below is the 2026-07-22 → 07-28 state. The implementation plan it
+> Stage C"). **Everything below — the status line, the runner instructions and the Stage C gates — is
+> the 2026-07-22 → 07-28 record, historical and non-actionable.** The implementation plan it
 > cites (`docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`) was removed on
 > 2026-09-26 and remains in git history. Nothing here authorizes new work.
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, a protected green/CodeRabbit-resolved PR, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
+**Status (historical, 2026-07-22 → 07-28):** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, a protected green/CodeRabbit-resolved PR, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
-**Current lane:** the Supplier Pricing Phase 3C owner-review packet is regenerated and verified at 604 aggregate-only rows, but parked pending fresh exact review, protected PR acceptance, and Mason's later row/field/checksum approval. B1 and B2 are landed historical work. Never reuse the coordination/docs branch or worktree `7582`.
+**Lane (historical, 2026-07-22 → 07-28; Stage C has since landed):** the Supplier Pricing Phase 3C owner-review packet is regenerated and verified at 604 aggregate-only rows, but parked pending fresh exact review, protected PR acceptance, and Mason's later row/field/checksum approval. B1 and B2 are landed historical work. Never reuse the coordination/docs branch or worktree `7582`.
 
-## Current Runner Instruction — Parked Stage C Review Packet
+## Runner Instruction (historical, 2026-07-22 → 07-28; Stage C has since landed) — Stage C Review Packet
 
 Stage A, B1, and B2 are landed. The only current Supplier Pricing lane is the
 parked Stage C owner-review packet: preserve the already regenerated-and-
@@ -42,7 +43,7 @@ It landed before this Stage C packet lane and must not be restarted.
 
 ## Historical Runner Instruction — Stage B1
 
-Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, create the pre-Stage-A Goal, or restart either landed Stage B lane.** Current runners must use the parked Stage C review-packet instruction near the top of this document and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
+Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, create the pre-Stage-A Goal, or restart either landed Stage B lane.** Runners at the time used the parked Stage C review-packet instruction near the top of this document and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
 
 The active B1 deny set remains explicit:
 
@@ -184,7 +185,7 @@ Only one writer may edit a given stage at a time. Fable and the independent Sol 
 
 ## Historical Goal Start Instruction — Already Satisfied; Do Not Execute
 
-The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Current runners must use the parked Stage C review-packet instruction near the top of this document instead.
+The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Runners at the time used the parked Stage C review-packet instruction near the top of this document instead.
 
 Once, and only once, a heartbeat returns `READY`, perform an idempotent start sequence keyed to this contract (`supplier-pricing-phase3-after-pr213`). Do not rely on read-then-create alone. Use the platform's conditional Goal creation/unfinished-Goal uniqueness guard so concurrent or repeated heartbeats can create at most one Goal; after any create rejection, re-read Goal state and accept it only when the active Goal matches this contract key and objective. Verify matching Goal ownership, and only then disable this watcher. If creation fails without a matching active Goal, leave the watcher active and report `FAILED`; never disable first and never create a duplicate.
 

@@ -11,7 +11,7 @@
 **Status (original):** SCOPED — **PARKED until supplier-pricing Phases 1a/1b ship and stabilize.** No implementation authorized yet.
 **Branch:** `claude/supplier-pricing-strategy-9c6129`
 **Advisors:** Claude (grounding + synthesis) + Codex gpt-5.6 "Sol 5.6" at extra-high reasoning (design partner; its five disagreements are folded in)
-**Companion plan:** `docs/plans/2026-07-16-supplier-pricing-and-variants-plan.md` (rev 5, in build)
+**Companion plan (historical):** `docs/plans/2026-07-16-supplier-pricing-and-variants-plan.md` (rev 5 — shipped, and removed 2026-09-26; see the note above)
 
 ---
 

@@ -37,10 +37,10 @@ dated IDs.
 all reviews and GPT-6 Sol for money and finance final gate reviews — make sure not routing to the old
 models," then "we don't need Terra as builder" and "make Luna the builder as well."
 
-**Operative rule.** The GPT-6 class ships two tiers only — `gpt-6-terra` and `gpt-6-spark` do not
-exist [Update 2026-09-26: overclaim, corrected in the changelog — both are *refused for this account
-on this CLI* (reproduced 2026-09-23 and 2026-09-25 on both binaries), but the refusal matches a
-made-up name's, so it shows "not usable here", not "does not exist"] — so the old frontier/workhorse/light split collapses onto **Luna for volume (building, every
+**Operative rule.** Only two GPT-6 tiers are usable on this account and CLI — `gpt-6-terra` and
+`gpt-6-spark` are refused here (reproduced 2026-09-23 and 2026-09-25 on both binaries; the refusal
+matches a made-up name's, so it shows "not usable here", not "does not exist") [Update 2026-09-26:
+the original wording said the two tiers "do not exist"; narrowed to the tested result] — so the old frontier/workhorse/light split collapses onto **Luna for volume (building, every
 iterating review round, bug hunting) and Sol for money** (the once-at-the-end gate that mints the
 proof). The 2026-09-20 tier decision below is unchanged in shape; only the model names moved.
 
@@ -865,10 +865,10 @@ and a rewrite — not another round. It does **not** solve the naming-scope limi
   naming-scope residuals. They cover the lexical residual only, and only at the sinks they key on.
 - Before starting related work, check for stranded parallel attempts — a third, unpushed regex attempt
   (`codex/actor-binding-guard-recut-20260831`, local only, no PR) duplicated one of PR #449's fixes.
-- PR #449 itself is **parked, not abandoned**: it holds the 19 closed bypasses and is worth landing after
-  one clean review round on a fresh review budget. Landing it is an improvement to a capped control, not a
-  resumption of the hardening programme. [Update 2026-09-26: PR #449 was closed unmerged on
-  2026-09-12. Its 19 closed bypasses are not on `main`; reviving them would be a new PR.]
+- PR #449's fixes are **unmerged work, not abandoned** [Update 2026-09-26: #449 was closed unmerged on
+  2026-09-12, so its 19 closed bypasses are not on `main`]. Reviving them means a new PR, worth landing
+  after one clean review round on a fresh review budget; that is an improvement to a capped control, not
+  a resumption of the hardening programme.
 
 **A generalisable lesson recorded here because it recurred seven times in ~24 hours.** Every one of those
 seven guard comments asserted a safety property its code did not have, and **every one overclaimed** — none

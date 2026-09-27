@@ -50,11 +50,14 @@ CREATE TABLE IF NOT EXISTS public.my_new_table (
 -- 2. RLS enabled (MANDATORY — no exceptions)
 ALTER TABLE public.my_new_table ENABLE ROW LEVEL SECURITY;
 
--- 3. RLS policies (at minimum: SELECT for active signed-in users)
+-- 3. RLS policies — DECIDE THIS TABLE'S ACCESS MODEL FIRST. The SELECT below
+--    lets EVERY active profile read EVERY row; use it only for data all staff
+--    may see. For role- or owner-restricted data, replace the USING clause
+--    with the table-specific predicate (a role helper such as
+--    (select public.is_admin()), or an ownership check).
 --    "All authenticated" means an ACTIVE profile, never USING (true) — a
 --    deactivated profile is still authenticated (convention since
---    20260727174657_broad_reads_require_active_profile.sql). Use a role helper
---    such as (select public.is_admin()) when only some roles may read.
+--    20260727174657_broad_reads_require_active_profile.sql).
 DROP POLICY IF EXISTS "my_new_table_select" ON public.my_new_table;
 CREATE POLICY "my_new_table_select" ON public.my_new_table
   FOR SELECT TO authenticated

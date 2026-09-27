@@ -2,7 +2,7 @@
 
 > **STOPPED UPDATING after 2026-07-24 (noted 2026-09-26).** The weekly task that wrote these rows no
 > longer exists, so the table below is a frozen history, not current numbers. Negative-inventory status
-> now lives in `docs/manual/KNOWN_ISSUES.md` §1 (19 rows, re-verified 2026-08-08, reconcile only from
+> now lives in `docs/manual/KNOWN_ISSUES.md` §1 (re-verified 2026-08-08, reconcile only from
 > physical counts), `docs/manual/CURRENT_STATE.md` §2, and `TODO.md` §1 item 1 (re-base deferred by
 > Mason 2026-07-16; decision re-confirmed in `docs/manual/DECISION_LOG.md` 2026-08-08).
 

@@ -45,9 +45,9 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
 > Detail: `docs/manual/KNOWN_ISSUES.md` and the item-4 label-data entry below (same catalog, same
 > data-entry bottleneck — worth doing in one sitting).
 
-1. ~~**Re-base the 18 negative-inventory products**~~ — **⏸ DEFERRED by Mason 2026-07-16**
-   ("skip and don't worry about it for now"). The 18 rows (verified live 2026-07-16:
-   `inventory.quantity_available < 0`; 19 when re-verified 2026-08-08 per KNOWN_ISSUES §1) stay as-is until he brings physical counts;
+1. ~~**Re-base the negative-inventory products**~~ — **⏸ DEFERRED by Mason 2026-07-16**
+   ("skip and don't worry about it for now"). The rows (first verified live 2026-07-16:
+   `inventory.quantity_available < 0`; re-verified 2026-08-08; take the current list from KNOWN_ISSUES §1) stay as-is until he brings physical counts;
    worksheet: `docs/operations/2026-06-10-negative-inventory-rebase-worksheet.md`.
    Deliveries are flowing despite it, so nothing is hard-blocked today. Don't re-raise
    as the top action — revisit only when Mason asks or a delivery actually fails on it.
@@ -180,8 +180,8 @@ When an item here ships or is decided, update this file AND `docs/manual/KNOWN_I
   migrations `20260720213000` / `20260720214000` / `20260720233000` are in the live ledger; the
   `per_line_split_billing_enabled` flag has been ON since 2026-07-21 — KNOWN_ISSUES §0). Default splits
   from field ownership, override %/price per invoice line, one invoice per customer, unpost reversible,
-  $0 recorded-but-unsent. **Still open — its first real-invoice proof:** still unused (zero split billing
-  sets at the read-only 2026-09-26 check; the 2026-07-17 billing cycle predates the feature). Check the
+  $0 recorded-but-unsent. **Still open — its first real-invoice proof:** still unused (no split invoices at
+  the read-only 2026-09-26 check; the 2026-07-17 billing cycle predates the feature). Check the
   first real split invoice when one is made. Design record:
   `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`. This is the settled resolution of the
   split-billing architecture decision (§4).

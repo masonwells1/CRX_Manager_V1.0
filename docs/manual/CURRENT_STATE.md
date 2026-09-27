@@ -117,8 +117,7 @@ and `20260903230000_commission_report_snapshot_contract`; PR #599 (2026-09-11, `
   payment-by-payment detail, capping future-ending presets at Chicago-today. New and revised
   commissions must carry an `order_date`; payouts reject negative items or a payment date before the
   order date. Zero-dollar commissions stay settleable and count as pending until a signed post
-  event exists. Postflight: 35 opening events (33 baseline, 2 legacy-excluded zero-dollar
-  cancellations), zero settlement events.
+  event exists. Postflight recorded the expected opening events and no settlement events.
 - **PR #535 gauntlet chain** — six migrations applied 2026-09-03 (`20260831160000`,
   `…161000`, `…162000`, `…212415`, `…233000`, `…235900`). `update_vendor_bill` is a single
   9-argument overload accepting `p_confirm_po_overage`/`p_po_overage_reason`; the cycle-count
@@ -384,7 +383,8 @@ PR #800.
   merge is the deploy.
 - **Supabase plan:** FREE — no point-in-time recovery (PITR). The weekly
   in-database backup plus the off-site weekly GitHub Action dump are the
-  only recovery mechanisms.
+  only database recovery mechanisms. (The nightly Personal DR task backs up
+  workstation and agent state, not the database.)
 - **Time zone:** the live database and its scheduled jobs (pg_cron) run in
   UTC. Business hours are America/Chicago — convert explicitly when
   reasoning about "today" or cron timing.

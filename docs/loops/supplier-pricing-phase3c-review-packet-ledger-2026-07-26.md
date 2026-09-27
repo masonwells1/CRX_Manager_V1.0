@@ -638,7 +638,7 @@ recorded elsewhere in this historical ledger.
 | Proposed manifest | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2` | 604 | 1580465 | `706ec4bc57e5c971e56e71bdff29ab0d7a16a824e84f2dd2946b968871082507` | `4f2977b1ef8058266f3e1c80448ba09506816d94079d4f563d17fbadbfb788b0` | write/verify and reproducibility PASS |
 | Owner decision sheet | private external path (not recorded) | `crx-supplier-pricing-phase3-owner-decision-sheet-v1` | 604 | 123853 | `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` | `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8` | write/verify and containment PASS |
 
-## Owner gate after this mission
+## Owner gate after this mission (historical — July 2026; superseded by the 2026-09-26 status update below)
 
 The packet has been regenerated and verified. Mason must not review any private
 row yet: PR #246's current head must match a recorded exact-reviewed SHA, and

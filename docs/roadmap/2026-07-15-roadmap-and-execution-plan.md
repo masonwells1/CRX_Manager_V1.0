@@ -9,7 +9,7 @@
 > - **Done:** N2/T1 schema-registry regen (2026-07-16; regenerated again since — latest 2026-09-20). T2 (2026-07-15). T14 — #106/#109 live
 >   2026-07-06 (`20260707050000`), #117 live 2026-07-22 (`20260722012359`, PR #199). T4's `u12`/`u13` draft folders were deleted 2026-07-15.
 > - **Changed:** the negative-inventory re-base (N5, §4 item 1, §6 task 2) was **deferred by Mason 2026-07-16** and deliveries are flowing,
->   so it does not block deliveries (19 rows at the 2026-08-08 check). T4's #40 RPC is **KEEP** per Mason 2026-07-16; only the
+>   so it does not block deliveries (still present at the 2026-08-08 check). T4's #40 RPC is **KEEP** per Mason 2026-07-16; only the
 >   `setup-blend-tickets-storage` retirement remains.
 > - **Model names in §5 are July's.** Current Codex routing (GPT-6 class since 2026-09-23, PR #796) is in `docs/reference/codex-model-tuning.md`.
 > - Everything else here is still open; `TODO.md` §1–§2 is the current tracker.
@@ -35,7 +35,7 @@ The identity, in order: **(1) billing engine you can trust, (2) cash-collection 
 | N2 | ~~**Regenerate the schema registry**~~ **DONE 2026-07-16** — (`/regen-schema-registry` from live introspection) — 8+ applied migrations (the 2026-07-14 batch plus the four applied 2026-07-15) are past the registry high-water; schema-aware hooks are validating stale data right now. | Guard integrity |
 | N3 | **Offline Stage 1B production proof** — verify PR #124 actually landed the browser rollout, then run the real-phone proof (lost-response recovery, two-tab replay, office resolution) with `[E2E]` fixtures. | Field completions touch inventory + billing |
 | N4 | ~~**First real billing cycle**~~ *(2026-09-26: DONE — the first real cycle completed 2026-07-17 and the money-audit re-run ran as the 2026-08-08 foundation ultra review (`docs/manual/CURRENT_STATE.md` §1, `TODO.md` §1 item 2))* — Mason routes real orders → deliveries → invoices → posting → payments through the app; then re-run `/foundation-ultra-review` money audits on non-empty data (prior audits were "vacuously clean"). | Everything downstream compounds off this |
-| N5 | **Owner data unblocks** — negative-inventory products re-based (17 when this plan was written; 19 at the 2026-08-08 check) (*2026-09-26: deferred by Mason 2026-07-16 — do only when Mason asks or a delivery fails on it*), junk-data delete packet, label-data load via `/label-data-quality`. | Cheap, unblocks built features |
+| N5 | **Owner data unblocks** — negative-inventory products re-based (*2026-09-26: deferred by Mason 2026-07-16 — do only when Mason asks or a delivery fails on it*), junk-data delete packet, label-data load via `/label-data-quality`. | Cheap, unblocks built features |
 
 ### NEXT (weeks 6–14) — "Open the cash door + compliance quick wins"
 | # | Item | Notes |
@@ -79,7 +79,7 @@ Native iOS/Android apps · multi-tenancy now · ML demand forecasting · autonom
 
 ## 4. Owner actions that block the biggest value (ranked)
 
-1. **Re-base the negative-inventory products — DEFERRED** (17 when written; 19 at the 2026-08-08 check) — *2026-09-26: DEFERRED by Mason 2026-07-16 and not in the active queue. Deliveries are flowing; do it only when Mason asks or a delivery fails on it (`TODO.md` §1).*
+1. **Re-base the negative-inventory products — DEFERRED** — *2026-09-26: DEFERRED by Mason 2026-07-16 and not in the active queue. Deliveries are flowing; do it only when Mason asks or a delivery fails on it (`TODO.md` §1).*
 2. ~~**Use the app for a real billing cycle**~~ — *2026-09-26: DONE — the first real cycle completed 2026-07-17 and the money-audit re-run ran as the 2026-08-08 foundation ultra review (`docs/manual/CURRENT_STATE.md` §1, `TODO.md` §1 item 2).*
 3. **Create a Stripe account and hand over API keys** (~15 min) — unblocks A1 now and the portal later.
 4. **Label-data load + approve EPA backfill** — compliance/WPS/spray-safety features render blank until then.
