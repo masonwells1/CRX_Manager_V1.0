@@ -174,6 +174,14 @@ try {
   equal(run().status, 2, 'a packet omitting function_contracts is an error, never a pass');
   writeFileSync(capture, JSON.stringify([{ ...withoutContracts, rows: [] }]));
   equal(run().status, 2, 'and still an error when it carries no rows at all');
+  // The capture must match THIS allowlist's wrapped query: an unrequested or repeated contract key
+  // is a different, stale, or hand-edited capture (CodeRabbit on #829).
+  writeFileSync(capture, JSON.stringify([{ ...packet, function_contracts: [...deliveryCatalog, { function_key: 'public.unrequested_fn()', contract_md5: 'a'.repeat(32) }] }]));
+  equal(run().status, 2, 'an unrequested contract key is an invalid capture');
+  writeFileSync(capture, JSON.stringify([{ ...packet, function_contracts: [...deliveryCatalog, deliveryCatalog[0]] }]));
+  equal(run().status, 2, 'a repeated contract key is an invalid capture');
+  writeFileSync(capture, JSON.stringify([{ ...packet, function_contracts: deliveryCatalog.slice(1) }]));
+  equal(run().status, 1, 'a missing contract key is legal input and fails closed as a violation');
   writeFileSync(capture, JSON.stringify([{ ...packet, rows: [{}] }]));
   equal(run().status, 2, 'invalid row contract is an error, never green');
   writeFileSync(capture, JSON.stringify([]));

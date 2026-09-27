@@ -2931,7 +2931,18 @@ function unappliedLocalCandidateTimestamps(history: string, appliedNames: string
     // disk peer participates, so one applied row cannot settle both an applied file
     // and an unapplied twin. The pure guard spends exact-stamp rows first and counts
     // the remaining slug evidence. A genuinely ambiguous result is an error, not applied.
-    const peers = diskNames.filter((name) => name.endsWith('.sql') && migrationSlug(name) === migrationSlug(basename));
+    // Same-stamp files compete too, whatever their slug: a bare applied row names only the
+    // stamp, so it could belong to any of them (CodeRabbit on #829).
+    const stamp = basename.slice(0, 14);
+    const peers = diskNames.filter((name) => name.endsWith('.sql')
+      && (migrationSlug(name) === migrationSlug(basename) || name.startsWith(`${stamp}_`)));
+    const stampPeers = peers.filter((name) => name.startsWith(`${stamp}_`)).length;
+    const bareRows = appliedNames.filter((name) => name === stamp).length;
+    if (bareRows > 0 && bareRows < stampPeers) {
+      // Fewer bare rows than files sharing the stamp: which file ran is unknowable, so the
+      // candidate is neither applied nor pending. Refuse rather than let matching order decide.
+      throw new Error(`Unknown local-candidate applied attribution: ${bareRows} bare applied row(s) for stamp ${stamp} cannot identify among ${stampPeers} same-stamp files`);
+    }
     const attribution = checkPendingMigrations({
       name: '99991231235959_inventory_probe', sql: '', appliedNames, trackedFiles: peers,
       baselineHighWater: '00000000000000', // Explicit candidates are never hidden below a date floor.
@@ -3082,6 +3093,20 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
     expect(() => unappliedLocalCandidateTimestamps(ambiguous, ['20260908120000_unrelated', 'shared_recorder'], [candidate, twin]))
       .toThrow(/Unknown local-candidate applied attribution/);
     expect([...unappliedLocalCandidateTimestamps(ambiguous, [candidate, twin], [candidate, twin])]).toEqual([]);
+  });
+
+  it('never lets a bare applied row settle a candidate that shares its stamp with a different-slug file', () => {
+    // CodeRabbit on #829: the bare row names only the stamp, so it could be either file.
+    const a = '20260905210000_a.sql';
+    const b = '20260905210000_b.sql';
+    const history = `| 999 | 20260905210000 | **LOCAL CANDIDATE — NOT APPLIED.** \`${a}\` |`;
+    expect(() => unappliedLocalCandidateTimestamps(history, ['20260905210000'], [a, b]))
+      .toThrow(/Unknown local-candidate applied attribution/);
+    // One bare row per same-stamp file accounts for both, and naming rows still settle it.
+    expect([...unappliedLocalCandidateTimestamps(history, ['20260905210000', '20260905210000'], [a, b])]).toEqual([]);
+    expect([...unappliedLocalCandidateTimestamps(history, ['20260905210000_a'], [a, b])]).toEqual([]);
+    // With no applied evidence at all the candidate is simply pending.
+    expect([...unappliedLocalCandidateTimestamps(history, ['20260908120000_unrelated'], [a, b])]).toEqual(['20260905210000']);
   });
 
   it('requires executable idempotency usage rather than comments or string literals', () => {
