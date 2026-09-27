@@ -141,7 +141,11 @@ const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
 // pairing with a real peer's close. Either way it swallowed the "stop" Mason
 // typed below: fail-OPEN on the halt path. Keeping the lines is fail-SAFE —
 // at worst code or peer text is read as Mason's and latches a spurious hold.
-function stripFencedCode(text) {
+//
+// `giveBack: false` restores the old drop-to-end behaviour. Only
+// hasAuthoredText() uses it, because there the safe direction is reversed:
+// see the note on that function.
+function stripFencedCode(text, { giveBack = true } = {}) {
   const kept = [];
   let openFence = null;
   let pending = [];
@@ -160,7 +164,7 @@ function stripFencedCode(text) {
   // Never closed: give the lines back rather than dropping them. The opener
   // line comes back as-is; the rest is re-scanned so a CLOSED inner fence of
   // the other marker (``` inside ~~~ or vice versa) is still removed.
-  if (openFence !== null) {
+  if (openFence !== null && giveBack) {
     kept.push(pending[0], stripFencedCode(pending.slice(1).join("\n")));
   }
   return kept.join("\n");
@@ -213,6 +217,20 @@ function stripCodeFirst(text) {
   return out.replace(BLOCKQUOTE_LINE_RE, " ");
 }
 
+// The parser exactly as it was before #794: an unclosed fence drops to the end,
+// and each tag's closed, unclosed and orphaned forms are removed before the
+// next tag. Used only by hasAuthoredText() as a floor for clearing a hold.
+function stripPre794(text) {
+  let out = stripFencedCode(text, { giveBack: false });
+  out = out.replace(INLINE_CODE_RE, " ");
+  for (const tag of NON_AUTHORED_TAG_NAMES) {
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    out = out.replace(new RegExp(`<\\/${tag}\\s*>`, "gi"), " ");
+  }
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
 // Each order loses Mason's words in a shape the other handles (2026-09-24,
 // #504b review): envelopes-first loses a "stop" between a quoted open tag and
 // a real peer message; code-first loses one below a peer's unfinished fence.
@@ -239,10 +257,22 @@ export function authoredByMason(prompt) {
 // order only, and under the union that peer-only message released a hold Mason
 // latched. Requiring BOTH orders to keep text means a sibling session can
 // never clear his hold by how it formats its own message.
+//
+// It also requires the pre-#794 parser (stripPre794) to keep text (2026-09-26,
+// Codex review of #794). Giving an
+// unclosed fence's lines back is fail-safe for LATCHING, but for clearing it
+// is the unsafe direction: a peer message with a fake closing tag followed by
+// a dangling fence had its tail given back in BOTH orders, so it cleared a hold
+// the old parser kept. With this third check, clearing is never easier than it
+// was before #794.
 export function hasAuthoredText(prompt) {
   const text = String(prompt || "");
   if (!text) return false;
-  return stripEnvelopesFirst(text).trim() !== "" && stripCodeFirst(text).trim() !== "";
+  return (
+    stripEnvelopesFirst(text).trim() !== "" &&
+    stripCodeFirst(text).trim() !== "" &&
+    stripPre794(text).trim() !== ""
+  );
 }
 
 // Keep this a pointer, not a second copy of the policy: the full hard-gate list
