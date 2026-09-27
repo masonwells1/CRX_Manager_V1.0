@@ -781,4 +781,19 @@ for (const payload of [
 // `|` that splits the segment.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
 
+// Unreadable input still fails OPEN (a "*"-matcher guard must not lock every
+// tool call on a stdin glitch) but now LOUDLY: a systemMessage names the skipped
+// check and no permission decision is emitted, so the normal prompt still runs.
+for (const input of ["{bad", "", '{"tool_name":"Bash","tool_in', "[]", "null", "42"]) {
+  const result = spawnSync(process.execPath, [hookPath], { encoding: "utf8", input });
+  const label = `unreadable input ${JSON.stringify(input)}`;
+  assert.equal(result.status, 0, `${label}: exits 0 (fails open)`);
+  assert.equal(result.stderr, "", `${label}: no stderr`);
+  const response = JSON.parse(result.stdout);
+  assert.match(response.systemMessage || "", /review-proof-guard.*SKIPPED/, `${label}: loud warning`);
+  assert.equal(response.hookSpecificOutput, undefined, `${label}: carries no allow/deny decision`);
+}
+// A readable, harmless call stays silent, so the warning means only "could not check".
+assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command: "ls" } }, "readable harmless call");
+
 console.log("OK - review proof guard checks passed.");

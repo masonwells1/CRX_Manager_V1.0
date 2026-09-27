@@ -25,11 +25,26 @@ function deny(reason) {
   process.exit(0);
 }
 
+// Unreadable input fails OPEN, because this guard's matcher is "*": denying here
+// would turn one stdin glitch into a lockout of every tool call (KNOWN_ISSUES,
+// 2026-09-02). It fails open LOUDLY, so a guard that could not check is never
+// mistaken for one that found nothing. The warning carries no permission
+// decision — an "allow" here would skip the normal permission prompt.
+function skippedCheck(why) {
+  process.stdout.write(JSON.stringify({
+    systemMessage: `⚠ review-proof-guard could not read this tool call (${why}), so its check was SKIPPED and the call was not inspected. If this repeats, the guard is not running — report it.`,
+  }));
+  process.exit(0);
+}
+
 let payload;
 try {
   payload = JSON.parse(readFileSync(0, "utf8"));
 } catch {
-  process.exit(0);
+  skippedCheck("input was not valid JSON");
+}
+if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  skippedCheck("input was not a JSON object");
 }
 
 const toolInput = payload?.tool_input || payload?.toolInput || {};
