@@ -43,6 +43,9 @@ function runStopWrap(sessionId, projectDir) {
 }
 const snapDir = path.join(os.tmpdir(), "crx-claude-hooks");
 function startSession(sessionId) {
+  // git's --since has one-second granularity: wait past the previous session's
+  // last commit so it cannot fall inside this session's window.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
   mkdirSync(snapDir, { recursive: true });
   const p = path.join(snapDir, `session-${sessionId}.snapshot`);
   writeFileSync(p, "", "utf8"); // clean tree at session start; mtime = now
@@ -107,6 +110,30 @@ try {
   const resolvedMerge = runStopWrap(s1b, tmp);
   assert.match(resolvedMerge.stdout, LEDGER_WARNING,
     "a merge carrying an authored conflict resolution with no ledger must still warn");
+  pass++;
+
+  // ── Session 1c: the merge resolution itself ADDS this session's changelog
+  //    entry (Codex P2, PR #827) → that counts as the ledger, no warning ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side 2\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base again"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side 2\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base again"], tmp, { past: true });
+  const s1c = "ledger-test-merge-adds-entry";
+  snapshots.push(startSession(s1c));
+  const conflicted2 = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted2.status, 0, "setup: the second merge must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "hand-resolved again\n");
+  writeFileSync(path.join(tmp, "docs", "changelog.d", "2026-09-27-merge-resolution.md"),
+    "## 2026-09-27 — merge resolution\n\nCombined both sides of base.txt by hand.\n");
+  git(["add", "base.txt", "docs/changelog.d/2026-09-27-merge-resolution.md"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const mergeWithEntry = runStopWrap(s1c, tmp);
+  assert.ok(!LEDGER_WARNING.test(mergeWithEntry.stdout),
+    `a merge whose resolution adds a changelog entry must count as recorded; got: ${mergeWithEntry.stdout}`);
   pass++;
 
   // ── Session 2: a real commit without any ledger → still warns ──

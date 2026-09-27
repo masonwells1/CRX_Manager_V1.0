@@ -543,8 +543,19 @@ try {
     const nonMergeCommits = runGit(["log", "--oneline", "--no-merges", since]).trim();
     const mergeResolutionFiles = runGit(["log", "--merges", "--format=%H", since])
       .split("\n").map((s) => s.trim()).filter(Boolean)
-      .flatMap((sha) => runGit(["diff-tree", "--cc", "--no-commit-id", "--name-only", "-r", sha])
-        .split("\n").map((s) => s.trim()).filter(Boolean));
+      .flatMap((sha) => runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha])
+        .split("\n").map((s) => s.trim()).filter(Boolean)
+        .map((s) => {
+          const parts = s.split("\t");
+          if (parts.length < 2) return null;
+          // One status letter per parent ("MM", "AA", …). A path added relative
+          // to EVERY parent is a new file the resolution created — e.g. the
+          // session's own changelog.d entry (Codex P2, PR #827) — so it stays
+          // an addition; anything else is a modification.
+          const status = /^A+$/.test(parts[0].trim()) ? "A" : "M";
+          return { path: parts[parts.length - 1], status };
+        })
+        .filter(Boolean));
     if (nonMergeCommits || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —
@@ -570,9 +581,9 @@ try {
       const touched = [
         ...lines.map((l) => ({ path: porcelainPath(l), status: l.slice(0, 2) })),
         ...fromLog,
-        // Files edited while resolving a merge; "M" because a resolution never
-        // ADDS a changelog.d fragment of this session's own.
-        ...mergeResolutionFiles.map((p) => ({ path: toPosixPath(p), status: "M" })),
+        // Files authored while resolving a merge, with the combined status
+        // mapped above ("A" only when new relative to every parent).
+        ...mergeResolutionFiles.map(({ path: p, status }) => ({ path: toPosixPath(p), status })),
       ];
       // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
       const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);
