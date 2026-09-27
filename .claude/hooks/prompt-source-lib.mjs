@@ -141,7 +141,11 @@ const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
 // pairing with a real peer's close. Either way it swallowed the "stop" Mason
 // typed below: fail-OPEN on the halt path. Keeping the lines is fail-SAFE —
 // at worst code or peer text is read as Mason's and latches a spurious hold.
-function stripFencedCode(text) {
+//
+// `giveBack: false` restores the old drop-to-end behaviour. Only
+// hasAuthoredText() uses it, because there the safe direction is reversed:
+// see the note on that function.
+function stripFencedCode(text, { giveBack = true } = {}) {
   const kept = [];
   let openFence = null;
   let pending = [];
@@ -160,7 +164,7 @@ function stripFencedCode(text) {
   // Never closed: give the lines back rather than dropping them. The opener
   // line comes back as-is; the rest is re-scanned so a CLOSED inner fence of
   // the other marker (``` inside ~~~ or vice versa) is still removed.
-  if (openFence !== null) {
+  if (openFence !== null && giveBack) {
     kept.push(pending[0], stripFencedCode(pending.slice(1).join("\n")));
   }
   return kept.join("\n");
@@ -213,6 +217,20 @@ function stripCodeFirst(text) {
   return out.replace(BLOCKQUOTE_LINE_RE, " ");
 }
 
+// The parser exactly as it was before #794: an unclosed fence drops to the end,
+// and each tag's closed, unclosed and orphaned forms are removed before the
+// next tag. Used only by hasAuthoredText() as a floor for clearing a hold.
+function stripPre794(text) {
+  let out = stripFencedCode(text, { giveBack: false });
+  out = out.replace(INLINE_CODE_RE, " ");
+  for (const tag of NON_AUTHORED_TAG_NAMES) {
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, "i"), " ");
+    out = out.replace(new RegExp(`<\\/${tag}\\s*>`, "gi"), " ");
+  }
+  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+}
+
 // Each order loses Mason's words in a shape the other handles (2026-09-24,
 // #504b review): envelopes-first loses a "stop" between a quoted open tag and
 // a real peer message; code-first loses one below a peer's unfinished fence.
@@ -239,10 +257,22 @@ export function authoredByMason(prompt) {
 // order only, and under the union that peer-only message released a hold Mason
 // latched. Requiring BOTH orders to keep text means a sibling session can
 // never clear his hold by how it formats its own message.
+//
+// It also requires the pre-#794 parser (stripPre794) to keep text (2026-09-26,
+// Codex review of #794). Giving an
+// unclosed fence's lines back is fail-safe for LATCHING, but for clearing it
+// is the unsafe direction: a peer message with a fake closing tag followed by
+// a dangling fence had its tail given back in BOTH orders, so it cleared a hold
+// the old parser kept. With this third check, clearing is never easier than it
+// was before #794.
 export function hasAuthoredText(prompt) {
   const text = String(prompt || "");
   if (!text) return false;
-  return stripEnvelopesFirst(text).trim() !== "" && stripCodeFirst(text).trim() !== "";
+  return (
+    stripEnvelopesFirst(text).trim() !== "" &&
+    stripCodeFirst(text).trim() !== "" &&
+    stripPre794(text).trim() !== ""
+  );
 }
 
 // Keep this a pointer, not a second copy of the policy: the full hard-gate list
@@ -250,4 +280,4 @@ export function hasAuthoredText(prompt) {
 // .claude/commands/ship.md Step 8. A shorter restated list here once told agents
 // only three actions were gated (2026-09-25 guidance review).
 export const PUSH_POLICY =
-  "LANDING POLICY: Mason authorized auto-landing regular, reversible code on main (2026-06-16) once the full pipeline is green: branch → (exact-SHA Sol proof first, for a risky diff) → PR → required checks → CodeRabbit review of the frozen head → exact-head merge, as detailed in .claude/commands/ship.md Step 8; direct pushes to main are impossible. In an ARMED hands-free run (autopilot flag), pushes/merges PARK for Mason's review instead. HARD GATES — every one in AGENTS.md › Safety and Protected Delivery (force-push, live migration or live-data change, Edge Function or out-of-band production change, data deletion, secrets, authentication, permissions, billing, domains, ownership) — need Mason's explicit OK in the current conversation. The only exception: a NON-destructive migration in an armed hands-free run he pre-authorized, through the migration-apply-guard proof + Codex gates; destructive migrations (DELETE/TRUNCATE business rows, DROP data-bearing tables/columns) are refused even then. Never commit unrelated files.";
+  "LANDING POLICY: Mason's autonomous-landing rule (2026-09-26): branch → PR → required checks green → ready-for-coderabbit → CodeRabbit APPROVED on the exact head (fixes stay on the same PR) → exact-SHA Sol proof LAST → apply the change's NON-destructive migration, if any → exact-head merge, all with no in-chat ask, as detailed in .claude/commands/ship.md Step 8; direct pushes to main are impossible. The merge and apply gates enforce it in every session; an ARMED hands-free run passes only a plain branch push and a plain `gh pr merge <n>` on to those gates. HARD GATES — every one in AGENTS.md › Safety and Protected Delivery (force-push, DESTRUCTIVE migration or live-data change outside a reviewed migration, Edge Function or out-of-band production change, data deletion, secrets, authentication, permissions, billing, domains, ownership) — need Mason's explicit OK in the current conversation; destructive migrations (DELETE/TRUNCATE business rows, DROP data-bearing tables/columns) are refused for agents even then, armed or not, until he says yes. Never commit unrelated files.";

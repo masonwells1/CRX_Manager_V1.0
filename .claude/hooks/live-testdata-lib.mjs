@@ -162,7 +162,7 @@ export function stripDollarQuoted(sql) {
 // DO-prefix allowlist kept being bypassable by legal comment placement; an
 // over-kept body can only cause a false PARK, never hidden data loss).
 const FN_BODY_PREFIX_RE = /\bas\s*$/i;
-function stripFunctionBodiesOnly(sql) {
+export function stripFunctionBodiesOnly(sql) {
   return stripDollarQuotedCore(sql, (out) => !FN_BODY_PREFIX_RE.test(stripTrailingComments(out)));
 }
 
@@ -174,7 +174,7 @@ function stripFunctionBodiesOnly(sql) {
 // a kept dollar-quoted body (e.g. a DO block) is no longer stripped, so prose
 // like `-- never TRUNCATE` in a DO body can false-positive — that parks the
 // migration for Mason, which is the safe direction.
-export function stripCommentsQuoteAware(sql) {
+export function stripCommentsQuoteAware(sql, { intoDollarBodies = false } = {}) {
   const src = String(sql || "");
   let out = "";
   let i = 0;
@@ -204,7 +204,14 @@ export function stripCommentsQuoteAware(sql) {
         const open = tag[0];
         const close = src.indexOf(open, i + open.length);
         const end = close === -1 ? n : close + open.length;
-        out += src.slice(i, end); i = end; continue;
+        // intoDollarBodies: also remove the comments INSIDE a kept body (a DO
+        // block), tokenized quote-aware from the body's own start — used by the
+        // access classifier, whose prose false positives would otherwise park
+        // every migration with a self-checking DO block. Default: verbatim.
+        out += intoDollarBodies && close !== -1
+          ? open + stripCommentsQuoteAware(src.slice(i + open.length, close), { intoDollarBodies }) + open
+          : src.slice(i, end);
+        i = end; continue;
       }
     }
     if (ch === "-" && src[i + 1] === "-") {

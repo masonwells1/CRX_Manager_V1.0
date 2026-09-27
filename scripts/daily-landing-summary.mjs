@@ -1,0 +1,256 @@
+#!/usr/bin/env node
+// Daily plain-English landing summary for Mason (autonomous-landing rule,
+// 2026-09-26). Once agents merge and apply non-destructive migrations on their
+// own, this is how Mason keeps sight of what happened: once a day, what merged,
+// which database changes the agents recorded as applied, and what is waiting on
+// him.
+//
+// READ-ONLY with respect to the code and the database. It reads GitHub (merged
+// and open pull requests) and this checkout's git history. The ONLY write it can
+// make is the summary itself, and only with --post: one comment on a single
+// "Daily landing summary" issue that @-mentions Mason, so GitHub emails it to
+// him. Without --post it prints the summary and changes nothing.
+//
+// WHERE "APPLIED" COMES FROM — stated plainly because it is the weak point. This
+// job holds no database credential (adding one is a secrets decision, which stays
+// Mason's), so it cannot read the live migration ledger. It reports applies as
+// they were RECORDED, and only as an explicit record line of its own:
+//     Applied live: <migration_name>
+// posted from Mason's account (which the agents' gh uses) as a comment on a pull
+// request merged in the window, or written in a docs/changelog.d/ entry. Prose
+// is never read as a record (Sol MEDIUM, round 8): real change notes say "was
+// applied live" and "has not been applied to production" in the same breath.
+// The agent posts the comment AFTER the merge, because the apply happens after
+// the final reviews, and editing the PR then would move its approved head. The
+// summary says all this in its footer rather than presenting it as a database
+// read.
+//
+// Usage:
+//   node scripts/daily-landing-summary.mjs                # print the last 24 hours
+//   node scripts/daily-landing-summary.mjs --hours 48     # widen the window
+//   node scripts/daily-landing-summary.mjs --post         # post it (GitHub Actions)
+
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { destructiveMigrationCheck } from "../.claude/hooks/live-testdata-lib.mjs";
+import { accessChangeCheck, dataRewriteCheck } from "../.claude/hooks/migration-access-lib.mjs";
+
+const ISSUE_TITLE = "Daily landing summary";
+const MASON = "masonwells1";
+const DEFAULT_REPO = "masonwells1/CRX_Manager_V1.0";
+const NEEDS_MASON_LABEL = "needs-mason";
+
+// PR titles and changelog headings are written by anyone who can open a PR on a
+// public repo. Neutralise the three things that would let that text act on the
+// comment it lands in: an @-mention (notifies strangers), a line break (forges
+// structure) and markdown link/emphasis syntax.
+export function plainText(value, max = 140) {
+  const text = String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/@/g, "@​")
+    .replace(/[`*_[\]<>|]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// A migration file name, shown intact inside a code span. plainText() strips
+// underscores, which mangles every migration name, so names are instead
+// admitted only if they are plain letters, digits, underscores and a dot.
+export function migrationName(name) {
+  const text = String(name ?? "");
+  return /^[A-Za-z0-9_.-]{1,120}$/.test(text) ? `\`${text}\`` : plainText(text, 100);
+}
+
+// Heading of a changelog.d entry: the first "## ..." line, minus the date prefix.
+export function changelogHeading(markdown) {
+  const line = String(markdown || "").split(/\r?\n/).find((candidate) => /^##\s+/.test(candidate));
+  if (!line) return null;
+  return line.replace(/^##\s+/, "").replace(/^\d{4}-\d{2}-\d{2}\s*[-—–:]\s*/, "").trim() || null;
+}
+
+// The migration names in explicit `Applied live: <migration_name>` record lines —
+// at the start of a line (optionally bulleted or bold), naming a real migration
+// stem (14-digit version + name). Anything else, including "not applied live",
+// "Applied live: none" or a mid-sentence mention, is not a record.
+export function applyRecords(markdown) {
+  const RECORD = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Applied live:(?:\*\*)?[ \t]*`?(\d{14}_[A-Za-z0-9_]+?)(?:\.sql)?`?[ \t]*$/gim;
+  return [...String(markdown || "").matchAll(RECORD)].map((match) => match[1]);
+}
+
+// Which open pull requests need Mason, and why. `files` entries are the REST
+// /pulls/{n}/files shape: { filename, patch }.
+export function waitingReasons({ labels = [], files = [] }) {
+  const reasons = [];
+  if (labels.some((label) => String(label?.name || label).toLowerCase() === NEEDS_MASON_LABEL)) {
+    reasons.push("an agent marked it as needing your decision");
+  }
+  if (files.some((file) => String(file?.filename || "").startsWith("supabase/functions/"))) {
+    reasons.push("it changes an Edge Function, and deploying one is yours");
+  }
+  for (const file of files) {
+    const name = String(file?.filename || "");
+    if (!/^supabase\/migrations\/[^/]+\.sql$/i.test(name)) continue;
+    // GitHub leaves `patch` out when a diff is too large to show. An unreadable
+    // migration is not a safe one (Sol MEDIUM, round 7): flag it for Mason rather
+    // than classify missing SQL as harmless. A removed file has no SQL to add.
+    if (typeof file?.patch !== "string" && String(file?.status || "") !== "removed") {
+      reasons.push(`its database change ${migrationName(path.basename(name))} could not be read from GitHub, so it could not be checked for deleting data — have an agent check it`);
+      continue;
+    }
+    const added = String(file?.patch || "").split(/\r?\n/)
+      .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      .map((line) => line.slice(1))
+      .join("\n");
+    let verdict;
+    try { verdict = destructiveMigrationCheck(added); } catch { verdict = { destructive: true, reason: "could not be classified" }; }
+    if (verdict.destructive) {
+      reasons.push(`its database change ${migrationName(path.basename(name))} deletes data (${plainText(verdict.reason, 100)}), which stays yours to approve`);
+      continue;
+    }
+    // Overwriting existing rows is his too (2026-09-27, "Data rewrites wait").
+    // Without history, a call to an earlier public function counts as unknown.
+    let rewrite;
+    try { rewrite = dataRewriteCheck(added); } catch { rewrite = { rewrites: true, reason: "could not be classified" }; }
+    if (rewrite.rewrites) {
+      reasons.push(`its database change ${migrationName(path.basename(name))} changes existing data (${plainText(rewrite.reason, 120)}), which stays yours to approve`);
+      continue;
+    }
+    // Permission changes are his too (2026-09-26). The patch shows only this
+    // PR's added lines, so for an EDITED file the check may miss objects the
+    // file created earlier — that errs toward listing it, never toward hiding it.
+    // No migration history is passed either, so a grant on a REPLACED object
+    // counts as unknown and is listed (Sol HIGH #2, round 10).
+    let access;
+    try { access = accessChangeCheck(added); } catch { access = { changesAccess: true, reason: "could not be classified" }; }
+    if (access.changesAccess) {
+      reasons.push(`its database change ${migrationName(path.basename(name))} changes who can access what (${plainText(access.reason, 120)}), which stays yours to approve`);
+    }
+  }
+  return reasons;
+}
+
+// Every apply record in the window, de-duplicated by migration name: comments by
+// Mason's account on the merged PRs, then changelog entries. A stranger's
+// comment on a public repo never counts.
+export function collectApplies({ merged = [], changes = [] }) {
+  const seen = new Map();
+  for (const pr of merged) {
+    for (const comment of pr.comments || []) {
+      if (String(comment?.author?.login || "").toLowerCase() !== MASON) continue;
+      for (const name of applyRecords(comment?.body)) if (!seen.has(name)) seen.set(name, `#${pr.number}`);
+    }
+  }
+  for (const change of changes) {
+    for (const name of change.applied || []) if (!seen.has(name)) seen.set(name, "change note");
+  }
+  return [...seen].map(([name, source]) => ({ name, source }));
+}
+
+export function buildSummary({ now, hours, merged, changes, landedMigrations, waiting }) {
+  const day = new Date(now).toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "long", day: "numeric", year: "numeric" });
+  const applied = collectApplies({ merged, changes });
+  const lines = [
+    `@${MASON} — here is what happened in CRX Manager in the last ${hours} hours (${day}).`,
+    "",
+    `**Went live (merged): ${merged.length}**`,
+    ...(merged.length
+      ? merged.map((pr) => `- #${pr.number} ${plainText(pr.title)}`)
+      : ["- Nothing merged."]),
+    "",
+    `**Database changes applied: ${applied.length}**`,
+    ...(applied.length
+      ? applied.map((apply) => `- ${migrationName(apply.name)} (${apply.source})`)
+      : ["- None recorded."]),
+  ];
+  if (landedMigrations.length) {
+    lines.push("", "New database change files that reached the main branch (applied or waiting to be applied):",
+      ...landedMigrations.map((name) => `- ${migrationName(name)}`));
+  }
+  lines.push("", `**Waiting on you: ${waiting.length}**`);
+  if (waiting.length) {
+    lines.push(...waiting.map((pr) => `- #${pr.number} ${plainText(pr.title)} — ${pr.reasons.join("; ")}.`));
+  } else {
+    lines.push("- Nothing needs you today.");
+  }
+  if (changes.length) {
+    lines.push("", "Changes recorded in this window:", ...changes.slice(0, 20).map((change) => `- ${plainText(change.heading)}`));
+    if (changes.length > 20) lines.push(`- …and ${changes.length - 20} more.`);
+  }
+  lines.push("",
+    "_How this is put together: merges come straight from GitHub. \"Applied\" lists only the explicit " +
+    "\"Applied live: <database change>\" records the agents post on a merged pull request (or write in a change " +
+    "note) after applying one; this job has no database access, so it cannot double-check the live database " +
+    "itself. What stays yours: database changes that delete or overwrite data, Edge Function deploys, and anything about " +
+    "secrets, logins, billing or permissions._");
+  return lines.join("\n");
+}
+
+function readArgs(argv) {
+  const hoursIndex = argv.indexOf("--hours");
+  const hours = hoursIndex >= 0 ? Number(argv[hoursIndex + 1]) : 24;
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 24 * 14) throw new Error("--hours must be a number of hours between 1 and 336");
+  return { hours, post: argv.includes("--post") };
+}
+
+function main() {
+  const { hours, post } = readArgs(process.argv.slice(2));
+  const repo = process.env.GITHUB_REPOSITORY || DEFAULT_REPO;
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const now = Date.now();
+  const since = new Date(now - hours * 3600_000);
+  const gh = (args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+
+  const merged = JSON.parse(gh(["pr", "list", "--repo", repo, "--state", "merged", "--limit", "200",
+    "--search", `merged:>=${since.toISOString().slice(0, 10)}`, "--json", "number,title,mergedAt,comments"]))
+    .filter((pr) => Date.parse(pr.mergedAt) >= since.getTime())
+    .sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt));
+
+  const added = (dir) => git(["log", `--since=${since.toISOString()}`, "--diff-filter=A", "--name-only", "--format=", "HEAD", "--", dir])
+    .split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const changes = [...new Set(added("docs/changelog.d"))].filter((file) => file.endsWith(".md") && !file.endsWith("README.md"))
+    .flatMap((file) => {
+      let text;
+      try { text = readFileSync(path.join(root, file), "utf8"); } catch { return []; }
+      const heading = changelogHeading(text);
+      return heading ? [{ heading, applied: applyRecords(text) }] : [];
+    });
+  const landedMigrations = [...new Set(added("supabase/migrations"))].filter((file) => file.endsWith(".sql")).map((file) => path.basename(file));
+
+  const open = JSON.parse(gh(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "number,title,labels,isDraft"]))
+    .filter((pr) => !pr.isDraft);
+  const waiting = [];
+  for (const pr of open) {
+    const files = JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${pr.number}/files?per_page=100`])).flat();
+    const reasons = waitingReasons({ labels: pr.labels, files });
+    if (reasons.length) waiting.push({ number: pr.number, title: pr.title, reasons });
+  }
+
+  const summary = buildSummary({ now, hours, merged, changes, landedMigrations, waiting });
+  if (!post) {
+    process.stdout.write(`${summary}\n\n(dry run — nothing was posted; pass --post to post it)\n`);
+    return;
+  }
+  const issues = JSON.parse(gh(["issue", "list", "--repo", repo, "--state", "open", "--limit", "20",
+    "--search", `"${ISSUE_TITLE}" in:title`, "--json", "number,title"]))
+    .filter((issue) => issue.title === ISSUE_TITLE);
+  let issueNumber = issues[0]?.number;
+  if (!issueNumber) {
+    const url = gh(["issue", "create", "--repo", repo, "--title", ISSUE_TITLE, "--body",
+      "One comment a day: what merged, which database changes were applied, and what is waiting on Mason. " +
+      "Posted by .github/workflows/daily-landing-summary.yml (scripts/daily-landing-summary.mjs)."]).trim();
+    issueNumber = Number(url.split("/").pop());
+  }
+  gh(["issue", "comment", String(issueNumber), "--repo", repo, "--body", summary]);
+  process.stdout.write(`Posted the daily landing summary to issue #${issueNumber}.\n`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { main(); } catch (error) {
+    process.stderr.write(`daily-landing-summary: ${error?.message || error}\n`);
+    process.exit(1);
+  }
+}
