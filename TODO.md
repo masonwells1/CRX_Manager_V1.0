@@ -296,7 +296,8 @@ then read it with `git show e81853970:<path>`. Re-verify against the live app be
   `git show e81853970:docs/loops/business-workflow-junk-customer-flags.md`.
 
 **Owner smoke test**
-- Click-test the three act-from-the-list write buttons on real data (open since 2026-06-24): Quotes list
+- Click-test the three act-from-the-list write buttons (open since 2026-06-24) using disposable `[E2E]` records only,
+  never real customer data; an agent does this only with Mason's explicit approval in the current conversation: Quotes list
   "Convert to Order", Deliveries list "Complete" (signed-by popup), and Receiving Hub "Receive" on a PO
   line. Each should match its detail-page flow.
 
