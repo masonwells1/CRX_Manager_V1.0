@@ -40,20 +40,44 @@ playbook is detail on top of that.
 
 ---
 
+## How to ask for things
+
+You never need technical wording, file names, or a copy of the project rules — `AGENTS.md` and the start-of-session hooks give every agent that context. Describe the business outcome; the agent owns the technical process. Usually one sentence is enough:
+
+> Fix [what is wrong] so [what should happen].
+
+> Build [outcome] for [who uses it].
+
+Helpful extras are what you saw, what you expected, and any firm limit. A few shapes that work well:
+
+- **Review only:** "Review [page, workflow, or PR]. Read-only — don't edit, merge, or change live data. Tell me what matters and one next step."
+- **Diagnose first:** "Find out why [problem] happens. Don't fix it yet — show me the cause, the business impact, and your recommended fix."
+- **Database change:** "Add [field or behavior] to [area]. Prepare and review the change, but don't apply it to the live database until I say so for that exact change."
+- **Finish and ship:** "Finish [outcome], fix real review findings, and land it through the normal protected process. Tell me right away if something needs me."
+- **Status:** "What's the current status of [task, PR, or the live app]? Use current evidence, not an old handoff."
+
+**Firm limits the agent must obey literally** (add one only when you mean it): "read-only", "don't write files", "don't push or merge", "don't query or change production", "stop before applying the live migration". Without one, words like "fix", "build", "finish" and "ship" authorize the normal reversible work and protected landing described in `AGENTS.md` — Claude still shows you one short plan first for multi-file or risky work.
+
+**What you should get back:** the outcome first, in plain English; routine technical choices made for you; no need to keep saying "continue"; a clear note when something fails; any real stop starting with `NEEDS MASON - ACTION REQUIRED` or `NEEDS MASON - DECISION REQUIRED` and one recommended action; and a closeout saying what's done, what proof ran, who owns what's left, and one next step. Rough or misspelled requests are fine — clear intent matters more than wording.
+
+---
+
 ## Your daily/weekly routines
 
 | Say this | What happens | When to use |
 |---|---|---|
 | Just open a session — nothing to say | A start-of-session check runs automatically and may warn you about: the **schema registry** (a snapshot of the database structure the safety hooks read) being out of date, **leftover uncommitted changes** from a previous session, or the **weekly database backup** being missing or stale. These are just heads-up flags, not errors — mention them to the agent and it'll offer to fix the stale one. | Every time you start working |
-| "Is prod okay?" | A one-page live health check: recent errors (Sentry), database security/performance warnings (Supabase advisors), the last website build status (Vercel), and whether the background email/OCR/user-admin jobs (Edge Functions) are deployed correctly. Read-only — nothing changes. (`spot-check-prod`) | Anytime you're unsure if something's wrong, or before approving a new deploy |
+| "Is prod okay?" | A one-page live health check: recent errors (Sentry), database security/performance warnings (Supabase advisors), the last website build status (Vercel), and whether the background jobs (Edge Functions: email, OCR, user admin, EPA lookups, customer-document files) are deployed correctly. Read-only — nothing changes. (`spot-check-prod`) | Anytime you're unsure if something's wrong, or before approving a new deploy |
 | "Back up the database" | A full read-only copy of every table in the live database gets saved as dated files. Because your Supabase plan doesn't include automatic point-in-time recovery, this weekly copy is your real safety net. (`backup-db`) | Weekly, or anytime before something risky |
-| "Is my data backed up?" | Just reads the last backup's date/size — no new backup runs. | Quick reassurance check |
+| "Is my data backed up?" | Checks both backup channels — the local backup files and the scheduled off-site backup that runs as a GitHub Action in your private `CRX_Backups` repo — and reports the newest good one. No new backup runs. | Quick reassurance check |
 | "What's the status of everything" | Shows every parallel worktree (a worktree is a separate folder/session working on its own piece of code) and every background loop at once — what's finished, what's still in progress, what's merged into the live app already. (`fleet`) Pair with "anything waiting on me" to see every written-but-not-yet-applied database change across all of them. (`parked`) | When you've had several sessions running and want the big picture |
 | "Review this before it ships" | Runs the code through the right combination of automated reviewers (security, database-drift, money-math, PDF-output checks) plus a genuinely independent second AI model, Codex, so nothing ships on one model's opinion alone. (`preflight` for the quick pre-commit check; `codex-gauntlet`/`codex-review` for the fuller adversarial pass) | Before committing or before anything you're nervous about |
 | "Ship it" | Runs the full pipeline: implement → verify it actually works → automated review → Codex's independent review → fix anything found → CodeRabbit's final review → Sol's final review → apply its database change if it has one → merge. It lands on its own once both final reviews are clean and every check is green (your 2026-09-26 rule, explained below). It stops and shows you exactly what it wants to do before a database change that deletes data, an Edge Function deploy, or anything touching secrets, logins, billing or permissions. (`ship`) | The standard way to get a feature or fix built end-to-end |
 | "Something looks wrong in the live app" | Pulls recent errors from Sentry (error tracking), Vercel (the website host), and Supabase (the database) logs, explains each one in plain English, and suggests a fix. If the real fix is "undo the last change" rather than "patch forward," it hands you to the rollback flow instead. (`quick-fix`) | The moment something looks broken |
 | "Undo the last change" / "roll back" | Walks you through exactly one of three fixes depending on what broke: a bad website deploy (one click in Vercel), a bad database change (a new corrective migration, never editing history), or a bad background job (redeploying its last good version). Every path shows you what happened and waits for your yes before doing anything live. (`rollback`) | Right after a change breaks something |
-| "End the session" / "wrap up" | The agent double-checks the code still compiles and builds, that documentation is in sync, and reminds you to commit if you haven't. There's no single command for this — just say it and the agent runs through the closing checklist. | Before closing your laptop |
+| "Are we done?" / "wrap up" / "good to archive?" | A read-only close-out check: is every change from this session committed, pushed, merged, and live? You get one verdict — safe to archive, or the exact steps still left. It never commits or merges anything on its own to make the answer green. (`wrap-session`, a Claude skill) | Before closing a session or your laptop |
+| "Check all my folders" / "is any work sitting uncommitted?" | A read-only sweep of every CRX and FarmRx folder on this PC for work that is uncommitted, unpushed, or unmerged, with one recommended action. (`sync-sweep`, a Claude skill) | When you're not sure where you're out of sync |
+| "Give me a prompt to paste" / "hand this to Codex" | Writes one copy-paste prompt so the work continues cleanly in a fresh session or in Codex. (`handoff`, a Claude skill) | When a session is getting long or you want another agent to pick up |
 
 ---
 
@@ -64,7 +88,7 @@ playbook is detail on top of that.
 **What you still do — the whole list:**
 
 - **Approve a database change that deletes data.** Anything that erases business records, or drops a table or column that holds data. Agents cannot apply these at all, in any session — not even after your yes, because a safety script has no way to prove a yes you typed to an agent. They park it, explain the risk in plain English, and hand it to you to apply yourself in the Supabase dashboard, walking you through each step.
-- **Approve Edge Function deploys.** These are the small pieces of backend code that send emails, scan blend-ticket photos (OCR), and create/reset user accounts. A bad deploy can silently break one of those without touching the rest of the app.
+- **Approve Edge Function deploys.** These are the small pieces of backend code that send emails, scan blend-ticket photos and import documents (OCR), look up EPA registrations, create/reset user accounts, and serve customer documents. A bad deploy can silently break one of those without touching the rest of the app.
 - **Approve anything touching secrets, logins, billing, or permissions.** Passwords and keys, who can sign in and how, what you pay for, and who is allowed to do what. For database changes you chose (2026-09-26) where the line sits: the routine "lock this new function or table down to signed-in staff" lines apply by themselves; anything that opens access wider (for example to the public), removes or changes an existing access rule, turns off row security, or touches logins, file storage or roles waits for you, and a safety script refuses to apply it for an agent.
 
 A few other things agents simply never do on their own — overwriting history on GitHub (a force-push), changing live data by hand outside a reviewed migration, or changing domains or account ownership. `AGENTS.md` holds that full list; if another document ever shows a shorter one, `AGENTS.md` wins.
@@ -122,7 +146,7 @@ A few other things agents simply never do on their own — overwriting history o
 ## Monthly health habits
 
 - **Run an agent-health check** ("is the Claude/Codex setup healthy?") — confirms the hooks, reviewers, and handoff wiring between the two AI tools are actually working, not just present. (`agent-health`)
-- **Check all backup paths actually ran:** the weekly file-based database backup (ask "is my data backed up?"), the automated in-database snapshot inside Supabase, and the nightly Personal DR backup. Independent copies are the point — one system quietly failing should not be a surprise months later.
+- **Check all backup paths actually ran:** the scheduled weekly off-site backup (a GitHub Action that saves an encrypted copy to your private `CRX_Backups` repo) and any local file-based backup (ask "is my data backed up?" — it checks both), the automated in-database snapshot inside Supabase, and the nightly Personal DR backup. Independent copies are the point — one system quietly failing should not be a surprise months later.
 - **Skim `docs/manual/KNOWN_ISSUES.md` with your agent** — the one consolidated list of everything known-open: dormant bugs, parked database changes, and decisions waiting on you. A five-minute skim once a month keeps small things from being forgotten.
 - **Ask "where are my Claude tokens going?"** — the agent runs `node scripts/claude-usage-report.mjs` (read-only; it reads the transcripts on this PC, sends nothing anywhere) and reports the last 14 days: how much of the spend is context being re-sent every call, which sessions ran longest, and how many tool calls a guard refused. Roughly three-quarters of spend is re-sent context, so the number to watch is "calls above 200K context"; a session that keeps climbing is cheaper to hand off than to continue.
 
