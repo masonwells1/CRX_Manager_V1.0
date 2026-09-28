@@ -5,7 +5,7 @@ source material. The program's completed build-loop ledgers and loop logs were a
 on **2026-07-13** and deleted in the 2026-09-26 docs cleanup (see the note under the table).
 
 Verify current live behavior in code and the live database before acting on anything here —
-these are point-in-time ledgers, not current state.
+these are point-in-time records, not current state.
 
 | Archived item | Was at | Program phase | Shipped |
 |---|---|---|---|
