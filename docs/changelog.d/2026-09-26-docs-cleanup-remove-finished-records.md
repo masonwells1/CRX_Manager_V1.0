@@ -47,10 +47,11 @@ paths that no longer existed even before this cleanup, and they were not touched
   run;
 - `docs/plans/sprayer-packet-feature-todo.md`, an open owner decision in `TODO.md` §4.
 
-**Follow-up:** some `(Source: …)` citations in `docs/manual/KNOWN_ISSUES.md` now name removed
-files without saying so. Parts 2 and 3 stayed out of that file so they could not conflict with the
-open field-season delivery PR (#832 when this was written; it has been replaced several times). Once that PR lands, those citations should gain
-"(removed 2026-09-26; in git history)".
+**Source citations:** twelve `(Source: …)` citations in `docs/manual/KNOWN_ISSUES.md` named files
+that parts 2 and 3 remove. Each now says the file was removed on 2026-09-26 and gives a
+`git show 4b6ff6293:<path>` command that recovers it: 4 were edited in #833 and 8 in this change.
+These edits touch only those lines. A trial merge against the open field-season delivery PR (#832
+at the time), which also edits that file, showed no conflict.
 
 **Proof observed for part 3:** `npm run check:docs` and `npm run test:agent-workflows` both exit 0,
 and the pre-push containment, typecheck and build checks pass. **Not verified:** the session-start
