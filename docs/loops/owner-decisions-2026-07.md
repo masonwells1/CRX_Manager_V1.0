@@ -1,21 +1,24 @@
 # Owner Decisions — Structure-Fix Wave (2026-07)
 
-**For:** Mason · **From:** the structure-fix loop · **Status:** decisions needed before the matching code is applied.
-These six packets each need a business call (not a coding call). Nothing here is applied yet. Where a fix is
-already drafted-and-parked (Wave A), the packet notes it. Live counts pulled 2026-07-02.
+**For:** Mason · **From:** the structure-fix loop · **Status (corrected 2026-09-26):** packets 4, 5 and 6 are
+settled (packet 4's due-date terms shipped 2026-07-21 in PRs #195 and #197); packet 3 is partly done; packets 1
+(vendor/manufacturer merges) and 2 (category remap), plus packet 3's true-junk deletes, still need your call.
+The current open list is `TODO.md` §1 item 5; the outcomes are recorded just below.
+These six packets each need a business call (not a coding call). The packet bodies below are the original
+2026-07-02 write-up. Live counts were pulled 2026-07-02 and are not refreshed.
 
 > **Outcomes recorded 2026-07-16 (Mason, in-chat):**
 > - **Packet 3 (junk deletes): PARTIAL.** Keep test entities for E2E/Playwright use, un-commingled —
 >   the two untagged test customers were renamed live with the `[E2E]` prefix. True-junk deletes
 >   (8 `RTJ Recipe…` rows, zero-link customers, vendor `we`, bad emails) still need line-item approval.
 > - **Packet 4 (due dates): DECIDED** — Net 30 default + Net 15 / due-on-receipt / custom-date
->   override. Build spec: `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`.
+>   override. Build spec (shipped; removed 2026-09-26, in git history): `docs/plans/invoice-due-dates-net30-spec-2026-07-16.md`.
 > - **Packet 5 (wire-vs-retire): SETTLED — KEEP** all five structures (planned features).
 > - **Packet 6 ("wire" method): RESOLVED, packet was stale** — `20260702152000_payment_method_wire.sql`
 >   is applied live; all four CHECK constraints already allow `'wire'` (verified 2026-07-16).
 > - Packets 1 (vendor merges) and 2 (category remap): still open.
 
-**Lead recommendation:** the safest, highest-value first step is **Packet 3 (junk-data deletes)** and **Packet 4
+**Lead recommendation (historical, 2026-07-02 — packet 4 has since been decided and shipped (2026-07-21), so this is not a pending ask; the current open items are in the status line above):** the safest, highest-value first step was **Packet 3 (junk-data deletes)** and **Packet 4
 (due-date policy)** — packet 3 is pure cleanup of obviously-fake rows, and packet 4 unblocks the whole late-AR
 machine (parked migration A8 is waiting on it). The two merge packets (1, 2) re-bucket history, so take those
 only when you can sign off the exact spelling that is the "real" one.
