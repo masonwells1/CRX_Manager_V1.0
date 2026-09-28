@@ -848,10 +848,81 @@ async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha
   };
 }
 
+// CodeRabbit follow-up delivery (handoff item 3, 2026-09-27). Once CodeRabbit
+// has APPROVED a PR, a follow-up review of a later head that finds nothing
+// creates NO review record: CodeRabbit only edits its summary comment and sets
+// its `CodeRabbit` commit status on the new head to "Review completed" (PR #820:
+// dispatch 07:26:02, status 07:31:22, no review — so this gate reported "no
+// completed exact-head review" and every post-approval fix needed Mason's hand).
+//
+// Accepted only on data CodeRabbit alone can write, and only for a request this
+// gate verifiably made (a receipt's `requestedAfter`; the pre-dispatch lookup
+// passes none, so an unattributed completion never blocks or credits anything):
+//   * CodeRabbit's latest APPROVED / CHANGES_REQUESTED / DISMISSED verdict is an
+//     authenticated APPROVED, and nothing CodeRabbit submitted at or after it has
+//     content (an empty COMMENTED reply artifact is tolerated). An undated
+//     CodeRabbit review refuses, since it could be a later finding;
+//   * the NEWEST `CodeRabbit`-context status on this exact head (its `url` names
+//     the commit) was created by the `coderabbitai[bot]` Bot account — a status's
+//     creator is the authenticated writer, so no person or workflow token can mint
+//     it — is `success` with the description exactly "Review completed", and is
+//     newer than both that approval and the receipt.
+// On every observed follow-up that found something (#797, #800, #806, #810,
+// #816, #818) CodeRabbit submitted the review 6-8 s BEFORE this status, so a
+// completion with no newer review record means the run posted no findings. The
+// summary comment is not read: repository writers can edit it. The merge gates
+// apply the same rule through coderabbitClearedHead() in
+// .claude/hooks/codex-push-lib.mjs.
+const CODERABBIT_STATUS_CONTEXT = 'CodeRabbit';
+const CODERABBIT_REVIEW_COMPLETED = 'Review completed';
+
+function standingCodeRabbitApproval(reviews) {
+  const mine = reviews
+    .filter((review) => normalize(review?.user?.login) === CODERABBIT_BOT_LOGIN)
+    .map((review) => ({ review, state: normalize(review?.state), at: Date.parse(String(review?.submitted_at || '')) }));
+  if (mine.some((entry) => !Number.isFinite(entry.at))) return null;
+  const verdicts = mine
+    .filter((entry) => ['approved', 'changes_requested', 'dismissed'].includes(entry.state))
+    .sort((left, right) => left.at - right.at);
+  const approval = verdicts[verdicts.length - 1];
+  if (!approval || approval.state !== 'approved') return null;
+  const approvalId = Number(approval.review.id);
+  if (!Number.isSafeInteger(approvalId) || approvalId <= 0 || normalize(approval.review.user?.type) !== 'bot') return null;
+  const laterContent = mine.some((entry) => entry !== approval && entry.at >= approval.at
+    && entry.state !== 'approved'
+    && !(entry.state === 'commented' && String(entry.review?.body || '').trim() === ''));
+  return laterContent ? null : approval;
+}
+
+async function inspectCodeRabbitFollowUp({ github, owner, repo, headSha, reviews, requestedAfter }) {
+  const approval = standingCodeRabbitApproval(reviews);
+  if (!approval) return null;
+  // One page, newest first (GitHub's documented order); only the newest
+  // CodeRabbit entry matters and it is sorted again below regardless.
+  const response = await github.rest.repos.listCommitStatusesForRef({ owner, repo, ref: headSha, per_page: 100 });
+  const statuses = response?.data;
+  if (!Array.isArray(statuses)) throw new Error('CodeRabbit follow-up status listing was not an array');
+  const newest = statuses
+    .filter((status) => status?.context === CODERABBIT_STATUS_CONTEXT)
+    .map((status) => ({ status, at: Date.parse(String(status?.created_at || '')), id: Number(status?.id) }))
+    .sort((left, right) => (right.at - left.at) || (right.id - left.id))[0];
+  if (!newest || !Number.isFinite(newest.at)) return null;
+  const { status } = newest;
+  const cleared = normalize(status?.creator?.login) === CODERABBIT_BOT_LOGIN
+    && normalize(status?.creator?.type) === 'bot'
+    && status?.state === 'success'
+    && status?.description === CODERABBIT_REVIEW_COMPLETED
+    && String(status?.url || '').toLowerCase().endsWith(`/statuses/${String(headSha).toLowerCase()}`)
+    && newest.at > approval.at
+    && newest.at > requestedAfter;
+  return cleared ? { review: approval.review, status } : null;
+}
+
 // The dispatch label only asks CodeRabbit to start work. A green CodeRabbit
 // status is emitted even for "Review skipped", so it is not evidence that an
 // exact-head review occurred. Require a submitted CodeRabbit review attached to
-// this head before reporting the request as reviewed.
+// this head before reporting the request as reviewed — or, after an earlier
+// approval, CodeRabbit's own "Review completed" follow-up of this head (above).
 async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumber, headSha, requestedAfter = null }) {
   try {
     const reviews = await github.paginate(
@@ -876,6 +947,10 @@ async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumbe
       return normalize(candidate?.state) === 'commented'
         && (/^\*\*actionable comments posted:\s*\d+\*\*/.test(normalize(body)) || outsideDiffReport);
     });
+    if (!review && requestedAfter !== null) {
+      const followUp = await inspectCodeRabbitFollowUp({ github, owner, repo, headSha, reviews, requestedAfter });
+      if (followUp) return { verified: true, reviewed: true, changesRequested: false, followUp: true, review: followUp.review };
+    }
     if (review) {
       const reviewId = Number(review.id);
       const submittedAt = Date.parse(String(review.submitted_at || ''));
@@ -1892,7 +1967,9 @@ async function dispatchNativeReview({ github, context, core, config, attemptStat
       core.setFailed(`CodeRabbit delivered a review for ${expectedHeadSha}, but ${finalReasons.join('; ')}. The receipt was kept, so no second review will be requested for this head; re-apply ${READY_LABEL} to re-check it once the blocker clears.`);
       return { status: 'blocked', headSha: expectedHeadSha, reviewed: true };
     }
-    core.notice(`CodeRabbit delivered a formal review for frozen head ${expectedHeadSha}. Findings still require disposition; this is not merge clearance.`);
+    core.notice(observed.followUp
+      ? `CodeRabbit completed a follow-up review of frozen head ${expectedHeadSha} after its earlier approval and posted no findings ("Review completed", no new review record). This is not merge clearance.`
+      : `CodeRabbit delivered a formal review for frozen head ${expectedHeadSha}. Findings still require disposition; this is not merge clearance.`);
     return { status: 'reviewed', headSha: expectedHeadSha, reviewed: true };
   }
   core.setFailed(`CodeRabbit dispatch remains pending for ${expectedHeadSha}: no completed exact-head review was verified within the observation window. Requested and dispatch labels were preserved. After confirming delivery, re-apply ${READY_LABEL} to reconcile without another request.`);

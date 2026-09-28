@@ -1579,7 +1579,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
   };
-  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", statuses = [], migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
     checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
@@ -1591,6 +1591,11 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       throw new Error(`unexpected git ${key}`);
     },
     runGh: (args) => {
+      if (args[0] === "api" && String(args[1]).includes("/statuses")) {
+        assert.deepEqual(args, ["api", `repos/{owner}/{repo}/commits/${HEAD_SHA}/statuses?per_page=100`]);
+        if (statuses instanceof Error) throw statuses;
+        return JSON.stringify(statuses);
+      }
       if (args[0] === "api") {
         const base = pr.baseRefOid || BASE_SHA;
         assert.deepEqual(args, ["api", `repos/{owner}/{repo}/compare/${base}...${HEAD_SHA}`, "--jq", ".behind_by"]);
@@ -1651,9 +1656,23 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   refused(gate({ pr: { baseRefName: "develop" } }), "does not target main", "a PR into another branch is refused");
   refused(gate({ pr: { headRefOid: "c".repeat(40) } }), "is not this checkout's HEAD", "a checkout behind or ahead of the PR head is refused");
   refused(gate({ pr: { reviewDecision: "CHANGES_REQUESTED" } }), "CHANGES_REQUESTED", "an open objection is refused");
-  refused(gate({ pr: { reviews: [] } }), "CodeRabbit has not APPROVED", "no CodeRabbit approval is refused");
-  refused(gate({ pr: { reviews: [{ ...readyPr.reviews[0], commit: { oid: "c".repeat(40) } }] } }), "CodeRabbit has not APPROVED",
+  refused(gate({ pr: { reviews: [] } }), "CodeRabbit has not cleared", "no CodeRabbit approval is refused");
+  refused(gate({ pr: { reviews: [{ ...readyPr.reviews[0], commit: { oid: "c".repeat(40) } }] } }), "CodeRabbit has not cleared",
     "an approval of an older commit is refused");
+  // Handoff item 3 (2026-09-27): a clean CodeRabbit follow-up of this exact head
+  // after an earlier approval clears the apply exactly as it clears a merge.
+  {
+    const olderApproval = { ...readyPr.reviews[0], commit: { oid: "c".repeat(40) }, submittedAt: "2026-09-27T06:24:24Z" };
+    const completed = { context: "CodeRabbit", state: "success", description: "Review completed", id: 2,
+      created_at: "2026-09-27T07:31:22Z", url: `https://api.github.com/repos/o/r/statuses/${HEAD_SHA}`,
+      creator: { login: "coderabbitai[bot]", type: "Bot" } };
+    ok(gate({ pr: { reviews: [olderApproval] }, statuses: [completed] }).ok === true,
+      "a clean follow-up review of the exact head after an earlier approval passes");
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: [{ ...completed, description: "Review skipped: excluded by label configuration" }] }),
+      "CodeRabbit has not cleared", "a skipped follow-up is refused");
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: new Error("HTTP 502") }),
+      "CodeRabbit has not cleared", "an unreadable status list fails closed");
+  }
   refused(gate({ pr: { mergeStateStatus: "BLOCKED" } }), "not merge-ready", "a PR that is not CLEAN is refused");
   refused(gate({ pr: { statusCheckRollup: [{ ...readyPr.statusCheckRollup[0], conclusion: "FAILURE" }] } }), "not merge-ready",
     "a failed check is refused");

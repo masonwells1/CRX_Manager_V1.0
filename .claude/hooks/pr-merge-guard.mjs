@@ -27,7 +27,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
-  coderabbitApprovedHead,
+  coderabbitClearedHead,
   headContainsBaseOnGitHub,
   createHardGateBudget,
   ghApiMergeRequest,
@@ -431,9 +431,13 @@ function gateRequest(request) {
     );
   }
 
-  if (!coderabbitApprovedHead(pr)) {
+  // An APPROVED verdict on the exact head, or — after an earlier approval — a
+  // clean CodeRabbit follow-up of this exact head ("Review completed" status set
+  // by CodeRabbit itself, nothing posted since). See coderabbitClearedHead().
+  if (!coderabbitClearedHead(pr, { repo: request.repo, gh: hardGateGh })) {
     deny(
-      `PR MERGE GATE: CodeRabbit has not APPROVED this exact head (${String(pr.headRefOid || "<head>").slice(0, 12)}). ` +
+      `PR MERGE GATE: CodeRabbit has not cleared this exact head (${String(pr.headRefOid || "<head>").slice(0, 12)}): ` +
+      "no APPROVED review of it, and no clean CodeRabbit follow-up review of it after an earlier approval. " +
       "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required " +
       "check is green, apply the `ready-for-coderabbit` label — the default-branch workflow revalidates this " +
       "head and dispatches one review. Fix every real finding (a fix on this same PR earns one fresh review " +

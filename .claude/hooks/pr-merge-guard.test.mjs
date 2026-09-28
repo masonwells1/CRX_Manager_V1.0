@@ -8,6 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   coderabbitApprovedHead,
+  coderabbitClearedHead,
+  coderabbitFollowUpClearedHead,
   ghApiMergeRequest,
   ghApiMutates,
   ghApiRepoPath,
@@ -319,6 +321,103 @@ ok(!coderabbitApprovedHead({ headRefOid: HEAD }), "a PR view that never asked fo
 ok(!coderabbitApprovedHead({ headRefOid: "", reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }), "an unusable head denies");
 ok(!coderabbitApprovedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "not-a-date")] }), "an undated verdict is ignored");
 
+// ── CodeRabbit follow-up clearance (handoff item 3, 2026-09-27) ──────────────
+// PR #820's real shape: CodeRabbit APPROVED at 06:24:24 (GitHub now reports it on
+// ffb400b2), the fix commit 970052fc was dispatched at 07:26 and CodeRabbit's run
+// ended "Review completed" at 07:31:22 with no new review record.
+const FIX = "970052fc40e111764c72350026046db8679714fd";
+const APPROVED_ON = "ffb400b212de5f5fa66c8932c348d8377b15012a";
+const crStatus = (description, createdAt, { state = "success", id = 1, sha = FIX, login = "coderabbitai[bot]", type = "Bot", context = "CodeRabbit" } = {}) => ({
+  context, state, description, id, created_at: createdAt,
+  url: `https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/statuses/${sha}`,
+  creator: { login, type },
+});
+const pr820 = {
+  headRefOid: FIX,
+  reviews: [
+    cr("APPROVED", APPROVED_ON, "2026-09-27T06:24:24Z"),
+    { author: { login: "chatgpt-codex-connector" }, state: "COMMENTED", commit: { oid: APPROVED_ON }, submittedAt: "2026-09-27T06:51:25Z", body: "Codex Review" },
+    { author: { login: "masonwells1" }, state: "COMMENTED", commit: { oid: FIX }, submittedAt: "2026-09-27T06:53:49Z", body: "" },
+  ],
+};
+const statuses820 = [
+  crStatus("Review completed", "2026-09-27T07:31:22Z", { id: 5 }),
+  crStatus("Review in progress", "2026-09-27T07:26:13Z", { state: "pending", id: 4 }),
+  crStatus("Review skipped: excluded by label configuration", "2026-09-27T07:26:05Z", { id: 3 }),
+  crStatus("Review skipped: excluded by label configuration", "2026-09-27T06:57:03Z", { id: 2 }),
+  { ...crStatus("Deployment has completed", "2026-09-27T06:57:52Z", { id: 1, login: "vercel[bot]" }), context: "Vercel" },
+];
+ok(!coderabbitApprovedHead(pr820), "#820: the approval-only rule could never clear the post-approval fix (the bug)");
+ok(coderabbitFollowUpClearedHead(pr820, statuses820), "#820: a clean follow-up of the exact head after the approval clears it");
+ok(coderabbitFollowUpClearedHead(pr820, [...statuses820].reverse()), "list order does not matter; the newest status decides");
+// Stale approval carried forward: the head was never reviewed to completion.
+ok(!coderabbitFollowUpClearedHead(pr820, statuses820.slice(1)), "a head whose newest CodeRabbit status is 'in progress' is refused");
+ok(!coderabbitFollowUpClearedHead(pr820, statuses820.slice(2)), "a head whose newest CodeRabbit status is 'skipped' is refused");
+ok(!coderabbitFollowUpClearedHead(pr820, []), "a head with no CodeRabbit status is refused");
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T06:20:00Z")]),
+  "a completion OLDER than the approval is not a follow-up of it");
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { state: "failure" })]),
+  "a non-success completion is refused");
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed.", "2026-09-27T07:31:22Z")]),
+  "the description must be exactly 'Review completed'");
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "not-a-date")]), "an undated status is refused");
+// A different SHA.
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { sha: APPROVED_ON })]),
+  "a completion recorded on a different commit is refused");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, headRefOid: OLD }, statuses820), "statuses of another commit never clear this head");
+// Forgery: a status's creator is the authenticated writer.
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { login: "masonwells1", type: "User" })]),
+  "a 'CodeRabbit' status written by a person does not count");
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { login: "github-actions[bot]" })]),
+  "a 'CodeRabbit' status written by a workflow token does not count");
+ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { type: "User" })]),
+  "the creator must be a Bot account");
+ok(!coderabbitFollowUpClearedHead(pr820, [...statuses820, crStatus("Review completed", "2026-09-27T07:40:00Z", { login: "masonwells1", type: "User", id: 9 })]),
+  "a newer same-context status from anyone else refuses (fail closed)");
+// Approval followed by findings or an objection.
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T07:31:15Z", "**Actionable comments posted: 2**")] }, statuses820),
+  "an approval followed by a follow-up review WITH findings is refused (#797/#818 order: review ~7s before the status)");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("CHANGES_REQUESTED", FIX, "2026-09-27T07:31:15Z", "x")] }, statuses820),
+  "an approval followed by CHANGES_REQUESTED is refused");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("DISMISSED", APPROVED_ON, "2026-09-27T07:00:00Z")] }, statuses820),
+  "a dismissed approval is not a standing approval");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T06:24:24Z", "Outside diff finding")] }, statuses820),
+  "content submitted in the same second as the approval is refused");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "not-a-date", "")] }, statuses820),
+  "an undated CodeRabbit review could be a later finding, so it refuses");
+ok(coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews,
+  cr("COMMENTED", APPROVED_ON, "2026-09-27T06:24:30Z"), cr("COMMENTED", FIX, "2026-09-27T07:00:00Z", "   ")] }, statuses820),
+  "empty thread-reply COMMENTED artifacts after the approval (#810/#816/#818 shape) do not block");
+ok(coderabbitFollowUpClearedHead({ ...pr820, reviews: [cr("CHANGES_REQUESTED", OLD, "2026-09-27T05:00:00Z", "x"), ...pr820.reviews] }, statuses820),
+  "an objection the later approval superseded does not block");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [cr("CHANGES_REQUESTED", OLD, "2026-09-27T05:00:00Z", "x")] }, statuses820),
+  "with no approval at all, a completed review is delivery, not clearance");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [{ ...pr820.reviews[0], author: { login: "masonwells1" } }] }, statuses820),
+  "only CodeRabbit's own approval can be followed up");
+ok(!coderabbitFollowUpClearedHead({ headRefOid: FIX }, statuses820), "a PR view without reviews fails closed");
+ok(!coderabbitFollowUpClearedHead(pr820, null), "an unreadable status list fails closed");
+ok(!coderabbitFollowUpClearedHead({ ...pr820, headRefOid: "" }, statuses820), "an unusable head fails closed");
+
+// coderabbitClearedHead(): the one predicate every gate calls.
+{
+  const calls = [];
+  const gh = (answer) => (args) => { calls.push(args); if (answer instanceof Error) throw answer; return answer; };
+  ok(coderabbitClearedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }, { gh: gh("[]") }) && calls.length === 0,
+    "an exact-head approval clears without any GitHub read");
+  ok(coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820)) }), "#820 clears through the follow-up read");
+  eq(calls.at(-1), ["api", `repos/{owner}/{repo}/commits/${FIX}/statuses?per_page=100`], "the read asks for the exact head's statuses");
+  ok(coderabbitClearedHead(pr820, { repo: "masonwells1/CRX_Manager_V1.0", gh: gh(JSON.stringify(statuses820)) }), "an explicit --repo is honoured");
+  eq(calls.at(-1)[1], `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/statuses?per_page=100`, "...and read from that repository");
+  const before = calls.length;
+  ok(!coderabbitClearedHead({ headRefOid: FIX, reviews: [] }, { gh: gh(JSON.stringify(statuses820)) }) && calls.length === before,
+    "no standing approval: refused without spending a GitHub read");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(new Error("HTTP 502")) }), "a failed status read refuses (fail closed)");
+  ok(!coderabbitClearedHead(pr820, { gh: gh("not json") }), "an unparseable status read refuses");
+  ok(!coderabbitClearedHead(pr820, { gh: gh("{}") }), "a non-list status answer refuses");
+  ok(!coderabbitClearedHead(pr820, { repo: "not a repo", gh: gh(JSON.stringify(statuses820)) }), "an unrecognizable --repo refuses");
+  ok(!coderabbitClearedHead(pr820, {}), "no gh runner: only an exact-head approval can clear");
+}
+
 // ── hook decision paths that need no gh (stdin spawn) ────────────────────────
 const HOOK = path.join(__dirname, "pr-merge-guard.mjs");
 function runHook(payload) {
@@ -563,9 +662,11 @@ ok(/"--json",\s*"[^"]*\breviews\b[^"]*"/.test(gateRequestSource),
   "the PR resolve asks GitHub for reviews, so the CodeRabbit verdict comes from the same snapshot");
 ok(/if\s*\(\s*request\.auto\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
   "--auto into main is denied outright, for every diff");
-ok(/if\s*\(\s*!coderabbitApprovedHead\(\s*pr\s*\)\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
-  "a merge without CodeRabbit's approval of the exact head is denied");
-ok(!/request\.auto[^\n]*coderabbitApprovedHead|coderabbitApprovedHead[^\n]*request\.auto/.test(gateRequestSource),
+ok(/if\s*\(\s*!coderabbitClearedHead\(\s*pr,\s*\{\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\s*\)\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
+  "a merge without CodeRabbit clearing the exact head is denied, and the status read runs on the hard-gate budget");
+ok(!/coderabbitApprovedHead\(/.test(gateRequestSource),
+  "the gate calls the combined predicate only, never the approval-only one on its own");
+ok(!/request\.auto[^\n]*coderabbitClearedHead|coderabbitClearedHead[^\n]*request\.auto/.test(gateRequestSource),
   "the CodeRabbit requirement is not exempt for any merge mode");
 ok(/if\s*\(\s*!pullRequestChecksGreen\(\s*pr\s*\)\s*\)\s*\{\s*deny\(/.test(gateRequestSource),
   "the green-pipeline denial is unconditional (no --auto exemption left)");

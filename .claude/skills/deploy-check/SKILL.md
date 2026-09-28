@@ -143,10 +143,11 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    the new candidate epoch, and after checks pass a relabel earns one follow-up review — no
    replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand,
    and reserve `@coderabbitai full review` for a deliberately justified complete reread.
-5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
+5. When CodeRabbit has **cleared the exact head** (APPROVED on it, or, after an earlier approval,
+   a clean follow-up review of it — `coderabbitClearedHead`), run the exact-SHA
    `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
-   merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
+   merge gates enforce Mason's autonomous-landing rule: CodeRabbit cleared `headRefOid`, the
    newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound
    to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused;
    `enforce_admins` is off and no agent may act on that exemption. **The merge is the deploy.**

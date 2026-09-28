@@ -1,11 +1,30 @@
 # Decision Log
 
-Last verified: 2026-09-26 (autonomous landing entry added)
+Last verified: 2026-09-28 (CodeRabbit follow-up clearance entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-28 — a clean CodeRabbit follow-up after an approval clears the head
+
+**Source:** item 3 of the 2026-09-27 PC-session handoff, which Mason approved ("I approve
+everything… see it all through") and sent to the 2026-09-28 session to carry out. It changes the
+merge gates, so it cannot pass its own new rules: **it takes effect only when Mason merges that PR
+by hand**, and that merge is his decision on it.
+
+**Decision.** Under the 2026-09-26 autonomous-landing rule, "CodeRabbit approved the final head"
+also covers the case CodeRabbit produces after an earlier approval: it re-reviews the fix head,
+finds nothing, and posts no new review record. That head is cleared when CodeRabbit's latest
+verdict is APPROVED, nothing it posted since carries content, and its own newest `CodeRabbit`
+status on the exact head reads `Review completed` and is newer than the approval.
+
+**Operative rule.** `coderabbitClearedHead()` in `.claude/hooks/codex-push-lib.mjs` (both merge
+gates and the migration landing gate) and `inspectCodeRabbitFollowUp()` in
+`.github/scripts/coderabbit-final-review.cjs`. Stale approvals, other SHAs, findings after the
+approval, and statuses written by anyone but CodeRabbit still refuse. Detail:
+`docs/reference/coderabbit-native-review.md` → "Follow-up after an approval".
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

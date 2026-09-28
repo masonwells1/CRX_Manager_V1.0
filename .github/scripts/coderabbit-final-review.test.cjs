@@ -4128,6 +4128,102 @@ test('C: a relabel reconciling a CHANGES_REQUESTED review stays blocked', async 
   assert.match(harness.failures.join('\n'), /CodeRabbit requested changes on this exact head/);
 });
 
+// ── Handoff item 3 (2026-09-27): a clean follow-up after an earlier approval ──
+// PR #820: CodeRabbit APPROVED an older head; the fix head was dispatched and
+// CodeRabbit finished with only a "Review completed" status — no review record.
+const earlierApproval = {
+  id: 5329115352, submitted_at: '2026-09-08T03:00:00Z', user: { login: 'coderabbitai[bot]', type: 'Bot' },
+  commit_id: NEXT_HEAD, state: 'APPROVED', body: '',
+};
+function codeRabbitStatus(description, createdAt, overrides = {}) {
+  return {
+    id: 77, context: 'CodeRabbit', state: 'success', description, created_at: createdAt,
+    url: `https://api.github.com/repos/masonwells1/FarmRx/statuses/${HEAD}`,
+    creator: { login: 'coderabbitai[bot]', type: 'Bot' }, ...overrides,
+  };
+}
+function relabelFollowUpHarness({ reviews = [earlierApproval], statuses }) {
+  const harness = makeNativeHarness({ existingComments: [nativeReceipt()], coderabbitReviews: reviews,
+    statuses: [commitStatus('Vercel'), ...statuses] });
+  harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' },
+    created_at: nativeReceipt().created_at });
+  return harness;
+}
+
+test('follow-up: the live poll accepts CodeRabbit\'s "Review completed" of the exact head after an earlier approval (PR #820)', async () => {
+  const statuses = [commitStatus('Vercel'), commitStatus('CodeRabbit', 'pending')];
+  const harness = makeNativeHarness({ coderabbitReviews: [earlierApproval], statuses });
+  let waits = 0;
+  const result = await execute(harness, {
+    nativeDispatch: true, reviewPollAttempts: 3, reviewPollMs: 1,
+    settle: async () => {
+      if (++waits === 2) statuses.push(codeRabbitStatus('Review completed', new Date(Date.now() + 5000).toISOString()));
+    },
+  });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+  assert.deepEqual(harness.failures, []);
+  assert.match(harness.notices.join('\n'), /completed a follow-up review of frozen head .* posted no findings/);
+  assert.equal(harness.liveLabels.has(DISPATCH_LABEL), false, 'provider label released once the follow-up landed');
+});
+
+test('follow-up: a relabel reconciles a completed follow-up from the receipt without dispatching again', async () => {
+  const harness = relabelFollowUpHarness({ statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+  assert.equal(harness.receiptComments.length, 1, 'no second request');
+});
+
+for (const [name, options] of [
+  ['a skipped follow-up', { statuses: [codeRabbitStatus('Review skipped: excluded by label configuration', '2026-09-08T03:50:00Z')] }],
+  ['a follow-up still in progress', { statuses: [codeRabbitStatus('Review in progress', '2026-09-08T03:50:00Z', { state: 'pending' })] }],
+  ['a completion older than this head\'s receipt', { statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:42:59Z')] }],
+  ['a completion recorded on another commit', { statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z',
+    { url: `https://api.github.com/repos/masonwells1/FarmRx/statuses/${NEXT_HEAD}` })] }],
+  ['a "CodeRabbit" status written by a person', { statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z',
+    { creator: { login: 'masonwells1', type: 'User' } })] }],
+  ['a "CodeRabbit" status written by a workflow token', { statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z',
+    { creator: { login: 'github-actions[bot]', type: 'Bot' } })] }],
+  ['a newer same-context status from anyone else', { statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z'),
+    codeRabbitStatus('Review completed', '2026-09-08T03:55:00Z', { id: 78, creator: { login: 'masonwells1', type: 'User' } })] }],
+  ['no earlier approval at all', { reviews: [], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['an approval followed by a review with findings', { reviews: [earlierApproval, { ...earlierApproval, id: 5329115399,
+    submitted_at: '2026-09-08T03:49:53Z', state: 'COMMENTED', body: '**Actionable comments posted: 2**' }],
+  statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['an approval later dismissed', { reviews: [earlierApproval, { ...earlierApproval, id: 5329115398,
+    submitted_at: '2026-09-08T03:10:00Z', state: 'DISMISSED' }], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+]) {
+  test(`follow-up: ${name} is not a delivered review`, async () => {
+    const harness = relabelFollowUpHarness(options);
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'pending', harness.failures.join('\n'));
+    assert.equal(harness.receiptComments.length, 1, 'nothing new was spent');
+    assert.match(harness.failures.join('\n'), /no review of it has been observed yet/);
+  });
+}
+
+test('follow-up: empty thread-reply artifacts after the approval do not block the follow-up', async () => {
+  const harness = relabelFollowUpHarness({
+    reviews: [earlierApproval, { ...earlierApproval, id: 5329115397, submitted_at: '2026-09-08T03:00:05Z', state: 'COMMENTED', body: '' }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
+  });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+});
+
+test('follow-up: an unreadable status list fails closed', async () => {
+  const harness = relabelFollowUpHarness({ statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] });
+  const listStatuses = harness.github.rest.repos.listCommitStatusesForRef;
+  // Fail only the follow-up read; the check collector's own status read is
+  // exercised elsewhere and must not mask which read failed here.
+  harness.github.rest.repos.listCommitStatusesForRef = (request) => {
+    if (new Error().stack.includes('inspectCodeRabbitFollowUp')) return Promise.reject(new Error('statuses unavailable'));
+    return listStatuses(request);
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.notEqual(result.status, 'reviewed');
+  assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);
+});
+
 test('A: a check still running when the label lands is waited out, then the review is requested', async () => {
   const running = inProgressCheck('foundation', 7001);
   const done = completedCheck('foundation');

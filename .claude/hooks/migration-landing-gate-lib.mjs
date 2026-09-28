@@ -13,7 +13,8 @@
 //   * the migration file is committed at HEAD and unchanged in the worktree, so
 //     the SQL being applied is the SQL in the reviewed commit;
 //   * HEAD is the open PR's headRefOid, and the PR targets main;
-//   * CodeRabbit's latest verdict is APPROVED on that exact head, nothing is
+//   * CodeRabbit cleared that exact head (APPROVED on it, or a clean follow-up
+//     review of it after an earlier approval — coderabbitClearedHead), nothing is
 //     CHANGES_REQUESTED, and the newest run of every check is green (CLEAN);
 //   * a fresh gpt-6-sol/high merge proof is bound to that head and to GitHub's
 //     real base — the same proof the merge gates require.
@@ -25,7 +26,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  coderabbitApprovedHead,
+  coderabbitClearedHead,
   headContainsBaseOnGitHub,
   proofSearchDirs,
   proofValid,
@@ -157,7 +158,11 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
     return refuse(`${number}'s head on GitHub (${String(pr?.headRefOid || "?").slice(0, 12)}) is not this checkout's HEAD (${head.slice(0, 12)}) — push, or pull, so the reviewed commit is the one applied.`);
   }
   if (pullRequestReviewBlocked(pr)) return refuse(`${number} has an unresolved CHANGES_REQUESTED review.`);
-  if (!coderabbitApprovedHead(pr)) return refuse(`CodeRabbit has not APPROVED ${number}'s exact head ${head.slice(0, 12)}.`);
+  // Same CodeRabbit requirement as the merge gates: an exact-head APPROVED, or a
+  // clean CodeRabbit follow-up of this head after an earlier approval.
+  if (!coderabbitClearedHead(pr, { gh })) {
+    return refuse(`CodeRabbit has not cleared ${number}'s exact head ${head.slice(0, 12)} (no APPROVED review of it, and no clean follow-up review of it after an earlier approval).`);
+  }
   if (!pullRequestChecksGreen(pr)) {
     return refuse(`${number} is not merge-ready: mergeStateStatus must be CLEAN and the newest run of every check green.`);
   }

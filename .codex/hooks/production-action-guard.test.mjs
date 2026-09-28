@@ -1461,7 +1461,7 @@ try {
     runGh: () => JSON.stringify({ ...mainPr, reviews: [] }),
   });
   assert.equal(noCodeRabbit.blocked, true, "no CodeRabbit review of the head: the merge stays with Mason");
-  assert.match(noCodeRabbit.reason, /CodeRabbit has not APPROVED this exact head/, "and the denial says why");
+  assert.match(noCodeRabbit.reason, /CodeRabbit has not cleared this exact head/, "and the denial says why");
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --squash${PIN}` },
@@ -1469,6 +1469,37 @@ try {
     nowMs: now,
     runGh: () => JSON.stringify({ ...mainPr, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] }),
   }).blocked, true, "an approval of an OLDER commit does not cover the head");
+  // Handoff item 3 (2026-09-27): after an earlier approval, a clean CodeRabbit
+  // follow-up review of the exact head ("Review completed", set by CodeRabbit)
+  // clears the merge; a skipped one, or one written by anyone else, does not.
+  {
+    const olderApproval = { ...mainPr, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] };
+    const completed = {
+      context: "CodeRabbit", state: "success", description: "Review completed", id: 7,
+      created_at: "2026-09-26T12:30:00Z", url: `https://api.github.com/repos/o/r/statuses/${risky.sha}`,
+      creator: { login: "coderabbitai[bot]", type: "Bot" },
+    };
+    const statusCalls = [];
+    const mergeWithStatuses = (statuses) => evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `gh pr merge 123 --squash${PIN}` },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGh: (args) => {
+        if (args[0] === "api" && String(args[1]).endsWith(`/commits/${risky.sha}/statuses?per_page=100`)) {
+          statusCalls.push(args);
+          return JSON.stringify(statuses);
+        }
+        return JSON.stringify(olderApproval);
+      },
+    });
+    assert.equal(mergeWithStatuses([completed]).blocked, false, "a clean follow-up of the exact head after an earlier approval merges");
+    assert.equal(statusCalls.length, 1, "...after reading the exact head's statuses once");
+    assert.equal(mergeWithStatuses([{ ...completed, description: "Review skipped: excluded by label configuration" }]).blocked, true,
+      "a skipped follow-up does not clear the head");
+    assert.equal(mergeWithStatuses([{ ...completed, creator: { login: "masonwells1", type: "User" } }]).blocked, true,
+      "a 'CodeRabbit' status written by a person does not clear the head");
+  }
   const autoMerge = evaluateProductionAction({
     toolName: "PowerShell",
     toolInput: { command: `gh pr merge 123 --squash --auto${PIN}` },

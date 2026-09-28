@@ -3107,6 +3107,105 @@ export function coderabbitApprovedHead(pullRequest) {
     && String(latest?.commit?.oid || "").toLowerCase() === headSha.toLowerCase();
 }
 
+// CodeRabbit follow-up clearance (Mason's handoff item 3, 2026-09-27).
+//
+// Once CodeRabbit has APPROVED a pull request, a later push that it re-reviews
+// and finds nothing in produces NO new review record — it only edits its summary
+// comment and sets its `CodeRabbit` commit status on the new head to "Review
+// completed" (PR #820: approved 2d231b66/ffb400b2, then 970052fc was reviewed
+// clean with no review). coderabbitApprovedHead() therefore could never clear a
+// post-approval fix, and every such PR needed Mason's manual merge.
+//
+// This accepts that follow-up only on GitHub data CodeRabbit alone can write:
+//   1. CodeRabbit's LATEST verdict (the same set coderabbitApprovedHead reads) is
+//      APPROVED;
+//   2. nothing CodeRabbit submitted at or after that approval carries content —
+//      the only thing tolerated is an empty COMMENTED thread-reply artifact
+//      (another APPROVED is harmless). A review with findings, an objection or a
+//      dismissal refuses, and so does an undated CodeRabbit review, since it
+//      could be a later finding;
+//   3. the NEWEST `CodeRabbit`-context status on the exact head was created by
+//      the `coderabbitai[bot]` Bot account, is `success` with the description
+//      exactly "Review completed", and is NEWER than that approval. A commit
+//      status's creator is the authenticated writer, so no person or workflow
+//      token can mint one in CodeRabbit's name; a same-context status from anyone
+//      else that is newest refuses. "Review skipped …", "Review in progress" and
+//      a completion older than the approval never count.
+// Evidence for (2)+(3) ordering: on every observed follow-up that DID find
+// something (#797, #800, #806, #810, #816, #818) CodeRabbit submitted its review
+// 6-8 seconds BEFORE the matching "Review completed" status, so a completed
+// status with no newer review means the run posted no findings.
+//
+// `statuses` is GitHub's REST list for the head commit
+// (`GET repos/{o}/{r}/commits/{head}/statuses`); each entry's `url` names the
+// commit it was set on and must be the head. The summary comment is deliberately
+// NOT read: repository writers can edit it.
+export const CODERABBIT_STATUS_CONTEXT = "CodeRabbit";
+export const CODERABBIT_STATUS_CREATOR = "coderabbitai[bot]";
+export const CODERABBIT_REVIEW_COMPLETED = "Review completed";
+
+function isCodeRabbitReview(review) {
+  return String(review?.author?.login || "").toLowerCase().replace(/\[bot\]$/, "") === "coderabbitai";
+}
+
+// The approval a follow-up may build on, or null. Shares the verdict rule of
+// coderabbitApprovedHead() but fails closed on any undated CodeRabbit review.
+function standingCodeRabbitApproval(reviews) {
+  if (!Array.isArray(reviews)) return null;
+  const mine = reviews.filter(isCodeRabbitReview)
+    .map((review) => ({ review, state: String(review?.state || "").toUpperCase(), at: Date.parse(String(review?.submittedAt || "")) }));
+  if (mine.some((entry) => !Number.isFinite(entry.at))) return null;
+  const verdicts = mine.filter((entry) => ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(entry.state))
+    .sort((left, right) => left.at - right.at);
+  const approval = verdicts[verdicts.length - 1];
+  if (!approval || approval.state !== "APPROVED") return null;
+  const laterContent = mine.some((entry) => entry !== approval && entry.at >= approval.at
+    && entry.state !== "APPROVED"
+    && !(entry.state === "COMMENTED" && String(entry.review?.body || "").trim() === ""));
+  return laterContent ? null : approval;
+}
+
+export function coderabbitFollowUpClearedHead(pullRequest, statuses) {
+  const headSha = String(pullRequest?.headRefOid || "").toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(headSha) || !Array.isArray(statuses)) return false;
+  const approval = standingCodeRabbitApproval(pullRequest?.reviews);
+  if (!approval) return false;
+  const newest = statuses
+    .filter((status) => status?.context === CODERABBIT_STATUS_CONTEXT)
+    .map((status) => ({ status, at: Date.parse(String(status?.created_at || "")), id: Number(status?.id) }))
+    .sort((left, right) => (right.at - left.at) || (right.id - left.id))[0];
+  if (!newest || !Number.isFinite(newest.at)) return false;
+  const { status } = newest;
+  return status?.creator?.login === CODERABBIT_STATUS_CREATOR
+    && status?.creator?.type === "Bot"
+    && status?.state === "success"
+    && status?.description === CODERABBIT_REVIEW_COMPLETED
+    && String(status?.url || "").toLowerCase().endsWith(`/statuses/${headSha}`)
+    && newest.at > approval.at;
+}
+
+// The single CodeRabbit merge/apply requirement every gate calls: an APPROVED
+// verdict on the exact head, or a clean follow-up of that head (above). The
+// follow-up costs one `gh api` read, made only when the exact-head approval is
+// absent and a standing approval exists. Any failure to read the statuses
+// refuses (fail closed).
+export function coderabbitClearedHead(pullRequest, { repo, gh } = {}) {
+  if (coderabbitApprovedHead(pullRequest)) return true;
+  if (typeof gh !== "function" || !standingCodeRabbitApproval(pullRequest?.reviews)) return false;
+  const headSha = String(pullRequest?.headRefOid || "");
+  const repoPath = ghApiRepoPath(repo);
+  if (!repoPath || !/^[0-9a-f]{40}$/i.test(headSha)) return false;
+  let statuses;
+  try {
+    // One page, newest first (GitHub's documented order for this list); only the
+    // newest CodeRabbit entry matters and it is sorted again above regardless.
+    statuses = JSON.parse(String(gh(["api", `${repoPath}/commits/${headSha}/statuses?per_page=100`])));
+  } catch {
+    return false;
+  }
+  return coderabbitFollowUpClearedHead(pullRequest, statuses);
+}
+
 // The API path for `gh api` calls about a merge request's repository. `gh pr
 // merge --repo` accepts OWNER/REPO, HOST/OWNER/REPO or a URL; `gh api` takes a
 // path, so reduce it to OWNER/REPO. No --repo means the checkout's own remote,

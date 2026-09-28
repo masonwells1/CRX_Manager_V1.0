@@ -33,8 +33,9 @@ CodeRabbit has reviewed the FINAL head with no unresolved objection, a fresh
 exact-SHA `gpt-6-sol` high review of that head is clean, and every required
 check is green, the agent merges by itself. The merge gates enforce it — both
 `.claude/hooks/pr-merge-guard.mjs` and `.codex/hooks/production-action-guard.mjs`
-deny a merge into `main` unless CodeRabbit's latest verdict is `APPROVED` on the
-exact `headRefOid`, the newest run of every reported check is green with
+deny a merge into `main` unless CodeRabbit has cleared the exact `headRefOid`
+(its latest verdict is `APPROVED` on it, or — after that approval — a clean
+follow-up review of it; see "Follow-up after an approval" below), the newest run of every reported check is green with
 `mergeStateStatus` CLEAN, and the Sol proof is bound to that head and to GitHub's
 real base. `--auto` and `--admin` are refused.
 
@@ -69,7 +70,55 @@ with a valid identity and submission time. An approval or a substantive
 delivery but keeps the gate blocked. A queued/skipped status, empty `COMMENTED`
 reply artifact or dismissed review is insufficient. Delivery is not merge
 clearance: the merge gates additionally require CodeRabbit's `APPROVED` verdict on
-the exact head.
+the exact head, or the clean follow-up below.
+
+## Follow-up after an approval (2026-09-28)
+
+Once CodeRabbit has approved a PR, a follow-up review of a later head that finds
+nothing creates **no new review record**. CodeRabbit only edits its summary
+comment ("No actionable comments were generated in the recent review") and sets
+its `CodeRabbit` commit status on the new head to `Review completed`. On PR #820
+(approved, then fix commit `970052fc` dispatched at 07:26 and completed at 07:31)
+the lifecycle check therefore reported "no completed exact-head review", the
+relabel reported "no second dispatch will be posted", and Mason had to merge by
+hand. Every PR with a post-approval fix hit the same wall.
+
+A head now also counts as reviewed and cleared when **all** of these hold, read
+only from data CodeRabbit alone can write:
+
+1. CodeRabbit's latest `APPROVED` / `CHANGES_REQUESTED` / `DISMISSED` verdict on
+   the PR is `APPROVED`;
+2. nothing CodeRabbit submitted at or after that approval carries content — an
+   empty `COMMENTED` thread-reply artifact is tolerated; a review with findings,
+   an objection, a dismissal or an undated CodeRabbit review refuses;
+3. the **newest** `CodeRabbit`-context status on the exact head commit was
+   created by the `coderabbitai[bot]` Bot account, is `success`, reads exactly
+   `Review completed`, and is newer than that approval. In the lifecycle workflow
+   it must also be newer than this head's verified dispatch receipt; the
+   pre-dispatch lookup never uses this path.
+
+A commit status's creator is the authenticated account that wrote it, so no
+person, agent token or workflow can mint one in CodeRabbit's name; a newer
+same-context status from anyone else refuses. The summary comment is **not** read,
+because repository writers can edit it. On every observed follow-up that did find
+something (#797, #800, #806, #810, #816, #818), CodeRabbit submitted its review
+6-8 seconds **before** the matching `Review completed` status, so a completion
+with no newer review record means the run posted no findings.
+
+Still refused: an approval carried forward with no completed review of the head
+(status missing, `Review in progress`, `Review skipped …`, or older than the
+approval), an approval of a different SHA with no completion on this head, and an
+approval followed by findings or an objection. Implemented once for the hooks in
+`coderabbitClearedHead()` (`.claude/hooks/codex-push-lib.mjs`, used by both merge
+gates and the migration landing gate; it costs one `gh api` read only when the
+exact-head approval is absent) and mirrored in `inspectCodeRabbitFollowUp()` in
+`.github/scripts/coderabbit-final-review.cjs`.
+
+Observed alongside (not changed here): GitHub reported #820's approval, submitted
+at 06:24 when the head was `2d231b66` (CodeRabbit's `Review approved` status sits
+on that commit), with `commit_id` `ffb400b2`, the "Update branch" merge made at
+06:47. A review's `commit_id` is therefore not always the commit it was submitted
+on. The follow-up rule does not depend on it; the exact-head approval rule does.
 
 Each normal native attempt records a head/base receipt tied to its trusted
 Actions run before dispatch. A review must be submitted after that receipt;
@@ -148,7 +197,8 @@ only its unit shrank from "the PR" to "the candidate epoch".
 
 The loop for a fix is therefore: fix, push to the same PR, wait for checks, run
 the exact-SHA Sol proof, apply `ready-for-coderabbit`, and merge once CodeRabbit
-approves the new head. Never post `@coderabbitai` commands by hand and never use
+approves the new head, or, having approved an earlier one, completes a clean
+follow-up review of it. Never post `@coderabbitai` commands by hand and never use
 `@coderabbitai resume`.
 
 The run API's `head_sha` can expose either the PR head or the execution base.

@@ -457,7 +457,7 @@ const claudeQueuePushes = [...guardSource.matchAll(/advisoryQueue\.push\(request
 const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request, advisoryDeadlineMs\);/g)].map((m) => m.index);
 const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
 const claudeProofAt = guardSource.indexOf("every main merge → require the fresh, bound Sol proof");
-const claudeCodeRabbitAt = guardSource.indexOf("if (!coderabbitApprovedHead(pr))");
+const claudeCodeRabbitAt = guardSource.indexOf("if (!coderabbitClearedHead(pr, ");
 const claudeRequestLoopAt = guardSource.indexOf("for (const request of requests) gateRequest(request);");
 eq(
   claudeQueuePushes.length,

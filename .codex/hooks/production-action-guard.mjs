@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  coderabbitApprovedHead,
+  coderabbitClearedHead,
   contentIsRisky,
   createHardGateBudget,
   extractPatchDestinations,
@@ -1222,9 +1222,12 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "review of them. Wait for the checks, then merge immediately."
     );
   }
-  if (!coderabbitApprovedHead(pullRequest)) {
+  // An exact-head APPROVED, or a clean CodeRabbit follow-up of this exact head
+  // after an earlier approval — the shared coderabbitClearedHead() predicate.
+  if (!coderabbitClearedHead(pullRequest, { repo: request.repo, gh: (args) => runGh(args, repoDir) })) {
     return denied(
-      `CODEX PRODUCTION GATE: CodeRabbit has not APPROVED this exact head (${String(pullRequest.headRefOid).slice(0, 12)}). ` +
+      `CODEX PRODUCTION GATE: CodeRabbit has not cleared this exact head (${String(pullRequest.headRefOid).slice(0, 12)}): ` +
+      "no APPROVED review of it, and no clean CodeRabbit follow-up review of it after an earlier approval. " +
       "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required check " +
       "is green, apply the `ready-for-coderabbit` label so the default-branch workflow dispatches one review, " +
       "fix every real finding, and retry. Do not post `@coderabbitai` commands by hand."
