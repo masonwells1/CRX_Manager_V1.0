@@ -24,7 +24,8 @@ same files; replaces PR #822.
 - `.codex/config.toml`: the Supabase MCP entry, dead since 2026-08-10, is `enabled = false`.
 - Docs: `ship.md`, `AGENTS.md`, the `deploy-check` and `codex-review` skills (+ `.agents/` copies),
   `SAFE_DEVELOPMENT_RULES.md`, `gotchas.md`, `agent-guardrails.md`, `coderabbit-native-review.md`,
-  `OWNER_PLAYBOOK.md` (how Mason unblocks a stuck CodeRabbit), and the hook landing reminder.
+  `OWNER_PLAYBOOK.md` (a stuck CodeRabbit means the merge waits; agents re-request a review and
+  never touch the protection rule), and the hook landing reminder.
 - Outside the repository, on Mason's machine and GitHub: 17 of 24 CRX Codex hooks that Codex had
   been silently skipping were re-trusted; Mason's `~/.claude/settings.json` lost its `gh pr merge`
   prompt; and the `protect-main` ruleset now requires one approving review of the latest push with

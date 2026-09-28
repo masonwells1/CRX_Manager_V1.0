@@ -62,7 +62,9 @@ showed Mason no permission prompts.
    closed PRs came from `coderabbitai[bot]`. With the autonomous-landing merge gates (CodeRabbit's
    latest verdict APPROVED on the exact head, `--auto` refused), an unreviewed PR cannot land even if
    a local gate were weakened. Supersedes the 2026-09-02 removal. Cost Mason accepted: if CodeRabbit
-   is down nothing merges until he sets the count to 0 by hand (`OWNER_PLAYBOOK.md`).
+   is down, nothing merges until it recovers. The ruleset is his alone to change; agents never
+   change or work around it, and no document carries a step-by-step way to switch it off (a Sol
+   review flagged such steps as a written bypass path, 2026-09-27).
 4. **Adversarial review:** unchanged from the entry below — Luna rounds and an exact-SHA Sol proof on
    every change — plus CodeRabbit and the Codex GitHub App on every PR automatically.
 5. **Codex hooks re-trusted (Mason's machine).** Codex silently skips a repository hook whose

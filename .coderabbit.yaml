@@ -31,7 +31,7 @@ reviews:
   # only a local hook - enforces it; the agent merge gates additionally require
   # that CodeRabbit's latest verdict is APPROVED on the exact head. The required
   # build/deployment contexts remain separate. If CodeRabbit is down or stuck,
-  # only Mason changes the ruleset (steps in docs/manual/OWNER_PLAYBOOK.md).
+  # merges wait for it to recover; only Mason ever changes the ruleset.
   request_changes_workflow: true
   high_level_summary: true
   # Put the summary in the walkthrough COMMENT, never in the PR description
