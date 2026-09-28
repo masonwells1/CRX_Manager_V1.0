@@ -49,7 +49,7 @@ paths that no longer existed even before this cleanup, and they were not touched
 
 **Follow-up:** some `(Source: …)` citations in `docs/manual/KNOWN_ISSUES.md` now name removed
 files without saying so. Parts 2 and 3 stayed out of that file so they could not conflict with the
-open field-season PR (#829). Once #829 lands, those citations should gain
+open field-season delivery PR (#832 when this was written; it has been replaced several times). Once that PR lands, those citations should gain
 "(removed 2026-09-26; in git history)".
 
 **Proof observed for part 3:** `npm run check:docs` and `npm run test:agent-workflows` both exit 0,
