@@ -83,6 +83,9 @@ try {
   check(hasStatementBreak('/* a; b */ SELECT 1') === false, 'a semicolon inside a block comment is prose');
   check(hasStatementBreak("SELECT 'a; b' AS lit") === false, 'a semicolon inside a literal is data');
   check(hasStatementBreak('SELECT $q$a; b$q$ AS lit') === false, 'a semicolon inside a dollar-quote is data');
+  check(hasStatementBreak('SELECT $q1$a; b$q1$ AS lit') === false, 'a dollar-quote tag may hold digits after its first character');
+  check(hasStatementBreak('SELECT $$a; b$$ AS lit') === false, 'an empty dollar-quote tag still quotes');
+  check(hasStatementBreak('SELECT $1; SELECT 2') === true, 'a positional parameter is not a dollar-quote tag');
   check(hasStatementBreak('SELECT "od;d" AS x') === false, 'a semicolon inside a quoted identifier is a name');
   assert.throws(
     () => buildSweepQuery({ name: 'actor-forgery', sql: 'CREATE OR REPLACE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS $$SELECT 1$$; SELECT 1 AS violation_key;' }, [delivery]),

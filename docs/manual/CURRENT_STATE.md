@@ -182,7 +182,7 @@ pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff re
 
 **Field-season delivery (open).** The Oct-1 filed-season guard ships as four migrations,
 `20260914101000`..`20260914101300` (rows 931–934 in `docs/reference/migration-history.md`), all
-LOCAL CANDIDATES, not applied, carried by the field-season delivery PR that replaced #793 (branch `claude/field-season-delivery-lap15-20260927`). They apply only after
+LOCAL CANDIDATES, not applied, carried by PR #832 (branch `claude/field-season-delivery-lap15-20260927`), which replaced #829 in the #793 → #828 → #829 line. They apply only after
 `20260914100900`, in ascending stamp order, with `101000` and `101100` in one window; see the
 APPLY-WINDOW and COMMISSION-FIRST rules in that file.
 

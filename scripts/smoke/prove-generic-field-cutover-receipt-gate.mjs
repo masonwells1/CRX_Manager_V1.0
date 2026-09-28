@@ -37,7 +37,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const MIGRATION = path.join(
   ROOT, 'supabase', 'migrations', '20260914101300_finish_generic_field_invoice_cutover.sql',
 );
-const CONTAINER = 'crx-generic-field-cutover-receipt-gate';
+// Unique per run, like prove-preview-field-app-season.mjs: a fixed name let a second run
+// delete a first run's container mid-proof on a shared Docker host. (CodeRabbit on #832.)
+const CONTAINER = `crx-generic-field-cutover-receipt-gate-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'postgres:17-alpine';
 
 const docker = (args, opts = {}) =>
@@ -103,7 +105,6 @@ const CASES = [
 // Exactly the fixtures whose only still-valid receipts resolve to a live NON-field invoice.
 const EXPECTED_DIFFERENCES = 3;
 
-try { docker(['rm', '-f', CONTAINER]); } catch { /* not running */ }
 docker(['run', '--detach', '--name', CONTAINER, '--network', 'none',
   '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=128m',
   '--env', 'POSTGRES_PASSWORD=disposable-only', IMAGE]);

@@ -21,8 +21,8 @@ authored stamp (authored stamp → ledger version): `20260914100100` → `202609
 
 **Still parked on `main`:** `20260914100900_repair_commission_history_label_snapshots` (row 915,
 the refusing repair, deliberately last). Rows 931–934 and the stamps `20260914101000`..`20260914101300` belong to the
-field-season work first opened as PR #754 (closed unmerged 2026-09-21). Open the field-season delivery PR that replaced #793 (branch
-`claude/field-season-delivery-lap15-20260927`) carries that work now, so those rows are still
+field-season work first opened as PR #754 (closed unmerged 2026-09-21). Open PR #832 (branch
+`claude/field-season-delivery-lap15-20260927`), which replaced #829 in the #793 → #828 → #829 line, carries that work now, so those rows are still
 claimed; they are not on `main` yet. `.claude/schema-registry.json` on `main` was regenerated
 2026-09-26 by PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100`
 through `100700` but not `20260914100800`. Refresh it, and the applied-migration snapshot the

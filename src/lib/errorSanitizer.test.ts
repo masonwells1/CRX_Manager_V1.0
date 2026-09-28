@@ -23,6 +23,15 @@ describe('sanitizeError', () => {
     // The date range is the operator's actual answer, so it must survive sanitizing.
     expect(shown).toContain('2025-10-01');
     expect(shown).toContain('2026-09-30');
+    // The reported member can be a sibling, so its season is never attributed to "this invoice".
+    expect(shown).toContain('The conflicting invoice is filed in season 2026');
+    expect(shown).not.toContain('this invoice is filed in season');
+  });
+
+  it('never echoes an unrecognised filed-season detail verbatim', () => {
+    const shown = sanitizeError('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED: unexpected server wording');
+    expect(shown).not.toContain('unexpected server wording');
+    expect(shown).toContain('every group member must keep its filed season');
   });
 
   it('explains a bare filed-season date refusal with no detail after the token', () => {

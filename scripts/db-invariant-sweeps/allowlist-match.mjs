@@ -126,7 +126,8 @@ export function hasStatementBreak(sql) {
         i += 1;
       }
     } else {
-      const tag = /^\$[A-Za-z_]*\$/.exec(text.slice(i))?.[0];
+      // PostgreSQL tags may hold digits after the first character ($q1$), never first. (CodeRabbit on #832.)
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i))?.[0];
       if (tag) {
         const close = text.indexOf(tag, i + tag.length);
         i = close === -1 ? text.length : close + tag.length;

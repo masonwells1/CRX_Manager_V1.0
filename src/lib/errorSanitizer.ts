@@ -129,10 +129,17 @@ export function sanitizeError(error: unknown): string {
   // Keep the server's season and allowed-date-range text after the colon and strip only the
   // token -- that text is the operator's answer, and it carries no schema identifiers.
   // (CodeRabbit on PR #786.)
-  const seasonDateDetail = message.match(/^INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:\s*(\S.*)$/s)?.[1];
+  // The server reports the FIRST conflicting group member, which can be a sibling rather than the
+  // invoice being edited, so its season is shown as the conflicting invoice's, never as "this
+  // invoice". Any other detail shape falls through to the generic sentence below. (CodeRabbit on #832.)
+  const seasonDateDetail = message.match(
+    /^INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED:\s*this invoice is filed in season (\d+), so its transaction date must stay between (\S+) and (\S+)\s*$/s,
+  );
   if (seasonDateDetail) {
     return 'No invoice was changed. This date conflicts with the filed season of this invoice or '
-      + `another invoice in its split group: ${seasonDateDetail.trim()}`;
+      + `another invoice in its split group. The conflicting invoice is filed in season ${seasonDateDetail[1]} `
+      + `(${seasonDateDetail[2]} through ${seasonDateDetail[3]}). Keep the original transaction date; `
+      + 'every group member must keep its filed season';
   }
   if (/^INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED(?::|$)/.test(message)) {
     return 'No invoice was changed. This date conflicts with the filed season of this invoice or '
