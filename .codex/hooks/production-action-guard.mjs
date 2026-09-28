@@ -1225,9 +1225,10 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (!coderabbitApprovedHead(pullRequest)) {
     return denied(
       `CODEX PRODUCTION GATE: CodeRabbit has not APPROVED this exact head (${String(pullRequest.headRefOid).slice(0, 12)}). ` +
-      "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required check " +
-      "is green, apply the `ready-for-coderabbit` label so the default-branch workflow dispatches one review, " +
-      "fix every real finding, and retry. Do not post `@coderabbitai` commands by hand."
+      "Agents merge only after CodeRabbit's final review of the frozen head is clean. CodeRabbit reviews every " +
+      "non-draft push automatically (since 2026-09-26): wait for its review of this head, fix every real " +
+      "finding, and retry. If CodeRabbit skipped or was rate limited on this exact head, post " +
+      "`@coderabbitai review` on the PR once (Mason, 2026-09-27)."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {

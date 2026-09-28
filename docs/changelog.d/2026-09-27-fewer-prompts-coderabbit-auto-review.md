@@ -17,7 +17,10 @@ same files; replaces PR #822.
   `scripts/check-doc-drift.mjs`: read only each manifest's `hooks` block, so `ask` rules that name
   hook files are not mistaken for hook wiring.
 - `.coderabbit.yaml`: automatic review of every non-draft PR, on open and on every push, never
-  pausing; the `ready-for-coderabbit` route stays as the fallback. The workflow test pins it.
+  pausing. The workflow test pins it. For a head CodeRabbit skipped, agents post
+  `@coderabbitai review` once (Mason's "Post", 2026-09-27); the `ready-for-coderabbit` label no
+  longer triggers a review. Both merge-gate messages and the guidance say so.
+- `scripts/run-claude-review.mjs` stays behind the edit prompt (a proof writer; Sol, 2026-09-27).
 - `.codex/config.toml`: the Supabase MCP entry, dead since 2026-08-10, is `enabled = false`.
 - Docs: `ship.md`, `AGENTS.md`, the `deploy-check` and `codex-review` skills (+ `.agents/` copies),
   `SAFE_DEVELOPMENT_RULES.md`, `gotchas.md`, `agent-guardrails.md`, `coderabbit-native-review.md`,

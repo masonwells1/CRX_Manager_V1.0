@@ -534,18 +534,14 @@ Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14),
 CodeRabbit reviews every non-draft PR automatically, on open and on every push, and GitHub's
 `protect-main` ruleset requires one approving review of the latest push. Bring the branch current
 and green and freeze the release-candidate commit. **Only if CodeRabbit did not review that exact
-head** (rate limited or skipped), record its head SHA and apply `ready-for-coderabbit`. The trusted default-branch workflow waits out running checks,
-rechecks the exact head and PR/check state, records `coderabbit-review-requested`, then adds
-`coderabbit-review-dispatch` to trigger CodeRabbit's native label opt-in, observes an authenticated
-formal review of that exact commit, and releases the provider label. A skipped status or empty
-reply artifact does not count. A timeout or uncertain dispatch preserves dedupe labels; never clear
-them blindly to retry. After observing the actual review, re-apply `ready-for-coderabbit` to
-reconcile without another request. See `docs/reference/coderabbit-native-review.md`. Read the
-review and fix any real issue before merging; nitpicks may be dismissed with a one-line reason.
-**A fix goes on the SAME PR:** the push resets the workflow labels, the trusted synchronize run
-records the new candidate epoch, and once checks pass a relabel earns one follow-up review — no
-replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand, and
-reserve `@coderabbitai full review` for a deliberately justified complete reread. Both agent merge
+head** (rate limited or skipped), post `@coderabbitai review` on the PR once (Mason, 2026-09-27);
+with automatic review on, the `ready-for-coderabbit` label no longer triggers a review
+(`docs/reference/coderabbit-native-review.md` describes that legacy route). A skipped status or
+empty reply artifact does not count as a review. Read the review and fix any real issue before
+merging; nitpicks may be dismissed with a one-line reason. **A fix goes on the SAME PR:** CodeRabbit
+re-reviews the push automatically — no replacement PR. Never use `@coderabbitai resume`, post
+`@coderabbitai review` only for a skipped head, and reserve `@coderabbitai full review` for a
+deliberately justified complete reread. Both agent merge
 gates enforce the rule: CodeRabbit's latest verdict APPROVED on the exact `headRefOid`, the newest
 run of every reported check green with `mergeStateStatus` CLEAN, and the Step 3B Sol proof bound to
 that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.

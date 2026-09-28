@@ -44,10 +44,14 @@ showed Mason no permission prompts.
    are not mistaken for hook wiring.
 2. **CodeRabbit reviews every non-draft PR automatically**, on open and on every push, never
    pausing (`auto_review.enabled: true`, no label restriction, `auto_pause_after_reviewed_commits:
-   0`). The `ready-for-coderabbit` route from the entry below stays installed and is now the
-   fallback for a head CodeRabbit skipped or was rate limited on. Proven on PR #822: CodeRabbit
-   reviewed it with no label or command. Supersedes the "automatic reviews disabled" part of the
-   2026-08-28, 2026-08-30 and autonomous-landing entries.
+   0`). Proven on PR #822: CodeRabbit reviewed it with no label or command. With no label filter
+   the `ready-for-coderabbit` provider label no longer triggers a review (the workflow stays
+   installed), so **for a head CodeRabbit skipped or was rate limited on, an agent posts
+   `@coderabbitai review` on the PR once** — Mason's answer "Post" on 2026-09-27, which reverses the
+   standing "never post `@coderabbitai` commands by hand" rule (2026-09-07, autonomous landing).
+   Posting can only add a review; nothing merges until CodeRabbit approves the latest push.
+   Supersedes the "automatic reviews disabled" part of the 2026-08-28, 2026-08-30 and
+   autonomous-landing entries.
 3. **GitHub requires CodeRabbit's approval again.** The `protect-main` ruleset's pull-request rule
    moved to `required_approving_review_count: 1` and `dismiss_stale_reviews_on_push: true` (no bypass
    actors), verified via `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27.

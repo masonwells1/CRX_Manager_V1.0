@@ -14,7 +14,7 @@ Codex, and Mason alike. The landing path is:
 
 **push a branch → open a PR (CodeRabbit reviews every non-draft push automatically) → finish
 required checks → freeze the candidate → read and resolve CodeRabbit's review of that exact head
-(if it skipped the head, apply `ready-for-coderabbit` to request one) → merge with
+(if it skipped the head, post `@coderabbitai review` once) → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
 
@@ -132,7 +132,9 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 4. Once required checks are green, freeze the candidate and record its head SHA. CodeRabbit
    reviews every non-draft push automatically (since 2026-09-26) and GitHub requires one approving
    review of the latest push. Only if CodeRabbit did not review that exact head (rate limited or
-   skipped), apply **`ready-for-coderabbit`**. The default-branch workflow waits out running checks, rechecks the
+   skipped), post **`@coderabbitai review`** on the PR once (Mason, 2026-09-27); with automatic
+   review on, the `ready-for-coderabbit` label no longer triggers a review. For reference, the
+   legacy label route: the default-branch workflow waits out running checks, rechecks the
    exact head, draft/conflict/auto-merge state, actor permission, required checks, and every
    reported non-CodeRabbit check before recording a trusted head/base receipt and adding
    `coderabbit-review-dispatch` once, then releases that provider label once the review lands.

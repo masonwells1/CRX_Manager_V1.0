@@ -183,10 +183,9 @@ if (requests.some((request) => request?.admin)) {
     "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
     "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
     "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
-    "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
-    "`ready-for-coderabbit` label and let the default-branch workflow dispatch the native review once, " +
-    "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
-    "gate. If the merge is still blocked, hand the PR to Mason and say why."
+    "without `--admin`. If a review did ask for changes, resolve it first — fix what it found and push; " +
+    "CodeRabbit re-reviews every push automatically (if it skipped the latest head, post " +
+    "`@coderabbitai review` once). If the merge is still blocked, hand the PR to Mason and say why."
   );
 }
 
@@ -434,10 +433,10 @@ function gateRequest(request) {
   if (!coderabbitApprovedHead(pr)) {
     deny(
       `PR MERGE GATE: CodeRabbit has not APPROVED this exact head (${String(pr.headRefOid || "<head>").slice(0, 12)}). ` +
-      "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required " +
-      "check is green, apply the `ready-for-coderabbit` label — the default-branch workflow revalidates this " +
-      "head and dispatches one review. Fix every real finding (a fix on this same PR earns one fresh review " +
-      "through the label), then retry. Do not post `@coderabbitai` commands by hand."
+      "Agents merge only after CodeRabbit's final review of the frozen head is clean. CodeRabbit reviews " +
+      "every non-draft push automatically (since 2026-09-26): wait for its review of this head, fix every " +
+      "real finding (each fix on this same PR is re-reviewed), then retry. If CodeRabbit skipped or was " +
+      "rate limited on this exact head, post `@coderabbitai review` on the PR once (Mason, 2026-09-27)."
     );
   }
 
