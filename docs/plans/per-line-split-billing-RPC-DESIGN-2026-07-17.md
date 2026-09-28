@@ -1,5 +1,14 @@
 # Per-Line Split Billing — SAVE/POST RPC Design + Build Handoff
 
+> **STATUS 2026-09-26 — SHIPPED AND LIVE.** This design was built and merged in PR #164 on 2026-07-21.
+> The shipped migrations are `20260720213000_per_line_split_billing_schema`,
+> `20260720214000_per_line_split_billing_calculator` and `20260720233000_per_line_split_billing_save_rpc`
+> (all in the live ledger); the `20260718010000` / `20260718020000` files named below were renamed to those
+> versions before merge (commit `33ddcdc72`), so they never existed on `main` under the old names. `per_line_split_billing_enabled` has been ON since 2026-07-21. The stacked Codex
+> variant (PRs #181/#182) was closed as superseded. "WHERE THIS STANDS" below is the 2026-07-17 state. The
+> READINESS companion was removed on 2026-09-26 and remains in git history. Current detail:
+> `docs/manual/KNOWN_ISSUES.md` §0 "Per-line split-billing".
+
 Companion to `per-line-item-split-billing-spec-2026-07-17.md` (the spec) and
 `per-line-split-billing-READINESS-2026-07-17.md` (grounding + 11 corrections).
 This doc is the **grounded, ready-to-build design for Phase 4 (the save RPC)**,
