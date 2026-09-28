@@ -1,7 +1,8 @@
 # FIN predicates — C9 financial identity suite
 
 Standing SQL predicates asserting the numeric identities of CRX Manager's money
-subsystem (AR, payments, prepay, write-offs, commissions, quote pricing).
+subsystem (AR, payments, prepay, write-offs, commissions, quote pricing, and,
+since 2026-08, whole-cent money values, purchase-order receipts, and AP vendor bills).
 Built per `docs/audits/2026-06-10-error-prevention-review.md` §4 C9: the
 money-logic errors Codex caught in review (B2 statement double-count, P1A
 discarded price overrides) were each a violated numeric identity that a
@@ -30,6 +31,9 @@ security predicates, and the allowlist are owned separately (same directory).
 | `fin-commission-split-sum.sql` | Every non-empty `commission_split` on orders/quotes/customers passes the `validate_commission_split_json` rules: sum within 0.01 of 100, non-empty unique recipients, each pct in (0,100] | Pre-validator split rows driving silent commission mis-payment |
 | `fin-quote-override-survival.sql` | Per quote (aggregates only): every persisted `quote_items.price_override` survives as `price_per_unit` (save_quote recalc sets ppu = COALESCE(override, tier price)) | P1A (overrides silently rewritten back to tier pricing) — rewrite-after-persist variant |
 | `fin-invoice-balance-identity.sql` | Per invoice: `write_off_cents` == SUM(unreversed write_offs); `prepay_applied_cents` == SUM(prepay_applications); `paid_amount_cents` == SUM(active payment-set allocations) + SUM(audited `payment_recorded` legacy payments). (`balance_cents` itself is GENERATED and cannot drift.) | Cached-component drift between ledger insert and invoice UPDATE; one-sided voids |
+| `fin-money-whole-cents.sql` | The numeric-dollar money columns `order_items.total_price` and `commissions.commission_amount` hold whole cents: value == ROUND(value, 2) (Mason's 2026-08-08 half-up rounding decision) | Fractional-cent money rows. **Expects zero rows:** the historical rows the 2026-08-08 audit found have since cleared, and the read-only live count was 0 on 2026-08-18 and again on 2026-09-26. How they cleared, and which zeros are enforced by a CHECK constraint versus only measured, is recorded in the whole-cent note in `docs/manual/CURRENT_STATE.md` §2. Any row now is a new regression — investigate it, never allowlist it. (The predicate file's own header still describes the pre-repair expectation; that file is fingerprint-pinned by `predicate-fingerprints.test.mjs`, so its comment is updated in a separate change.) |
+| `fin-po-receipt-identity.sql` | Per purchase order: no line received beyond ordered; `fully_received` / `partially_received` / `draft` / `submitted` status agrees with line receipts; `total_cost_cents` == SUM(round(qty × unit cost)) | Over-receipt hidden by the on-order clamp in `section9-po-ap-controls`; status running ahead of or behind receipts. Pre-existing rows are allowlisted per key (Mason, 2026-08-07) |
+| `fin-vendor-bill-balance-identity.sql` | AP mirror of the invoice identity: per live vendor bill, `paid_cents` == SUM(unvoided `vendor_payments`), `total_cents` == subtotal + adjustment, balance never negative, status follows the balance; voided/deleted bills carry no live payments; live payments are positive | One-sided AP pays/voids and a fully-paid bill left `unpaid` (hidden from AP aging) |
 
 ## Live validation — 2026-06-10, project rhyzpcqhnizqbxphqdkr (read-only)
 
@@ -63,11 +67,11 @@ shape (`recipient is required`) so the write path cannot reproduce them.
 Percentages sum to 100, so commission TOTALS are right, but the recipient is
 unattributable — any commission calculated from these defaults pays "nobody".
 
-| identity_key | farm | raw |
+| identity_key | customer | split shape |
 |---|---|---|
-| `customer:0c703cb9-7bdf-4900-87f7-4952ef1df2d1` | Test Farm Alpha | `{"splits":[{"recipient":"","percentage":100}]}` |
-| `customer:144763fa-bb50-489e-bc26-29c09c2c8356` | Yeley Farms | `{"splits":[{"recipient":"","percentage":100}]}` |
-| `customer:679200b6-a56d-4fb0-8c20-8a72f2a2366f` | Tim Jondle | `{"splits":[{"recipient":"","percentage":100}]}` |
+| `customer:0c703cb9-7bdf-4900-87f7-4952ef1df2d1` | Test Farm Alpha | one split, empty recipient, 100% |
+| `customer:<real customer A — id redacted>` | (real customer — name omitted, public repo) | one split, empty recipient, 100% |
+| `customer:<real customer B — id redacted>` | (real customer — name omitted, public repo) | one split, empty recipient, 100% |
 
 Disposition: fix the data (set a real recipient or clear the split to
 `{"splits":[]}`) via the normal save_customer path, then remove this baseline
@@ -113,7 +117,10 @@ them here so they're fixed before that, not after.
 ## Schema facts verified live (pg_catalog/information_schema, 2026-06-10)
 
 - `invoices.balance_cents` is GENERATED ALWAYS AS
-  `(total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents)`.
+  `(total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents)`,
+  plus `credit_applied_cents` for a credit memo and minus it otherwise [Update 2026-09-27:
+  the credit term was added by `20260711021000_credit_apply_balance_lever.sql` after this
+  section was verified; re-verified live 2026-09-27].
   Status CHECK: draft, unposted, posted, paid, overdue, voided, cancelled.
   Type CHECK: chemical_sale, field_application, misc_charge, credit_memo.
   Credit memos are stored with **negative** `total_amount_cents`
