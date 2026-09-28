@@ -49,7 +49,8 @@ showed Mason no permission prompts.
    installed), so **for a head CodeRabbit skipped or was rate limited on, an agent posts
    `@coderabbitai review` on the PR once** — Mason's answer "Post" on 2026-09-27, which reverses the
    standing "never post `@coderabbitai` commands by hand" rule (2026-09-07, autonomous landing).
-   Posting can only add a review; nothing merges until CodeRabbit approves the latest push.
+   Posting can only add a review; nothing merges until CodeRabbit approves the latest push. A fix
+   on the same PR is re-reviewed automatically; relabelling no longer earns a follow-up review.
    Supersedes the "automatic reviews disabled" part of the 2026-08-28, 2026-08-30 and
    autonomous-landing entries.
 3. **GitHub requires CodeRabbit's approval again.** The `protect-main` ruleset's pull-request rule

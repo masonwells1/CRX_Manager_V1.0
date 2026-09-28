@@ -143,10 +143,10 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    another request. Never clear and re-add the provider label to retry. Follow
    `docs/reference/coderabbit-native-review.md`, including its introducing-PR bootstrap. Read the
    resulting review and fix every real issue; nitpicks may be dismissed with a one-line reason.
-   **A fix goes on the SAME PR:** the push resets the labels, the trusted synchronize run records
-   the new candidate epoch, and after checks pass a relabel earns one follow-up review — no
-   replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand,
-   and reserve `@coderabbitai full review` for a deliberately justified complete reread.
+   **A fix goes on the SAME PR:** push it and CodeRabbit re-reviews the new head automatically
+   (post `@coderabbitai review` once only if it skipped that head) — no replacement PR. Never use
+   `@coderabbitai resume`, post no other `@coderabbitai` commands, and reserve
+   `@coderabbitai full review` for a deliberately justified complete reread.
 5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
    `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
