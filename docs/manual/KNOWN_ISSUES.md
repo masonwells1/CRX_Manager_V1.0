@@ -55,7 +55,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   (`20260627120000`) lets dispatched applicators read `cost_per_unit_cents`; (3) `update_field_app_invoice_billing`
   gates admin OR sales_rep with no per-row ownership, so any rep can edit another rep's draft billing fields;
   (4) `buildInvoiceEmailPayload` (`src/lib/emailService.ts`) puts the invoice number/date into email HTML
-  unescaped. (Source: `docs/archive/2026-summer/fieldapp-parity/LEDGER.md` (removed 2026-09-26; recover with `git show 4b6ff6293:docs/archive/2026-summer/fieldapp-parity/LEDGER.md`).)
+  unescaped. (Source: `docs/archive/2026-summer/fieldapp-parity/LEDGER.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer/fieldapp-parity/LEDGER.md`).)
 - **Split-acre rounding drift (deferred MED, Track B B1.4).** `derive_customer_shares_from_fields` (latest body
   `20260429140635`) rounds `share_acres` to 2 dp, so small multi-customer splits can drift a few cents from the
   field's applied acres. Re-verify the current billing path still consumes it, then bill at 4 dp / display 2 dp,
@@ -65,12 +65,12 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   `total_acres` to the stale loaded value (see the KNOWN FOLLOW-UP comment in `src/pages/FieldSetup.tsx`).
   E2: deleting every drawn polygon of a loaded multi-part field makes `buildBoundaryGeometry` fall back to the
   old boundary, so `set_field_boundary` may re-measure only the largest part.
-  (Source: `docs/build-loops/field-acre-billing/HANDOFF.md` (removed 2026-09-26; recover with `git show 4b6ff6293:docs/build-loops/field-acre-billing/HANDOFF.md`).)
+  (Source: `docs/build-loops/field-acre-billing/HANDOFF.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/build-loops/field-acre-billing/HANDOFF.md`).)
 - **Reports › Profitability still uses stored order profit.** The customer / product / monthly sub-fetchers in
   `src/pages/Reports.tsx` compute margins in the browser from `orders.total_profit` and `order_items.profit`.
   The server RPC `get_profitability_report` (`20260812115235`, live 2026-08-12), which uses the as-of-sale cost
   snapshot, has no caller. Fix: switch the three sub-fetchers to the RPC and compare a real date range.
-  (Source: `docs/handoffs/2026-08-09-pricing-audit-local-finish.md` (removed 2026-09-26; recover with `git show 4b6ff6293:docs/handoffs/2026-08-09-pricing-audit-local-finish.md`).)
+  (Source: `docs/handoffs/2026-08-09-pricing-audit-local-finish.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/handoffs/2026-08-09-pricing-audit-local-finish.md`).)
 - **AR aging and date boundaries (2026-05-25 review).** (1) The Financial Dashboard's AR aging (current ≤ 30
   days, UTC `now()`) disagrees with the AR Aging page (current 0–29, as-of date), so a 30-day-old invoice shows
   as current on one and 30–59 on the other. (2) `invoice_date` has no future-date bound in the UI or on the
@@ -99,7 +99,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   trigger also fires for service role, so AI intake must INSERT provenance with the row and never UPDATE it;
   (4) the 15-month transcript auto-purge job (DECISION_LOG) is a build precondition; (5) open design question:
   must every stored customer fact cite a `customer_interaction`?
-  (Source: `docs/loops/crm-relationship-intelligence-ledger.md` (removed 2026-09-26; recover with `git show 4b6ff6293:docs/loops/crm-relationship-intelligence-ledger.md`).)
+  (Source: `docs/loops/crm-relationship-intelligence-ledger.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/loops/crm-relationship-intelligence-ledger.md`).)
 
 ## PARKED — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots` (written, NOT applied as of 2026-09-27)
 
