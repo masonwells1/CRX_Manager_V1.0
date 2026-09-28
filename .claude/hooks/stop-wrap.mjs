@@ -527,35 +527,63 @@ const porcelainPath = (l) => {
   const arrow = rel.lastIndexOf(" -> ");
   return (arrow === -1 ? rel : rel.slice(arrow + 4)).replace(/^"|"$/g, "").trim();
 };
+// Files a merge commit's author wrote by hand, as [{ path, status }]. Compares
+// the committed merge against git's own automatic merge of the same parents
+// (`merge-tree --write-tree`, which exits 1 but still prints the tree when it
+// hits conflicts, so runGit — which swallows non-zero exits — cannot be used).
+// A path the automatic merge lacks is "A" (e.g. a changelog.d entry written
+// during the resolution); every other difference is "M". Octopus merges, or a
+// git too old for --write-tree, fall back to the combined diff, which catches
+// resolutions that differ from every parent.
+function authoredMergeFiles(sha) {
+  const parents = runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).slice(1);
+  let autoTree = "";
+  if (parents.length === 2) {
+    try {
+      autoTree = execFileSync("git", ["merge-tree", "--write-tree", parents[0], parents[1]], {
+        encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir,
+      });
+    } catch (err) {
+      autoTree = typeof err?.stdout === "string" && err.status === 1 ? err.stdout : "";
+    }
+    autoTree = autoTree.split("\n")[0].trim();
+  }
+  const parse = (out, isAdded) => out.split("\n").map((s) => s.trim()).filter(Boolean)
+    .map((s) => {
+      const parts = s.split("\t");
+      if (parts.length < 2) return null;
+      return { path: parts[parts.length - 1], status: isAdded(parts[0].trim()) ? "A" : "M" };
+    })
+    .filter(Boolean);
+  if (/^[0-9a-f]{40,64}$/.test(autoTree)) {
+    return parse(runGit(["diff-tree", "-r", "--name-status", autoTree, sha]), (st) => st === "A");
+  }
+  // Combined-diff fallback: one status letter per parent; all-"A" = new file.
+  return parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
+}
+
 try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
     const since = `--since=${new Date(sessionStartMs).toISOString()}`;
-    // A CLEAN merge is not session work (2026-09-26): merging main into the
-    // branch authors nothing, and `git log --name-status` lists no files for a
-    // merge, so a merge-only session was warned that "no ledger file was
-    // touched" in a loop even though the branch's real commits carried one.
-    // The merged-in commits carry their own ledger via the pre-commit guard.
-    // A merge whose result differs from EVERY parent carries edits authored
-    // while resolving it (Codex P2, PR #824), so it still counts: the combined
-    // diff (`diff-tree --cc`) lists exactly those files and is empty for a
-    // clean merge.
-    const nonMergeCommits = runGit(["log", "--oneline", "--no-merges", since]).trim();
-    const mergeResolutionFiles = runGit(["log", "--merges", "--format=%H", since])
+    // Session work = this branch's own history since the snapshot, read along
+    // FIRST parents only (Codex P2, PR #827): a merge of main would otherwise
+    // pull every commit main gained after the snapshot into the scan, and one
+    // unrecorded src/ commit there re-raised the false warning.
+    //
+    // A merge itself counts only for what the resolver AUTHORED (2026-09-26;
+    // Codex P2s, PRs #824/#827). Merging main authors nothing, and `git log
+    // --name-status` lists no files for a merge, so a merge-only session was
+    // warned in a loop. `git merge-tree --write-tree` recomputes git's own
+    // automatic result for the two parents; every file where the committed
+    // merge differs from it was written by hand — conflict fixes, including
+    // taking one side, plus anything added — while a clean automatic merge,
+    // even of separate hunks in one file, differs in nothing.
+    const firstParentLog = (extra) => runGit(["log", "--first-parent", ...extra, since]);
+    const nonMergeCommits = firstParentLog(["--oneline", "--no-merges"]).trim();
+    const mergeResolutionFiles = firstParentLog(["--merges", "--format=%H"])
       .split("\n").map((s) => s.trim()).filter(Boolean)
-      .flatMap((sha) => runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha])
-        .split("\n").map((s) => s.trim()).filter(Boolean)
-        .map((s) => {
-          const parts = s.split("\t");
-          if (parts.length < 2) return null;
-          // One status letter per parent ("MM", "AA", …). A path added relative
-          // to EVERY parent is a new file the resolution created — e.g. the
-          // session's own changelog.d entry (Codex P2, PR #827) — so it stays
-          // an addition; anything else is a modification.
-          const status = /^A+$/.test(parts[0].trim()) ? "A" : "M";
-          return { path: parts[parts.length - 1], status };
-        })
-        .filter(Boolean));
+      .flatMap(authoredMergeFiles);
     if (nonMergeCommits || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —

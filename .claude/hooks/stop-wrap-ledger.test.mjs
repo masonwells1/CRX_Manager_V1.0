@@ -136,6 +136,55 @@ try {
     `a merge whose resolution adds a changelog entry must count as recorded; got: ${mergeWithEntry.stdout}`);
   pass++;
 
+  // ── Session 1d (Codex P2, PR #827): main gains an unrecorded commit AFTER the
+  //    snapshot and is merged cleanly — main's commit is not this session's
+  //    work (first-parent scan), and a clean merge of separate hunks in the
+  //    SAME file is not authored work either → no warning ──
+  mkdirSync(path.join(tmp, "src"), { recursive: true });
+  writeFileSync(path.join(tmp, "src", "shared.txt"), "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "shared file on feat"], tmp, { past: true });
+  git(["checkout", "-q", "main"], tmp);
+  git(["merge", "-q", "--no-edit", "feat"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "src", "shared.txt"), "ONE feat\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits top of shared"], tmp, { past: true });
+  const s1d = "ledger-test-upstream-after-snapshot";
+  snapshots.push(startSession(s1d));
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "src", "shared.txt"), "one\ntwo\nthree\nfour\nfive\nsix\nSEVEN main\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits bottom of shared, no ledger"], tmp);
+  git(["checkout", "-q", "feat"], tmp);
+  git(["merge", "--no-ff", "--no-edit", "main"], tmp);
+  const upstreamMerge = runStopWrap(s1d, tmp);
+  assert.ok(!LEDGER_WARNING.test(upstreamMerge.stdout),
+    `merging main's post-snapshot commit (clean, same-file hunks) must not warn; got: ${upstreamMerge.stdout}`);
+  pass++;
+
+  // ── Session 1e (Codex P2, PR #827): a conflict resolved by taking one side
+  //    ("ours") equals a parent, but it is still a hand-made resolution → warns ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side 3\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base a third time"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side 3\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base a third time"], tmp, { past: true });
+  const s1e = "ledger-test-take-ours";
+  snapshots.push(startSession(s1e));
+  const conflicted3 = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted3.status, 0, "setup: the third merge must conflict");
+  git(["checkout", "--ours", "base.txt"], tmp);
+  git(["add", "base.txt"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const tookOurs = runStopWrap(s1e, tmp);
+  assert.match(tookOurs.stdout, LEDGER_WARNING,
+    "a conflict resolved by taking one side is authored work and must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
