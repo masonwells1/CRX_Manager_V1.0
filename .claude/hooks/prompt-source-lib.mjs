@@ -205,6 +205,19 @@ function stripUnclosedEnvelopes(text) {
   return out;
 }
 
+// The prompt with only the other-agent envelopes removed (peer sessions, subagent
+// reports, harness blocks) — code, inline code and blockquotes are left alone.
+// The advisory reminder hooks (gauntlet, ship-intent, autopilot, handoff,
+// pair-review, dangerous-phrase) match on this, so a subagent's report cannot
+// trigger a reminder meant for Mason's words (handoff item 5, 2026-09-28), while
+// everything he typed — including code he pastes — still reaches their patterns
+// exactly as before. The hold latch keeps using the stricter authoredByMason().
+export function withoutOtherAgentText(prompt) {
+  const text = String(prompt || "");
+  if (!text) return "";
+  return stripUnclosedEnvelopes(stripClosedEnvelopes(text));
+}
+
 // Envelopes first: a peer's unfinished markdown cannot reach past the closing
 // tag that ends the peer's own turn.
 function stripEnvelopesFirst(text) {

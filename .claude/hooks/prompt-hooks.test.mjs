@@ -553,5 +553,35 @@ const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-rem
 });
 ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed intent");
 
+// ── handoff item 5 (2026-09-28): a subagent report cannot trip a reminder ──
+// Seen live the same day: a subagent's hand-back report, wrapped in
+// <agent-message>, fired the ship-intent reminder as if Mason had asked to ship.
+// Every advisory reminder hook matches on withoutOtherAgentText(), so the same
+// words inside the envelope stay silent and still fire when Mason types them.
+{
+  const REMINDER_TRIGGERS = [
+    ["ship-intent-reminder.mjs", "build me the vendor page and ship it"],
+    ["codex-gauntlet-reminder.mjs", "is this safe to merge?"],
+    ["autopilot-intent-reminder.mjs", "run it overnight while i'm asleep"],
+    ["codex-to-claude-handoff-reminder.mjs", "have claude review this"],
+    ["agent-pair-review-reminder.mjs", "let claude and codex review this"],
+    ["dangerous-phrase-warning.mjs", "force push it"],
+  ];
+  const fires = (hook, prompt) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "crx-agent-msg-"));
+    const r = spawnSync(process.execPath, [path.join(__dirname, hook)], {
+      input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    });
+    rmSync(dir, { recursive: true, force: true });
+    return String(r.stdout || "").includes("additionalContext");
+  };
+  const report = (text) => `<agent-message from="general-purpose">\n  [Subagent hand-back] ${text}\n</agent-message>`;
+  for (const [hook, trigger] of REMINDER_TRIGGERS) {
+    ok(fires(hook, trigger), `${hook} fires on Mason's own "${trigger}" (sanity)`);
+    ok(!fires(hook, report(trigger)), `${hook} stays silent when only a subagent report says "${trigger}"`);
+    ok(fires(hook, `${report("all done")}\n${trigger}`), `${hook} still fires when Mason types "${trigger}" after a report`);
+  }
+}
+
 rmSync(tmpProj, { recursive: true, force: true });
 console.log(`prompt-hooks: ${pass} assertions passed`);
