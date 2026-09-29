@@ -257,6 +257,30 @@ ok(/merge-guard-launcher\.mjs["']?\s+["']?[^"']*pr-merge-guard\.mjs/.test(mergeW
 ok(mergeWiring[0]?.timeout === HARNESS_TIMEOUT_S, `the hook entry's timeout is ${HARNESS_TIMEOUT_S}s, matching the launcher`);
 ok(/Bash/.test(mergeWiring[0]?.matcher || "") && /mcp__/.test(mergeWiring[0]?.matcher || ""),
   "the launcher sees shell and MCP calls, like the guard did");
+// If node cannot start the launcher, the shell fallback denies (Luna, 2026-09-28).
+const fallback = (mergeWiring[0]?.command || "").match(/\|\|\s*printf '%s' '([^']+)'\s*$/);
+ok(fallback, "the hook entry ends with a shell fallback that prints a verdict");
+ok(isVerdict(fallback?.[1] || "") && decisionOf(fallback?.[1] || "")?.permissionDecision === "deny",
+  "the fallback's verdict is a real PreToolUse denial");
+const bashProbe = spawnSync("bash", ["-c", "echo ok"], { encoding: "utf8" });
+if (bashProbe.status === 0 && bashProbe.stdout.trim() === "ok") {
+  // PATH is emptied INSIDE the shell: Windows finds bash itself on the child's PATH.
+  const noNode = spawnSync("bash", ["-c", `PATH=/nonexistent-crx-path; ${mergeWiring[0].command}`], {
+    input: PLAIN, encoding: "utf8", timeout: 30_000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT.replace(/\\/g, "/") },
+  });
+  ok(decisionOf(noNode.stdout)?.permissionDecision === "deny", "the wired command with no node on PATH denies");
+  const withNode = spawnSync("bash", ["-c", mergeWiring[0].command], {
+    input: PLAIN, encoding: "utf8", timeout: 60_000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT.replace(/\\/g, "/") },
+  });
+  ok(withNode.status === 0 && withNode.stdout === "", "the wired command with node allows an ordinary call and never reaches the fallback");
+} else {
+  console.log("merge-guard-launcher: bash unavailable, wired-command fallback run skipped");
+}
+ok(mayMerge(JSON.stringify({ tool_name: "Bash", command: "gh pr merge 812" })),
+  "a call with no tool_input object is judged on its whole text");
+
 const guardSource = readFileSync(REAL_GUARD, "utf8");
 const budget = guardSource.match(/const HOOK_TIMEOUT_MS = ([\d_]+);/);
 ok(budget && Number(budget[1].replace(/_/g, "")) === GUARD_BUDGET_MS, "the guard's own budget matches what the launcher assumes");

@@ -20,8 +20,10 @@
 // call is allowed
 // (@proven-by .claude/hooks/merge-guard-launcher.test.mjs).
 //
-// Not covered: node failing to start this launcher at all. That stops every
-// hook in the repository, not only this one, and no hook can answer for it.
+// The launcher always exits 0. The hook entry in .claude/settings.json adds a
+// shell fallback after it (`|| printf <denial>`), so if node cannot start the
+// launcher at all, or the launcher dies before answering, every shell and MCP
+// call is denied until that is fixed; file edits still work (Luna, 2026-09-28).
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -59,7 +61,11 @@ export function mayMerge(input) {
   let text = String(input || "");
   try {
     const payload = JSON.parse(text);
-    text = `${payload?.tool_name || ""} ${JSON.stringify(payload?.tool_input ?? "")}`;
+    // Only a well-formed call is narrowed to its name and input; anything else is
+    // judged on its whole text (Luna, 2026-09-28).
+    if (payload?.tool_input && typeof payload.tool_input === "object") {
+      text = `${payload.tool_name || ""} ${JSON.stringify(payload.tool_input)}`;
+    }
   } catch { /* unparseable: judge the raw text */ }
   return /merge|graphql|api\.github|\bgh(?:\.(?:exe|cmd|bat|ps1))?\b/i.test(text);
 }

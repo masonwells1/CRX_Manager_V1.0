@@ -97,7 +97,8 @@ its helpers are not blocked by `review-proof-guard`; only native edits prompt. C
 15-second limit, but it has no watchdog for being killed at that limit or for a module that fails
 to load, and Codex merges without prompts. That gap predates this change. A launcher there changes
 `.codex/hooks.json`, which Codex silently skips until re-trusted (item 5), so it is a separate
-follow-up. Node failing to start the Claude launcher itself is not covered; that stops every hook.
+follow-up. If node cannot start the Claude launcher at all, a shell fallback in the hook entry denies
+every shell and MCP call until it is fixed (file edits still work).
 A merge the command text does not show (decoded or assembled at run time) passes the working guard
 too; the launcher's "could merge" test matches every form the guard denies.
 

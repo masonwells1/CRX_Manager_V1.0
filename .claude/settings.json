@@ -428,7 +428,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/merge-guard-launcher.mjs\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/merge-guard-launcher.mjs\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\" || printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"PR MERGE GATE: the merge check could not start, so shell and MCP calls are denied until it is fixed. File edits still work.\"}}'",
             "timeout": 45
           }
         ]
