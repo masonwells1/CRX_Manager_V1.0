@@ -11,7 +11,7 @@ import { mkdtempSync, existsSync, readFileSync, rmSync, readdirSync } from "node
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { isMachineGenerated, MACHINE_TAG_NAMES, PUSH_POLICY, authoredByMason, hasAuthoredText, withoutOtherAgentText } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, MACHINE_TAG_NAMES, PUSH_POLICY, authoredByMason, hasAuthoredText } from "./prompt-source-lib.mjs";
 import { isHoldPhrase } from "./hold-latch-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -100,20 +100,6 @@ ok(!isMachineGenerated(""), "empty not machine");
     "Mason's stop after a peer block still latches");
   ok(isHoldPhrase(authoredByMason("stop.\n\n> quoting the peer here\n")),
     "Mason's stop still latches alongside a blockquote");
-
-  // 5b. Handoff item 5 (Mason, 2026-09-28): a subagent's hand-back report
-  //     arrives wrapped in <agent-message …>. It is another agent's words, so it
-  //     is stripped like a peer block, while Mason's own words around it still
-  //     latch. It is NOT a machine tag: the whole prompt must not go inert.
-  const AGENT_REPORT =
-    '<agent-message from="general-purpose" id="a1">Found it. We should pause the rollout ' +
-    "and stop the loop before shipping.</agent-message>";
-  ok(!isMachineGenerated(AGENT_REPORT), "agent-message is not a machine tag (Mason's words beside it must still count)");
-  ok(!isHoldPhrase(authoredByMason(AGENT_REPORT)), "a subagent report saying pause/stop does not latch");
-  ok(!hasAuthoredText(AGENT_REPORT), "a bare subagent report leaves no Mason-authored text");
-  ok(!isHoldPhrase(authoredByMason('<agent-message from="x">pause everything')), "an unterminated subagent report is stripped to the end");
-  ok(isHoldPhrase(authoredByMason(AGENT_REPORT + "\nstop now")), "Mason's stop after a subagent report still latches");
-  ok(isHoldPhrase(authoredByMason("pause here.\n" + AGENT_REPORT)), "Mason's pause before a subagent report still latches");
 
   // The negation guard added after "going to bed don't stop" is untouched.
   ok(!isHoldPhrase(authoredByMason("going to bed, don't stop")), "negated stop still not a hold");
@@ -486,11 +472,6 @@ rmSync(hbProj, { recursive: true, force: true });
     ["a message naming the hook file",
       "take a look at .claude/hooks/stop-wrap.mjs — that is the one, right?", false],
     ["Mason's pause beside a peer block", "pause here.\n" + PEER_BLOCK, true],
-    // Handoff item 5 (2026-09-28): a subagent's hand-back report is data.
-    ["a subagent report saying pause",
-      '<agent-message from="general-purpose">pause the rollout and stop the loop</agent-message>', false],
-    ["Mason's stop after a subagent report",
-      '<agent-message from="general-purpose">all done</agent-message>\nstop everything', true],
     // 2026-09-24: a stop only ONE strip order keeps must still latch end to
     // end — the hook's "not Mason's turn" gate runs after the latch.
     ["Mason's stop after an inline-quoted open tag, before a peer block",
@@ -552,54 +533,6 @@ const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-rem
   env: { ...process.env, CLAUDE_PROJECT_DIR: tmpProj },
 });
 ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed intent");
-
-// ── handoff item 5 (2026-09-28): a subagent report cannot trip a reminder ──
-// Seen live the same day: a subagent's hand-back report, wrapped in
-// <agent-message>, fired the ship-intent reminder as if Mason had asked to ship.
-// Every advisory reminder hook matches on withoutOtherAgentText(), so the same
-// words inside the envelope stay silent and still fire when Mason types them.
-{
-  const REMINDER_TRIGGERS = [
-    ["ship-intent-reminder.mjs", "build me the vendor page and ship it"],
-    ["codex-gauntlet-reminder.mjs", "is this safe to merge?"],
-    ["autopilot-intent-reminder.mjs", "run it overnight while i'm asleep"],
-    ["codex-to-claude-handoff-reminder.mjs", "have claude review this"],
-    ["agent-pair-review-reminder.mjs", "let claude and codex review this"],
-    ["dangerous-phrase-warning.mjs", "force push it"],
-  ];
-  const fires = (hook, prompt) => {
-    const dir = mkdtempSync(path.join(tmpdir(), "crx-agent-msg-"));
-    const r = spawnSync(process.execPath, [path.join(__dirname, hook)], {
-      input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-    });
-    rmSync(dir, { recursive: true, force: true });
-    return String(r.stdout || "").includes("additionalContext");
-  };
-  const report = (text) => `<agent-message from="general-purpose">\n  [Subagent hand-back] ${text}\n</agent-message>`;
-  for (const [hook, trigger] of REMINDER_TRIGGERS) {
-    ok(fires(hook, trigger), `${hook} fires on Mason's own "${trigger}" (sanity)`);
-    ok(!fires(hook, report(trigger)), `${hook} stays silent when only a subagent report says "${trigger}"`);
-    ok(fires(hook, `${report("all done")}\n${trigger}`), `${hook} still fires when Mason types "${trigger}" after a report`);
-    // Codex P2 on #836: a tag Mason only QUOTES must not swallow his instruction.
-    ok(fires(hook, `The literal \`<agent-message>\` tag is relevant. ${trigger}`),
-      `${hook} still fires on "${trigger}" after Mason quotes an <agent-message> tag in inline code`);
-    ok(fires(hook, "here is the tag:\n```\n<agent-message from=\"x\">\n```\n" + trigger),
-      `${hook} still fires on "${trigger}" after Mason quotes an <agent-message> tag in a fenced block`);
-  }
-}
-
-// withoutOtherAgentText at the unit level (Codex P2 on #836, 2026-09-29).
-{
-  const quoted = "The literal `<agent-message>` tag is relevant. Build the page and ship it";
-  ok(withoutOtherAgentText(quoted).includes("Build the page and ship it"),
-    "a quoted open tag in inline code does not delete Mason's instruction after it");
-  ok(withoutOtherAgentText(quoted).includes("`<agent-message>`"), "Mason's inline code itself is kept");
-  ok(!withoutOtherAgentText('<agent-message from="x">see `const a = 1` then ship it</agent-message>').includes("ship it"),
-    "a real report containing inline code is still removed whole");
-  ok(!withoutOtherAgentText('<agent-message from="x">pause everything').includes("pause"),
-    "an unterminated real report is still removed to the end");
-  eq(withoutOtherAgentText("plain words, no envelopes"), "plain words, no envelopes", "text with no envelopes is unchanged");
-}
 
 rmSync(tmpProj, { recursive: true, force: true });
 console.log(`prompt-hooks: ${pass} assertions passed`);

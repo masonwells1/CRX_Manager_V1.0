@@ -14,7 +14,7 @@
 // without realizing what it costs.
 
 import { readFileSync } from "node:fs";
-import { isMachineGenerated, PUSH_POLICY, withoutOtherAgentText } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -37,8 +37,7 @@ try {
 // risky-sounding words can't trip the warning.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-// A subagent report or peer message is another agent's words, not Mason's.
-const prompt = withoutOtherAgentText(payload?.prompt).toLowerCase();
+const prompt = (payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
 
 // Each rule = { pattern, label, why, alternatives }

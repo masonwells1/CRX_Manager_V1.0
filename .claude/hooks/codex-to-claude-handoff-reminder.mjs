@@ -4,7 +4,7 @@
 // Direct review is preferred; durable handoff stays available for continuation.
 
 import { readFileSync } from "node:fs";
-import { isMachineGenerated, PUSH_POLICY, withoutOtherAgentText } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -29,8 +29,7 @@ try {
 // output) are not something Mason typed — stay silent on them.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-// A subagent report or peer message is another agent's words, not Mason's.
-const prompt = withoutOtherAgentText(payload?.prompt).toLowerCase();
+const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
 
 const reviewVerbs = String.raw`(?:review|check|double[-\s]?check|look(?:\s+at|\s+over)?|challenge|audit|vet|verify|take\s+a\s+second\s+look)`;

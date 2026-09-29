@@ -20,7 +20,7 @@
 // Regression cases live in codex-gauntlet-reminder.test.mjs.
 
 import { readFileSync } from "node:fs";
-import { isMachineGenerated, PUSH_POLICY, withoutOtherAgentText } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -43,8 +43,7 @@ try {
 // embedded report can't trip the gauntlet reminder.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-// A subagent report or peer message is another agent's words, not Mason's.
-const prompt = withoutOtherAgentText(payload?.prompt).toLowerCase();
+const prompt = String(payload?.prompt || "").toLowerCase();
 if (!prompt) emit();
 
 // Farm/business objects that mark a NON-code-review question.

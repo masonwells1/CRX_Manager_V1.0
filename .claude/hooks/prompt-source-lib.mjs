@@ -130,15 +130,7 @@ export function isMachineGenerated(prompt) {
 
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
-//
-// "agent-message" (Mason, 2026-09-28, handoff item 5): a subagent's hand-back
-// report arrives wrapped in <agent-message …>. Like a peer's message it is
-// another agent's words, not Mason's, and it repeatedly tripped the gauntlet
-// and ship-intent reminders and could latch hold.json on a word like "pause".
-// Mason chose the same treatment as cross-session-message: strip the block,
-// keep matching whatever he typed around it — NOT a MACHINE_TAG_NAMES entry,
-// which would make his own words in the same prompt inert.
-const NON_AUTHORED_TAG_NAMES = ["cross-session-message", "agent-message", ...MACHINE_TAG_NAMES];
+const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
 
 // ``` / ~~~ fenced blocks, line-based. Only a fence that CLOSES is removed.
 //
@@ -203,36 +195,6 @@ function stripUnclosedEnvelopes(text) {
     out = out.replace(new RegExp(`<\\/${tag}\\s*>`, "gi"), " ");
   }
   return out;
-}
-
-// The prompt with only the other-agent envelopes removed (peer sessions, subagent
-// reports, harness blocks) — code, inline code and blockquotes are left alone.
-// The advisory reminder hooks (gauntlet, ship-intent, autopilot, handoff,
-// pair-review, dangerous-phrase) match on this, so a subagent's report cannot
-// trigger a reminder meant for Mason's words (handoff item 5, 2026-09-28), while
-// everything he typed — including code he pastes — still reaches their patterns
-// exactly as before. The hold latch keeps using the stricter authoredByMason().
-//
-// Two passes, and anything EITHER keeps counts (Codex P2 on #836, 2026-09-29).
-// Stripping the raw text alone let a tag Mason merely QUOTES — "the literal
-// `<agent-message>` tag matters. Build the page and ship it" — act as an
-// unclosed envelope and delete his real instruction after it. The second pass
-// hides closed code spans and fences behind placeholders first, strips
-// envelopes, then puts the code back, so a quoted tag cannot open or close an
-// envelope. The union is the safe direction for an advisory reminder: at worst a
-// reminder fires on text it could have skipped; it never goes silent on Mason.
-export function withoutOtherAgentText(prompt) {
-  const text = String(prompt || "");
-  if (!text) return "";
-  const plain = stripUnclosedEnvelopes(stripClosedEnvelopes(text));
-  const shielded = [];
-  const shield = (match) => `\u0000${shielded.push(match) - 1}\u0000`;
-  const masked = text
-    .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]{0,3}\1[^\n]*$/gm, shield)
-    .replace(INLINE_CODE_RE, shield);
-  const codeSafe = stripUnclosedEnvelopes(stripClosedEnvelopes(masked))
-    .replace(/\u0000(\d+)\u0000/g, (_, index) => shielded[Number(index)]);
-  return plain.trim() === codeSafe.trim() ? plain : `${plain}\n${codeSafe}`;
 }
 
 // Envelopes first: a peer's unfinished markdown cannot reach past the closing
