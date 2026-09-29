@@ -4,9 +4,10 @@
 // 2026-09-26 regression: a session whose only commit was a merge of main into
 // the feature branch was warned in a loop. `git log --name-status` lists no
 // files for a merge commit, so the branch's changelog entry (committed before
-// the session-start snapshot) was invisible. Commits already on main, and the
-// clean part of a merge, are not session work; a real commit without a ledger —
-// on this branch or on a side branch merged in — must still warn.
+// the session-start snapshot) was invisible. Session work is what this
+// checkout created (HEAD's reflog): commits fetched from elsewhere, and the
+// clean part of a merge, are not; a real commit without a ledger — on this
+// branch, on a side branch merged in, or already landed on main — still warns.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -153,11 +154,20 @@ try {
   git(["commit", "-qm", "feat edits top of shared"], tmp, { past: true });
   const s1d = "ledger-test-upstream-after-snapshot";
   snapshots.push(startSession(s1d));
-  git(["checkout", "-q", "main"], tmp);
-  writeFileSync(path.join(tmp, "src", "shared.txt"), "one\ntwo\nthree\nfour\nfive\nsix\nSEVEN main\n");
-  git(["add", "."], tmp);
-  git(["commit", "-qm", "main edits bottom of shared, no ledger"], tmp);
-  git(["checkout", "-q", "feat"], tmp);
+  // Someone else's commit reaches main the real way: made in another clone,
+  // then fetched — it never passes through this checkout's HEAD.
+  const other = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other], os.tmpdir());
+    git(["config", "user.email", "other@test"], other);
+    git(["config", "user.name", "other"], other);
+    writeFileSync(path.join(other, "src", "shared.txt"), "one\ntwo\nthree\nfour\nfive\nsix\nSEVEN main\n");
+    git(["add", "."], other);
+    git(["commit", "-qm", "main edits bottom of shared, no ledger"], other);
+    git(["fetch", "-q", other, "main:main"], tmp);
+  } finally {
+    rmSync(other, { recursive: true, force: true });
+  }
   git(["merge", "--no-ff", "--no-edit", "main"], tmp);
   const upstreamMerge = runStopWrap(s1d, tmp);
   assert.ok(!LEDGER_WARNING.test(upstreamMerge.stdout),
@@ -200,6 +210,20 @@ try {
   const topicMerge = runStopWrap(s1f, tmp);
   assert.match(topicMerge.stdout, LEDGER_WARNING,
     "an unrecorded commit authored this session on a side branch and merged in must still warn");
+  pass++;
+
+  // ── Session 1g (Codex P2, PR #827 round 5): an unrecorded session commit
+  //    that has already LANDED on main before the stop hook runs is still
+  //    this session's work → still warns ──
+  const s1g = "ledger-test-landed-on-main";
+  snapshots.push(startSession(s1g));
+  writeFileSync(path.join(tmp, "landed.txt"), "landed work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded work that lands on main"], tmp);
+  git(["branch", "-f", "main", "feat"], tmp);
+  const landed = runStopWrap(s1g, tmp);
+  assert.match(landed.stdout, LEDGER_WARNING,
+    "a session commit that already reached main must still warn without a ledger");
   pass++;
 
   // ── Session 2: a real commit without any ledger → still warns ──

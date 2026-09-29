@@ -565,36 +565,38 @@ function authoredMergeFiles(sha) {
 try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
-    const since = `--since=${new Date(sessionStartMs).toISOString()}`;
-    // Session work = commits since the snapshot that are NOT already on the
-    // base branch (Codex P2s, PR #827). Commits reached by merging main —
-    // including ones main gained after the snapshot — carry their own ledger
-    // through main's pre-commit guard, so they are excluded; an unrecorded
-    // src/ commit there re-raised the false warning. Commits made on a local
-    // topic branch this session and then merged in are NOT on main, so they
-    // still count (a first-parent-only scan dropped them). The current
-    // branch's own local ref is never excluded, so a session on main still
-    // sees its unpushed commits.
-    //
+    // Session work = the commits this checkout CREATED since the snapshot, read
+    // from HEAD's reflog (per worktree), not inferred from the commit graph.
+    // Every graph-based rule failed a Codex P2 on PR #827: `git log --since`
+    // pulled in main's post-snapshot commits once main was merged; a
+    // first-parent scan dropped commits made on a topic branch and merged in;
+    // subtracting main's current tip dropped the session's own commits once
+    // they landed on main. The reflog records each commit where it was made,
+    // whichever branch it is on later, and never records commits that only
+    // arrive by fetch/merge. Checkouts, resets and fast-forwards create
+    // nothing and are skipped. No reflog (disabled) → nothing counted, the
+    // same fail-open as the rest of this hook.
+    const AUTHORING_RE = /^(commit|cherry-pick|revert|am)\b|^rebase\b[^:]*\((pick|reword|edit|squash|fixup)\)|: Merge made by /;
+    const sessionStartSec = Math.floor(sessionStartMs / 1000);
+    const authored = new Set();
+    for (const entry of runGit(["reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"]).split("\n")) {
+      const [sha, selector = "", subject = ""] = entry.split("\t");
+      const ts = Number(/@\{(\d+)\}/.exec(selector)?.[1]);
+      if (sha && ts >= sessionStartSec && AUTHORING_RE.test(subject)) authored.add(sha.trim());
+    }
+    const isMerge = (sha) => runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).length > 2;
+    const authoredShas = [...authored];
+    const nonMergeShas = authoredShas.filter((sha) => !isMerge(sha));
     // A merge itself counts only for what the resolver AUTHORED (2026-09-26;
-    // Codex P2s, PRs #824/#827). Merging main authors nothing, and `git log
-    // --name-status` lists no files for a merge, so a merge-only session was
+    // Codex P2s, PRs #824/#827). Merging main authors nothing, and
+    // `--name-status` lists no files for a merge, so a merge-only session was
     // warned in a loop. `git merge-tree --write-tree` recomputes git's own
     // automatic result for the two parents; every file where the committed
     // merge differs from it was written by hand — conflict fixes, including
     // taking one side, plus anything added — while a clean automatic merge,
     // even of separate hunks in one file, differs in nothing.
-    const currentRef = runGit(["symbolic-ref", "-q", "HEAD"]).trim();
-    const baseRefs = [
-      "refs/heads/main", "refs/heads/master",
-      "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/remotes/origin/HEAD",
-    ].filter((ref) => ref !== currentRef && runGit(["rev-parse", "--verify", "-q", ref]).trim());
-    const sessionLog = (extra) => runGit(["log", ...extra, since, "HEAD", ...baseRefs.map((ref) => `^${ref}`)]);
-    const nonMergeCommits = sessionLog(["--oneline", "--no-merges"]).trim();
-    const mergeResolutionFiles = sessionLog(["--merges", "--format=%H"])
-      .split("\n").map((s) => s.trim()).filter(Boolean)
-      .flatMap(authoredMergeFiles);
-    if (nonMergeCommits || mergeResolutionFiles.length > 0) {
+    const mergeResolutionFiles = authoredShas.filter(isMerge).flatMap(authoredMergeFiles);
+    if (nonMergeShas.length > 0 || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —
       // those have left the status listing entirely. An earlier version stat'd
@@ -611,8 +613,9 @@ try {
       const toPosixPath = (s) => s.split(BACKSLASH).join("/").trim();
       // Same session scope as above: a ledger file that only arrived by merging
       // main records main's work, not this session's.
-      const fromLog = sessionLog(["--name-status", "-M", "--pretty=format:"])
-        .split("\n").map(s => s.trim()).filter(Boolean)
+      const fromLog = nonMergeShas
+        .flatMap((sha) => runGit(["diff-tree", "--no-commit-id", "-r", "--root", "--name-status", "-M", sha]).split("\n"))
+        .map(s => s.trim()).filter(Boolean)
         .map((s) => {
           const parts = s.split("\t");
           if (parts.length < 2) return null;
