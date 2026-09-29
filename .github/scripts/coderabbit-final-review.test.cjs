@@ -419,24 +419,20 @@ test('CodeRabbit reviews every non-draft PR automatically, on open and on every 
   const autoReviewStart = config.indexOf('  auto_review:');
   const autoReview = config.slice(autoReviewStart, config.indexOf('  path_instructions:', autoReviewStart));
   assert.notEqual(autoReviewStart, -1);
-  // Read the EFFECTIVE values, not the first matching text (CodeRabbit, PR #841):
-  // exactly one `reviews:` and one `auto_review:` block, and each setting set
-  // exactly once among the block's direct children, so a later `enabled: false`
-  // cannot silently override an earlier `enabled: true`.
-  assert.equal((config.match(/^reviews:/gm) || []).length, 1, 'exactly one top-level reviews block');
-  assert.equal((config.match(/^\s*auto_review:/gm) || []).length, 1, 'exactly one auto_review block');
-  const settings = new Map();
-  for (const line of autoReview.split(/\r?\n/).slice(1)) {
-    const match = line.match(/^ {4}([A-Za-z_]+):\s*(.*?)\s*(?:#.*)?$/);
-    if (!match) continue;
-    const [, key, value] = match;
-    assert.ok(!settings.has(key), `auto_review.${key} is set only once`);
-    settings.set(key, value);
-  }
-  assert.equal(settings.get('enabled'), 'true');
-  assert.equal(settings.get('auto_incremental_review'), 'true');
-  assert.equal(settings.get('auto_pause_after_reviewed_commits'), '0');
-  assert.equal(settings.get('drafts'), 'false');
+  // Read the EFFECTIVE values with a real YAML parser, not the first matching
+  // text (CodeRabbit and Luna, PR #841): a later `enabled: false`, a quoted
+  // `"enabled": false` or a second `auto_review` block must not slip past.
+  // `yaml` arrives through vite and tailwindcss; if it ever does not, this
+  // require throws and the test FAILS rather than checking less.
+  const YAML = require('yaml');
+  const doc = YAML.parseDocument(config, { uniqueKeys: true });
+  assert.deepEqual(doc.errors.map(String), [], 'the config parses as YAML with no duplicate keys');
+  const effective = doc.toJS()?.reviews?.auto_review;
+  assert.equal(effective?.enabled, true);
+  assert.equal(effective?.auto_incremental_review, true);
+  assert.equal(effective?.auto_pause_after_reviewed_commits, 0);
+  assert.equal(effective?.drafts, false);
+  assert.equal(Object.hasOwn(effective ?? {}, 'labels'), false);
   // A positive `labels:` list would restrict automatic review to labelled PRs.
   assert.doesNotMatch(autoReview, /^\s*labels:/m);
   assert.match(config, /^\s*high_level_summary_in_walkthrough:\s*true\b/m);
