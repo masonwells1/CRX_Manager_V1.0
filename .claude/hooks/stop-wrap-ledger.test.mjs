@@ -4,8 +4,9 @@
 // 2026-09-26 regression: a session whose only commit was a merge of main into
 // the feature branch was warned in a loop. `git log --name-status` lists no
 // files for a merge commit, so the branch's changelog entry (committed before
-// the session-start snapshot) was invisible. Merge commits author no new work
-// and are now skipped; a real commit without a ledger must still warn.
+// the session-start snapshot) was invisible. Commits already on main, and the
+// clean part of a merge, are not session work; a real commit without a ledger —
+// on this branch or on a side branch merged in — must still warn.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -183,6 +184,22 @@ try {
   const tookOurs = runStopWrap(s1e, tmp);
   assert.match(tookOurs.stdout, LEDGER_WARNING,
     "a conflict resolved by taking one side is authored work and must still warn without a ledger");
+  pass++;
+
+  // ── Session 1f (Codex P2, PR #827 round 4): an unrecorded commit made THIS
+  //    session on a local topic branch, then merged cleanly into feat, is
+  //    session work — it is not on main, so it must still warn ──
+  const s1f = "ledger-test-topic-branch";
+  snapshots.push(startSession(s1f));
+  git(["checkout", "-qb", "topic"], tmp);
+  writeFileSync(path.join(tmp, "topic.txt"), "topic work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded topic work"], tmp);
+  git(["checkout", "-q", "feat"], tmp);
+  git(["merge", "--no-ff", "--no-edit", "topic"], tmp);
+  const topicMerge = runStopWrap(s1f, tmp);
+  assert.match(topicMerge.stdout, LEDGER_WARNING,
+    "an unrecorded commit authored this session on a side branch and merged in must still warn");
   pass++;
 
   // ── Session 2: a real commit without any ledger → still warns ──

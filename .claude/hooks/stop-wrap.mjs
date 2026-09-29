@@ -566,10 +566,15 @@ try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
     const since = `--since=${new Date(sessionStartMs).toISOString()}`;
-    // Session work = this branch's own history since the snapshot, read along
-    // FIRST parents only (Codex P2, PR #827): a merge of main would otherwise
-    // pull every commit main gained after the snapshot into the scan, and one
-    // unrecorded src/ commit there re-raised the false warning.
+    // Session work = commits since the snapshot that are NOT already on the
+    // base branch (Codex P2s, PR #827). Commits reached by merging main —
+    // including ones main gained after the snapshot — carry their own ledger
+    // through main's pre-commit guard, so they are excluded; an unrecorded
+    // src/ commit there re-raised the false warning. Commits made on a local
+    // topic branch this session and then merged in are NOT on main, so they
+    // still count (a first-parent-only scan dropped them). The current
+    // branch's own local ref is never excluded, so a session on main still
+    // sees its unpushed commits.
     //
     // A merge itself counts only for what the resolver AUTHORED (2026-09-26;
     // Codex P2s, PRs #824/#827). Merging main authors nothing, and `git log
@@ -579,9 +584,14 @@ try {
     // merge differs from it was written by hand — conflict fixes, including
     // taking one side, plus anything added — while a clean automatic merge,
     // even of separate hunks in one file, differs in nothing.
-    const firstParentLog = (extra) => runGit(["log", "--first-parent", ...extra, since]);
-    const nonMergeCommits = firstParentLog(["--oneline", "--no-merges"]).trim();
-    const mergeResolutionFiles = firstParentLog(["--merges", "--format=%H"])
+    const currentRef = runGit(["symbolic-ref", "-q", "HEAD"]).trim();
+    const baseRefs = [
+      "refs/heads/main", "refs/heads/master",
+      "refs/remotes/origin/main", "refs/remotes/origin/master", "refs/remotes/origin/HEAD",
+    ].filter((ref) => ref !== currentRef && runGit(["rev-parse", "--verify", "-q", ref]).trim());
+    const sessionLog = (extra) => runGit(["log", ...extra, since, "HEAD", ...baseRefs.map((ref) => `^${ref}`)]);
+    const nonMergeCommits = sessionLog(["--oneline", "--no-merges"]).trim();
+    const mergeResolutionFiles = sessionLog(["--merges", "--format=%H"])
       .split("\n").map((s) => s.trim()).filter(Boolean)
       .flatMap(authoredMergeFiles);
     if (nonMergeCommits || mergeResolutionFiles.length > 0) {
@@ -599,7 +609,9 @@ try {
       // split, adding ENTRY_RE here would have made the hook LOOSER than before.
       const BACKSLASH = String.fromCharCode(92);
       const toPosixPath = (s) => s.split(BACKSLASH).join("/").trim();
-      const fromLog = runGit(["log", "--name-status", "-M", "--pretty=format:", since])
+      // Same session scope as above: a ledger file that only arrived by merging
+      // main records main's work, not this session's.
+      const fromLog = sessionLog(["--name-status", "-M", "--pretty=format:"])
         .split("\n").map(s => s.trim()).filter(Boolean)
         .map((s) => {
           const parts = s.split("\t");
