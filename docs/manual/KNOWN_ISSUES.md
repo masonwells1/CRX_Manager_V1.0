@@ -1,7 +1,8 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-26 against the live migration ledger** (a read-only snapshot of the ledger
-taken that day; the `20260914100800` apply below was read live on 2026-09-27). Every entry's status
+taken that day; the `20260914100800` apply below was read live on 2026-09-27, and the
+`20260914100900` apply was read live the evening of 2026-09-27, Chicago time). Every entry's status
 (open, or fixed/applied/closed) was re-checked on 2026-09-26 against that snapshot and against `main`,
 except where an entry says otherwise; the detailed evidence inside an entry keeps its own date and
 was not all re-measured.
@@ -10,10 +11,12 @@ was not all re-measured.
   (`100100`–`100400` on 2026-09-21, `100500` and `100600` on 2026-09-22), the customer-document
   fix `20260914100700_customer_document_bytes_server_only` (2026-09-26, ledger `20260926163005`), and
   the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent` (2026-09-27, ledger
-  `20260927060531`).
-- **Still parked (written, not applied):** `20260914100900_repair_commission_history_label_snapshots`
-  — see the PARKED entry below. Other parked files (for example PR #800's customer-document fix) are
-  named in their own entries.
+  `20260927060531`), and the label repair `20260914100900_repair_commission_history_label_snapshots`
+  (the evening of 2026-09-27 Chicago time, ledger `20260928025520`). The whole commission cohort
+  `20260914100100`..`20260914100900` is now live — see the RESOLVED entry below.
+- **Nothing from the commission cohort is still parked.** Other parked files (for example PR #800's
+  customer-document fix, and the four field-season candidates `20260914101000`..`20260914101300`
+  carried by open PR #837) are named in their own entries.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -185,9 +188,21 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   must every stored customer fact cite a `customer_interaction`?
   (Source: `docs/loops/crm-relationship-intelligence-ledger.md`.)
 
-## PARKED — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots` (written, NOT applied as of 2026-09-27)
+## RESOLVED 2026-09-27 (was PARKED; `20260914100900` applied live as ledger `20260928025520`) — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots`
 
-`20260914100900` is the only cohort file not applied. The transfer intent wrapper
+**Status (2026-09-27 evening, America/Chicago):** APPLIED LIVE under ledger version
+`20260928025520` (UTC, 2026-09-28 02:55:20), from PR #832's branch checkout (PR #832 has since been
+replaced by open PR #837); a read-only live read right after took the ledger to 1013 rows and
+confirmed: `public.record_commission_earned_state()` body md5 `5623b0d31181d357b303a36e563a77aa`,
+SECURITY DEFINER, ACL `{postgres=X/postgres}`; settlement recorder and ledger mutation guard
+unchanged; both recorder triggers enabled; 34 `revised` correction rows appended to
+`commission_earned_state_ledger` (35 -> 69 rows); latest labels hold 0 `[Unknown customer]` and 0
+UUID-shaped source numbers; 35 commissions and 8 commission payments unchanged, none posted, 0
+settlement events. The whole cohort `20260914100100`..`20260914100900` is live, and it is the
+effective ordering high-water. `.claude/schema-registry.json` still records only through `100700`.
+Everything below is the pre-apply record, kept as history.
+
+(Historical, before the 2026-09-27 evening apply.) `20260914100900` is the only cohort file not applied. The transfer intent wrapper
 `20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 under ledger version
 `20260927060531` (read live that day), and everything else in the cohort (`20260914100100`–`100700`)
 is live. Read the boundary block at the top of `docs/reference/migration-history.md` before any
@@ -344,7 +359,8 @@ time.
   deliberately below the eight pending `20260914100*` migrations, since the pending-set guard in
   `.claude/hooks/migration-pending-lib.mjs` refuses an apply while an **older** migration is pending.
   **Stale as of 2026-09-27:** `20260914100100`–`100800` have since applied live (only `100900`
-  remains parked), so this stamp now sorts below the live ordering high-water and the file
+  remained parked, and it too applied live the evening of 2026-09-27, ledger `20260928025520`, so
+  the whole cohort is now live), so this stamp now sorts below the live ordering high-water and the file
   would need a restamp before any apply.
 - Superseded: the earlier branch `claude/bind-adjust-inventory-receipt-delivery-20260917` HEAD
   `143da828f` (unpushed) **still cannot be applied** — it edits an applied migration, and its
@@ -2366,7 +2382,8 @@ Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-s
 ## 2. Parked migrations (written, not applied)
 
 The current parked set is recorded in `docs/reference/migration-history.md` (rows marked LOCAL
-CANDIDATE … NOT APPLIED) and in the PARKED entry at the top of this file. The rows below still need a
+CANDIDATE … NOT APPLIED). (The commission-cohort PARKED entry near the top of this file that this
+sentence used to name resolved on 2026-09-27, when `20260914100900` applied live.) The rows below still need a
 warning: two superseded staging files that must not be applied, one open finding about the dispatch
 sync triggers, the shelved earmark engine, and a reminder to check other worktrees. Other rows that
 have since been applied, resolved or retired moved to the archive on 2026-09-26.
@@ -2649,6 +2666,9 @@ block in `docs/reference/migration-history.md` before ordering anything.**
 **Superseded 2026-09-27:** `20260914100100`–`100800` have since applied live; only `100900` is
 still parked. The field-app season files, restamped `20260914101000`–`101300`, are carried by open
 PR #793 (it replaced PR #754, closed unmerged 2026-09-21); they are not on `main`.
+**Update 2026-09-27 evening:** `20260914100900` applied live too (ledger `20260928025520`), so the
+whole `20260914100100`..`20260914100900` cohort is live and nothing from it is parked. The
+field-season files are now carried by open PR #837 and remain unapplied.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
@@ -5231,8 +5251,9 @@ with JWT enforcement and rejects supplier price/product lists before OCR.
 
 **SUPERSEDED 2026-09-26 — kept as the historical record only.** These paragraphs used to sit at the top
 of this file as stacked status headers. The current status is the header at the top. In particular the
-first paragraph below is stale: `20260914100100`–`100800` have all applied live, and only `100900`
-remains parked (see the PARKED entry at the top of this file).
+first paragraph below is stale: `20260914100100`–`100800` have all applied live, and `100900`,
+the last one, applied live the evening of 2026-09-27 (ledger `20260928025520`; see the RESOLVED
+entry for it near the top of this file), so the whole cohort is live.
 
 Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`
 and the separate transfer wrapper below) remain unapplied;

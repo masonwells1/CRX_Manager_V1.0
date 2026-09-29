@@ -748,6 +748,24 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
     expect(await screen.findByRole('alert')).toHaveTextContent('filed in season 2026');
   });
 
+  it.each([null, ''])('treats a loaded season of %j as unknown, not season 0', async (season) => {
+    // Number(null) and Number('') are 0, which used to block every date change with
+    // "filed in season 0". (CodeRabbit on #837.)
+    mockFrom.mockImplementation(makeFromMock({
+      invoices: { data: [{ id: 'inv-solo', invoice_number: 'INV-NOSEASON',
+        invoice_type: 'field_application', invoice_date: '2026-04-29', season,
+        status: 'draft', invoice_group_id: null, application_service_id: null,
+        total_amount_cents: 0 }] },
+      field_app_locations: { data: [] }, invoice_items: { data: [] }, invoice_shares: { data: [] },
+    }));
+    await renderPage();
+    await screen.findByText(/Field Application INV-NOSEASON/);
+    const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-06' } });
+    await waitFor(() => expect((dateInput as HTMLInputElement).value).toBe('2026-10-06'));
+    expect(screen.queryByText(/filed in season/)).not.toBeInTheDocument();
+  });
+
   it('keeps the unsaved-changes modal available while the next invoice loads', async () => {
     const pendingHeader = new Promise<{ data: unknown; error: null }>(() => {});
     const fallback = makeFromMock({});

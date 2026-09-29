@@ -879,8 +879,10 @@ export default function FieldApplicationInvoice() {
     }
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');
-    const loadedSeason = Number(invoice.season);
-    setFiledSeason(Number.isInteger(loadedSeason) ? loadedSeason : null);
+    // A NULL or blank season is unknown, never season 0 (Number(null) is 0). (CodeRabbit on #837.)
+    const rawSeason = invoice.season;
+    const loadedSeason = rawSeason == null || rawSeason === '' ? NaN : Number(rawSeason);
+    setFiledSeason(Number.isInteger(loadedSeason) && loadedSeason > 0 ? loadedSeason : null);
     setNotes((invoice.header_notes as string) || '');
     // #33: load the ChemMan billing details from the loaded invoice. These header
     // fields are uniform across a split group (the save RPC writes them to every
