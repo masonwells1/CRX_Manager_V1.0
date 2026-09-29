@@ -34,6 +34,8 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  pushParseCostExceeded,
+  PUSH_PARSE_COST_BUDGET,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
@@ -779,11 +781,19 @@ function interpreterArgumentIsUnresolvable(command) {
   return SHELL_EXPANSION_RE.test(text);
 }
 
+// Both option spellings below are DISJOINT on purpose. The single-dash form was
+// `-{1,2}[a-z-]+`, which also matched every `--name` the first form matches, so
+// each repeated option doubled the paths tried on a failing match: `node --a`
+// repeated 20 times, an 86-character command, took 26 s — past the hook limit,
+// and a killed hook allows the command. The pipe form's path prefix stops at `|`
+// for the same reason `\S*` did not: from every `|` it ran to the end of the
+// command and backtracked (quadratic). A prefix that spanned a `|` has a match
+// starting at that later `|`, so what matches is unchanged in both.
 function usesDynamicProcessEval(command) {
   const text = String(command || "");
-  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
+  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-[a-z][a-z-]*)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
     /(?:^|[|;&]\s*)node(?:\.exe)?["']?\s*(?:-|$)/i.test(text) ||
-    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
+    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:[^\s|]*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
 }
 
 function denied(reason) {
@@ -1487,6 +1497,14 @@ export function evaluateProductionAction({
   const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
   if (!command) return { blocked: false };
 
+  // First, before any parser: a hook killed at its time limit allows the command.
+  if (pushParseCostExceeded(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this command is too large to inspect safely (its `git` count times its length is " +
+      `over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command ` +
+      "through, so it is refused instead. Split it into smaller commands, or move long text into a file."
+    );
+  }
   if (reviewProofPathMentioned(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
   }

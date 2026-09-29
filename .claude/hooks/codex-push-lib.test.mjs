@@ -67,6 +67,7 @@ import {
   divergentPushLookups,
   configuredMirrorRemotes,
   pushDestinationLookupArgs,
+  pushParseCostExceeded,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -3320,6 +3321,92 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     /^PR MERGE GATE: .*time limit.*fail closed/s,
     "the denial names the gate, the cause, and that it fails closed",
   );
+}
+
+// ── parse time is a security property (2026-09-28) ──────────────────────────
+// A hook killed at its 15 s limit ALLOWS the command. On main at fcfab3a2a the
+// Claude push guard took 55 s on 200K `;`, 13 s on 50K `'a'|`, and both guards
+// ran past 60 s on a 116-character `git -c "x" …` command (exponential option
+// backtracking). The parser checks below are the unit bound; the hook checks
+// run the REAL guard processes, because a fast helper inside a slow hook is
+// still a bypass.
+{
+  const push = "git push origin HEAD:main";
+  const shapes = [
+    ["200K `;` (reported)", `${push} ${";".repeat(200_000)}`],
+    ["50K `'a'|` (reported)", `${push} ${"'a'|".repeat(50_000)}`],
+    ['`-c "x"` x24, 190 chars (exponential)', `git${' -c "x"'.repeat(24)} --bogus push origin HEAD:main`],
+    ["`-C x` x24 (exponential, /i duplicate)", `git${" -C x".repeat(24)} --bogus push origin HEAD:main`],
+    ["200K newlines", `${push}${"\n".repeat(200_000)}`],
+    ["`git.a;` x20K (extension tail)", `${"git.a;".repeat(20_000)} ${push}`],
+    ["`git -C ` under the cost budget", `${"git -C ".repeat(2_000)}${push}`],
+    ["dense tokens then push", `git -x ${"a ".repeat(8_000)}push`],
+  ];
+  for (const [label, input] of shapes) {
+    const started = process.hrtime.bigint();
+    for (const parse of [isGitPush, eachPush, gitPushCwd, gitSubcommandIsDynamic, unknownGitGlobalOptions,
+      pushHiddenByShellComposition, pushIsForced, pushSetsInlineEnv, mainPushSource, pushUsesInlineConfig]) {
+      parse(input, "main");
+    }
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 1_000, `push parsers stay fast on ${label} (${input.length} chars): ${elapsedMs.toFixed(1)}ms`);
+  }
+  for (const [label, input] of [["200K `/`", "/".repeat(200_000)], ["200K `\\`", "\\".repeat(200_000)]]) {
+    const started = process.hrtime.bigint();
+    reviewStateDirectoryMentioned(input);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the review-state path check stays linear on ${label}: ${elapsedMs.toFixed(1)}ms`);
+  }
+
+  // The fixes change speed, not what is detected.
+  assert.equal(isGitPush("npm test;C:/tools/git push origin HEAD:main"), true, "a path prefix after `;` still names git");
+  assert.equal(isGitPush("x;y/git push origin HEAD:main"), true, "a prefix that spanned `;` matches from the `;`");
+  assert.equal(isGitPush('git -c "x"y push origin HEAD:main'), true, "a quoted value glued to more text still falls back to one word");
+  assert.equal(isGitPush("git -c 'a b' -C repo push origin HEAD:main"), true, "quoted values with spaces still read");
+  assert.equal(eachPush("git -C repo push origin HEAD:main")[0].args, " origin HEAD:main", "the args capture survived the rename");
+  assert.equal(mainPushSource("git -C repo push origin release:main", "feature"), "release", "and every consumer reads it");
+  assert.equal(pushContextIsAmbiguous("echo ok;\n\n  GIT_DIR=x git push origin HEAD:main"), true, "GIT_DIR after blank lines is still seen");
+  assert.equal(reviewStateDirectoryMentioned("cd ./a/.claude/session-state/"), true, "the session-state path is still seen");
+
+  // The budget: refuse what cannot be parsed in time, and nothing ordinary.
+  assert.equal(pushParseCostExceeded("git -C ".repeat(9_200) + push), true, "`git -C ` to 64 KB is over budget");
+  assert.equal(pushParseCostExceeded('g"i"t -C '.repeat(9_200) + push), true, "quote-spliced `git` words count too");
+  assert.equal(pushParseCostExceeded(`${push} ${";".repeat(200_000)}`), false, "one push in a long command is fine");
+  assert.equal(
+    pushParseCostExceeded(`gh pr create --body "${"We ran git status and git diff. ".repeat(600)}"`),
+    false,
+    "a 20 KB PR body that mentions git 1,200 times is still under budget",
+  );
+
+  // The real hooks, end to end.
+  const hooksDir = path.dirname(fileURLToPath(import.meta.url));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "push-parse-time-"));
+  const hooks = [
+    ["Claude push guard", path.join(hooksDir, "codex-push-guard.mjs"), (command) => ({ tool_name: "Bash", cwd: tmp, tool_input: { command } })],
+    ["Codex production guard", path.join(hooksDir, "..", "..", ".codex", "hooks", "production-action-guard.mjs"),
+      (command) => ({ tool_name: "shell", cwd: tmp, tool_input: { command } })],
+  ];
+  try {
+    for (const [hookLabel, hook, payload] of hooks) {
+      for (const [label, input] of [...shapes, ["`git -C ` to 64 KB (over budget)", "git -C ".repeat(9_200) + push]]) {
+        const started = Date.now();
+        const res = spawnSync(process.execPath, [hook], {
+          input: JSON.stringify(payload(input)),
+          encoding: "utf8",
+          timeout: 15_000,
+          env: { ...scratchHookEnvironment(tmp, process.env), CODEX_PROJECT_DIR: tmp },
+        });
+        const elapsedMs = Date.now() - started;
+        assert.equal(res.error, undefined, `${hookLabel} was not killed on ${label}: ${res.error?.message}`);
+        assert.ok(elapsedMs < 5_000, `${hookLabel} decides ${label} in well under 15 s: ${elapsedMs}ms`);
+        if (label.includes("over budget")) {
+          assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses ${label}`);
+        }
+      }
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 console.log("OK - codex push shared library checks passed.");
