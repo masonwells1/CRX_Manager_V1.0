@@ -128,6 +128,159 @@ export function isMachineGenerated(prompt) {
 // fence, because stripFencedCode() gives an unclosed fence's lines back instead
 // of dropping the rest of the prompt.
 
+// INCIDENT (2026-09-25). A background subagent's final report reached its parent
+// session wrapped as
+//     Another Claude session sent a message:
+//     <\~agent-message from="<agent id>">
+//     [Subagent hand-back] ...indented report...
+//     <\~/agent-message>
+// None of that was recognised, so the report was read as Mason's words: a "stop"
+// in it latched hold.json, a quoted `--no-verify` fired dangerous-phrase-warning,
+// and the ship / autopilot / gauntlet reminders fired too. The hold then blocked
+// source edits until Mason replied.
+//
+// A hand-back is recognised by its LINE STRUCTURE, not by tag pairing. The
+// harness always puts the preamble line in front of it, writes the open and
+// close tags alone on their own lines at column zero, and indents every line of
+// the report itself; only its own frame lines ("[Subagent hand-back] ...",
+// "[harness: ...]") sit at column zero inside. So a block is:
+//   1. the preamble, with the open tag after it on the same line or on the next
+//      non-blank line (indentation allowed), and — outside STRICT mode — a
+//      "[Subagent hand-back]" / "[harness" frame as the next non-blank line, so
+//      only the exact harness shape is ever taken away from Mason;
+//   2. then the run of blank / indented / frame lines after the open tag, plus
+//      a column-zero close-tag line directly after that run. The first other
+//      column-zero line ends the block. When the open tag itself was indented,
+//      an indented close-tag line ends it too.
+//   3. STRICT mode only: everything from the hand-back to the end of the
+//      prompt. Every other preamble LINE is dropped whole, words after it
+//      included.
+// The two modes follow the union / intersection split below (Luna review,
+// 2026-09-26). A truncated report followed by Mason's "stop now" and then a
+// close tag is indistinguishable from a closed report with one unindented line.
+// Latching and the reminders use rule 2, so his stop is never swallowed; the
+// latch also keeps a report with no close tag whole (see keepTruncated below).
+// hasAuthoredText() uses rule 3, so no report layout can count as Mason
+// speaking and CLEAR a hold he latched.
+// Defects of the earlier rules (Claude review + Luna review, 2026-09-25) that
+// cannot happen under this one:
+//   - a close tag the REPORT quotes is indented, so it cannot end the report
+//     early and expose the rest of it as Mason's words;
+//   - a tag Mason MENTIONS, or a wrapper he types without the harness preamble,
+//     is not a block, and a truncated report ends at the next column-zero line,
+//     so none of them can swallow the "stop" he typed. Pairing to end-of-prompt
+//     did exactly that, and so did accepting an open tag with no preamble.
+//
+// The tag carries a "~" sigil, and the copy in the incident report had it
+// backslash-escaped (the harness neutralises control tags by inserting "\"),
+// with the sigil in front of the "/" on the close. Both tags accept any number
+// of backslashes and an optional "~". The tag name must end at whitespace or
+// ">", so `<agent-message-log>` is not an open tag, and the tag must be ALONE
+// on its line: `<agent-message> stop now </agent-message>` is Mason's text.
+// Column zero only: a preamble the REPORT quotes is indented, and must not be
+// taken for the start of a new message (Luna review round 4, 2026-09-26).
+const PREAMBLE_LINE_RE = /^Another Claude session sent a message:([^\n]*)$/i;
+const AGENT_OPEN_RE = /^<\\*~?agent-message(?:\s[^<>]*)?>$/i; // tested on a trimmed line
+const AGENT_CLOSE_LINE_RE = /^<\\*~?\/~?agent-message\s*>\s*$/i;
+const REPORT_FRAME_LINE_RE = /^\[(?:Subagent hand-back|harness)\b/i;
+
+function isReportBodyLine(line) {
+  return line.trim() === "" || /^[ \t]/.test(line) || REPORT_FRAME_LINE_RE.test(line);
+}
+
+function nextNonBlank(lines, from) {
+  let j = from;
+  while (j < lines.length && lines[j].trim() === "") j++;
+  return j;
+}
+
+// Index of a hand-back's open-tag line when line i is its preamble, else -1.
+function reportOpenAt(lines, i, strict) {
+  const pre = PREAMBLE_LINE_RE.exec(lines[i]);
+  if (!pre) return -1;
+  let open = -1;
+  if (AGENT_OPEN_RE.test(pre[1].trim())) open = i;
+  // The harness preamble ends at the colon. Words after it are not the
+  // harness's, and the block would drop that whole line, so outside strict mode
+  // such a line never starts a report (Sol review of #826, 2026-09-29: Mason's
+  // "…message: stop now" above a report was swallowed).
+  else if (!strict && pre[1].trim() !== "") return -1;
+  else {
+    const j = nextNonBlank(lines, i + 1);
+    if (j < lines.length && AGENT_OPEN_RE.test(lines[j].trim())) open = j;
+  }
+  if (open < 0 || strict) return open;
+  // The frame sits at column zero, or at the open tag's own indentation.
+  const frame = nextNonBlank(lines, open + 1);
+  if (frame >= lines.length) return -1;
+  const openIndent = open === i ? "" : /^[ \t]*/.exec(lines[open])[0];
+  const frameLine = lines[frame].startsWith(openIndent) ? lines[frame].slice(openIndent.length) : lines[frame];
+  return REPORT_FRAME_LINE_RE.test(frameLine) ? open : -1;
+}
+
+// Index of a hand-back's last line (rules 2 and 3 above).
+function reportEndAfter(lines, open, strict) {
+  // STRICT: the rest of the prompt. Rounds 4-7 of the Luna review each found a
+  // malformed report layout (a quoted close tag, a stray preamble, an
+  // unindented line) that ended a narrower strict scan early and let report
+  // text CLEAR a hold. Ending at the prompt's end closes the whole class. The
+  // cost: Mason's words typed AFTER a hand-back in the same prompt cannot clear
+  // a hold — his next message does. Words before it still count.
+  if (strict) return lines.length - 1;
+  // An open tag on the preamble's own line counts as column zero.
+  const indentedOpen = /^[ \t]/.test(lines[open]) && !PREAMBLE_LINE_RE.test(lines[open]);
+  let end = open;
+  while (end + 1 < lines.length && isReportBodyLine(lines[end + 1])) {
+    end++;
+    if (indentedOpen && AGENT_CLOSE_LINE_RE.test(lines[end].trim())) return end;
+  }
+  if (end + 1 < lines.length && AGENT_CLOSE_LINE_RE.test(lines[end + 1])) end++;
+  return end;
+}
+
+// Runs FIRST in both strip orders: the structure above is unambiguous, and a
+// fence inside an indented report must not get the chance to pair with a fence
+// in what Mason typed below it.
+//
+// `keepTruncated` (the hold LATCH only): a report with no close tag is kept, not
+// stripped. Its end cannot be found, so an indented "  stop now" Mason typed
+// under it is indistinguishable from report text, and stripping it lost his
+// stop (Sol review of #826, 2026-09-29). Keeping it is the fail-safe direction:
+// at worst a truncated report's own words latch a spurious hold. The reminders
+// still strip it, so it cannot fire them or write the overnight freeze flag.
+function stripSubagentReports(text, strict = false, keepTruncated = false) {
+  const lines = text.split("\n");
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    const open = reportOpenAt(lines, i, strict);
+    if (open >= 0) {
+      const end = reportEndAfter(lines, open, strict);
+      if (keepTruncated && !(end > open && AGENT_CLOSE_LINE_RE.test(lines[end].trim()))) {
+        kept.push(lines[i]);
+        continue;
+      }
+      i = end;
+      kept.push("");
+    } else if (strict && PREAMBLE_LINE_RE.test(lines[i])) {
+      // Luna round 5: words after a stray preamble never count as Mason
+      // speaking. A tag there (a peer envelope opening on the same line) is
+      // kept so the envelope strippers still pair it with its close.
+      const rest = PREAMBLE_LINE_RE.exec(lines[i])[1];
+      kept.push(/^\s*</.test(rest) ? rest : "");
+    } else if (!AGENT_CLOSE_LINE_RE.test(lines[i])) {
+      kept.push(lines[i]); // an orphaned close-tag line carries no words; drop it
+    }
+  }
+  return kept.join("\n");
+}
+
+// The line the harness puts in front of every peer envelope (cross-session and
+// agent-message alike). It is not Mason's either: while it counted as his text,
+// a peer-only message passed hasAuthoredText() and CLEARED a hold he latched.
+// Only the phrase itself is removed, and only at the start of a line, so
+// anything typed after it on the same line is still read.
+const PEER_PREAMBLE_RE = /^[ \t]*Another Claude session sent a message:/gim;
+
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
 const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
@@ -199,22 +352,22 @@ function stripUnclosedEnvelopes(text) {
 
 // Envelopes first: a peer's unfinished markdown cannot reach past the closing
 // tag that ends the peer's own turn.
-function stripEnvelopesFirst(text) {
-  let out = stripClosedEnvelopes(text);
+function stripEnvelopesFirst(text, strict = false) {
+  let out = stripClosedEnvelopes(stripSubagentReports(text, strict, !strict));
   out = stripFencedCode(out);
   out = out.replace(INLINE_CODE_RE, " ");
   out = stripUnclosedEnvelopes(out);
-  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+  return out.replace(BLOCKQUOTE_LINE_RE, " ").replace(PEER_PREAMBLE_RE, " ");
 }
 
 // Code first (the pre-#504b order): an envelope tag Mason QUOTES in a fence or
 // inline code is gone before it can pair with a real peer's closing tag and
 // cut out what he typed between them.
-function stripCodeFirst(text) {
-  let out = stripFencedCode(text);
+function stripCodeFirst(text, strict = false) {
+  let out = stripFencedCode(stripSubagentReports(text, strict, !strict));
   out = out.replace(INLINE_CODE_RE, " ");
   out = stripUnclosedEnvelopes(stripClosedEnvelopes(out));
-  return out.replace(BLOCKQUOTE_LINE_RE, " ");
+  return out.replace(BLOCKQUOTE_LINE_RE, " ").replace(PEER_PREAMBLE_RE, " ");
 }
 
 // The parser exactly as it was before #794: an unclosed fence drops to the end,
@@ -256,7 +409,8 @@ export function authoredByMason(prompt) {
 // direction: a peer that merely quotes its own closing tag leaves text in one
 // order only, and under the union that peer-only message released a hold Mason
 // latched. Requiring BOTH orders to keep text means a sibling session can
-// never clear his hold by how it formats its own message.
+// never clear his hold by how it formats its own message. For the same reason
+// both orders strip subagent hand-backs in STRICT mode (see the note on those).
 //
 // It also requires the pre-#794 parser (stripPre794) to keep text (2026-09-26,
 // Codex review of #794). Giving an
@@ -269,10 +423,25 @@ export function hasAuthoredText(prompt) {
   const text = String(prompt || "");
   if (!text) return false;
   return (
-    stripEnvelopesFirst(text).trim() !== "" &&
-    stripCodeFirst(text).trim() !== "" &&
+    stripEnvelopesFirst(text, true).trim() !== "" &&
+    stripCodeFirst(text, true).trim() !== "" &&
     stripPre794(text).trim() !== ""
   );
+}
+
+// ── withoutSubagentReports(prompt) ───────────────────────────────────────
+// For the intent REMINDER hooks (dangerous-phrase-warning, ship-intent,
+// autopilot-intent, codex-gauntlet, agent-pair-review, codex-to-claude-handoff).
+// It removes only agent-message blocks (by the line structure above, closed or
+// truncated) and the peer preamble line — not code, blockquotes or
+// cross-session messages, which authoredByMason() strips for the hold latch.
+// The reminders must keep reading those: Mason's own `git push --force` in
+// backticks is exactly what the danger warning is for, and a sibling session's
+// request is still something this session may act on. A subagent's hand-back
+// is neither — it is this session's own child reporting.
+export function withoutSubagentReports(prompt) {
+  const text = String(prompt || "");
+  return stripSubagentReports(text).replace(PEER_PREAMBLE_RE, " ").trim();
 }
 
 // Keep this a pointer, not a second copy of the policy: the full hard-gate list

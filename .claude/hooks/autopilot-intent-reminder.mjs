@@ -9,7 +9,7 @@
 
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isMachineGenerated } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, withoutSubagentReports } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -26,7 +26,9 @@ try { payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(
 // a word like "overnight" inside an embedded report.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-const prompt = String(payload?.prompt || "").toLowerCase();
+// A subagent's hand-back report is not Mason's either (2026-09-25): a report
+// quoting "going to bed" would otherwise latch the 45-minute freeze.
+const prompt = withoutSubagentReports(payload?.prompt).toLowerCase();
 if (!prompt) emit();
 
 const triggers = [

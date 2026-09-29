@@ -20,6 +20,14 @@ export function normalizeHookOutput(output, warn = (msg) => process.stderr.write
       if (typeof sysMsg === "string" && sysMsg) warn(`${sysMsg}\n`);
       return "";
     }
+    // A warning with no decision at all (review-proof-guard's loud fail-open
+    // on unreadable input) goes to the same warn channel, and nothing is
+    // forwarded as a decision.
+    const keys = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed) : [];
+    if (keys.length === 1 && keys[0] === "systemMessage" && typeof parsed.systemMessage === "string") {
+      if (parsed.systemMessage) warn(`${parsed.systemMessage}\n`);
+      return "";
+    }
   } catch {
     return output;
   }

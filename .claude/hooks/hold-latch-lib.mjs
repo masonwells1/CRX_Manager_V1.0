@@ -25,7 +25,8 @@ const RESUME_RE = /\b(resume|go ahead|continue|keep going|proceed|start (buildin
 // NOTE: these are pure VOCABULARY predicates — they judge whatever text they are
 // handed. Deciding WHOSE text that is belongs to the caller: hold-latch-prompt.mjs
 // passes authoredByMason(prompt), never the raw prompt, so a peer session's
-// <cross-session-message> can no longer halt this one (2026-08-26). If you add a
+// <cross-session-message> can no longer halt this one (2026-08-26), and neither can
+// a subagent's <~agent-message> hand-back (2026-09-25). If you add a
 // caller, strip it there too — prompt-hooks.test.mjs asserts the hook still does.
 export function isHoldPhrase(prompt) {
   return HOLD_RE.test(String(prompt || ""));
