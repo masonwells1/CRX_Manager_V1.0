@@ -59,8 +59,12 @@ const rawToolName = payload?.tool_name || payload?.toolName;
 // A parseable object with no usable tool name (e.g. `{}`) or no tool input at
 // all gives every check below nothing to match, so it is as uninspectable as
 // malformed JSON. An empty `tool_input: {}` is still a real, readable call.
-if (typeof rawToolName !== "string" || !rawToolName) skippedCheck("input had no tool name");
-if (payload.tool_input == null && payload.toolInput == null) skippedCheck("input had no tool input");
+if (typeof rawToolName !== "string" || !rawToolName.trim()) skippedCheck("input had no tool name");
+const rawToolInput = payload.tool_input ?? payload.toolInput;
+// An object (or apply_patch's raw string) is inspectable; anything else is not.
+if (rawToolInput == null || (typeof rawToolInput !== "string" && (typeof rawToolInput !== "object" || Array.isArray(rawToolInput)))) {
+  skippedCheck("input had no usable tool input");
+}
 const toolName = rawToolName;
 const eventCwd = String(payload?.cwd || "");
 // Preserve the event-first cwd used by the shell-state checks below. Patch

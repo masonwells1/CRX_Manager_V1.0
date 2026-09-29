@@ -964,7 +964,7 @@ pins all six unreadable shapes plus a silent readable call; `codex-hook-adapter.
 forwarding; a run through the real adapter showed the warning on stderr, a silent `ls`, and a
 proof-file write still denied. **Residual:** on Codex the warning goes to stderr, the same channel the
 schema-registry warnings use. Whether the Codex app shows exit-0 hook stderr has not been observed,
-so on Codex it may still be quiet in practice. The reasoning below still decides the direction and must survive.
+so on Codex it may still be quiet in practice. The original reasoning is kept below because it still explains why the guard fails open.
 The original entry follows.
 
 `review-proof-guard.mjs` begins:

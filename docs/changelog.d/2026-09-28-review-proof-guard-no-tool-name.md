@@ -16,6 +16,13 @@ Luna round 2 also flagged "do not re-open that" in `agent-guardrails.md` as prom
 was refuted: it is an unchanged context line from `8cfd349db` recording Mason's decision to decline
 a separate agent credential, not text this PR added.
 
+Luna round 3 (MED) found two more: a tool input that is neither an object nor apply_patch's raw
+string (`42`, `[]`), and a whitespace-only tool name. Both now warn too. Its other findings: the
+"Do not open round seven" line it read as a reviewer instruction is git hunk-header context from
+`main` (#530), not this PR, and the one added line it cited was reworded to a neutral note; the LOW
+about `process.exit` truncating the warning is refuted, since the guard's existing `deny()` uses the
+same write-then-exit pattern and Node writes to pipes synchronously on Windows and Linux.
+
 `main` (#834) was also merged into the branch; no conflicts.
 
 **Proof observed (local session):** `{}` piped to the real hook prints the SKIPPED warning (exit 0);
