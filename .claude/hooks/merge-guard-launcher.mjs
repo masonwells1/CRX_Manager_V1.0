@@ -40,6 +40,10 @@ const LABEL = "PR MERGE GATE";
 // waiting at 36 seconds, and the hook entry in .claude/settings.json allows 45,
 // leaving the launcher about 9 seconds to answer, including the Windows launcher
 // shell that process.uptime() cannot see. The test pins all three numbers.
+// The launcher's own work never blocks for long: child I/O is asynchronous, and
+// its synchronous parsing is bounded by the input cap below — about 0.3 seconds
+// at a full 64 MB call, measured 2026-09-28 — so its deadline timer always gets
+// to run inside that 9-second margin (Luna, 2026-09-28).
 export const GUARD_BUDGET_MS = 30_000;
 export const KILL_AFTER_MS = 36_000;
 export const HARNESS_TIMEOUT_S = 45;
