@@ -1,7 +1,8 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-26 against the live migration ledger** (a read-only snapshot of the ledger
-taken that day; the `20260914100800` apply below was read live on 2026-09-27). Every entry's status
+taken that day; the `20260914100800` apply below was read live on 2026-09-27 and the `20260914100900`
+apply on 2026-09-29). Every entry's status
 (open, or fixed/applied/closed) was re-checked on 2026-09-26 against that snapshot and against `main`,
 except where an entry says otherwise; the detailed evidence inside an entry keeps its own date and
 was not all re-measured.
@@ -10,10 +11,10 @@ was not all re-measured.
   (`100100`–`100400` on 2026-09-21, `100500` and `100600` on 2026-09-22), the customer-document
   fix `20260914100700_customer_document_bytes_server_only` (2026-09-26, ledger `20260926163005`), and
   the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent` (2026-09-27, ledger
-  `20260927060531`).
-- **Still parked (written, not applied):** `20260914100900_repair_commission_history_label_snapshots`
-  — see the PARKED entry below. Other parked files (for example PR #800's customer-document fix) are
-  named in their own entries.
+  `20260927060531`), and the label repair `20260914100900_repair_commission_history_label_snapshots`
+  (2026-09-28, ledger `20260928025520`) — the whole cohort is live.
+- **Nothing from the cohort is still parked.** Other parked files (for example PR #800's
+  customer-document fix) are named in their own entries.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -101,9 +102,15 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   must every stored customer fact cite a `customer_interaction`?
   (Source: `docs/loops/crm-relationship-intelligence-ledger.md`.)
 
-## PARKED — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots` (written, NOT applied as of 2026-09-27)
+## RESOLVED 2026-09-28 — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots` (APPLIED LIVE, ledger `20260928025520`)
 
-`20260914100900` is the only cohort file not applied. The transfer intent wrapper
+**Applied live 2026-09-28** under ledger version `20260928025520`, while there were still 0
+settlement events and all 8 commission payments were unposted, so its refusal guard never fired.
+Post-apply read (2026-09-29): 34 `revised` label rows in `commission_earned_state_ledger` (69
+total), and no commission's latest snapshot still shows `[Unknown customer]` or a raw UUID source
+number. Nothing below is owed; it is kept as the pre-apply record.
+
+(Historical, 2026-09-27:) `20260914100900` is the only cohort file not applied. The transfer intent wrapper
 `20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 under ledger version
 `20260927060531` (read live that day), and everything else in the cohort (`20260914100100`–`100700`)
 is live. Read the boundary block at the top of `docs/reference/migration-history.md` before any

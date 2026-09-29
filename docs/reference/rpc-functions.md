@@ -4,7 +4,7 @@
 >
 > **Count is dated (checked 2026-09-26).** The 2026-08-11 live count above has not been re-measured. More than 40 function names were added by later migrations, and `src/types/supabase.ts` (generated 2026-09-11) already lists 481 function names. Re-measure with a read-only `pg_proc` query before quoting a current total.
 >
-> **2026-09-26 status pass:** every "LOCAL", "candidate", "queued", "not live", and "pending apply" marker in this file was re-checked against the live migration ledger (read 2026-09-26) and corrected. Since then `20260914100800_bind_transfer_invoice_intent` was applied live on 2026-09-27 (ledger `20260927060531`); the only migration still NOT applied is `20260914100900_repair_commission_history_label_snapshots`.
+> **2026-09-26 status pass:** every "LOCAL", "candidate", "queued", "not live", and "pending apply" marker in this file was re-checked against the live migration ledger (read 2026-09-26) and corrected. Since then `20260914100800_bind_transfer_invoice_intent` was applied live on 2026-09-27 (ledger `20260927060531`); `20260914100900_repair_commission_history_label_snapshots` followed on 2026-09-28 (ledger `20260928025520`), so no commission-cohort migration remains unapplied.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 >

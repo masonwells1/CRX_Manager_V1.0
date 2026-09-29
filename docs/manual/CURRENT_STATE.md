@@ -1,15 +1,16 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-09-27 for the migration ledger only (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1012 rows / 1005 distinct names, `max(version)` `20260927060531`). Every
-other section keeps its own date; nothing below was re-certified by that read.
+**Last verified:** 2026-09-29 for the migration ledger only (read-only ledger query against project
+`rhyzpcqhnizqbxphqdkr`: 1013 rows / 1006 distinct names, `max(version)` `20260928025520`; the
+2026-09-27 read was 1012 / 1005 / `20260927060531`). Every other section keeps its own date;
+nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-09-27)
+## Current state at a glance (2026-09-29)
 
-- **Effective ordering high-water: `20260914100800_bind_transfer_invoice_intent`** (ledger
-  version `20260927060531`, applied live 2026-09-27). The effective ordering high-water is the
+- **Effective ordering high-water: `20260914100900_repair_commission_history_label_snapshots`**
+  (ledger version `20260928025520`, applied live 2026-09-28). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -22,11 +23,12 @@ ships or quarterly, whichever comes first.
   `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`),
   `20260914100600_latest_commission_recipient_label` (`20260922020038`),
   `20260914100700_customer_document_bytes_server_only` (`20260926163005`), and
-  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`).
-- **Written but NOT applied (parked on `main`):** `20260914100900_repair_commission_history_label_snapshots`.
-  Applying it goes through the `AGENTS.md` › Safety and Protected Delivery migration rules. While it
-  waits on `main`, the pending-migration guard refuses a later-stamped file that steps over it unless
-  that file carries an explicit `ahead-of-pending` marker.
+  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`), and
+  `20260914100900_repair_commission_history_label_snapshots` (`20260928025520`).
+- **No commission-cohort migration is parked on `main` any more.** The label repair `100900`
+  applied 2026-09-28 before any commission payment was posted; a 2026-09-29 read shows 34 `revised`
+  label rows and no latest commission snapshot still reading `[Unknown customer]` or a raw ID.
+  Other parked files (for example PR #800's) live on their own branches.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
