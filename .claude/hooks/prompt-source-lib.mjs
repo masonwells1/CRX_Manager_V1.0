@@ -158,7 +158,8 @@ export function isMachineGenerated(prompt) {
 // The two modes follow the union / intersection split below (Luna review,
 // 2026-09-26). A truncated report followed by Mason's "stop now" and then a
 // close tag is indistinguishable from a closed report with one unindented line.
-// Latching and the reminders use rule 2, so his stop is never swallowed.
+// Latching and the reminders use rule 2, so his stop is never swallowed; the
+// latch also keeps a report with no close tag whole (see keepTruncated below).
 // hasAuthoredText() uses rule 3, so no report layout can count as Mason
 // speaking and CLEAR a hold he latched.
 // Defects of the earlier rules (Claude review + Luna review, 2026-09-25) that
@@ -235,13 +236,25 @@ function reportEndAfter(lines, open, strict) {
 // Runs FIRST in both strip orders: the structure above is unambiguous, and a
 // fence inside an indented report must not get the chance to pair with a fence
 // in what Mason typed below it.
-function stripSubagentReports(text, strict = false) {
+//
+// `keepTruncated` (the hold LATCH only): a report with no close tag is kept, not
+// stripped. Its end cannot be found, so an indented "  stop now" Mason typed
+// under it is indistinguishable from report text, and stripping it lost his
+// stop (Sol review of #826, 2026-09-29). Keeping it is the fail-safe direction:
+// at worst a truncated report's own words latch a spurious hold. The reminders
+// still strip it, so it cannot fire them or write the overnight freeze flag.
+function stripSubagentReports(text, strict = false, keepTruncated = false) {
   const lines = text.split("\n");
   const kept = [];
   for (let i = 0; i < lines.length; i++) {
     const open = reportOpenAt(lines, i, strict);
     if (open >= 0) {
-      i = reportEndAfter(lines, open, strict);
+      const end = reportEndAfter(lines, open, strict);
+      if (keepTruncated && !(end > open && AGENT_CLOSE_LINE_RE.test(lines[end].trim()))) {
+        kept.push(lines[i]);
+        continue;
+      }
+      i = end;
       kept.push("");
     } else if (strict && PREAMBLE_LINE_RE.test(lines[i])) {
       // Luna round 5: words after a stray preamble never count as Mason
@@ -335,7 +348,7 @@ function stripUnclosedEnvelopes(text) {
 // Envelopes first: a peer's unfinished markdown cannot reach past the closing
 // tag that ends the peer's own turn.
 function stripEnvelopesFirst(text, strict = false) {
-  let out = stripClosedEnvelopes(stripSubagentReports(text, strict));
+  let out = stripClosedEnvelopes(stripSubagentReports(text, strict, !strict));
   out = stripFencedCode(out);
   out = out.replace(INLINE_CODE_RE, " ");
   out = stripUnclosedEnvelopes(out);
@@ -346,7 +359,7 @@ function stripEnvelopesFirst(text, strict = false) {
 // inline code is gone before it can pair with a real peer's closing tag and
 // cut out what he typed between them.
 function stripCodeFirst(text, strict = false) {
-  let out = stripFencedCode(stripSubagentReports(text, strict));
+  let out = stripFencedCode(stripSubagentReports(text, strict, !strict));
   out = out.replace(INLINE_CODE_RE, " ");
   out = stripUnclosedEnvelopes(stripClosedEnvelopes(out));
   return out.replace(BLOCKQUOTE_LINE_RE, " ").replace(PEER_PREAMBLE_RE, " ");

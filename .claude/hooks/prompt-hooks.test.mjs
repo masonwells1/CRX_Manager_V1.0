@@ -555,10 +555,15 @@ rmSync(hbProj, { recursive: true, force: true });
     ["indented open and close tags", `${PREAMBLE}  <\\~agent-message from="a1">\n${REPORT_BODY}\n  ${CLOSE}`],
   ];
 
-  // Unit level: the report leaves nothing of Mason's behind.
+  // Unit level: the report leaves nothing of Mason's behind. A TRUNCATED report
+  // (no close tag) is the exception for the latch only: its end cannot be found,
+  // so it is kept and its own "stop" latches — the fail-safe side (Sol review of
+  // #826, 2026-09-29). It still clears nothing and fires no reminder.
   for (const [label, turn] of SPELLINGS) {
     ok(!isMachineGenerated(turn), `${label}: stripped, not whole-prompt inert`);
-    ok(!isHoldPhrase(authoredByMason(turn)), `${label}: report does not latch`);
+    const truncated = /truncated/.test(label);
+    eq(isHoldPhrase(authoredByMason(turn)), truncated,
+      `${label}: report ${truncated ? "is kept for the latch (fail-safe)" : "does not latch"}`);
     ok(!hasAuthoredText(turn), `${label}: a bare report leaves no Mason-authored text`);
     eq(withoutSubagentReports(turn), "", `${label}: reminders see nothing`);
   }
@@ -577,6 +582,19 @@ rmSync(hbProj, { recursive: true, force: true });
   const TRUNCATED = `${PREAMBLE}<\\~agent-message from="a1">\n${REPORT_BODY}`;
   ok(isHoldPhrase(authoredByMason(TRUNCATED + "\nok stop, do not continue")),
     "Mason's stop after a truncated report still latches");
+  // Sol review of #826 (2026-09-29): an INDENTED stop Mason types under a
+  // truncated report looks like report body. It must still latch. The body
+  // here carries no hold phrase, so only his line can latch it.
+  const QUIET_TRUNCATED = `${PREAMBLE}<\\~agent-message from="a1">\n[Subagent hand-back] x\n  all done, tests pass`;
+  ok(!isHoldPhrase(QUIET_TRUNCATED), "setup: the quiet report body carries no hold phrase");
+  ok(isHoldPhrase(authoredByMason(QUIET_TRUNCATED + "\n  stop now")),
+    "Mason's indented stop under a truncated report still latches");
+  ok(isHoldPhrase(authoredByMason(QUIET_TRUNCATED + "\n\thold on")),
+    "Mason's tab-indented hold under a truncated report still latches");
+  ok(!isHoldPhrase(authoredByMason(`${PREAMBLE}<\\~agent-message from="a1">\n[Subagent hand-back] x\n  all done\n${CLOSE}\n  `)),
+    "a CLOSED quiet report is still stripped for the latch");
+  ok(!hasAuthoredText(QUIET_TRUNCATED + "\n  carry on"),
+    "a truncated report still cannot clear a hold");
   eq(withoutSubagentReports(TRUNCATED + "\nship it"), "ship it",
     "reminders see only Mason's line after a truncated report");
   ok(isHoldPhrase(authoredByMason(
@@ -700,15 +718,20 @@ rmSync(hbProj, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 
-  // A bare agent-message turn: every hook silent, no hold, no freeze flag.
+  // A bare agent-message turn: every hook silent, no hold, no freeze flag. The
+  // exception is a TRUNCATED report and the latch: it is kept for the latch
+  // (fail-safe, Sol review of #826), so its own "stop" latches the hold.
   for (const [label, turn] of SPELLINGS) {
     const dir = mkdtempSync(path.join(tmpdir(), "crx-agentmsg-"));
+    const truncated = /truncated/.test(label);
     for (const hook of PHRASE_HOOKS) {
       const r = run(hook, dir, turn);
       eq(r.status, 0, `${hook} exits 0 on a ${label} report`);
+      if (truncated && hook === "hold-latch-prompt.mjs") continue;
       eq(r.stdout.trim(), "", `${hook} SILENT on a ${label} report`);
     }
-    ok(!existsSync(stateOf(dir, "hold.json")), `${label} report did not latch hold.json`);
+    eq(existsSync(stateOf(dir, "hold.json")), truncated,
+      `${label} report ${truncated ? "latched hold.json (fail-safe)" : "did not latch hold.json"}`);
     ok(!existsSync(stateOf(dir, "OVERNIGHT-INTENT.flag")), `${label} report did not write OVERNIGHT-INTENT.flag`);
     rmSync(dir, { recursive: true, force: true });
   }
