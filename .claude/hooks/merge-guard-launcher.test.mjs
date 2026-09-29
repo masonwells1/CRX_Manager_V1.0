@@ -4,7 +4,7 @@
 // could merge, and in an allow for everything else; a guard that finishes
 // normally must have its verdict forwarded unchanged.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -201,6 +201,22 @@ ok(elapsed < 10_000, `end to end: the launcher answered in ${elapsed}ms, long be
 copyFileSync(guards.crash, path.join(tmp, "crash-guard.mjs"));
 res = launch(shortLauncher, path.join(tmp, "crash-guard.mjs"), MERGE);
 ok(decisionOf(res.stdout)?.permissionDecision === "deny", "end to end: a crashing guard's merge is denied");
+
+// A tool call that cannot be read is unknown, so it is treated as a possible
+// merge (Luna, 2026-09-28): here the input never finishes arriving.
+ok(decisionOf(failureVerdict(null, "unreadable").stdout)?.permissionDecision === "deny",
+  "an unreadable tool call is denied, whatever it was");
+const unread = await new Promise((resolve) => {
+  const child = spawn(process.execPath, [shortLauncher, guards.allow], { stdio: ["pipe", "pipe", "pipe"] });
+  let out = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  child.stdin.write('{"tool_name":"Bash","tool_input":{"command":"npm run build"');
+  const kill = setTimeout(() => child.kill(), 15_000);
+  child.on("close", () => { clearTimeout(kill); resolve(out); });
+});
+ok(decisionOf(unread)?.permissionDecision === "deny" && /had not finished arriving/.test(decisionOf(unread)?.permissionDecisionReason || ""),
+  "end to end: input still open at the deadline is denied, even when it looks harmless");
+ok(!/import\s*\{[^}]*\breadFileSync\b/.test(source), "the launcher reads its input as a stream, not readFileSync(0)");
 
 // ── wiring and timing ───────────────────────────────────────────────────────
 const settings = JSON.parse(readFileSync(path.join(ROOT, ".claude", "settings.json"), "utf8"));

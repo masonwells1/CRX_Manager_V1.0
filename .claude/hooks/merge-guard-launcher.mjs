@@ -22,7 +22,7 @@
 // hook in the repository, not only this one, and no hook can answer for it.
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,9 +81,11 @@ export function isVerdict(stdout) {
 
 // What to print when the guard did not finish: a denial for anything that could
 // merge, silence (allow) for everything else, and a note on stderr either way.
+// `input` is null when the tool call itself could not be read; nothing is known
+// about it, so it is treated as a possible merge (Luna, 2026-09-28).
 export function failureVerdict(input, detail) {
   const note = `${LABEL}: the merge check did not finish (${detail}).`;
-  if (!mayMerge(input)) return { stdout: "", stderr: `${note} This call cannot merge, so it is allowed.\n` };
+  if (input !== null && !mayMerge(input)) return { stdout: "", stderr: `${note} This call cannot merge, so it is allowed.\n` };
   return {
     stdout: denial(
       `${note} This call could merge a pull request, so it is denied (fail closed) — a check that ` +
@@ -163,14 +165,31 @@ export function superviseGuard({ guardPath, input, deadlineMs }) {
   });
 }
 
+// The tool call arrives on stdin. Read as a stream, not readFileSync(0), which
+// can throw EAGAIN on a non-blocking pipe; a read error, or input still open at
+// the deadline, rejects, and main() then treats the unread call as a possible merge.
+function readInput(deadlineMs) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const timer = setTimeout(
+      () => reject(new Error("the tool call had not finished arriving at the launcher's deadline")),
+      Math.max(0, deadlineMs - Date.now()),
+    );
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString("utf8")); });
+    process.stdin.on("error", (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
 async function main() {
   const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);
-  let input = "";
+  const deadlineMs = startedAtMs + KILL_AFTER_MS;
+  let input = null;
   try {
-    input = readFileSync(0, "utf8");
+    input = await readInput(deadlineMs);
     const guardPath = path.resolve(process.argv[2] || "");
     const result = guardPathAllowed(guardPath)
-      ? await superviseGuard({ guardPath, input, deadlineMs: startedAtMs + KILL_AFTER_MS })
+      ? await superviseGuard({ guardPath, input, deadlineMs })
       : failureVerdict(input, `no guard file next to the launcher at "${process.argv[2] || ""}"`);
     if (result.stderr) process.stderr.write(result.stderr);
     process.stdout.write(result.stdout, () => process.exit(0));
