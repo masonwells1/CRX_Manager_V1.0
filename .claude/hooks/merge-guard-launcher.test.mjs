@@ -5,7 +5,7 @@
 // normally must have its verdict forwarded unchanged.
 
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,8 +112,13 @@ const fake = (name, source) => {
   return file;
 };
 const DENY_JSON = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "fake guard says no" } });
+// An allowing guard reports the launcher's token, as pr-merge-guard.mjs's passthrough() does.
+const REPORTS_FINISHED = "writeSync(2, `merge-guard finished ${process.env.CRX_MERGE_GUARD_TOKEN}\\n`);";
 const guards = {
-  allow: fake("allow.mjs", "import { readFileSync } from 'node:fs'; readFileSync(0); process.exit(0);\n"),
+  allow: fake("allow.mjs", `import { readFileSync, writeSync } from 'node:fs'; readFileSync(0); ${REPORTS_FINISHED} process.exit(0);\n`),
+  silentAllow: fake("silent-allow.mjs", "import { readFileSync } from 'node:fs'; readFileSync(0); process.exit(0);\n"),
+  empty: fake("empty.mjs", ""),
+  wrongToken: fake("wrong-token.mjs", "process.stderr.write('merge-guard finished 0123456789abcdef\\n'); process.exit(0);\n"),
   deny: fake("deny.mjs", `import { readFileSync } from 'node:fs'; readFileSync(0); process.stdout.write(${JSON.stringify(DENY_JSON)}); process.exit(0);\n`),
   crash: fake("crash.mjs", "import { readFileSync } from 'node:fs'; readFileSync(0); throw new Error('boom from the fake guard');\n"),
   missingModule: fake("missing-module.mjs", "import './does-not-exist.mjs';\n"),
@@ -128,7 +133,8 @@ const guards = {
 const run = (guardPath, input, ms = 20_000) => superviseGuard({ guardPath, input, deadlineMs: Date.now() + ms });
 
 let r = await run(guards.allow, MERGE);
-ok(r.stdout === "", "a guard that exits silently is forwarded as an allow");
+ok(r.stdout === "", "a guard that allows and reports the token is forwarded as an allow");
+ok(!/merge-guard finished/.test(r.stderr), "the token line is not passed on to the harness");
 r = await run(guards.deny, MERGE);
 ok(r.stdout === DENY_JSON, "a guard's own denial is forwarded unchanged");
 r = await run(guards.deny, PLAIN);
@@ -140,6 +146,10 @@ for (const [name, reason] of [
   ["exitThree", /exited with code 3/],
   ["garbage", /not a verdict/],
   ["noDecision", /not a verdict/],
+  // Luna, 2026-09-28: an emptied or no-op guard file exits 0 silently.
+  ["silentAllow", /without reporting that it finished/],
+  ["empty", /without reporting that it finished/],
+  ["wrongToken", /without reporting that it finished/],
 ]) {
   r = await run(guards[name], MERGE);
   ok(decisionOf(r.stdout)?.permissionDecision === "deny", `${name}: a merge is DENIED when the guard fails`);
@@ -170,6 +180,11 @@ ok(!guardPathAllowed(LAUNCHER), "the launcher does not launch itself");
 ok(!guardPathAllowed(guards.allow), "a file outside the hooks directory is refused");
 ok(!guardPathAllowed(path.join(__dirname, "no-such-guard.mjs")), "a missing file is refused");
 ok(!guardPathAllowed(""), "an empty path is refused");
+
+// The real guard reports the token when it allows. A plain command is allowed
+// either way, so check that the launcher saw a FINISHED guard, not a failure.
+r = await run(REAL_GUARD, PLAIN);
+ok(r.stdout === "" && !/did not finish/.test(r.stderr), "the real guard reports that it finished when it allows");
 
 // ── end to end: the real launcher process ────────────────────────────────────
 const launch = (launcher, guardArg, input) => spawnSync(process.execPath, [launcher, guardArg], {
@@ -217,6 +232,19 @@ const unread = await new Promise((resolve) => {
 ok(decisionOf(unread)?.permissionDecision === "deny" && /had not finished arriving/.test(decisionOf(unread)?.permissionDecisionReason || ""),
   "end to end: input still open at the deadline is denied, even when it looks harmless");
 ok(!/import\s*\{[^}]*\breadFileSync\b/.test(source), "the launcher reads its input as a stream, not readFileSync(0)");
+
+// Input is capped rather than buffered without limit (Luna, 2026-09-28). A copy
+// with a 1 KB cap stands in for the real 64 MB one.
+ok(/const MAX_INPUT_BYTES = 64 \* 1024 \* 1024;/.test(source), "the input cap constant is where the copy expects it");
+const cappedLauncher = path.join(tmp, "capped", "merge-guard-launcher.mjs");
+mkdirSync(path.dirname(cappedLauncher));
+writeFileSync(cappedLauncher, source.replace("const MAX_INPUT_BYTES = 64 * 1024 * 1024;", "const MAX_INPUT_BYTES = 1024;"));
+copyFileSync(guards.allow, path.join(tmp, "capped", "allow.mjs"));
+res = launch(cappedLauncher, path.join(tmp, "capped", "allow.mjs"), payload(`echo ${"x".repeat(4096)}`));
+ok(decisionOf(res.stdout)?.permissionDecision === "deny" && /larger than 1024 bytes/.test(decisionOf(res.stdout)?.permissionDecisionReason || ""),
+  "an oversized tool call is refused unread");
+res = launch(cappedLauncher, path.join(tmp, "capped", "allow.mjs"), PLAIN);
+ok(res.status === 0 && res.stdout === "", "a normal-sized call still passes under the cap");
 
 // ── wiring and timing ───────────────────────────────────────────────────────
 const settings = JSON.parse(readFileSync(path.join(ROOT, ".claude", "settings.json"), "utf8"));

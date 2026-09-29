@@ -14,14 +14,17 @@
 // This file imports only node built-ins, so a bug in the guard or in any library
 // the guard loads cannot stop this launcher from answering. When the guard exits
 // normally its verdict is forwarded unchanged. When it crashes, exits non-zero,
-// prints something that is not a verdict, or is still running at the launcher's
-// deadline, a call that could merge is denied and every other call is allowed
+// prints something that is not a verdict, exits silently without reporting that
+// it finished, or is still running at the launcher's deadline, or when the tool
+// call itself cannot be read, a call that could merge is denied and every other
+// call is allowed
 // (@proven-by .claude/hooks/merge-guard-launcher.test.mjs).
 //
 // Not covered: node failing to start this launcher at all. That stops every
 // hook in the repository, not only this one, and no hook can answer for it.
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +42,9 @@ export const GUARD_BUDGET_MS = 30_000;
 export const KILL_AFTER_MS = 36_000;
 export const HARNESS_TIMEOUT_S = 45;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+// A tool call larger than this is refused unread rather than buffered without
+// limit (Luna, 2026-09-28); real Bash, PowerShell and MCP calls are far smaller.
+const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 
 // Could this tool call merge a pull request? Deliberately broad and simple: it
 // decides only what happens when the real guard FAILED, so it over-denies rather
@@ -106,10 +112,16 @@ export function guardPathAllowed(guardPath, dir = HERE) {
 
 // Run the guard with `input` on its stdin and resolve { stdout, stderr } for the
 // launcher to print. Never rejects.
+//
+// Silence is the guard's allow, but an emptied or truncated guard file is silent
+// too. So the guard gets a per-run token and must report it on stderr when it
+// allows (pr-merge-guard.mjs passthrough()); silence without it is a failure.
 export function superviseGuard({ guardPath, input, deadlineMs }) {
   return new Promise((resolve) => {
     const stdout = [];
     const stderr = [];
+    const token = randomBytes(16).toString("hex");
+    const finishedLine = `merge-guard finished ${token}`;
     let bytes = 0;
     let overflow = false;
     let settled = false;
@@ -121,7 +133,8 @@ export function superviseGuard({ guardPath, input, deadlineMs }) {
       settled = true;
       clearTimeout(timer);
       if (!failure) {
-        resolve({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: errText() });
+        const notes = errText().split(/\r?\n/).filter((line) => line.trim() !== finishedLine).join("\n");
+        resolve({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: notes.trim() ? `${notes.trimEnd()}\n` : "" });
         return;
       }
       // Node ends a crash report with its version line; the error itself is the
@@ -145,7 +158,11 @@ export function superviseGuard({ guardPath, input, deadlineMs }) {
     }, Math.max(0, deadlineMs - Date.now()));
 
     try {
-      child = spawn(process.execPath, [guardPath], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      child = spawn(process.execPath, [guardPath], {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        env: { ...process.env, CRX_MERGE_GUARD_TOKEN: token },
+      });
     } catch (error) {
       finish(`could not start: ${error?.message || error}`);
       return;
@@ -157,7 +174,11 @@ export function superviseGuard({ guardPath, input, deadlineMs }) {
       if (signal) return finish(`stopped by ${signal}`);
       if (code !== 0) return finish(`exited with code ${code}`);
       if (overflow) return finish("printed more than a verdict");
-      if (!isVerdict(Buffer.concat(stdout).toString("utf8"))) return finish("printed something that is not a verdict");
+      const printed = Buffer.concat(stdout).toString("utf8");
+      if (!isVerdict(printed)) return finish("printed something that is not a verdict");
+      if (!printed.trim() && !errText().split(/\r?\n/).some((line) => line.trim() === finishedLine)) {
+        return finish("exited silently without reporting that it finished");
+      }
       return finish(null);
     });
     child.stdin.on("error", () => { /* the guard exited before reading its input; close reports it */ });
@@ -171,11 +192,21 @@ export function superviseGuard({ guardPath, input, deadlineMs }) {
 function readInput(deadlineMs) {
   return new Promise((resolve, reject) => {
     const chunks = [];
+    let size = 0;
     const timer = setTimeout(
       () => reject(new Error("the tool call had not finished arriving at the launcher's deadline")),
       Math.max(0, deadlineMs - Date.now()),
     );
-    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_INPUT_BYTES) {
+        clearTimeout(timer);
+        process.stdin.pause();
+        reject(new Error(`the tool call is larger than ${MAX_INPUT_BYTES} bytes`));
+        return;
+      }
+      chunks.push(chunk);
+    });
     process.stdin.on("end", () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString("utf8")); });
     process.stdin.on("error", (error) => { clearTimeout(timer); reject(error); });
   });

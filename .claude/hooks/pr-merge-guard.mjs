@@ -23,7 +23,7 @@
 // This is an honest-mistake net, not a security boundary: GitHub branch
 // protection (required Vercel check) remains the external hard wall.
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
@@ -53,7 +53,14 @@ import {
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
-function passthrough() { process.exit(0); }
+// Under merge-guard-launcher.mjs, silence counts as an allow only when this
+// guard also reports the launcher's per-run token: an emptied or truncated guard
+// file exits 0 silently too, and must not read as an allow (Luna, 2026-09-28).
+// writeSync, because process.exit() would not wait for a stream write.
+function passthrough() {
+  if (process.env.CRX_MERGE_GUARD_TOKEN) writeSync(2, `merge-guard finished ${process.env.CRX_MERGE_GUARD_TOKEN}\n`);
+  process.exit(0);
+}
 function deny(reason) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
   process.exit(0);
