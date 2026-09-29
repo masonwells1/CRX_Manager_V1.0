@@ -27,7 +27,7 @@ ships or quarterly, whichever comes first.
   `20260914100700_customer_document_bytes_server_only` (`20260926163005`),
   `20260914100800_bind_transfer_invoice_intent` (`20260927060531`), and
   `20260914100900_repair_commission_history_label_snapshots` (`20260928025520`, applied from PR
-  #832's branch checkout; #832 has since been replaced by open PR #837).
+  #832's branch checkout; #832 has since been replaced by the open field-season delivery PR).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season candidates `20260914101000`..`20260914101300`
@@ -193,7 +193,7 @@ pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff re
 
 **Field-season delivery (open).** The Oct-1 filed-season guard ships as four migrations,
 `20260914101000`..`20260914101300` (rows 931–934 in `docs/reference/migration-history.md`), all
-LOCAL CANDIDATES, not applied, carried by PR #837 (branch `claude/field-season-delivery-lap16-20260928`), which replaced #832 in the #793 → #828 → #829 → #832 line. They apply only after
+LOCAL CANDIDATES, not applied, carried by the open field-season delivery PR (branch `claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line; a fresh PR replaces it whenever `main` moves, because the CodeRabbit lifecycle gate pins head and base). They apply only after
 `20260914100900` (that precondition is now met: it applied live 2026-09-27 evening, ledger
 `20260928025520`), in ascending stamp order, with `101000` and `101100` in one window; see the
 APPLY-WINDOW and COMMISSION-FIRST rules in that file.

@@ -16,7 +16,7 @@ was not all re-measured.
   `20260914100100`..`20260914100900` is now live — see the RESOLVED entry below.
 - **Nothing from the commission cohort is still parked.** Other parked files (for example PR #800's
   customer-document fix, and the four field-season candidates `20260914101000`..`20260914101300`
-  carried by open PR #837) are named in their own entries.
+  carried by the open field-season delivery PR) are named in their own entries.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -192,7 +192,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
 
 **Status (2026-09-27 evening, America/Chicago):** APPLIED LIVE under ledger version
 `20260928025520` (UTC, 2026-09-28 02:55:20), from PR #832's branch checkout (PR #832 has since been
-replaced by open PR #837); a read-only live read right after took the ledger to 1013 rows and
+replaced by the open field-season delivery PR); a read-only live read right after took the ledger to 1013 rows and
 confirmed: `public.record_commission_earned_state()` body md5 `5623b0d31181d357b303a36e563a77aa`,
 SECURITY DEFINER, ACL `{postgres=X/postgres}`; settlement recorder and ledger mutation guard
 unchanged; both recorder triggers enabled; 34 `revised` correction rows appended to
@@ -2668,7 +2668,7 @@ still parked. The field-app season files, restamped `20260914101000`–`101300`,
 PR #793 (it replaced PR #754, closed unmerged 2026-09-21); they are not on `main`.
 **Update 2026-09-27 evening:** `20260914100900` applied live too (ledger `20260928025520`), so the
 whole `20260914100100`..`20260914100900` cohort is live and nothing from it is parked. The
-field-season files are now carried by open PR #837 and remain unapplied.
+field-season files are now carried by the open field-season delivery PR and remain unapplied.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
