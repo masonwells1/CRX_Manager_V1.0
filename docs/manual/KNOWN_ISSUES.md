@@ -228,7 +228,7 @@ provers. The Documents-tab change that calls the RPC is on the separate unmerged
 `claude/customer-document-rep-remove-page-v3` and ships only after the apply (`CustomerDocuments.tsx`
 on `main` still updates the row directly). **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge PR #800
 or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed in the
-live ledger.** `20260914101000`..`101300` are on open PR #832 (it replaced the closed #793), so the
+live ledger.** `20260914101000`..`101300` are on open PR #837 (it replaced the closed #832 and #793), so the
 pending-migration guard cannot see them; landing this higher stamp first would strand them. Full
 order: `20260914100700`, `100800`, `100900` (all three live as of 2026-09-28), `101000`..`101300`,
 then this file. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the hold lifts it applies

@@ -69,6 +69,14 @@ const SHAPE_CHECK_SOURCE = path.join(ROOT, 'supabase', 'migrations', '2026091410
 // Installed live by 20260914100800 on every idempotency_keys INSERT; this
 // function's receipt passes through it.
 const LIVE_RECEIPT_TRIGGER = 'trg_idempotency_keys_require_transfer_intent_20260908';
+// Mason's ordering hold: these must be live before 20260921180000 applies. They
+// are never skipped; the run reports whether this checkout replays them.
+const HOLD_PREDECESSORS = [
+  '20260914101000_field_app_invoice_cross_season_edit_guard.sql',
+  '20260914101100_preserve_unchanged_source_invoice_dates.sql',
+  '20260914101200_refuse_generic_field_invoice_creation.sql',
+  '20260914101300_finish_generic_field_invoice_cutover.sql',
+];
 
 const ADMIN = '5d000000-0000-4000-8000-00000000000a';
 const REP = '5d000000-0000-4000-8000-00000000000b';
@@ -388,7 +396,7 @@ function selected() {
   const before = all.slice(0, candidate);
   const skipped = before.filter((f) => PARKED.has(path.basename(f)));
   for (const name of PARKED) {
-    if (!OPTIONAL_PARKED.has(name)) assert.ok(skipped.some((f) => path.basename(f) === name), `${name} must be in the replay plan (re-check the PARKED list against the live ledger)`);
+    assert.ok(skipped.some((f) => path.basename(f) === name), `${name} must be in the replay plan (re-check the PARKED list against the live ledger)`);
   }
   for (const file of skipped) {
     const label = path.basename(file);
@@ -418,7 +426,13 @@ function selected() {
     }
     assert.ok(!/customer_documents|soft_delete_customer_document/i.test(readFileSync(file, 'utf8')), `${path.basename(file)} touches customer documents; skipping it would change the proof`);
   }
-  return before.filter((f) => !PARKED.has(path.basename(f)));
+  const replayed = before.filter((f) => !PARKED.has(path.basename(f)));
+  const names = new Set(replayed.map((f) => path.basename(f)));
+  const missing = HOLD_PREDECESSORS.filter((n) => !names.has(n));
+  console.log(missing.length === 0
+    ? `[prover] ordering-hold predecessors replayed: ${HOLD_PREDECESSORS.length}/${HOLD_PREDECESSORS.length}`
+    : `[prover] ordering-hold predecessors NOT in this checkout yet (${missing.length}/${HOLD_PREDECESSORS.length}): ${missing.join(', ')} - this proof does not cover them; re-run after main carries them and before 20260921180000 applies`);
+  return replayed;
 }
 /**
  * Install 20260914100700's customer_documents CHECK exactly as that file
@@ -825,9 +839,11 @@ $shadow$;`);
     await finishLock(held, 'COMMIT');
     expectRefusal(await removal, refusal, `removal that waited on a committed ${label}`);
     assert.match(docState(DOC.roleCheck), /^live\|/, `removal went through after a committed ${label}`);
+    // Restore before the next race, so each one starts from a state in which
+    // the removal would otherwise succeed.
+    psql(`UPDATE public.customers SET assigned_sales_rep = '${REP}' WHERE id = '${CUSTOMER_MINE}';`);
+    setActive(REP, true);
   }
-  psql(`UPDATE public.customers SET assigned_sales_rep = '${REP}' WHERE id = '${CUSTOMER_MINE}';`);
-  setActive(REP, true);
   console.log('[prover] locks: removal waits on a held profile row and a held customer row, and is refused when the reassignment or deactivation commits');
 
   // 6. Admin path.
