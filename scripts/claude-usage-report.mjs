@@ -42,7 +42,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { authoredByMason, isMachineGenerated } from "../.claude/hooks/prompt-source-lib.mjs";
+import { authoredByMason, isMachineGenerated, withoutSubagentReports } from "../.claude/hooks/prompt-source-lib.mjs";
 
 const args = process.argv.slice(2);
 const opt = (flag, dflt) => { const i = args.indexOf(flag); return i >= 0 && args[i + 1] ? args[i + 1] : dflt; };
@@ -117,10 +117,13 @@ const isEnvelope = (text) => isMachineGenerated(text) || CI_MONITOR_ENVELOPE_RE.
 // A subagent's hand-back (2026-09-25) is stripped the same way. The harness puts
 // its "Another Claude session sent a message:" line in front of every peer
 // envelope, so that line — not a tag Mason might type — is what marks one.
+// Hand-backs are removed FIRST, truncated ones included: the hold latch's
+// `authoredByMason` deliberately keeps a truncated report whole (fail-safe for a
+// stop), which would otherwise count it as a prompt Mason typed (Codex App, #826).
 const PEER_ENVELOPE_RE = /<cross-session-message\b|^[ \t]*Another Claude session sent a message:/im;
 const masonWords = (text) => {
   if (isEnvelope(text)) return "";
-  const authored = authoredByMason(text).replace(/\s+/g, " ").trim();
+  const authored = authoredByMason(withoutSubagentReports(text)).replace(/\s+/g, " ").trim();
   if (authored) return authored;
   return PEER_ENVELOPE_RE.test(text) ? "" : text;
 };
