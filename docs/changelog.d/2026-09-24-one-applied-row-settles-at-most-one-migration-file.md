@@ -25,7 +25,7 @@ nothing to `slugCounts` and charging the file's slug would invent a budget that 
 
 Proven backwards on the same input, through the real `checkPendingMigrations`:
 
-```
+```text
 PREV: ok=true   names an unsettled same-slug file: no
 NOW : ok=false  names an unsettled same-slug file: YES
 ```

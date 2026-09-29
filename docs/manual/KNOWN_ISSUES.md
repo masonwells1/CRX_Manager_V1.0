@@ -118,7 +118,8 @@ the time. **Fix shape:** a new migration refusing `field_application` in both or
 INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
 reviewed change with its own container proof — not as an add-on to the season guards. Awaiting
 Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped season closure first
-with this gap documented rather than hold the September 30 season deadline for it.
+with this gap documented. (The original September 30 target was superseded by his 2026-09-28
+decision to land the four field-season migrations after 2026-10-01; see the entry above.)
 
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 
