@@ -33,17 +33,19 @@ try {
   writeFileSync(snapPath, porcelain, "utf8");
 } catch { /* ignore */ }
 
-// HEAD's reflog length at session start. stop-wrap.mjs treats every reflog
-// entry after this position as the session's own, instead of trusting entry
-// timestamps, which come from the committer date and can be backdated (e.g.
-// `rebase --committer-date-is-author-date`; Codex P2, PR #827).
+// HEAD's newest reflog entry at session start, as an anchor. stop-wrap.mjs
+// treats every entry newer than it as the session's own, instead of trusting
+// entry timestamps, which come from the committer date and can be backdated
+// (`rebase --committer-date-is-author-date`), or the reflog's length, which
+// expiry changes (Codex P2s, PR #827). The line format must match the one
+// stop-wrap.mjs reads. An empty file means the reflog was empty.
 try {
-  const entries = execFileSync("git", ["reflog", "show", "--format=%H", "HEAD"], {
+  const newest = execFileSync("git", ["reflog", "show", "-n", "1", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"], {
     encoding: "utf8",
     timeout: 5000,
     stdio: ["ignore", "pipe", "ignore"],
-  }).split("\n").filter(Boolean).length;
-  writeFileSync(path.join(dir, `session-${sessionId}.reflog`), String(entries), "utf8");
-} catch { /* no reflog yet — stop-wrap falls back to timestamps */ }
+  }).split("\n")[0] ?? "";
+  writeFileSync(path.join(dir, `session-${sessionId}.reflog`), newest, "utf8");
+} catch { /* no HEAD yet — stop-wrap falls back to timestamps */ }
 
 process.exit(0);

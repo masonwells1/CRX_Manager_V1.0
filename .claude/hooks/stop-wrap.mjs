@@ -579,22 +579,24 @@ try {
     // nothing and are skipped. No reflog (disabled) → nothing counted, the
     // same fail-open as the rest of this hook.
     const AUTHORING_RE = /^(commit|cherry-pick|revert|am)\b|^rebase\b[^:]*\((pick|reword|edit|squash|fixup|continue)\)|: Merge made by /;
-    // Which entries are this session's: everything after the reflog length
+    // Which entries are this session's: everything newer than the anchor entry
     // session-snapshot.mjs recorded at session start (newest entries come
     // first). Entry timestamps are the committer date, which a rebase can
     // backdate (`--committer-date-is-author-date`; Codex P2, PR #827 round
-    // 10), so they are only the fallback when no position was recorded or the
-    // reflog has since been expired below it.
+    // 10), and the reflog's length changes when old entries expire (round 11),
+    // so neither marks the boundary. Timestamps are only the fallback when no
+    // anchor was recorded or the anchor entry itself has since expired.
     const sessionStartSec = Math.floor(sessionStartMs / 1000);
     const reflogEntries = runGit(["reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"])
       .split("\n").filter(Boolean);
-    let startLength = NaN;
+    let anchor = null;
     try {
-      startLength = Number.parseInt(readFileSync(snapPath.replace(/\.snapshot$/, ".reflog"), "utf8"), 10);
-    } catch { /* no recorded position — use timestamps */ }
-    const byPosition = Number.isInteger(startLength) && startLength >= 0 && reflogEntries.length >= startLength;
-    const sessionEntries = byPosition
-      ? reflogEntries.slice(0, reflogEntries.length - startLength)
+      anchor = readFileSync(snapPath.replace(/\.snapshot$/, ".reflog"), "utf8").split("\n")[0].trim();
+    } catch { /* no recorded anchor — use timestamps */ }
+    // An empty anchor means the reflog was empty at session start: every entry is new.
+    const anchorIndex = anchor === null ? -1 : anchor === "" ? reflogEntries.length : reflogEntries.findIndex((entry) => entry.trim() === anchor);
+    const sessionEntries = anchorIndex >= 0
+      ? reflogEntries.slice(0, anchorIndex)
       : reflogEntries.filter((entry) => Number(/@\{(\d+)\}/.exec(entry.split("\t")[1] ?? "")?.[1]) >= sessionStartSec);
     const authored = new Set();
     for (const entry of sessionEntries) {

@@ -343,6 +343,21 @@ try {
     "a session commit backdated by --committer-date-is-author-date must still warn without a ledger");
   pass++;
 
+  // ── Session 1l (Codex P2, PR #827 round 11): an old reflog entry expires
+  //    while the session adds one, so the reflog's LENGTH is unchanged. The
+  //    session boundary is an anchor entry, not a length → still warns ──
+  const s1l = "ledger-test-reflog-expiry";
+  snapshots.push(startSession(s1l));
+  writeFileSync(path.join(tmp, "expiry.txt"), "unrecorded work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded work while an old entry expires"], tmp);
+  const oldest = git(["reflog", "show", "--format=%gd", "HEAD"], tmp).trim().split("\n").pop();
+  git(["reflog", "delete", "--rewrite", oldest], tmp);
+  const expired = runStopWrap(s1l, tmp);
+  assert.match(expired.stdout, LEDGER_WARNING,
+    "a session commit must still warn when an old reflog entry expired during the session");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
