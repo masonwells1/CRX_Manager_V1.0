@@ -6,7 +6,7 @@ already committed. The only commit made after the session-start snapshot was a m
 `main`, and `git log --name-status` lists no files for a merge commit, so the check saw
 "commits, but no ledger".
 
-Fix, refined across seven Codex review rounds (PRs #824 and #827):
+Fix, refined across eight Codex review rounds (PRs #824 and #827):
 
 - **Only this session's own work counts.** The hook reads the commits this checkout
   created since the session started from git's own record of them (HEAD's reflog), instead
@@ -17,7 +17,8 @@ Fix, refined across seven Codex review rounds (PRs #824 and #827):
   was made on a side branch and merged in or has already landed on `main`. A commit that
   was amended, reset or rebased away stays in the reflog but no longer exists in the
   history, so it is ignored. Otherwise a ledger edit amended out of a commit would still
-  count. Three earlier
+  count. The commit a rebase writes after a conflict resolution
+  (`rebase (continue)`) counts like any other replayed commit. Three earlier
   graph-based rules each missed one of these cases:
   - plain `git log --since` counted main's post-snapshot commits;
   - a first-parent scan dropped side-branch work;
@@ -35,7 +36,7 @@ Fix, refined across seven Codex review rounds (PRs #824 and #827):
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real hook in a temp git repo with nine cases:
+  It runs the real hook in a temp git repo with ten cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -45,6 +46,7 @@ Fix, refined across seven Codex review rounds (PRs #824 and #827):
   - an unrecorded commit made on a side branch this session and merged in cleanly still warns;
   - an unrecorded session commit that has already landed on `main` still warns;
   - a ledger edit amended out of the session's commit does not count, so it still warns;
+  - an unrecorded session commit replayed through a conflict-resolved rebase still warns;
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -55,5 +57,6 @@ Fix, refined across seven Codex review rounds (PRs #824 and #827):
   - With the "skip what is on `main`" scan, the landed-on-main case fails. Codex reproduced
     this, and the new test mirrors it.
   - Without the reachability filter, the amended-out case fails.
-- With the final version, all nine cases pass. `npm run test:correction-guards`,
+  - Without `continue` among the rebase actions, the rebase case fails.
+- With the final version, all ten cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.

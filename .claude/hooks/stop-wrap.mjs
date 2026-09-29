@@ -576,7 +576,7 @@ try {
     // arrive by fetch/merge. Checkouts, resets and fast-forwards create
     // nothing and are skipped. No reflog (disabled) → nothing counted, the
     // same fail-open as the rest of this hook.
-    const AUTHORING_RE = /^(commit|cherry-pick|revert|am)\b|^rebase\b[^:]*\((pick|reword|edit|squash|fixup)\)|: Merge made by /;
+    const AUTHORING_RE = /^(commit|cherry-pick|revert|am)\b|^rebase\b[^:]*\((pick|reword|edit|squash|fixup|continue)\)|: Merge made by /;
     const sessionStartSec = Math.floor(sessionStartMs / 1000);
     const authored = new Set();
     for (const entry of runGit(["reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"]).split("\n")) {

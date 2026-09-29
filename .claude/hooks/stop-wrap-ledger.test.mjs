@@ -243,6 +243,42 @@ try {
     "a ledger edit amended out of the session's commit must not count as the record");
   pass++;
 
+  // ── Session 1i (Codex P2, PR #827 round 7): an unrecorded session commit
+  //    replayed by a rebase that needed a conflict resolution is recorded as
+  //    `rebase (continue)`; the original commit is then unreachable → still
+  //    warns ──
+  // Line main up with feat first, so the rebase replays ONLY this session's
+  // commit (replaying 1h's unrecorded commit would warn on its own).
+  git(["branch", "-f", "main", "feat"], tmp);
+  const other2 = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other2], os.tmpdir());
+    git(["config", "user.email", "other@test"], other2);
+    git(["config", "user.name", "other"], other2);
+    writeFileSync(path.join(other2, "base.txt"), "upstream rewrite\n");
+    git(["add", "."], other2);
+    git(["commit", "-qm", "upstream edits base"], other2);
+    const s1i = "ledger-test-rebase-continue";
+    snapshots.push(startSession(s1i));
+    writeFileSync(path.join(tmp, "base.txt"), "session rewrite\n");
+    git(["add", "."], tmp);
+    git(["commit", "-qm", "unrecorded session edit"], tmp);
+    git(["fetch", "-q", other2, "main:main"], tmp);
+  } finally {
+    rmSync(other2, { recursive: true, force: true });
+  }
+  const rebase = spawnSync("git", ["-C", tmp, "rebase", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(rebase.status, 0, "setup: the rebase must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "resolved during rebase\n");
+  git(["add", "base.txt"], tmp);
+  const cont = spawnSync("git", ["-C", tmp, "-c", "core.editor=true", "rebase", "--continue"],
+    { encoding: "utf8", env: { ...cleanEnv, GIT_EDITOR: "true" } });
+  assert.equal(cont.status, 0, `setup: rebase --continue must succeed: ${cont.stderr}`);
+  const rebased = runStopWrap("ledger-test-rebase-continue", tmp);
+  assert.match(rebased.stdout, LEDGER_WARNING,
+    "a session commit replayed through a conflict-resolved rebase must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
