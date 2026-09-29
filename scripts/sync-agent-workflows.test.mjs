@@ -90,6 +90,7 @@ for (const command of RELEASE_COMMANDS) {
   assertAdjudicationContract(source, command);
 }
 
+
 // Prove the helper actually rejects the reversals, rather than passing whatever
 // the current prose happens to say. Each mutation is applied to every real
 // command source; if a mutation is a no-op on some source the guard would look
@@ -115,6 +116,21 @@ for (const command of RELEASE_COMMANDS) {
     assert.notEqual(mutated, source, `mutation "${name}" did not change ${command}.md — the guard would pass vacuously`);
     assert.throws(() => assertAdjudicationContract(mutated, command),
       assert.AssertionError, `${command}.md mutated to "${name}" must be rejected`);
+  }
+}
+
+// The review skills launch the same live sweeps, so they must route through the same adjudicator:
+// a skill that still says "classify the MCP rows against the allowlist" bypasses the contract
+// checks entirely. (Codex on #838.)
+const REVIEW_SKILLS = ["codex-review", "codex-cross-review"];
+for (const skill of REVIEW_SKILLS) {
+  const source = readFileSync(new URL(`../.claude/skills/${skill}/SKILL.md`, import.meta.url), "utf8");
+  assertAdjudicationContract(source, `skill ${skill}`);
+  for (const [name, mutate] of SEMANTIC_REVERSALS) {
+    const mutated = mutate(source);
+    assert.notEqual(mutated, source, `mutation "${name}" did not change skill ${skill} — the guard would pass vacuously`);
+    assert.throws(() => assertAdjudicationContract(mutated, `skill ${skill}`),
+      assert.AssertionError, `skill ${skill} mutated to "${name}" must be rejected`);
   }
 }
 
