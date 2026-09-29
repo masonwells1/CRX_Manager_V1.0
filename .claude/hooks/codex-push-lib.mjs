@@ -3458,6 +3458,16 @@ function pipelineStages(text, shell) {
       if (powershell) return [];
       frame.redirected = true;
       if (posix && next === "<" && text[index + 2] === "<") { frame.current += "<<<"; index += 2; continue; }
+      // Inside `(( … ))` or `let`, `<<` is a left shift, not a here-document;
+      // reading it as one would skip the real commands on the following lines.
+      // Only the stage's first 256 characters are looked at, so the check stays
+      // constant-time; a stage padded past that is read as a here-document,
+      // which can only over-refuse.
+      if (posix && next === "<" && /^\s*(?:for\s*)?\(\(|^\s*let\s/.test(frame.current.slice(0, 256))) {
+        frame.current += "<<";
+        index += 1;
+        continue;
+      }
       if (posix && next === "<") {
         // A here-document: its delimiter (quotes and escapes removed), and
         // whether `<<-` strips leading tabs from the closing line.
@@ -3529,9 +3539,30 @@ function pipelineStages(text, shell) {
   return stages;
 }
 
+// Language runtimes that run a PROGRAM read from their input when given no
+// script and no inline code: `echo "…" | node`, `python3 - < payload.py`.
+// With a script (`node scripts/x.mjs < data.json`) the input is only data.
+const STDIN_PROGRAM_RUNTIMES = new Set(["node", "deno", "bun", "python", "python3", "py", "perl", "ruby", "php"]);
+const RUNTIME_CODE_OPTION_RE = /^(?:-[ecpE]|--eval|--print|--command)(?:=|$)/;
+function runtimeReadsProgramFromInput(words, candidate) {
+  const end = Math.min(words.length, candidate + 1 + NESTED_SCAN_WINDOW);
+  for (let index = candidate + 1; index < end; index += 1) {
+    const word = words[index];
+    const redirection = redirectionWidth(word);
+    if (redirection) { index += redirection - 1; continue; }
+    if (word === "-") return true;
+    if (RUNTIME_CODE_OPTION_RE.test(word)) return false;
+    if (!word.startsWith("-")) return false;
+  }
+  // No script before the stage ended reads the program from input; a scan
+  // that ran out of window with words left is refused rather than guessed at.
+  return true;
+}
+
 // Does this stage hand an interpreter its input? True for an interpreter that
-// reads a pipe or a redirection, and for anything run by xargs, which builds
-// the command from its input: an interpreter, gh, or a git push.
+// reads a pipe or a redirection, for a language runtime that would read its
+// program from one, and for anything run by xargs, which builds the command
+// from its input: an interpreter, gh, or a git push.
 function stageFeedsInterpreter({ text, piped, redirected }) {
   const rawWords = splitShellWordsRaw(text);
   const words = rawWords.map(shellArgvWord);
@@ -3547,6 +3578,10 @@ function stageFeedsInterpreter({ text, piped, redirected }) {
     const names = [candidateProgram(words[candidate]), candidateProgram(rawWords[candidate])];
     const viaXargs = firstXargs !== -1 && firstXargs < candidate;
     if (names.some((name) => FED_INTERPRETER_NAMES.has(name)) && (piped || redirected || viaXargs)) return true;
+    if ((piped || redirected) && names.some((name) => STDIN_PROGRAM_RUNTIMES.has(name)) &&
+        runtimeReadsProgramFromInput(words, candidate)) {
+      return true;
+    }
     if (viaXargs && (names.includes("gh") || (names.includes("git") && namesPush))) return true;
   }
   return false;
@@ -3554,16 +3589,27 @@ function stageFeedsInterpreter({ text, piped, redirected }) {
 
 // `nested` is true for a command another program runs (the text inside
 // `cmd /c "…"` may be read by cmd, where `'` is not a quote).
+//
+// `exec < payload.txt` replaces the shell's OWN input, so every later stage
+// reads that file — a plain `bash` on the next line runs it.
 export function commandFedToInterpreter(command, { nested = false } = {}) {
   const text = String(command || "");
   const shells = nested ? ["posix", "powershell", "cmd"] : ["posix", "powershell"];
-  return shells.some((shell) => pipelineStages(text, shell).some(stageFeedsInterpreter));
+  return shells.some((shell) => {
+    let inputReplaced = false;
+    for (const stage of pipelineStages(text, shell)) {
+      if (stageFeedsInterpreter(inputReplaced ? { ...stage, redirected: true } : stage)) return true;
+      if (stage.redirected && /^\s*exec(?:\s|$)/.test(stage.text.slice(0, 64))) inputReplaced = true;
+    }
+    return false;
+  });
 }
 
 export function commandFedToInterpreterDenial(prefix) {
   return (
     `${prefix}: this command feeds text to a shell or evaluator on its input (a pipe or redirection into ` +
-    "bash/sh/cmd/pwsh/iex, a here-string or here-document, or xargs running gh, git push or a shell). What " +
+    "bash/sh/cmd/pwsh/iex, node or python reading its program from input, a here-string or here-document, " +
+    "or xargs running gh, git push or a shell). What " +
     "the interpreter runs is not on the command line, so the guard cannot check it. Run the command directly."
   );
 }
@@ -3610,6 +3656,18 @@ const COMMAND_WRAPPERS = new Set([
 // seventh word) and read the ARGUMENT in `timeout 30 echo gh mm` as the program
 // (Codex luna, PR #795, 2026-09-26, findings 8 and 9).
 const WRAPPER_NUMBER_RE = /^[+-]?\d[\w.:]*$/;
+// Shell keywords that come before the command they run: `then gh mm 1`,
+// `! bash < payload.txt`, `do bash < "$f"`.
+const SHELL_KEYWORDS = new Set(["!", "if", "then", "else", "elif", "while", "until", "do", "coproc"]);
+// A redirection may sit anywhere in a command, even before the program
+// (`< payload.txt bash`). A bare operator takes the next word as its target;
+// an attached one (`<payload.txt`, `2>&1`) is one word.
+const BARE_REDIRECTION_RE = /^(?:\d*|&)(?:<<<|<<-?|<>|<&|>&|>>|>\||<|>)$/;
+const ATTACHED_REDIRECTION_RE = /^(?:\d*|&)[<>]/;
+function redirectionWidth(word) {
+  if (BARE_REDIRECTION_RE.test(word)) return 2;
+  return ATTACHED_REDIRECTION_RE.test(word) ? 1 : 0;
+}
 function stripGrouping(word) {
   return String(word).replace(/^[({]+/, "").replace(/[)}]+$/, "");
 }
@@ -3624,7 +3682,9 @@ function programCandidates(words) {
     if (!state) continue;
     const word = stripGrouping(words[index]);
     const next = (to, value) => { if (to <= words.length) reach[to] |= value; };
-    if (!word || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) { next(index + 1, state); continue; }
+    if (!word || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || SHELL_KEYWORDS.has(word)) { next(index + 1, state); continue; }
+    const redirection = redirectionWidth(word);
+    if (redirection) { next(index + redirection, state); continue; }
     if (COMMAND_WRAPPERS.has(word.toLowerCase())) { next(index + 1, WRAPPED); continue; }
     if (state & WRAPPED) {
       // `--name=value` carries its value; any other option may take the next word.
@@ -3637,9 +3697,10 @@ function programCandidates(words) {
   return candidates;
 }
 // The program a candidate word names. A word holding whitespace is a command
-// string handed over whole (`env -S 'gh mm 1'`), so its first token is read.
+// string handed over whole (`env -S 'gh mm 1'`), so its first token is read,
+// and a redirection glued to it (`bash<payload.txt`) is cut off.
 function candidateProgram(word) {
-  return programName(stripGrouping(String(word).trim().split(/\s+/)[0] || ""));
+  return programName(stripGrouping(String(word).trim().split(/\s+/)[0].split(/[<>]/)[0] || ""));
 }
 
 // The gh command a segment runs, when it is one the guards cannot read: an

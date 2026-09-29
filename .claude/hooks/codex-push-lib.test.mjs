@@ -3522,6 +3522,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "timeout --signal KILL 30 gh mm 123",
     "env -S 'gh mm 123'",
     "nohup nice -n 5 timeout 30 gh mm 123",
+    "then gh mm 123",
   ]) {
     assert.equal(unreadable(wrapped), "mm", `the program after any number of wrapper options is read: ${wrapped}`);
   }
@@ -3580,6 +3581,18 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     'echo "$(echo x | bash)"',
     "cat <<EOF > notes.txt\ndon't\nEOF\necho x | bash",
     "@'\nit's\n'@ | iex",
+    // Self-review of the lexer (2026-09-28): a keyword before the command, a
+    // shell whose own input was replaced, arithmetic `<<`, and runtimes that run
+    // a program read from their input.
+    "if true; then bash < payload.txt; fi",
+    "! bash < payload.txt",
+    "exec < payload.txt; bash",
+    "(( x = 1 << 2 ))\necho x | bash",
+    "echo \"require('child_process').execSync('gh pr merge 1 --admin')\" | node",
+    "python3 - < payload.py",
+    "node < payload.js",
+    "< payload.txt bash",
+    "bash<payload.txt",
   ]) {
     assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command.slice(0, 80))}`);
   }
@@ -3597,6 +3610,10 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "git commit -m \"$(cat <<'EOF'\nfix: don't pipe | bash\nEOF\n)\"",
     "cat <<'EOF' > notes.md\n| shell | bash |\nEOF",
     "# a note about | bash\ngit status",
+    "echo x | node scripts/summarize.mjs",
+    "cat data.json | node -e \"process.stdin.pipe(process.stdout)\"",
+    "cat data.csv | python3 -c \"import sys; print(len(sys.stdin.read()))\"",
+    "(( x = 1 << 2 ))",
   ]) {
     assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
   }

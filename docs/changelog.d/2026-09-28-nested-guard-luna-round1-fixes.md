@@ -21,6 +21,13 @@ Codex `gpt-6-luna` (xhigh) reviewed PR #795 on 2026-09-26 and reported 12 findin
   as Claude's push guard already did, instead of evaluating it.
 - **Hook-level tests (finding 12).** Nested admin merges, the padded and capped forms, fed interpreters
   and wrapper aliases now run through the real `pr-merge-guard.mjs` hook, with controls.
+- **Self-review of the new lexer (before Luna round 2):** four more ways to feed an interpreter are
+  refused. A shell keyword before the command (`then bash < payload.txt`, `! bash < …`). A redirection
+  before or glued to the program (`< payload.txt bash`, `bash<payload.txt`). `exec < payload.txt`,
+  which replaces the shell's own input for every later line. And a language runtime reading its
+  program from input (`… | node`, `python3 - < payload.py`), while `node script.mjs < data.json` still
+  passes. `<<` inside `(( … ))` or `let` is a shift, not a here-document, so the lines after it are
+  still read.
 - **Accepted residuals (findings 5, 6, 7):** script files; run-time program names in PowerShell or cmd
   syntax; the Codex guard not re-checking a non-gh decoded payload against its other rules. Finding 11
   (the pre-existing quadratic push parser) is tracked separately.
