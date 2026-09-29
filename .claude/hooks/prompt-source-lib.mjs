@@ -200,6 +200,11 @@ function reportOpenAt(lines, i, strict) {
   if (!pre) return -1;
   let open = -1;
   if (AGENT_OPEN_RE.test(pre[1].trim())) open = i;
+  // The harness preamble ends at the colon. Words after it are not the
+  // harness's, and the block would drop that whole line, so outside strict mode
+  // such a line never starts a report (Sol review of #826, 2026-09-29: Mason's
+  // "…message: stop now" above a report was swallowed).
+  else if (!strict && pre[1].trim() !== "") return -1;
   else {
     const j = nextNonBlank(lines, i + 1);
     if (j < lines.length && AGENT_OPEN_RE.test(lines[j].trim())) open = j;

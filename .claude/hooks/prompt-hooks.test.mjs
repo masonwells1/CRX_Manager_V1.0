@@ -595,6 +595,15 @@ rmSync(hbProj, { recursive: true, force: true });
     "a CLOSED quiet report is still stripped for the latch");
   ok(!hasAuthoredText(QUIET_TRUNCATED + "\n  carry on"),
     "a truncated report still cannot clear a hold");
+  // Sol review of #826, second finding: words typed after the preamble's colon,
+  // with a real framed report on the next line, must not be dropped with it.
+  const QUIET_REPORT = `<\\~agent-message from="a1">\n[Subagent hand-back] x\n  all done\n${CLOSE}`;
+  ok(isHoldPhrase(authoredByMason(`Another Claude session sent a message: stop now\n${QUIET_REPORT}`)),
+    "Mason's stop after the preamble's colon, above a report, still latches");
+  ok(/--force/.test(withoutSubagentReports(`Another Claude session sent a message: git push --force\n${QUIET_REPORT}`)),
+    "a push --force after the preamble's colon, above a report, still reaches the danger warning");
+  eq(withoutSubagentReports(`Another Claude session sent a message:\n${QUIET_REPORT}`), "",
+    "a bare preamble line still starts a report");
   eq(withoutSubagentReports(TRUNCATED + "\nship it"), "ship it",
     "reminders see only Mason's line after a truncated report");
   ok(isHoldPhrase(authoredByMason(
