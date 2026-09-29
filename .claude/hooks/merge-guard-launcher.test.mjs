@@ -5,7 +5,7 @@
 // normally must have its verdict forwarded unchanged.
 
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +95,8 @@ ok(!isVerdict(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse
   "a decision for the wrong event is not a verdict");
 ok(!isVerdict(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "maybe" } })),
   "an unknown decision is not a verdict");
+ok(!isVerdict(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })),
+  "an explicit allow is not a verdict: the real guard allows only by silence plus its token");
 
 const failed = failureVerdict(MERGE, "exited with code 1");
 ok(decisionOf(failed.stdout)?.permissionDecision === "deny", "a failed guard denies a merge");
@@ -119,6 +121,7 @@ const guards = {
   silentAllow: fake("silent-allow.mjs", "import { readFileSync } from 'node:fs'; readFileSync(0); process.exit(0);\n"),
   empty: fake("empty.mjs", ""),
   wrongToken: fake("wrong-token.mjs", "process.stderr.write('merge-guard finished 0123456789abcdef\\n'); process.exit(0);\n"),
+  explicitAllow: fake("explicit-allow.mjs", `process.stdout.write(${JSON.stringify(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }))}); process.exit(0);\n`),
   deny: fake("deny.mjs", `import { readFileSync } from 'node:fs'; readFileSync(0); process.stdout.write(${JSON.stringify(DENY_JSON)}); process.exit(0);\n`),
   crash: fake("crash.mjs", "import { readFileSync } from 'node:fs'; readFileSync(0); throw new Error('boom from the fake guard');\n"),
   missingModule: fake("missing-module.mjs", "import './does-not-exist.mjs';\n"),
@@ -150,6 +153,7 @@ for (const [name, reason] of [
   ["silentAllow", /without reporting that it finished/],
   ["empty", /without reporting that it finished/],
   ["wrongToken", /without reporting that it finished/],
+  ["explicitAllow", /not a verdict/],
 ]) {
   r = await run(guards[name], MERGE);
   ok(decisionOf(r.stdout)?.permissionDecision === "deny", `${name}: a merge is DENIED when the guard fails`);
@@ -180,6 +184,15 @@ ok(!guardPathAllowed(LAUNCHER), "the launcher does not launch itself");
 ok(!guardPathAllowed(guards.allow), "a file outside the hooks directory is refused");
 ok(!guardPathAllowed(path.join(__dirname, "no-such-guard.mjs")), "a missing file is refused");
 ok(!guardPathAllowed(""), "an empty path is refused");
+// A link named like a guard must not point the launcher elsewhere (Luna, 2026-09-28).
+const linkDir = path.join(tmp, "linkdir");
+mkdirSync(linkDir);
+copyFileSync(guards.allow, path.join(linkDir, "regular-guard.mjs"));
+ok(guardPathAllowed(path.join(linkDir, "regular-guard.mjs"), linkDir), "a regular guard file in the directory is accepted (control)");
+let linked = false;
+try { symlinkSync(guards.allow, path.join(linkDir, "pr-merge-guard.mjs"), "file"); linked = true; } catch { /* no symlink privilege */ }
+if (linked) ok(!guardPathAllowed(path.join(linkDir, "pr-merge-guard.mjs"), linkDir), "a symbolic link named like a guard is refused");
+else console.log("merge-guard-launcher: cannot create symlinks here, link refusal run skipped");
 
 // The real guard reports the token when it allows. A plain command is allowed
 // either way, so check that the launcher saw a FINISHED guard, not a failure.

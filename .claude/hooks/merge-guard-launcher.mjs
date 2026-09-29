@@ -27,7 +27,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,16 +76,17 @@ function denial(reason) {
   });
 }
 
-// A guard that exited normally either says nothing (allow) or prints one
-// PreToolUse decision. Any other output, including JSON without a decision
-// (which the harness would treat as an allow), means it did not finish its job
-// (Luna, 2026-09-28).
+// A guard that exited normally either says nothing (allow, confirmed by its
+// token) or prints one PreToolUse DENIAL. pr-merge-guard.mjs never prints an
+// allow or ask decision, so any other output — JSON without a decision, which
+// the harness would treat as an allow, or an explicit allow — means the guard
+// did not do its job (Luna, 2026-09-28).
 export function isVerdict(stdout) {
   const text = String(stdout || "").trim();
   if (!text) return true;
   try {
     const decision = JSON.parse(text)?.hookSpecificOutput;
-    return decision?.hookEventName === "PreToolUse" && ["allow", "deny", "ask"].includes(decision?.permissionDecision);
+    return decision?.hookEventName === "PreToolUse" && decision?.permissionDecision === "deny";
   } catch {
     return false;
   }
@@ -109,11 +110,19 @@ export function failureVerdict(input, detail) {
   };
 }
 
-// Is `guardPath` a guard file next to this launcher (and not the launcher)?
+// Is `guardPath` a regular guard file next to this launcher (and not the
+// launcher)? Compared after resolving links, and a symbolic link is refused, so
+// a link named like a guard cannot point the launcher elsewhere (Luna, 2026-09-28).
 export function guardPathAllowed(guardPath, dir = HERE) {
-  if (!guardPath || !guardPath.endsWith(".mjs") || !existsSync(guardPath)) return false;
-  const relative = path.relative(dir, guardPath);
-  return relative === path.basename(guardPath) && relative !== path.basename(fileURLToPath(import.meta.url));
+  try {
+    if (!guardPath || !guardPath.endsWith(".mjs") || !existsSync(guardPath)) return false;
+    if (lstatSync(guardPath).isSymbolicLink() || !lstatSync(guardPath).isFile()) return false;
+    const real = realpathSync(guardPath);
+    const relative = path.relative(realpathSync(dir), real);
+    return relative === path.basename(real) && relative !== path.basename(realpathSync(fileURLToPath(import.meta.url)));
+  } catch {
+    return false;
+  }
 }
 
 // Run the guard with `input` on its stdin and resolve { stdout, stderr } for the
