@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { buildSweepQuery, functionContractSql, subtractAllowlist, hasStatementBreak, stripLeadingComments } from './allowlist-match.mjs';
+import { assertRequestedContracts, buildSweepQuery, functionContractSql, subtractAllowlist, hasStatementBreak, stripLeadingComments } from './allowlist-match.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const allowlist = JSON.parse(readFileSync(new URL('./allowlist.json', import.meta.url), 'utf8'));
@@ -86,6 +86,21 @@ try {
   check(hasStatementBreak('SELECT $q1$a; b$q1$ AS lit') === false, 'a dollar-quote tag may hold digits after its first character');
   check(hasStatementBreak('SELECT $$a; b$$ AS lit') === false, 'an empty dollar-quote tag still quotes');
   check(hasStatementBreak('SELECT $1; SELECT 2') === true, 'a positional parameter is not a dollar-quote tag');
+  check(hasStatementBreak("SELECT E'a\\'; b' AS lit") === false, "an escaped quote inside E'...' does not close the literal");
+  check(hasStatementBreak("SELECT e'a\\\\'; SELECT 2") === true, "an escaped backslash lets E'...' close, exposing the next statement");
+  check(hasStatementBreak("SELECT 'a\\'; SELECT 2") === true, 'a plain literal does not honour backslash escapes');
+  check(hasStatementBreak("SELECT some_e'a\\'; SELECT 2") === true, "an identifier ending in e is not an E-string prefix");
+
+  // One requested-keys check shared by --adjudicate and the linked psql path. (CodeRabbit on #842.)
+  const pinned = [{ reviewed_contracts: { 'public.f(uuid)': 'a'.repeat(32), 'auth.uid()': 'b'.repeat(32) } }];
+  const refuses = (contracts) => {
+    try { assertRequestedContracts('p', pinned, contracts); return false; } catch (e) { return e instanceof TypeError; }
+  };
+  check(!refuses([{ function_key: 'public.f(uuid)' }, { function_key: 'auth.uid()' }]), 'every requested key once is accepted');
+  check(!refuses([{ function_key: 'auth.uid()' }]), 'a missing requested key stays legal (it fails closed later)');
+  check(refuses([{ function_key: 'public.other()' }]), 'an unrequested key is refused');
+  check(refuses([{ function_key: 'auth.uid()' }, { function_key: 'auth.uid()' }]), 'a repeated key is refused');
+  check(refuses([{ function_key: 42 }]), 'a non-string key is refused');
   check(hasStatementBreak('SELECT "od;d" AS x') === false, 'a semicolon inside a quoted identifier is a name');
   assert.throws(
     () => buildSweepQuery({ name: 'actor-forgery', sql: 'CREATE OR REPLACE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS $$SELECT 1$$; SELECT 1 AS violation_key;' }, [delivery]),

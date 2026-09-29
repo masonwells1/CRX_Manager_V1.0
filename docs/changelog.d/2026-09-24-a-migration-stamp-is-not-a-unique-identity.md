@@ -40,7 +40,7 @@ still matches its file by either stamp, because the slug agrees.
 
 Before/after on the same input, through the real `checkPendingMigrations`:
 
-```
+```text
 OLD: ok=true   reports the colliding pending migration: no
 NEW: ok=false  reports the colliding pending migration: YES
      pending=["20260905210000_shared_recorder"]

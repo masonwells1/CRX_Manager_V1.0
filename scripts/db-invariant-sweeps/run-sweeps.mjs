@@ -49,7 +49,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildSweepQuery, subtractAllowlist } from './allowlist-match.mjs';
+import { assertRequestedContracts, buildSweepQuery, subtractAllowlist } from './allowlist-match.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PREDICATE_DIR = join(__dirname, 'predicates');
@@ -148,6 +148,8 @@ function runViaPsql(predicate, entries) {
         !Array.isArray(packet.function_contracts)) {
       throw new TypeError('Invalid sweep_result packet.');
     }
+    // The same requested-keys check --adjudicate applies, so both paths enforce one matcher.
+    assertRequestedContracts(predicate.name, entries, packet.function_contracts);
     return { ...packet, error: null };
   } catch (e) {
     return { rows: null, error: `could not parse psql JSON output: ${e.message}\n${res.stdout}` };
@@ -248,20 +250,7 @@ if (args.includes('--adjudicate')) {
       if (!Array.isArray(packet.rows) || !Array.isArray(packet.function_contracts)) {
         throw new TypeError('Each packet must carry both rows and function_contracts arrays, exactly as buildSweepQuery emits them.');
       }
-      // buildSweepQuery reads only the contract keys this predicate's allowlist pins, once each. An
-      // unrequested or repeated key means a capture from a different or stale query, or a hand-edited
-      // array. A MISSING key stays legal: a dropped function simply returns no row, and its exception
-      // then fails closed in subtractAllowlist exactly as on the linked path. (CodeRabbit on #829.)
-      const requested = new Set(allowlistFor(allowlist, packet.predicate)
-        .flatMap((entry) => Object.keys(entry.reviewed_contracts ?? {})));
-      const seenKeys = new Set();
-      for (const contract of packet.function_contracts) {
-        const key = contract?.function_key;
-        if (typeof key !== 'string' || !requested.has(key) || seenKeys.has(key)) {
-          throw new TypeError(`Packet ${packet.predicate} carries a function contract its wrapped query never requests (or repeats one): ${String(key)}.`);
-        }
-        seenKeys.add(key);
-      }
+      assertRequestedContracts(packet.predicate, allowlistFor(allowlist, packet.predicate), packet.function_contracts);
       const remaining = subtractAllowlist(packet.predicate, packet.rows, allowlistFor(allowlist, packet.predicate), packet.function_contracts);
       return { predicate: packet.predicate, status: remaining.length === 0 ? 'PASS' : 'FAIL',
         total_rows: packet.rows.length, allowlisted: packet.rows.length - remaining.length, violations: remaining };

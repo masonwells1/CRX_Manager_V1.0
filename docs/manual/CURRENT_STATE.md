@@ -196,7 +196,7 @@ pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff re
 LOCAL CANDIDATES, not applied, carried by the open field-season delivery PR (branch `claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line; a fresh PR replaces it whenever `main` moves, because the CodeRabbit lifecycle gate pins head and base). They apply only after
 `20260914100900` (that precondition is now met: it applied live 2026-09-27 evening, ledger
 `20260928025520`), in ascending stamp order, with `101000` and `101100` in one window; see the
-APPLY-WINDOW and COMMISSION-FIRST rules in that file.
+APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session, and no owner-approval route exists yet. The delivery PR stays OPEN and is NOT merged until all four have applied; merging first would strand them, because the landing gate applies only from an open PR's checkout.
 
 ## Recent production deployments
 

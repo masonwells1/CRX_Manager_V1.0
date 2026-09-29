@@ -55,6 +55,27 @@ export function subtractAllowlist(predicateName, rows, entries, functionContract
   });
 }
 
+/**
+ * A packet may carry only the contract keys its wrapped query requests, once each.
+ *
+ * buildSweepQuery reads only the keys this predicate's allowlist pins. An unrequested or repeated key
+ * means a capture from a different or stale query, or a hand-edited array. A MISSING key stays legal:
+ * a dropped function simply returns no row, and its exception then fails closed in subtractAllowlist.
+ * Shared by --adjudicate and the linked psql path so both enforce the same check. (CodeRabbit on #829
+ * and #842.)
+ */
+export function assertRequestedContracts(predicateName, entries, functionContracts) {
+  const requested = new Set(entries.flatMap((entry) => Object.keys(entry.reviewed_contracts ?? {})));
+  const seen = new Set();
+  for (const contract of functionContracts) {
+    const key = contract?.function_key;
+    if (typeof key !== 'string' || !requested.has(key) || seen.has(key)) {
+      throw new TypeError(`Packet ${predicateName} carries a function contract its wrapped query never requests (or repeats one): ${String(key)}.`);
+    }
+    seen.add(key);
+  }
+}
+
 /** Full definition includes body/defaults/volatility/security/search_path; pin owner and ACL too. */
 export function functionContractSql(functionKeys) {
   const literals = [...new Set(functionKeys)].sort()
@@ -119,8 +140,12 @@ export function hasStatementBreak(sql) {
       }
     } else if (text[i] === "'" || text[i] === '"') {
       const quote = text[i];
+      // E'...' escape strings end at an unescaped quote, so `E'a\'; b'` is ONE literal: honour the
+      // backslash there, or the scanner closes the literal early. (CodeRabbit on #842.)
+      const escapeString = quote === "'" && /[Ee]/.test(text[i - 1] ?? '') && !/[A-Za-z0-9_$]/.test(text[i - 2] ?? '');
       i += 1;
       while (i < text.length) {
+        if (escapeString && text[i] === '\\') { i += 2; continue; }
         if (text[i] === quote && text[i + 1] === quote) { i += 2; continue; }
         if (text[i] === quote) { i += 1; break; }
         i += 1;

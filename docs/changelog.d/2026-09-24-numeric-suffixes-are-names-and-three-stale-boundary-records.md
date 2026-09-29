@@ -18,7 +18,7 @@ separator). Any other suffix is a name, including a purely numeric one.
 Proven backwards against the version committed an hour earlier, same input, through the real
 `checkPendingMigrations`:
 
-```
+```text
 PREV (letters test):     ok=true   names 67890: no
 NOW  (stamps-only test): ok=false  names 67890: YES
 ```

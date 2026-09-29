@@ -36,6 +36,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## OPEN 2026-09-12 — filed-season date-edit guard is not deployed (field-season delivery PR)
 
+**Status 2026-09-28:** Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session, and no owner-approval route exists yet. The delivery PR stays OPEN and is NOT merged until all four have applied; merging first would strand them, because the landing gate applies only from an open PR's checkout. Until then a read-only daily check flags any invoice dated outside its filed season (baseline 2026-09-28: 13 invoices, none outside).
+
 PR #599 merged September 11 with invoice-date season stamping and preview parity. Its
 original migrations are already live and must not be reapplied. The later filed-season edit
 guard is not part of that merge: September 12 read-only live inspection confirms its helpers

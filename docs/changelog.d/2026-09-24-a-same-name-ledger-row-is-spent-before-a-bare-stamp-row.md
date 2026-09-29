@@ -14,7 +14,7 @@ DIFFERENT file that row is no evidence for at all.
 Measured on CodeRabbit's own input, ledger rows `20260905100000` (bare) and
 `20260910000000_20260905100000_shared` (renumbered, carries the earlier stamp AND the slug):
 
-```
+```text
 row0: stamps=["20260905100000"]                    slug="20260905100000"  identifying=""
 row1: stamps=["20260910000000","20260905100000"]   slug="shared"          identifying="shared"
 slugCounts: [["20260905100000",1],["shared",1]]
@@ -24,7 +24,7 @@ slugCounts: [["20260905100000",1],["shared",1]]
 `20260905200000_shared.sql` — which neither row carries a stamp for — was treated as applied. Through
 the real guard, with a later candidate so the unevidenced file is genuinely in the way:
 
-```
+```text
 BEFORE  candidate 20260906000000_next.sql   ok=true   pending=[]
 AFTER   candidate 20260906000000_next.sql   ok=false  pending=["20260905200000_shared"]
 ```
@@ -42,7 +42,7 @@ still settles the file.
 installing the pre-fix order as a mutant — `const edges = [...bare, ...exact]` — and observing the new
 assertion fail by name:
 
-```
+```text
 AssertionError: a file spends the row that NAMES it, not the bare-stamp row that merely shares its number
 ```
 
