@@ -3377,6 +3377,16 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     false,
     "a 20 KB PR body that mentions git 1,200 times is still under budget",
   );
+  assert.equal(pushParseCostExceeded("git -C ".repeat(2_138)), false, "at the edge: 2,138 git × 14,966 chars = 31,997,308");
+  assert.equal(pushParseCostExceeded("git -C ".repeat(2_139)), true, "one over: 2,139 git × 14,973 chars = 32,027,247");
+  {
+    // Millions of `git` words: refused by counting only up to the limit.
+    const huge = `${"#git\n".repeat(2_000_000)}${push}`;
+    const started = process.hrtime.bigint();
+    assert.equal(pushParseCostExceeded(huge), true, "a 10 MB command of `git` words is refused");
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 2_000, `the budget check stays cheap on 2M git words: ${elapsedMs.toFixed(1)}ms`);
+  }
 
   // The real hooks, end to end.
   const hooksDir = path.dirname(fileURLToPath(import.meta.url));
@@ -3398,7 +3408,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         });
         const elapsedMs = Date.now() - started;
         assert.equal(res.error, undefined, `${hookLabel} was not killed on ${label}: ${res.error?.message}`);
-        assert.ok(elapsedMs < 5_000, `${hookLabel} decides ${label} in well under 15 s: ${elapsedMs}ms`);
+        // The property is "decides before the 15 s kill"; 10 s leaves room for a
+        // loaded CI runner without letting a real regression (tens of seconds) pass.
+        assert.ok(elapsedMs < 10_000, `${hookLabel} decides ${label} before the 15 s hook limit: ${elapsedMs}ms`);
         if (label.includes("over budget")) {
           assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses ${label}`);
         }

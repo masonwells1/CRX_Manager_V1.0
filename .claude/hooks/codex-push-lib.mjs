@@ -102,7 +102,8 @@ export function isGitPush(cmd) {
 // (number of `git` words) × (command length). Measured with ~25 parser calls per
 // guard run: 32M of that product takes ~65 ms at worst, while `git -C ` repeated
 // to 64 KB (~600M) took ~11 s. The guards refuse a command above the budget
-// before any other parsing.
+// before any command parser runs (only reading the hook's JSON input and, on the
+// Codex side, trimming the command come first — both single linear passes).
 //
 // `git` is counted in the LETTERS ONLY: every alternate reading the parsers take
 // (quote splicing, escape removal, `("gi"+"t")` joining, argv splitting) only
@@ -112,8 +113,19 @@ export function isGitPush(cmd) {
 export const PUSH_PARSE_COST_BUDGET = 32_000_000;
 export function pushParseCostExceeded(cmd) {
   const text = String(cmd || "");
-  const gitWords = (text.replace(/[^a-z]+/gi, "").match(/git/gi) || []).length;
-  return gitWords * text.length > PUSH_PARSE_COST_BUDGET;
+  // Count and stop at the first `git` over the limit, rather than collecting
+  // every match: a command with millions of `git` words would otherwise build a
+  // millions-long array before it could be refused (Luna, 2026-09-28).
+  // `count > floor(budget / length)` is exactly `count × length > budget`.
+  const allowed = Math.floor(PUSH_PARSE_COST_BUDGET / Math.max(text.length, 1));
+  const gitWord = /git/gi;
+  const letters = text.replace(/[^a-z]+/gi, "");
+  let count = 0;
+  while (gitWord.exec(letters) !== null) {
+    count += 1;
+    if (count > allowed) return true;
+  }
+  return false;
 }
 
 // The hook must see a literal Git subcommand. Shell variables, command

@@ -27,9 +27,10 @@ killed 13 runs at the limit on `main`.
   `GIT_DIR` check no longer re-reads newline runs.
 - `production-action-guard.mjs`: the `node` eval check had both faults (exponential option list,
   quadratic pipe prefix); both fixed the same way.
-- Both push guards refuse, before any parsing, a command whose `git`-word count × length exceeds
-  32,000,000 — the one remaining super-linear shape (`git -C git -C …`). Documented in
-  `docs/reference/agent-guardrails.md`.
+- Both push guards refuse, before any command parser runs, a command whose `git`-word count ×
+  length exceeds 32,000,000 — the one remaining super-linear shape (`git -C git -C …`). The count
+  stops at the first word over the limit, so a command with millions of `git` words is refused
+  without first collecting them all. Documented in `docs/reference/agent-guardrails.md`.
 
 **Proof.** After the fix the same 432-run fuzz killed 0 runs; worst 1.3 s. The table's inputs,
 Claude / Codex guard: 0.38 s / 0.20 s (200K `;`), 0.39 s / 0.86 s (`'a'|`), 41 ms / 50 ms (the
@@ -41,6 +42,8 @@ eslint.
 **Reviewed.** Plan and prototype reviewed by Codex Luna (xhigh): no detection counterexample found;
 its four findings were measured — two not reproducible (extension tail, dense tokens: both ~ms,
 now pinned by tests), two adopted (cap scope and a narrower cap than a flat 16 KB size limit).
+Luna on the committed diff, round 2: again no detection counterexample; fixed its three findings
+(early-exit count, "before any parsing" wording, looser whole-hook timing bound for slow CI).
 
 **Not verified.** Separate and pre-existing, not changed here: the Codex guard does not refuse an
 unrecognised git global option before `push` the way the Claude guard does.
