@@ -44,6 +44,8 @@ its four findings were measured — two not reproducible (extension tail, dense 
 now pinned by tests), two adopted (cap scope and a narrower cap than a flat 16 KB size limit).
 Luna on the committed diff, round 2: again no detection counterexample; fixed its three findings
 (early-exit count, "before any parsing" wording, looser whole-hook timing bound for slow CI).
+CodeRabbit (#840): the whole-hook timing test now also requires each guard to exit cleanly, so a
+guard that crashes instead of deciding fails the test.
 
 **Not verified.** Separate and pre-existing, not changed here: the Codex guard does not refuse an
 unrecognised git global option before `push` the way the Claude guard does.

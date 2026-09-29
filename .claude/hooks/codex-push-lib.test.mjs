@@ -3408,6 +3408,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         });
         const elapsedMs = Date.now() - started;
         assert.equal(res.error, undefined, `${hookLabel} was not killed on ${label}: ${res.error?.message}`);
+        // A crash is not a decision: a guard that exits non-zero produced no
+        // verdict, and the harness treats that like a kill (CodeRabbit, #840).
+        assert.equal(res.status, 0, `${hookLabel} exited cleanly on ${label}: ${res.stderr}`);
         // The property is "decides before the 15 s kill"; 10 s leaves room for a
         // loaded CI runner without letting a real regression (tens of seconds) pass.
         assert.ok(elapsedMs < 10_000, `${hookLabel} decides ${label} before the 15 s hook limit: ${elapsedMs}ms`);
