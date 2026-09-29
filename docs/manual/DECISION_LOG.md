@@ -35,11 +35,13 @@ showed Mason no permission prompts.
    (`write-codex-push-proof.mjs`, `write-apply-proofs.mjs`, `run-claude-review.mjs`), the
    private-artifact containment check the git hooks run (a leak to the public repo cannot be
    recalled), `.husky/**` and `.github/workflows/**` (a branch-pushed workflow runs with a write
-   `GITHUB_TOKEN` before review). `scripts/check-agent-guidance.mjs` DERIVES that set from the
+   `GITHUB_TOKEN` before review), and `package.json` (`npm run <script>` needs no prompt, so an
+   uncommitted script edit could hide a `gh pr merge` from the command-text merge guard; Codex
+   GitHub App P1 on PR #841). `scripts/check-agent-guidance.mjs` DERIVES the hook set from the
    manifests and the import graph and fails CI if any file lacks its prompt (28 files at
-   introduction). Removed: write-time content guards, tests, routers, `package.json`,
-   `.coderabbit.yaml`, `.codex/config.toml` and the other check scripts — they act only once
-   committed, inside PR review. A prompt naming a gate file is something Mason CAN judge ("did I ask
+   introduction). Removed: write-time content guards, tests, routers, `.coderabbit.yaml`,
+   `.codex/config.toml` and the other check scripts — they act only once committed, inside PR
+   review. A prompt naming a gate file is something Mason CAN judge ("did I ask
    for safety-gate work?"). `gh pr merge` moves to `allow`; the merge gates below are its hard stop,
    and item 7 keeps them closed when the local guard breaks.
    `scripts/agent-manifest-parity.mjs` reads only each manifest's `hooks` block, so these `ask` rules
@@ -99,8 +101,11 @@ to load, and Codex merges without prompts. That gap predates this change. A laun
 `.codex/hooks.json`, which Codex silently skips until re-trusted (item 5), so it is a separate
 follow-up. If node cannot start the Claude launcher at all, a shell fallback in the hook entry denies
 every shell and MCP call until it is fixed (file edits still work).
-A merge the command text does not show (decoded or assembled at run time) passes the working guard
-too; the launcher's "could merge" test matches every form the guard denies.
+A merge the command text does not show (decoded, assembled at run time, or run from a new script
+file) passes the working guard too; the launcher's "could merge" test matches every form the guard
+denies. `package.json` keeps its prompt because an npm script is the one such route an existing,
+auto-allowed command (`npm run`) reaches; GitHub's required CodeRabbit approval and checks still
+hold for every route.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

@@ -160,6 +160,8 @@
       "Write(.github/workflows/**)",
       "Edit(.husky/**)",
       "Write(.husky/**)",
+      "Edit(package.json)",
+      "Write(package.json)",
       "Edit(.claude/hooks/active-area-guard.mjs)",
       "Write(.claude/hooks/active-area-guard.mjs)",
       "Edit(.claude/hooks/autopilot-lib.mjs)",

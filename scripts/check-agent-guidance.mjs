@@ -401,7 +401,10 @@ record(
   `every production-gate file and module it loads keeps an Edit/Write ask prompt (${gateClosure.size} files)`,
   unpromptedGateFiles.join(", "),
 );
-for (const pattern of [".codex/hooks.json", ".github/workflows/**", ".husky/**", ".claude/settings.json", ".claude/settings.local.json"]) {
+// package.json too (Codex GitHub App P1, PR #841): `npm run <script>` is allowed
+// without a prompt, so an uncommitted script edit could hide a `gh pr merge` from
+// the command-text merge guard, which sees only `npm run <script>`.
+for (const pattern of [".codex/hooks.json", ".github/workflows/**", ".husky/**", "package.json", ".claude/settings.json", ".claude/settings.local.json"]) {
   record(ask.has(`Edit(${pattern})`) && ask.has(`Write(${pattern})`), `${pattern} keeps an Edit/Write ask prompt`);
 }
 

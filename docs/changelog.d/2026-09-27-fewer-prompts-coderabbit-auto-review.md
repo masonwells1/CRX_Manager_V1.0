@@ -10,8 +10,8 @@ same files; replaces PR #822.
   settings files, and every file whose uncommitted local edit could change what reaches production
   before PR review (30 files: execution-time hooks in both manifests and every module they load,
   the Codex adapter and `hooks.json`, the proof writers, the private-artifact containment check,
-  `.husky/**`, `.github/workflows/**`). `gh pr merge` moves to `allow` (Mason's "No prompt",
-  2026-09-28).
+  `.husky/**`, `.github/workflows/**`, and `package.json`, whose npm scripts could hide a merge
+  from the command-text guard). `gh pr merge` moves to `allow` (Mason's "No prompt", 2026-09-28).
 - New `.claude/hooks/merge-guard-launcher.mjs`: runs `pr-merge-guard.mjs` as a child process and
   denies any call that could merge when the guard crashes, fails to load, exits abnormally, prints
   something that is not a verdict, or is still running at 36 seconds (hook timeout now 45 seconds).
