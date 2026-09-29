@@ -784,7 +784,7 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypeche
 // Unreadable input still fails OPEN (a "*"-matcher guard must not lock every
 // tool call on a stdin glitch) but now LOUDLY: a systemMessage names the skipped
 // check and no permission decision is emitted, so the normal prompt still runs.
-for (const input of ["{bad", "", '{"tool_name":"Bash","tool_in', "[]", "null", "42"]) {
+for (const input of ["{bad", "", '{"tool_name":"Bash","tool_in', "[]", "null", "42", "{}", '{"tool_input":{"command":"ls"}}']) {
   const result = spawnSync(process.execPath, [hookPath], { encoding: "utf8", input });
   const label = `unreadable input ${JSON.stringify(input)}`;
   assert.equal(result.status, 0, `${label}: exits 0 (fails open)`);

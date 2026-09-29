@@ -56,6 +56,9 @@ const toolInput = payload?.tool_input || payload?.toolInput || {};
 const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
 const input = toolInput && typeof toolInput === "object" ? toolInput : {};
 const toolName = String(payload?.tool_name || payload?.toolName || "");
+// A parseable object with no tool name (e.g. `{}`) gives every check below
+// nothing to match, so it is as uninspectable as malformed JSON.
+if (!toolName) skippedCheck("input had no tool name");
 const eventCwd = String(payload?.cwd || "");
 // Preserve the event-first cwd used by the shell-state checks below. Patch
 // destinations use pathCandidateCwd instead: an explicit relative tool
