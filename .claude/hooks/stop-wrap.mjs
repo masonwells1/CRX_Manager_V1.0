@@ -584,8 +584,17 @@ try {
       const ts = Number(/@\{(\d+)\}/.exec(selector)?.[1]);
       if (sha && ts >= sessionStartSec && AUTHORING_RE.test(subject)) authored.add(sha.trim());
     }
+    // Only commits still reachable from HEAD or a branch/tag count: an amended,
+    // reset or rebased-away commit stays in the reflog, and counting it let a
+    // ledger edit that was amended OUT still satisfy the check (Codex P2,
+    // PR #827 round 6). Every session commit was committed after the snapshot,
+    // so --since bounds the walk.
+    const reachable = new Set(runGit([
+      "rev-list", "HEAD", "--branches", "--remotes", "--tags",
+      `--since=${new Date(sessionStartMs).toISOString()}`,
+    ]).split("\n").map((s) => s.trim()).filter(Boolean));
     const isMerge = (sha) => runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).length > 2;
-    const authoredShas = [...authored];
+    const authoredShas = [...authored].filter((sha) => reachable.has(sha));
     const nonMergeShas = authoredShas.filter((sha) => !isMerge(sha));
     // A merge itself counts only for what the resolver AUTHORED (2026-09-26;
     // Codex P2s, PRs #824/#827). Merging main authors nothing, and

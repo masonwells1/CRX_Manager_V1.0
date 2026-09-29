@@ -226,6 +226,23 @@ try {
     "a session commit that already reached main must still warn without a ledger");
   pass++;
 
+  // ── Session 1h (Codex P2, PR #827 round 6): a ledger edit that was amended
+  //    OUT of the session's commit no longer records anything — the superseded
+  //    commit stays in the reflog but is unreachable → still warns ──
+  const s1h = "ledger-test-amended-out";
+  snapshots.push(startSession(s1h));
+  mkdirSync(path.join(tmp, "docs", "manual"), { recursive: true });
+  writeFileSync(path.join(tmp, "src", "amended.txt"), "real work\n");
+  writeFileSync(path.join(tmp, "docs", "manual", "NOTES.md"), "# Notes\n\nRecorded the work.\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "work plus ledger"], tmp);
+  git(["rm", "-q", "docs/manual/NOTES.md"], tmp);
+  git(["commit", "-q", "--amend", "-m", "work only"], tmp);
+  const amendedOut = runStopWrap(s1h, tmp);
+  assert.match(amendedOut.stdout, LEDGER_WARNING,
+    "a ledger edit amended out of the session's commit must not count as the record");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
