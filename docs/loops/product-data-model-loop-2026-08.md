@@ -18,7 +18,9 @@ the build plan disagree, the build plan wins** — its §0 closed items the PRD 
 anything irreversible.**
 
 Per cycle, the orchestrator: grounds against live schema (read-only) → writes a self-contained
-spec → runs `node scripts/codex-build.mjs <spec> --model gpt-5.6-sol --effort high` → runs the
+spec → runs `node scripts/codex-build.mjs <spec> --model gpt-6-sol` (the money/database builder
+pin in `docs/reference/codex-model-tuning.md`, at the script's `xhigh` default; this line named
+`gpt-5.6-sol` at `high` until the 2026-09-23 GPT-6 move, PR #796) → runs the
 deterministic floor → fans out the four reviewers → proves the behavior in the running app →
 commissions the Opus checkpoint → mints the exact-SHA Codex proof → commits, PRs, and lands.
 
@@ -107,7 +109,7 @@ recovery**, so that file is the only restore path.
 Follow ORCHESTRATION §3 exactly. Condensed:
 
 1. Collision preflight (§5). 2. Branch off fresh `origin/main`. 3. Ground read-only + write the
-spec. 4. `codex-build.mjs` at `gpt-5.6-sol` / high — max 3 fix rounds. 5. `typecheck && lint &&
+spec. 4. `codex-build.mjs` at `gpt-6-sol` (see Driver above) — max 3 fix rounds. 5. `typecheck && lint &&
 build && test && test:agent-workflows`. 6. Four reviewers in one message: `rls-security-reviewer`,
 `migration-drift-reviewer`, `typescript-types-drift-reviewer`, `compliance-reviewer`.
 7. **Behavioral proof in the running app** — positive *and* negative cases (R-11), on `[E2E]` rows
