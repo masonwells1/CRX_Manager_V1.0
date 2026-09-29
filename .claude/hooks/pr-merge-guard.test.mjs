@@ -652,9 +652,8 @@ ok(
   "a nested command built at run time is refused",
 );
 ok(
-  /commandFedToInterpreter\(\s*toolInput\.command\s*\)/.test(guardSource) &&
-    /nested\.commands\.some\(\s*\(inner\)\s*=>\s*commandFedToInterpreter\(\s*inner\s*,\s*\{\s*nested:\s*true\s*\}\s*\)\s*\)/.test(guardSource),
-  "a command fed to an interpreter on its input is refused, nested commands with cmd's reading as well",
+  /scannedCommands\.some\(\s*\(text\)\s*=>\s*commandFedToInterpreter\(\s*text\s*\)\s*\)/.test(guardSource),
+  "a command fed to an interpreter on its input is refused, the whole command and every nested one",
 );
 // A single `&` runs both sides — POSIX in the background, cmd sequentially — so
 // it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved

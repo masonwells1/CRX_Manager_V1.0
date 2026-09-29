@@ -1510,8 +1510,7 @@ export function evaluateProductionAction({
     const nested = expandNestedCommands(command);
     if (nested.tooDeep) return denied(nestedTooDeepDenial("CODEX PRODUCTION GATE"));
     if (nested.computed) return denied(nestedComputedDenial("CODEX PRODUCTION GATE"));
-    if (commandFedToInterpreter(command) ||
-        nested.commands.some((inner) => commandFedToInterpreter(inner, { nested: true }))) {
+    if ([command, ...nested.commands].some((text) => commandFedToInterpreter(text))) {
       return denied(commandFedToInterpreterDenial("CODEX PRODUCTION GATE"));
     }
     // One policy with Claude's push guard: a push carried by another program is

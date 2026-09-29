@@ -3236,24 +3236,36 @@ function finishNested(inner, text) {
 // dropped it and the Claude merge guard allowed it (independent Opus review of
 // PR #795).
 const RUNTIME_TEXT_RE = /[$`]/;
+const GATED_VERB_RE = /(?:^|[^\w-])(?:merge|push|api|alias)(?:$|[^\w-])/i;
 
 // Does any command in `text` get its PROGRAM NAME at run time? `g$1 pr merge …`,
 // `${P}h …`, `$P …`, `` `echo g`h … ``, `& $p …` never spell gh or git, so the
 // gh/git test above cannot see them and both Claude guards allowed every one
 // (found testing round 2 of the independent review of PR #795). A variable in
 // an ARGUMENT (`echo $HOME`, `ForEach-Object { $_.Name }`) is not this case.
-function programBuiltAtRuntime(text) {
+//
+// The program is found with programCandidates, so a wrapper's own options and
+// values come before it: stopping at the first non-wrapper word read the `30`
+// in `timeout 30 $P push origin HEAD:main --force` as the program (Codex luna,
+// PR #795, 2026-09-28 round 2, finding 4). A PowerShell assignment
+// (`$b = git branch`, `$p='gh'`) assigns; its `$` word is not a program.
+const POWERSHELL_ASSIGNED_RE = /^\$\{?[A-Za-z_][\w:]*\}?$/;
+const POWERSHELL_ASSIGN_OP_RE = /^[+\-*/%]?=$/;
+const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
+function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE) {
   for (const segment of splitCommandSegments(text)) {
-    const words = splitShellWordsRaw(segment);
-    let index = 0;
-    while (index < words.length &&
-      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]) || COMMAND_WRAPPERS.has(words[index].toLowerCase()))) {
-      index += 1;
+    let words = splitShellWordsRaw(segment);
+    if (POWERSHELL_ASSIGNED_RE.test(words[0] ?? "") && POWERSHELL_ASSIGN_OP_RE.test(words[1] ?? "")) {
+      words = words.slice(2);
+    } else if (POWERSHELL_ASSIGNMENT_WORD_RE.test(words[0] ?? "")) {
+      words = words.slice(1);
     }
-    // A word with whitespace in it is a quoted STRING (the quote-keeping reading
-    // of `pwsh -Command "… { $_.Name }"`), not a program name.
-    const program = words[index] ?? "";
-    if (RUNTIME_TEXT_RE.test(program) && !/\s/.test(shellArgvWord(program))) return true;
+    for (const candidate of programCandidates(words)) {
+      // A word with whitespace in it is a quoted STRING (the quote-keeping reading
+      // of `pwsh -Command "… { $_.Name }"`), not a program name.
+      const program = words[candidate];
+      if (runtimeText.test(program) && !/\s/.test(shellArgvWord(program))) return true;
+    }
   }
   return false;
 }
@@ -3277,7 +3289,14 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
   const found = [];
   const seen = new Set([outer.trim()]);
   const outerMentionsGhOrGit = mentionsGhOrGit(outer);
-  let computed = false;
+  // The TOP-LEVEL command's own program can be built at run time too:
+  // `$p='gh'; & $p pr merge 123 --admin` in PowerShell, `P=gh; $P pr merge …` in
+  // POSIX. Only nested text was checked, so the Claude merge guard allowed it
+  // (Codex luna, PR #795, 2026-09-28 round 2, finding 3). Refused when the
+  // command names gh or git, or a merge, push or API call. Only `$` is looked
+  // for here: a top-level backtick (``g`h``, `` `echo g`h ``) is refused by the
+  // composition checks, whose denial names the actual cause.
+  let computed = programBuiltAtRuntime(outer, /\$/) && (outerMentionsGhOrGit || GATED_VERB_RE.test(outer));
   let frontier = [outer];
   for (let depth = 1; frontier.length; depth += 1) {
     const next = [];
@@ -3301,7 +3320,7 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
       // mentions: `cmd /c "type payload.txt | bash"` hides the pipe inside
       // quotes from the outer reading, so only the inner one can refuse it.
       if (mentionsGhOrGit(inner) || nestedCommandsOneLevel(inner, { grouping }).length ||
-          commandFedToInterpreter(inner, { nested: true })) {
+          commandFedToInterpreter(inner)) {
         found.push(inner);
       }
     }
@@ -3312,10 +3331,10 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
 
 export function nestedComputedDenial(prefix) {
   return (
-    `${prefix}: this command hands another shell or evaluator text it builds at run time (a \`$\` ` +
-    "variable, a substitution, or a backtick) in a command that involves gh or git. The guard cannot read " +
-    "what that text will become, so it is refused rather than guessed at. Spell the gh or git command " +
-    "literally and run it directly."
+    `${prefix}: this command runs a program whose name, or hands another shell or evaluator text that, ` +
+    "is built at run time (a `$` variable, a substitution, or a backtick) in a command that involves gh, " +
+    "git, a merge or a push. The guard cannot read what that text will become, so it is refused rather " +
+    "than guessed at. Spell the gh or git command literally and run it directly."
   );
 }
 
@@ -3337,9 +3356,8 @@ export function nestedComputedDenial(prefix) {
 // lexer follows quotes, escapes, `$( )` and backtick substitutions (whose
 // commands are real commands), here-document bodies and comments, so an
 // apostrophe in a here-document body cannot desynchronise the quoting and hide
-// a pipe after it. The top-level command gets the POSIX and PowerShell
-// readings; a command nested inside another program also gets cmd's reading,
-// where `'` is not a quote.
+// a pipe after it. Every command is read as POSIX, PowerShell and cmd read it
+// (cmd: `'` is not a quote, `#` is not a comment, only the first line runs).
 const FED_INTERPRETER_NAMES = new Set([
   ...POSIX_SHELLS, ...CMD_SHELLS, ...POWERSHELLS, "iex", "invoke-expression",
 ]);
@@ -3498,6 +3516,10 @@ function pipelineStages(text, shell) {
       frame.current += char;
       continue;
     }
+    // cmd runs one line: `cmd /c` ignores everything after the first line
+    // break, and cmd has no here-documents, so reading on would take a bash
+    // here-document's body for cmd commands.
+    if (char === "\n" && shell === "cmd") break;
     if (char === "\n") {
       // A here-document's body is the input of its command, not a command: skip
       // it, up to the line that is exactly its delimiter (or to the end, which
@@ -3568,13 +3590,17 @@ function stageFeedsInterpreter({ text, piped, redirected }) {
   const words = rawWords.map(shellArgvWord);
   const firstXargs = words.findIndex((word) => programName(stripGrouping(word)) === "xargs");
   const namesPush = words.some((word) => word.toLowerCase() === "push");
+  const candidates = programCandidates(words);
   // `Start-Process bash -RedirectStandardInput payload.txt` feeds a file to the
-  // program it starts, with no `<` anywhere on the line.
-  if (words.some((word) => /^-redirectstandardi/i.test(word)) &&
+  // program it starts, with no `<` anywhere on the line. Only when Start-Process
+  // is the program: `echo -RedirectStandardInput bash` is an echo (Codex luna,
+  // round 2, finding 6).
+  if (candidates.some((candidate) => PROCESS_STARTERS.has(candidateProgram(words[candidate]))) &&
+      words.some((word) => /^-redirectstandardi/i.test(word)) &&
       words.some((word) => FED_INTERPRETER_NAMES.has(candidateProgram(word)))) {
     return true;
   }
-  for (const candidate of programCandidates(words)) {
+  for (const candidate of candidates) {
     const names = [candidateProgram(words[candidate]), candidateProgram(rawWords[candidate])];
     const viaXargs = firstXargs !== -1 && firstXargs < candidate;
     if (names.some((name) => FED_INTERPRETER_NAMES.has(name)) && (piped || redirected || viaXargs)) return true;
@@ -3587,15 +3613,16 @@ function stageFeedsInterpreter({ text, piped, redirected }) {
   return false;
 }
 
-// `nested` is true for a command another program runs (the text inside
-// `cmd /c "…"` may be read by cmd, where `'` is not a quote).
+// Every command gets all three readings. cmd's was once kept for nested text,
+// but a command may be run by cmd.exe itself, where `'` is not a quote and `#`
+// is not a comment: `type payload.txt # note | bash` pipes the file into bash
+// (Codex luna, PR #795, 2026-09-28 round 2, finding 1).
 //
 // `exec < payload.txt` replaces the shell's OWN input, so every later stage
 // reads that file — a plain `bash` on the next line runs it.
-export function commandFedToInterpreter(command, { nested = false } = {}) {
+export function commandFedToInterpreter(command) {
   const text = String(command || "");
-  const shells = nested ? ["posix", "powershell", "cmd"] : ["posix", "powershell"];
-  return shells.some((shell) => {
+  return ["posix", "powershell", "cmd"].some((shell) => {
     let inputReplaced = false;
     for (const stage of pipelineStages(text, shell)) {
       if (stageFeedsInterpreter(inputReplaced ? { ...stage, redirected: true } : stage)) return true;
@@ -3687,8 +3714,10 @@ function programCandidates(words) {
     if (redirection) { next(index + redirection, state); continue; }
     if (COMMAND_WRAPPERS.has(word.toLowerCase())) { next(index + 1, WRAPPED); continue; }
     if (state & WRAPPED) {
-      // `--name=value` carries its value; any other option may take the next word.
-      if (/^--[^=]+=/.test(word)) { next(index + 1, WRAPPED); continue; }
+      // `--` ends the wrapper's options, so the next word is the program
+      // (`sudo -- echo gh mm` runs echo). `--name=value` carries its value; any
+      // other option may take the next word.
+      if (word === "--" || /^--[^=]+=/.test(word)) { next(index + 1, WRAPPED); continue; }
       if (/^-./.test(word)) { next(index + 1, WRAPPED); next(index + 2, WRAPPED); continue; }
       if (WRAPPER_NUMBER_RE.test(word)) { next(index + 1, WRAPPED); continue; }
     }

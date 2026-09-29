@@ -2348,8 +2348,17 @@ try {
   for (const command of [`'${nestedAdmin}' | iex`, `echo '${nestedAdmin}' | bash`, `bash <<< '${nestedAdmin}'`, "echo pr merge 123 --admin | xargs gh"]) {
     assert.match(String(evaluateReady(command).reason), /on its input/, `a command fed on stdin is refused: ${command}`);
   }
-  assert.match(String(evaluateReady("bash -c '$0 pr merge 123 --admin' gh").reason), /builds at run time|builds text at run time/,
+  assert.match(String(evaluateReady("bash -c '$0 pr merge 123 --admin' gh").reason), /built at run time/,
     "a nested shell handed run-time text is refused");
+  // Codex luna round 2: a top-level program held in a variable, and cmd's reading.
+  assert.match(String(evaluateReady("$p='gh'; & $p pr merge 123 --admin").reason), /built at run time/,
+    "a top-level run-time program name is refused");
+  assert.match(String(evaluateReady("type C:\\Temp\\payload.txt # note | bash").reason), /on its input/,
+    "cmd's reading of `#` exposes the pipe");
+  // This guard refuses the next command anyway (its computed-argument rule), so the
+  // control is that the run-time PROGRAM rule is not what refused it.
+  assert.doesNotMatch(String(evaluateReady("$b = git branch --show-current; gh pr view $b").reason), /built at run time/,
+    "CONTROL: a PowerShell assignment is not a run-time program");
   // Codex luna, PR #795, 2026-09-26: a payload in a file (finding 3), a wrapper
   // before the interpreter (finding 4), and a feed hidden inside cmd's quotes.
   for (const command of [

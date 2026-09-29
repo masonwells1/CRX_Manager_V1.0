@@ -28,6 +28,17 @@ Codex `gpt-6-luna` (xhigh) reviewed PR #795 on 2026-09-26 and reported 12 findin
   program from input (`… | node`, `python3 - < payload.py`), while `node script.mjs < data.json` still
   passes. `<<` inside `(( … ))` or `let` is a shift, not a here-document, so the lines after it are
   still read.
+- **Luna round 2 (on `398e560`, 7 findings).** Every command now gets cmd.exe's reading too, not only
+  nested ones: there `#` is not a comment and `'` is not a quote, so `type payload.txt # note | bash`
+  feeds bash. cmd's reading stops at the first line, since cmd runs one line and has no
+  here-documents. A single-quoted pipe into a shell is therefore refused; double quotes pass.
+  A top-level program held in a `$` variable (`$p='gh'; & $p pr merge …`, `P=gh; $P pr merge …`) is
+  refused when the command names gh, git, merge, push, api or alias. A PowerShell assignment
+  (`$b = git branch`) is not a program. The run-time program check now finds the program behind a
+  wrapper's options (`timeout 30 $P push …`). `sudo -- echo gh mm` and `echo -RedirectStandardInput bash`
+  are no longer refused. `<<< "…" bash` was already covered by the self-review fixes. **Deferred
+  (LOW):** `bash -c 'echo gh $HOME'` is still refused as computed text. The rule errs on the side of
+  refusing, and narrowing it risks reopening the `bash -c '$0 …' gh` bypass it was written for.
 - **Accepted residuals (findings 5, 6, 7):** script files; run-time program names in PowerShell or cmd
   syntax; the Codex guard not re-checking a non-gh decoded payload against its other rules. Finding 11
   (the pre-existing quadratic push parser) is tracked separately.

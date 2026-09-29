@@ -103,8 +103,7 @@ try {
 }
 if (nestedCommands.tooDeep) deny(nestedTooDeepDenial("CODEX GATE"));
 if (nestedCommands.computed) deny(nestedComputedDenial("CODEX GATE"));
-if (commandFedToInterpreter(cmd) ||
-    nestedCommands.commands.some((inner) => commandFedToInterpreter(inner, { nested: true }))) {
+if ([cmd, ...nestedCommands.commands].some((text) => commandFedToInterpreter(text))) {
   deny(commandFedToInterpreterDenial("CODEX GATE"));
 }
 if (nestedCommands.commands.some((inner) =>

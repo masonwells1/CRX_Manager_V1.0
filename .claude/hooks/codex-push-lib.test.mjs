@@ -3477,7 +3477,24 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // An inner command that feeds an interpreter is returned whatever it mentions,
   // so the pipe hidden inside cmd's quotes is still read (finding 3).
   assert.ok(expandNestedCommands('cmd /c "type payload.txt | bash"').commands
-    .some((text) => commandFedToInterpreter(text, { nested: true })), "a feed inside cmd /c reaches the caller");
+    .some((text) => commandFedToInterpreter(text)), "a feed inside cmd /c reaches the caller");
+  // Codex luna round 2 (2026-09-28): a program built at run time at the TOP
+  // level (finding 3), and after a wrapper's options (finding 4).
+  for (const command of [
+    "$p='gh'; & $p pr merge 123 --admin",
+    "P=gh; $P pr merge 123 --admin",
+    "$g = 'git'; & $g push origin HEAD:main --force",
+    "bash -c 'timeout 30 $P push origin HEAD:main --force'",
+  ]) {
+    assert.equal(expandNestedCommands(command).computed, true, `a run-time program name is refused: ${command}`);
+  }
+  for (const command of [
+    "$b = git branch --show-current; gh pr view $b",
+    "\"$CODEX\" --version",
+    "$files = git diff --name-only; npx eslint $files",
+  ]) {
+    assert.equal(expandNestedCommands(command).computed, false, `an assignment or an unrelated variable program is not: ${command}`);
+  }
 }
 
 // ── gh aliases and unknown gh commands (2026-09-24) ──────────────────────────
@@ -3526,7 +3543,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ]) {
     assert.equal(unreadable(wrapped), "mm", `the program after any number of wrapper options is read: ${wrapped}`);
   }
-  for (const harmless of ["timeout 30 echo gh mm 123", "sudo -u root grep -rn gh mm .", "xargs echo gh mm", "nice --adjustment=5 echo gh mm"]) {
+  for (const harmless of ["timeout 30 echo gh mm 123", "sudo -u root grep -rn gh mm .", "xargs echo gh mm", "nice --adjustment=5 echo gh mm", "sudo -- echo gh mm"]) {
     assert.equal(unreadable(harmless), null, `gh as an argument of the wrapped program is not refused: ${harmless}`);
   }
 
@@ -3593,6 +3610,12 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "node < payload.js",
     "< payload.txt bash",
     "bash<payload.txt",
+    // Codex luna round 2: cmd.exe reads `#` as text and `'` as a plain
+    // character (finding 1); a redirection before the program (finding 2).
+    "type C:\\Temp\\payload.txt # note | bash",
+    "# a note about | bash\ngit status",
+    "git commit -m 'pipe it | bash later'",
+    "<<< \"$(printf '\\147\\150 pr merge 123 --admin')\" bash",
   ]) {
     assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command.slice(0, 80))}`);
   }
@@ -3601,15 +3624,16 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "git diff --name-only | xargs npx eslint",
     "git ls-files | xargs wc -l",
     "gh pr list --json number | jq '.[]'",
-    "git commit -m 'pipe it | bash later'",
+    "git commit -m \"pipe it | bash later\"",
     "npm test 2>&1 | Select-Object -Last 20",
     "gh pr view 1 | shasum",
     "git log --oneline | grep -n bash",
     "node scripts/check.mjs < input.json",
-    "echo 'a | bash' > notes.txt",
+    "echo \"a | bash\" > notes.txt",
     "git commit -m \"$(cat <<'EOF'\nfix: don't pipe | bash\nEOF\n)\"",
     "cat <<'EOF' > notes.md\n| shell | bash |\nEOF",
-    "# a note about | bash\ngit status",
+    "# a note\ngit status",
+    "echo -RedirectStandardInput bash",
     "echo x | node scripts/summarize.mjs",
     "cat data.json | node -e \"process.stdin.pipe(process.stdout)\"",
     "cat data.csv | python3 -c \"import sys; print(len(sys.stdin.read()))\"",
@@ -3617,14 +3641,15 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ]) {
     assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
   }
-  // Inside `cmd /c "…"`, cmd's reading applies too: `'` is not a quote there.
-  assert.equal(commandFedToInterpreter("echo 'x | bash'", { nested: true }), true, "cmd reads a single-quoted pipe as a pipe");
-  assert.equal(commandFedToInterpreter("echo 'x | bash'"), false, "…which bash and PowerShell do not");
+  // A single-quoted pipe is refused too, because cmd.exe does not treat `'` as a
+  // quote. That over-blocks prose in single quotes that pipes into a shell;
+  // double quotes, which all three shells honour, pass.
+  assert.equal(commandFedToInterpreter("echo 'x | bash'"), true, "cmd reads a single-quoted pipe as a pipe");
   // Linear, like every other scan here: a hook cut off at its limit ALLOWS.
   for (const unit of ["'a'|", "$(", "<<E\n", "sudo -a x ", "`", "\"$(x) ", "@'\n"]) {
     const huge = unit.repeat(Math.ceil(200_000 / unit.length));
     const started = Date.now();
-    commandFedToInterpreter(huge, { nested: true });
+    commandFedToInterpreter(huge);
     const elapsed = Date.now() - started;
     assert.ok(elapsed < 3000, `reading ~200 KB of ${JSON.stringify(unit)} stays well inside the hook limit (took ${elapsed} ms)`);
   }
