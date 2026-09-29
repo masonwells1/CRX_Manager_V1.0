@@ -2,7 +2,12 @@
 -- soft_delete_customer_document: let an active sales rep remove a document of
 -- a customer assigned to them (admins keep the same ability through the same
 -- path) without widening any read or write policy on public.customer_documents.
--- STATUS: PARKED / NOT APPLIED — DO NOT APPLY without Mason's explicit in-chat approval.
+-- STATUS: PARKED / NOT APPLIED. ORDERING HOLD (Mason, 2026-09-26): do not apply
+-- until 20260914101300_finish_generic_field_invoice_cutover is confirmed in the
+-- live ledger. Once it is, this applies under the autonomous-landing rule with
+-- no separate in-chat approval (Mason, 2026-09-27): CodeRabbit APPROVED on the
+-- final head, a fresh exact-SHA gpt-6-sol review clean, every required check
+-- green, and the migration-apply-guard proofs.
 -- Adds ONE new function; no table, policy, trigger or data change.
 --
 -- APPLY ORDER: apply only after EVERY parked candidate stamped below
