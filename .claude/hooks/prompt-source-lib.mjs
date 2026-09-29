@@ -212,10 +212,27 @@ function stripUnclosedEnvelopes(text) {
 // trigger a reminder meant for Mason's words (handoff item 5, 2026-09-28), while
 // everything he typed — including code he pastes — still reaches their patterns
 // exactly as before. The hold latch keeps using the stricter authoredByMason().
+//
+// Two passes, and anything EITHER keeps counts (Codex P2 on #836, 2026-09-29).
+// Stripping the raw text alone let a tag Mason merely QUOTES — "the literal
+// `<agent-message>` tag matters. Build the page and ship it" — act as an
+// unclosed envelope and delete his real instruction after it. The second pass
+// hides closed code spans and fences behind placeholders first, strips
+// envelopes, then puts the code back, so a quoted tag cannot open or close an
+// envelope. The union is the safe direction for an advisory reminder: at worst a
+// reminder fires on text it could have skipped; it never goes silent on Mason.
 export function withoutOtherAgentText(prompt) {
   const text = String(prompt || "");
   if (!text) return "";
-  return stripUnclosedEnvelopes(stripClosedEnvelopes(text));
+  const plain = stripUnclosedEnvelopes(stripClosedEnvelopes(text));
+  const shielded = [];
+  const shield = (match) => `\u0000${shielded.push(match) - 1}\u0000`;
+  const masked = text
+    .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]{0,3}\1[^\n]*$/gm, shield)
+    .replace(INLINE_CODE_RE, shield);
+  const codeSafe = stripUnclosedEnvelopes(stripClosedEnvelopes(masked))
+    .replace(/\u0000(\d+)\u0000/g, (_, index) => shielded[Number(index)]);
+  return plain.trim() === codeSafe.trim() ? plain : `${plain}\n${codeSafe}`;
 }
 
 // Envelopes first: a peer's unfinished markdown cannot reach past the closing

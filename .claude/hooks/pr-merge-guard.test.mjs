@@ -347,6 +347,18 @@ const statuses820 = [
   crStatus("Review skipped: excluded by label configuration", "2026-09-27T06:57:03Z", { id: 2 }),
   { ...crStatus("Deployment has completed", "2026-09-27T06:57:52Z", { id: 1, login: "vercel[bot]" }), context: "Vercel" },
 ];
+// Codex P1 on #836 claimed a status's `url` is /statuses/<status-id>. GitHub's
+// real answer for #820's head (GET …/commits/970052fc…/statuses, read
+// 2026-09-29) is below, verbatim apart from the avatar/target links: the url
+// ends in the COMMIT SHA, so the exact-head binding holds on real data.
+const REAL_820_COMPLETED = {
+  url: "https://api.github.com/repos/masonwells1/CRX_Manager_V1.0/statuses/970052fc40e111764c72350026046db8679714fd",
+  id: 55018527630, state: "success", description: "Review completed", context: "CodeRabbit",
+  created_at: "2026-09-27T07:31:22Z", updated_at: "2026-09-27T07:31:22Z",
+  creator: { login: "coderabbitai[bot]", id: 136622811, type: "Bot" },
+};
+ok(coderabbitFollowUpClearedHead(pr820, [REAL_820_COMPLETED]),
+  "GitHub's real status object for #820's head (url ends in the commit SHA) clears it");
 ok(!coderabbitApprovedHead(pr820), "#820: the approval-only rule could never clear the post-approval fix (the bug)");
 ok(coderabbitFollowUpClearedHead(pr820, statuses820), "#820: a clean follow-up of the exact head after the approval clears it");
 ok(coderabbitFollowUpClearedHead(pr820, [...statuses820].reverse()), "list order does not matter; the newest status decides");

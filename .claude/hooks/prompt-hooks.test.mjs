@@ -11,7 +11,7 @@ import { mkdtempSync, existsSync, readFileSync, rmSync, readdirSync } from "node
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { isMachineGenerated, MACHINE_TAG_NAMES, PUSH_POLICY, authoredByMason, hasAuthoredText } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, MACHINE_TAG_NAMES, PUSH_POLICY, authoredByMason, hasAuthoredText, withoutOtherAgentText } from "./prompt-source-lib.mjs";
 import { isHoldPhrase } from "./hold-latch-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -580,7 +580,25 @@ ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed
     ok(fires(hook, trigger), `${hook} fires on Mason's own "${trigger}" (sanity)`);
     ok(!fires(hook, report(trigger)), `${hook} stays silent when only a subagent report says "${trigger}"`);
     ok(fires(hook, `${report("all done")}\n${trigger}`), `${hook} still fires when Mason types "${trigger}" after a report`);
+    // Codex P2 on #836: a tag Mason only QUOTES must not swallow his instruction.
+    ok(fires(hook, `The literal \`<agent-message>\` tag is relevant. ${trigger}`),
+      `${hook} still fires on "${trigger}" after Mason quotes an <agent-message> tag in inline code`);
+    ok(fires(hook, "here is the tag:\n```\n<agent-message from=\"x\">\n```\n" + trigger),
+      `${hook} still fires on "${trigger}" after Mason quotes an <agent-message> tag in a fenced block`);
   }
+}
+
+// withoutOtherAgentText at the unit level (Codex P2 on #836, 2026-09-29).
+{
+  const quoted = "The literal `<agent-message>` tag is relevant. Build the page and ship it";
+  ok(withoutOtherAgentText(quoted).includes("Build the page and ship it"),
+    "a quoted open tag in inline code does not delete Mason's instruction after it");
+  ok(withoutOtherAgentText(quoted).includes("`<agent-message>`"), "Mason's inline code itself is kept");
+  ok(!withoutOtherAgentText('<agent-message from="x">see `const a = 1` then ship it</agent-message>').includes("ship it"),
+    "a real report containing inline code is still removed whole");
+  ok(!withoutOtherAgentText('<agent-message from="x">pause everything').includes("pause"),
+    "an unterminated real report is still removed to the end");
+  eq(withoutOtherAgentText("plain words, no envelopes"), "plain words, no envelopes", "text with no envelopes is unchanged");
 }
 
 rmSync(tmpProj, { recursive: true, force: true });
