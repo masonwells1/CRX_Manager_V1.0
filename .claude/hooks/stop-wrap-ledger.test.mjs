@@ -44,14 +44,18 @@ function runStopWrap(sessionId, projectDir) {
   });
 }
 const snapDir = path.join(os.tmpdir(), "crx-claude-hooks");
+const sessionSnapshotPath = path.join(hooksDir, "session-snapshot.mjs");
 function startSession(sessionId) {
-  // git's --since has one-second granularity: wait past the previous session's
-  // last commit so it cannot fall inside this session's window.
+  // Reflog timestamps have one-second granularity: wait past the previous
+  // session's last entry so the timestamp fallback cannot pick it up either.
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
-  mkdirSync(snapDir, { recursive: true });
-  const p = path.join(snapDir, `session-${sessionId}.snapshot`);
-  writeFileSync(p, "", "utf8"); // clean tree at session start; mtime = now
-  return p;
+  // The real SessionStart hook writes the status snapshot and HEAD's reflog
+  // position, exactly as a live session would.
+  const r = spawnSync(process.execPath, [sessionSnapshotPath], {
+    encoding: "utf8", cwd: tmp, input: JSON.stringify({ session_id: sessionId }), env: cleanEnv,
+  });
+  assert.equal(r.status, 0, `session-snapshot exits 0: ${r.stderr}`);
+  return path.join(snapDir, `session-${sessionId}`);
 }
 const LEDGER_WARNING = /no ledger file was touched/;
 
@@ -302,6 +306,43 @@ try {
     "renaming an existing changelog entry during a merge resolution must not count as a new record");
   pass++;
 
+  // ── Session 1k (Codex P2, PR #827 round 10): `rebase
+  //    --committer-date-is-author-date` backdates the new commit AND its reflog
+  //    entry to an old author date. Session membership comes from the reflog
+  //    position recorded at session start, not timestamps → still warns ──
+  git(["branch", "-f", "main", "feat"], tmp);
+  const other3 = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other3], os.tmpdir());
+    git(["config", "user.email", "other@test"], other3);
+    git(["config", "user.name", "other"], other3);
+    writeFileSync(path.join(other3, "base.txt"), "upstream rewrite again\n");
+    git(["add", "."], other3);
+    git(["commit", "-qm", "upstream edits base again"], other3);
+    const s1k = "ledger-test-backdated-rebase";
+    snapshots.push(startSession(s1k));
+    writeFileSync(path.join(tmp, "base.txt"), "session rewrite again\n");
+    git(["add", "."], tmp);
+    const oldAuthor = spawnSync("git", ["-C", tmp, "commit", "-qm", "unrecorded edit, old author date"],
+      { encoding: "utf8", env: { ...cleanEnv, GIT_AUTHOR_DATE: PAST } });
+    assert.equal(oldAuthor.status, 0, `setup: commit with an old author date: ${oldAuthor.stderr}`);
+    git(["fetch", "-q", other3, "main:main"], tmp);
+  } finally {
+    rmSync(other3, { recursive: true, force: true });
+  }
+  const rebase2 = spawnSync("git", ["-C", tmp, "rebase", "--committer-date-is-author-date", "main"],
+    { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(rebase2.status, 0, "setup: the backdated rebase must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "resolved during backdated rebase\n");
+  git(["add", "base.txt"], tmp);
+  const cont2 = spawnSync("git", ["-C", tmp, "rebase", "--continue"],
+    { encoding: "utf8", env: { ...cleanEnv, GIT_EDITOR: "true" } });
+  assert.equal(cont2.status, 0, `setup: backdated rebase --continue must succeed: ${cont2.stderr}`);
+  const backdated = runStopWrap("ledger-test-backdated-rebase", tmp);
+  assert.match(backdated.stdout, LEDGER_WARNING,
+    "a session commit backdated by --committer-date-is-author-date must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
@@ -314,7 +355,10 @@ try {
   pass++;
 } finally {
   rmSync(tmp, { recursive: true, force: true });
-  for (const p of snapshots) rmSync(p, { force: true });
+  for (const p of snapshots) {
+    rmSync(`${p}.snapshot`, { force: true });
+    rmSync(`${p}.reflog`, { force: true });
+  }
 }
 
 console.log(`stop-wrap-ledger: ${pass} assertions passed`);

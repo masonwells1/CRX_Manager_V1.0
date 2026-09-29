@@ -33,4 +33,17 @@ try {
   writeFileSync(snapPath, porcelain, "utf8");
 } catch { /* ignore */ }
 
+// HEAD's reflog length at session start. stop-wrap.mjs treats every reflog
+// entry after this position as the session's own, instead of trusting entry
+// timestamps, which come from the committer date and can be backdated (e.g.
+// `rebase --committer-date-is-author-date`; Codex P2, PR #827).
+try {
+  const entries = execFileSync("git", ["reflog", "show", "--format=%H", "HEAD"], {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).split("\n").filter(Boolean).length;
+  writeFileSync(path.join(dir, `session-${sessionId}.reflog`), String(entries), "utf8");
+} catch { /* no reflog yet — stop-wrap falls back to timestamps */ }
+
 process.exit(0);

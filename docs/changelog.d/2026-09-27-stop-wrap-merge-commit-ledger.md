@@ -6,7 +6,7 @@ already committed. The only commit made after the session-start snapshot was a m
 `main`, and `git log --name-status` lists no files for a merge commit, so the check saw
 "commits, but no ledger".
 
-Fix, refined across nine Codex review rounds (PRs #824 and #827):
+Fix, refined across ten Codex review rounds (PRs #824 and #827):
 
 - **Only this session's own work counts.** The hook reads the commits this checkout
   created since the session started from git's own record of them (HEAD's reflog), instead
@@ -18,7 +18,11 @@ Fix, refined across nine Codex review rounds (PRs #824 and #827):
   was amended, reset or rebased away stays in the reflog but no longer exists in the
   history, so it is ignored. Otherwise a ledger edit amended out of a commit would still
   count. The commit a rebase writes after a conflict resolution
-  (`rebase (continue)`) counts like any other replayed commit. Three earlier
+  (`rebase (continue)`) counts like any other replayed commit. Which reflog entries belong
+  to the session comes from the reflog length that `session-snapshot.mjs` records at
+  session start, not from entry timestamps. Those are committer dates, and
+  `rebase --committer-date-is-author-date` backdates them. Timestamps are only the
+  fallback when no position was recorded. Three earlier
   graph-based rules each missed one of these cases:
   - plain `git log --since` counted main's post-snapshot commits;
   - a first-parent scan dropped side-branch work;
@@ -38,7 +42,7 @@ Fix, refined across nine Codex review rounds (PRs #824 and #827):
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real hook in a temp git repo with eleven cases:
+  It runs the real SessionStart and Stop hooks in a temp git repo with twelve cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -50,6 +54,7 @@ Fix, refined across nine Codex review rounds (PRs #824 and #827):
   - a ledger edit amended out of the session's commit does not count, so it still warns;
   - an unrecorded session commit replayed through a conflict-resolved rebase still warns;
   - a merge resolution that only renames an existing changelog entry still warns;
+  - a session commit backdated by `rebase --committer-date-is-author-date` still warns;
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -62,5 +67,6 @@ Fix, refined across nine Codex review rounds (PRs #824 and #827):
   - Without the reachability filter, the amended-out case fails.
   - Without `continue` among the rebase actions, the rebase case fails.
   - Without rename detection in the merge comparison, the rename case fails.
-- With the final version, all eleven cases pass. `npm run test:correction-guards`,
+  - With the timestamp-only cutoff, the backdated-rebase case fails.
+- With the final version, all twelve cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.
