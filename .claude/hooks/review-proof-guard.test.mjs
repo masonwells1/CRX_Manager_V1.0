@@ -797,6 +797,17 @@ for (const input of ["{bad", "", '{"tool_name":"Bash","tool_in', "[]", "null", "
 }
 // A readable, harmless call stays silent, so the warning means only "could not check".
 assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command: "ls" } }, "readable harmless call");
+// Sol (PR #823): a missing or unusable tool name must not skip the checks that do
+// not need one. A protected target still DENIES; only a call that reaches the
+// final allow gets the warning.
+for (const [label, payload] of [
+  ["no tool name, proof path", { tool_input: { file_path: ".claude/session-state/codex-review-abc.json" } }],
+  ["object tool name, proof path", { tool_name: {}, tool_input: { file_path: ".claude/session-state/claude-review-push.json" } }],
+  ["blank tool name, proof path", { tool_name: " ", tool_input: { path: ".claude/session-state/codex-review-abc.json" } }],
+  ["no tool name, raw patch to proof", { tool_input: "*** Begin Patch\n*** Add File: .claude/session-state/codex-review-abc.json\n+{}\n*** End Patch" }],
+]) {
+  assertEntrypointDenied(payload, /REVIEW PROOF GUARD/, label);
+}
 // A parameterless tool sends an empty tool_input object; that is readable, not skipped.
 assertEntrypointAllowed({ tool_name: "TodoRead", tool_input: {} }, "parameterless tool call");
 

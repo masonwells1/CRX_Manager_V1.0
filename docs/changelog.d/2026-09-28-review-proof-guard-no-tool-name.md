@@ -29,6 +29,14 @@ string tool input was accepted from any tool, though only apply_patch sends one;
 name ends in `apply_patch` (including `mcp__…__apply_patch`); any other string, empty included,
 warns. A raw apply_patch aimed at a protected CI file is still denied (observed).
 
+The final `gpt-6-sol` review of `14d9c4e` then found a HIGH regression in these follow-ups: the new
+"no tool name / no usable input" warnings exited BEFORE the checks that do not need a tool name
+(proof-file paths, the review-state directory, patch destinations). `main`'s guard still ran those,
+so a nameless event naming a proof file would have gone from denied to warned. The guard now only
+records the reason up front, runs every check as before, and emits the SKIPPED warning at the final
+allow — a protected target still denies. Regression tests cover a proof path with no, an object, or
+a blank tool name, and a nameless raw patch to a proof file; all deny.
+
 `main` (#834) was also merged into the branch; no conflicts.
 
 **Proof observed (local session):** `{}` piped to the real hook prints the SKIPPED warning (exit 0);

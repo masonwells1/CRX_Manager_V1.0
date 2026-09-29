@@ -56,20 +56,19 @@ const toolInput = payload?.tool_input || payload?.toolInput || {};
 const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
 const input = toolInput && typeof toolInput === "object" ? toolInput : {};
 const rawToolName = payload?.tool_name || payload?.toolName;
-// A parseable object with no usable tool name (e.g. `{}`) or no tool input at
-// all gives every check below nothing to match, so it is as uninspectable as
-// malformed JSON. An empty `tool_input: {}` is still a real, readable call.
-if (typeof rawToolName !== "string" || !rawToolName.trim()) skippedCheck("input had no tool name");
+const toolName = String(rawToolName || "");
+// A parseable object with no usable tool name (e.g. `{}`) or no usable tool
+// input leaves most checks below nothing to match. That is recorded here but
+// NOT acted on yet: the tool-independent checks (proof paths, the review-state
+// directory, patch destinations) must still run and may deny. Only a call that
+// reaches the final allow gets the SKIPPED warning (Sol, PR #823). An empty
+// `tool_input: {}` is still a real, readable call.
 const rawToolInput = payload.tool_input ?? payload.toolInput;
-// An object (or apply_patch's raw string) is inspectable; anything else is not.
-// A raw string from any other tool leaves `input` empty and only patch headers
-// scanned, so it would pass unexamined.
-const isRawPatch = typeof rawToolInput === "string" && /(?:^|__)apply_patch$/i.test(rawToolName.trim());
+const isRawPatch = typeof rawToolInput === "string" && /(?:^|__)apply_patch$/i.test(toolName.trim());
 const isObjectInput = typeof rawToolInput === "object" && rawToolInput !== null && !Array.isArray(rawToolInput);
-if (!isRawPatch && !isObjectInput) {
-  skippedCheck("input had no usable tool input");
-}
-const toolName = rawToolName;
+let uninspectable = "";
+if (typeof rawToolName !== "string" || !rawToolName.trim()) uninspectable = "input had no tool name";
+else if (!isRawPatch && !isObjectInput) uninspectable = "input had no usable tool input";
 const eventCwd = String(payload?.cwd || "");
 // Preserve the event-first cwd used by the shell-state checks below. Patch
 // destinations use pathCandidateCwd instead: an explicit relative tool
@@ -853,4 +852,5 @@ if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {
   deny("REVIEW PROOF GUARD: shell commands from the wrapper-owned review state directory are blocked. Return to the repository root and run the real review wrapper.");
 }
 
+if (uninspectable) skippedCheck(uninspectable);
 process.exit(0);
