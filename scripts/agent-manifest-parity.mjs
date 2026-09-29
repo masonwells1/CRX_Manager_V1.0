@@ -17,6 +17,11 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   // guards.
   "codex-push-guard.mjs",
   "pr-merge-guard.mjs",
+  // Runs pr-merge-guard.mjs as a child and denies a possible merge when the guard
+  // crashes or runs out of time (Sol, 2026-09-27). It launches only that
+  // Claude-only guard; the Codex production guard's own fail-open on a timeout is
+  // a recorded follow-up (docs/manual/DECISION_LOG.md, 2026-09-26 entry).
+  "merge-guard-launcher.mjs",
   // Autopilot enforcement (the armed hands-free-run concept) is a Claude-session
   // mechanism; prompt-router.mjs keeps its intent reminder Claude-only internally.
   "unattended-autopilot.mjs",

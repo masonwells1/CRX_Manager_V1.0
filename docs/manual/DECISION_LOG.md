@@ -40,7 +40,8 @@ showed Mason no permission prompts.
    introduction). Removed: write-time content guards, tests, routers, `package.json`,
    `.coderabbit.yaml`, `.codex/config.toml` and the other check scripts — they act only once
    committed, inside PR review. A prompt naming a gate file is something Mason CAN judge ("did I ask
-   for safety-gate work?"). `gh pr merge` moves to `allow`; the merge gates below are its hard stop.
+   for safety-gate work?"). `gh pr merge` moves to `allow`; the merge gates below are its hard stop,
+   and item 7 keeps them closed when the local guard breaks.
    `scripts/agent-manifest-parity.mjs` reads only each manifest's `hooks` block, so these `ask` rules
    are not mistaken for hook wiring.
 2. **CodeRabbit reviews every non-draft PR automatically**, on open and on every push, never
@@ -76,12 +77,26 @@ showed Mason no permission prompts.
    `.codex/hooks.json` change, re-check trust** (`codex app-server` → `hooks/list`).
 6. The tracked `.codex/config.toml` Supabase MCP entry, dead since 2026-08-10, is `enabled = false`
    (the 2026-08-14 write-scope decision is unchanged; Codex uses `codex_apps/supabase`).
+7. **The merge guard denies when it breaks** (Mason's "No prompt", 2026-09-28). A Sol review of this
+   change found that with `gh pr merge` in `allow`, the local merge guard is the only check enforcing
+   the exact-SHA Sol proof, and a guard that crashes or is killed at its timeout prints nothing, which
+   allows the merge. Offered keeping the merge prompt for now, Mason chose no prompt with this fix
+   first. `.claude/hooks/merge-guard-launcher.mjs` runs `pr-merge-guard.mjs` as a child process and
+   forwards its verdict; if the guard crashes, fails to load, exits abnormally, prints something that
+   is not a verdict, or is still running at 36 seconds, any call that could merge is denied and other
+   calls continue. The hook entry allows 45 seconds so the launcher can still answer. Proven by
+   `.claude/hooks/merge-guard-launcher.test.mjs` (crashing, hanging, missing-module and
+   garbage-printing guards, end to end through the real launcher process).
 
 **Residuals, stated.** Agents run `gh` with Mason's admin login, so a hand-assembled `gh api` call
 could in principle change the ruleset; only the auto-mode classifier stands in the way on the Claude
 side (Codex's production gate denies unrecognized mutating `gh api` calls). A non-admin token for
 agents is the real fix and is Mason's to authorize. Shell writes to the migration proof writer and
-its helpers are not blocked by `review-proof-guard`; only native edits prompt.
+its helpers are not blocked by `review-proof-guard`; only native edits prompt. Codex's
+`production-action-guard.mjs` has the same gap on its 15-second timeout and no launcher yet, and Codex
+merges without prompts: wrapping it changes `.codex/hooks.json`, which Codex silently skips until the
+hook is re-trusted (item 5), so it is a separate follow-up. Node failing to start the Claude launcher
+itself is not covered; that stops every hook.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

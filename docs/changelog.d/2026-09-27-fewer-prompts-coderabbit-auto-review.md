@@ -8,9 +8,15 @@ same files; replaces PR #822.
 - `.claude/settings.json`: the `ask` tier drops routine guard/tooling edits (186 of Mason's 209
   prompts in two weeks, all approved) and keeps deploys, GitHub/filesystem MCP writers, the two
   settings files, and every file whose uncommitted local edit could change what reaches production
-  before PR review (28 files: execution-time hooks in both manifests and every module they load,
+  before PR review (30 files: execution-time hooks in both manifests and every module they load,
   the Codex adapter and `hooks.json`, the proof writers, the private-artifact containment check,
-  `.husky/**`, `.github/workflows/**`). `gh pr merge` moves to `allow`.
+  `.husky/**`, `.github/workflows/**`). `gh pr merge` moves to `allow` (Mason's "No prompt",
+  2026-09-28).
+- New `.claude/hooks/merge-guard-launcher.mjs`: runs `pr-merge-guard.mjs` as a child process and
+  denies any call that could merge when the guard crashes, fails to load, exits abnormally, prints
+  something that is not a verdict, or is still running at 36 seconds (hook timeout now 45 seconds).
+  Without it, a guard that crashed or was killed printed nothing, which allowed the merge without the
+  Sol proof (Sol, 2026-09-27). Codex's production guard keeps that gap as a recorded follow-up.
 - `scripts/check-agent-guidance.mjs`: derives that production-gate set from the hook manifests and
   the import graph and fails if any file lacks its prompt.
 - `scripts/agent-manifest-parity.mjs` and the "wired hooks documented" row of

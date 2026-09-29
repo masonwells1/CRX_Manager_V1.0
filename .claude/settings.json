@@ -196,6 +196,8 @@
       "Write(.claude/hooks/migration-ordering-lib.mjs)",
       "Edit(.claude/hooks/migration-pending-lib.mjs)",
       "Write(.claude/hooks/migration-pending-lib.mjs)",
+      "Edit(.claude/hooks/merge-guard-launcher.mjs)",
+      "Write(.claude/hooks/merge-guard-launcher.mjs)",
       "Edit(.claude/hooks/pr-merge-guard.mjs)",
       "Write(.claude/hooks/pr-merge-guard.mjs)",
       "Edit(.claude/hooks/review-proof-guard.mjs)",
@@ -426,8 +428,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\"",
-            "timeout": 30
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/merge-guard-launcher.mjs\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\"",
+            "timeout": 45
           }
         ]
       },

@@ -194,9 +194,11 @@ const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
 );
 
-// The hard gates spend ONE budget between them (see createHardGateBudget). The
-// timeout mirrors this hook's entry in .claude/settings.json; the reserve covers
-// what process.uptime() cannot see plus writing the verdict. The advisory lookup
+// The hard gates spend ONE budget between them (see createHardGateBudget). This
+// guard runs under merge-guard-launcher.mjs, which denies a possible merge if the
+// guard is still running at 36s; the hook entry in .claude/settings.json allows
+// 45s so the launcher can still answer. The reserve covers what process.uptime()
+// cannot see plus writing the verdict. The advisory lookup
 // is NOT on this budget: it keeps its own deadline and fails open by design, so a
 // slow GitHub there must not turn into a denial.
 const HOOK_TIMEOUT_MS = 30_000;
