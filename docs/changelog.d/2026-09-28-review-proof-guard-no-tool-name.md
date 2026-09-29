@@ -23,6 +23,12 @@ string (`42`, `[]`), and a whitespace-only tool name. Both now warn too. Its oth
 about `process.exit` truncating the warning is refuted, since the guard's existing `deny()` uses the
 same write-then-exit pattern and Node writes to pipes synchronously on Windows and Linux.
 
+CodeRabbit (Major) and the Codex GitHub App (P2) then both flagged the same gap on `edae1db`: a raw
+string tool input was accepted from any tool, though only apply_patch sends one; a string from
+`Bash` or `Write` left the guard nothing to inspect. A raw string is now accepted only when the tool
+name ends in `apply_patch` (including `mcp__…__apply_patch`); any other string, empty included,
+warns. A raw apply_patch aimed at a protected CI file is still denied (observed).
+
 `main` (#834) was also merged into the branch; no conflicts.
 
 **Proof observed (local session):** `{}` piped to the real hook prints the SKIPPED warning (exit 0);

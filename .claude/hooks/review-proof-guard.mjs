@@ -62,7 +62,11 @@ const rawToolName = payload?.tool_name || payload?.toolName;
 if (typeof rawToolName !== "string" || !rawToolName.trim()) skippedCheck("input had no tool name");
 const rawToolInput = payload.tool_input ?? payload.toolInput;
 // An object (or apply_patch's raw string) is inspectable; anything else is not.
-if (rawToolInput == null || (typeof rawToolInput !== "string" && (typeof rawToolInput !== "object" || Array.isArray(rawToolInput)))) {
+// A raw string from any other tool leaves `input` empty and only patch headers
+// scanned, so it would pass unexamined.
+const isRawPatch = typeof rawToolInput === "string" && /(?:^|__)apply_patch$/i.test(rawToolName.trim());
+const isObjectInput = typeof rawToolInput === "object" && rawToolInput !== null && !Array.isArray(rawToolInput);
+if (!isRawPatch && !isObjectInput) {
   skippedCheck("input had no usable tool input");
 }
 const toolName = rawToolName;
