@@ -2350,6 +2350,29 @@ try {
   }
   assert.match(String(evaluateReady("bash -c '$0 pr merge 123 --admin' gh").reason), /builds at run time|builds text at run time/,
     "a nested shell handed run-time text is refused");
+  // Codex luna, PR #795, 2026-09-26: a payload in a file (finding 3), a wrapper
+  // before the interpreter (finding 4), and a feed hidden inside cmd's quotes.
+  for (const command of [
+    "Get-Content C:\\Temp\\payload.txt | iex",
+    `echo '${nestedAdmin}' | env bash`,
+    'cmd /c "type payload.txt | bash"',
+    "xargs -a payload.txt gh",
+  ]) {
+    assert.match(String(evaluateReady(command).reason), /on its input/, `a fed interpreter is refused: ${command}`);
+  }
+  // Finding 10: one nested-push policy with Claude's push guard — refused, not evaluated.
+  for (const command of [
+    'bash -c "git push origin HEAD:feature/x"',
+    `pwsh -EncodedCommand ${Buffer.from("git push origin HEAD:feature/x", "utf16le").toString("base64")}`,
+  ]) {
+    const verdict = evaluateReady(command);
+    assert.equal(verdict.blocked, true, `a nested push is refused: ${command}`);
+    assert.match(String(verdict.reason), /runs a git push inside another shell/, `…as a nested push: ${command}`);
+  }
+  // Findings 8 and 9: the wrapper's real program is read, however far out.
+  assert.match(String(evaluateReady("sudo -u root -g staff -H -n -E gh mm 123").reason),
+    /is not a gh command this guard can read/, "an alias past six wrapper words is refused");
+  assert.equal(evaluateReady("timeout 30 echo gh mm 123").blocked, false, "CONTROL: gh as an argument of the wrapped program passes");
   // Over-blocks the review found must now pass.
   for (const command of [
     "which -a pwsh gh git node",

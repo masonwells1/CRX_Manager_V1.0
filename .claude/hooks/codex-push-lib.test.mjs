@@ -3463,6 +3463,21 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     assert.equal(expandNestedCommands(command).tooDeep, false, `ordinary options or arguments are not: ${command.slice(0, 40)}…`);
   }
   assert.match(nestedTooDeepDenial("PR MERGE GATE"), /option words/, "the denial explains the padding case");
+
+  // The inner-command cap (Codex luna, 2026-09-26, finding 2): the one-level scan
+  // stopped quietly at 32 entries, the caller de-duplicated the identical harmless
+  // ones below its own cap, and the admin merge after them was never read. The
+  // segments differ only in spacing, so they are distinct segments carrying the
+  // same inner command.
+  const spaced = Array.from({ length: 40 }, (_, i) => `bash${" ".repeat(i + 1)}-c 'echo ok'`).join("; ");
+  assert.equal(expandNestedCommands(`${spaced}; bash -c '${ADMIN}'`).tooDeep, true,
+    "a scan stopped at the inner-command cap is refused, not partly read");
+  assert.equal(expandNestedCommands("bash -c 'echo ok'; bash -c 'echo ok'; bash -c 'npm test'").tooDeep, false,
+    "a few nested commands are not");
+  // An inner command that feeds an interpreter is returned whatever it mentions,
+  // so the pipe hidden inside cmd's quotes is still read (finding 3).
+  assert.ok(expandNestedCommands('cmd /c "type payload.txt | bash"').commands
+    .some((text) => commandFedToInterpreter(text, { nested: true })), "a feed inside cmd /c reaches the caller");
 }
 
 // ── gh aliases and unknown gh commands (2026-09-24) ──────────────────────────
@@ -3500,6 +3515,19 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   assert.equal(unreadable("timeout 30 gh alias set mm 'pr merge --admin'"), "alias set", "…nor alias creation");
   assert.equal(unreadable("timeout 60 npm test"), null, "a wrapper around something other than gh is not refused");
   assert.equal(unreadable("sudo apt-get install -y gh"), null, "…nor is gh as a package name at the end");
+  // Codex luna, 2026-09-26: a six-word window after the wrapper missed a
+  // program further out (finding 8) and read an argument as the program (finding 9).
+  for (const wrapped of [
+    "sudo -u root -g staff -H -n -E gh mm 123",
+    "timeout --signal KILL 30 gh mm 123",
+    "env -S 'gh mm 123'",
+    "nohup nice -n 5 timeout 30 gh mm 123",
+  ]) {
+    assert.equal(unreadable(wrapped), "mm", `the program after any number of wrapper options is read: ${wrapped}`);
+  }
+  for (const harmless of ["timeout 30 echo gh mm 123", "sudo -u root grep -rn gh mm .", "xargs echo gh mm", "nice --adjustment=5 echo gh mm"]) {
+    assert.equal(unreadable(harmless), null, `gh as an argument of the wrapped program is not refused: ${harmless}`);
+  }
 
   // Whole-command check: prose inside quotes is not a command.
   const unreadableIn = (command) => ghCommandUnreadableIn(command);
@@ -3530,8 +3558,30 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "echo pr merge 123 --admin | xargs gh",
     "echo origin HEAD:main | xargs git push",
     "echo 'git push origin HEAD:main --force' | bash",
+    // Codex luna, 2026-09-26, finding 3: the payload need not be on the line.
+    "Get-Content C:\\Temp\\payload.txt | iex",
+    "echo hello | bash",
+    "bash < payload.txt",
+    "type payload.txt | cmd",
+    "xargs -a payload.txt gh",
+    "Start-Process bash -RedirectStandardInput payload.txt",
+    "bash <(cat payload.txt)",
+    // Finding 4: a wrapper between the pipe and the interpreter, and inputs past
+    // the old regexes' 256-character bounds.
+    "echo 'gh pr merge 123 --admin' | env bash",
+    "echo x | timeout 30 bash",
+    "echo x | sudo -u root sh -s",
+    "echo x | xargs -0 bash -c",
+    `echo x | ${"C:\\very\\long\\".repeat(100)}bash.exe`,
+    `bash ${"-x ".repeat(200)}<<'EOF'\ngh pr merge 123 --admin\nEOF`,
+    "Get-Content p.txt | & pwsh",
+    // A pipe inside a substitution is a real pipe, and a here-document body's
+    // apostrophe must not desynchronise the quoting of what follows it.
+    'echo "$(echo x | bash)"',
+    "cat <<EOF > notes.txt\ndon't\nEOF\necho x | bash",
+    "@'\nit's\n'@ | iex",
   ]) {
-    assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command)}`);
+    assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command.slice(0, 80))}`);
   }
   for (const command of [
     "git log --oneline | head -5",
@@ -3540,10 +3590,26 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "gh pr list --json number | jq '.[]'",
     "git commit -m 'pipe it | bash later'",
     "npm test 2>&1 | Select-Object -Last 20",
-    "echo hello | bash",
     "gh pr view 1 | shasum",
+    "git log --oneline | grep -n bash",
+    "node scripts/check.mjs < input.json",
+    "echo 'a | bash' > notes.txt",
+    "git commit -m \"$(cat <<'EOF'\nfix: don't pipe | bash\nEOF\n)\"",
+    "cat <<'EOF' > notes.md\n| shell | bash |\nEOF",
+    "# a note about | bash\ngit status",
   ]) {
     assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
+  }
+  // Inside `cmd /c "…"`, cmd's reading applies too: `'` is not a quote there.
+  assert.equal(commandFedToInterpreter("echo 'x | bash'", { nested: true }), true, "cmd reads a single-quoted pipe as a pipe");
+  assert.equal(commandFedToInterpreter("echo 'x | bash'"), false, "…which bash and PowerShell do not");
+  // Linear, like every other scan here: a hook cut off at its limit ALLOWS.
+  for (const unit of ["'a'|", "$(", "<<E\n", "sudo -a x ", "`", "\"$(x) ", "@'\n"]) {
+    const huge = unit.repeat(Math.ceil(200_000 / unit.length));
+    const started = Date.now();
+    commandFedToInterpreter(huge, { nested: true });
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 3000, `reading ~200 KB of ${JSON.stringify(unit)} stays well inside the hook limit (took ${elapsed} ms)`);
   }
   assert.match(commandFedToInterpreterDenial("PR MERGE GATE"), /^PR MERGE GATE: .*input/s, "the denial names the gate and the cause");
 }

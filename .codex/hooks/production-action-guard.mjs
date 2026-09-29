@@ -25,6 +25,7 @@ import {
   splitCommandSegments,
   ghMergeRequest,
   gitPushCwd,
+  gitSubcommandIsDynamic,
   isGitPush,
   mainPushSource,
   mcpMergeRequest,
@@ -1509,8 +1510,21 @@ export function evaluateProductionAction({
     const nested = expandNestedCommands(command);
     if (nested.tooDeep) return denied(nestedTooDeepDenial("CODEX PRODUCTION GATE"));
     if (nested.computed) return denied(nestedComputedDenial("CODEX PRODUCTION GATE"));
-    if ([command, ...nested.commands].some(commandFedToInterpreter)) {
+    if (commandFedToInterpreter(command) ||
+        nested.commands.some((inner) => commandFedToInterpreter(inner, { nested: true }))) {
       return denied(commandFedToInterpreterDenial("CODEX PRODUCTION GATE"));
+    }
+    // One policy with Claude's push guard: a push carried by another program is
+    // refused, not evaluated. Evaluating it here allowed
+    // `bash -c "git push origin HEAD:feature"` while Claude's guard refused the
+    // same command (Codex luna, PR #795, 2026-09-26, finding 10).
+    if (nested.commands.some((inner) =>
+      isGitPush(inner) || gitSubcommandIsDynamic(inner) || pushHiddenByShellComposition(inner))) {
+      return denied(
+        "CODEX PRODUCTION GATE: this command runs a git push inside another shell or an evaluator (bash -c, " +
+        "cmd /c, pwsh -Command or -EncodedCommand, eval, Invoke-Expression, Start-Process). The gate reads the " +
+        "outer command's text, so it cannot prove where a push carried that way would go. Run the push as its " +
+        "own plain command: `git -C <repo> push <remote> <refspec>`.");
     }
     for (const inner of nested.commands) {
       const verdict = evaluateProductionAction({

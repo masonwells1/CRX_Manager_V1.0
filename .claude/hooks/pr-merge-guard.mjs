@@ -124,7 +124,10 @@ if (GITHUB_MERGE_TOOL.test(toolName)) {
   if (nested.tooDeep) deny(nestedTooDeepDenial("PR MERGE GATE"));
   if (nested.computed) deny(nestedComputedDenial("PR MERGE GATE"));
   const scannedCommands = [toolInput.command, ...nested.commands];
-  if (scannedCommands.some(commandFedToInterpreter)) deny(commandFedToInterpreterDenial("PR MERGE GATE"));
+  if (commandFedToInterpreter(toolInput.command) ||
+      nested.commands.some((inner) => commandFedToInterpreter(inner, { nested: true }))) {
+    deny(commandFedToInterpreterDenial("PR MERGE GATE"));
+  }
   for (const scanned of scannedCommands) collectMergeRequests(scanned);
 }
 if (requests.length === 0) passthrough();

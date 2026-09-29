@@ -2921,13 +2921,23 @@ export function mergeRequestKey(request) {
 // such as `cmd /c` re-reads its arguments with its own quoting) it yields more
 // than one reading, and callers deny when ANY reading is refused.
 //
-// Only inner commands that could reach a gate — ones that mention `gh` or `git`
-// or themselves carry a further nested command — are returned. The guards exist
+// Only inner commands that could reach a gate — ones that mention `gh` or `git`,
+// feed an interpreter on its input, or themselves carry a further nested
+// command — are returned. The guards exist
 // for merges, pushes and GitHub writes; re-inspecting `bash -c "npm test"` buys
 // nothing and costs the chance of a false refusal.
 //
-// Still open, and named rather than half-covered: a script FILE (`bash x.sh`,
-// `pwsh -File x.ps1`) runs text the guard cannot see from the command line.
+// Accepted residuals, named rather than half-covered (Mason, 2026-09-28, after
+// Codex luna's review of PR #795): no command-line reader can close these, and
+// GitHub's protect-main ruleset still refuses any direct push to main.
+//   - A script FILE (`bash x.sh`, `pwsh -File x.ps1`, `node x.mjs`) runs text
+//     the guard cannot see from the command line (finding 6).
+//   - A program name assembled at run time in a syntax other than `$` or a
+//     backtick — PowerShell `& ("g" + "h")`, cmd `%VAR%` (finding 5).
+//   - The Codex guard re-checks only nested commands that mention gh or git,
+//     carry further nesting, or feed an interpreter, so a decoded
+//     -EncodedCommand payload doing something else is not re-checked against
+//     its other rules (finding 7).
 const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish"]);
 const CMD_SHELLS = new Set(["cmd"]);
 const POWERSHELLS = new Set(["powershell", "pwsh"]);
@@ -3177,10 +3187,16 @@ function nestedCommandsOneLevel(command, { grouping }) {
     // `pwsh –EncodedCommand …` is the flag every check below looks for.
     const argvWords = rawWords.map(shellArgvWord).map((word) => word.replace(/^[–—―]/, "-"));
     for (let index = 0; index < argvWords.length; index += 1) {
-      // Past the cap the caller refuses the command anyway (tooDeep); stopping
-      // here keeps a command with thousands of `cmd /c` words from spending the
-      // hook's time limit — a hook cut off at its limit ALLOWS.
-      if (inner.length > NESTED_MAX_COMMANDS) return finishNested(inner, text);
+      // Stopping at the cap keeps a command with thousands of `cmd /c` words from
+      // spending the hook's time limit — a hook cut off at its limit ALLOWS. The
+      // stop is reported as exceeded so the caller refuses (tooDeep): returning
+      // quietly let 33 identical harmless `bash -c` words, which the caller
+      // de-duplicates below its own cap, hide a later admin merge that was never
+      // read (Codex luna, PR #795, 2026-09-26, finding 2).
+      if (inner.length > NESTED_MAX_COMMANDS) {
+        inner.push({ text: "", grouped: false, windowExceeded: true });
+        return finishNested(inner, text);
+      }
       const is = (names) => wordIsProgram(rawWords, argvWords, index, names);
       if (is(POSIX_SHELLS)) {
         const found = posixShellInner(argvWords, index + 1);
@@ -3281,7 +3297,13 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
       }
     }
     for (const inner of next) {
-      if (mentionsGhOrGit(inner) || nestedCommandsOneLevel(inner, { grouping }).length) found.push(inner);
+      // An inner command that feeds an interpreter is returned too, whatever it
+      // mentions: `cmd /c "type payload.txt | bash"` hides the pipe inside
+      // quotes from the outer reading, so only the inner one can refuse it.
+      if (mentionsGhOrGit(inner) || nestedCommandsOneLevel(inner, { grouping }).length ||
+          commandFedToInterpreter(inner, { nested: true })) {
+        found.push(inner);
+      }
     }
     frontier = next;
   }
@@ -3299,51 +3321,250 @@ export function nestedComputedDenial(prefix) {
 
 // A command FED to an interpreter on its input, rather than passed as an
 // argument: `'gh pr merge 1 --admin' | iex`, `echo '…' | bash`, `bash <<< '…'`,
-// a here-document, or `… | xargs gh`. Nothing on the command line is the command
-// the interpreter runs, so no argument parser can see it (independent Opus
-// review of PR #795; the bash, here-string and xargs forms were confirmed in a
-// real shell). Refused when the command involves gh or git at all.
+// `bash < payload.txt`, a here-document, or `… | xargs gh`. Nothing on the
+// command line is the command the interpreter runs, so no argument parser can
+// see it (independent Opus review of PR #795; the bash, here-string and xargs
+// forms were confirmed in a real shell).
 //
-// Quoted text is blanked first, so a `|` inside a commit message is not read as
-// a pipe; the payload itself usually IS quoted, so gh/git is looked for in the
-// original text.
-const FED_INTERPRETERS = "bash|sh|zsh|dash|ksh|mksh|ash|fish|pwsh|powershell|cmd|iex|invoke-expression";
-// Every open-ended run below is bounded ({0,256}). An unbounded `[^;&|\n]*`
-// after each shell name rescanned the rest of the line from every occurrence,
-// and a 187 KB line of repeated `--/bash` took 6.5 s — the time a hook must not
-// spend, because a hook cut off at its limit ALLOWS. A here-string or an xargs
-// program sits within a few words of its interpreter, so the bound loses nothing.
-const FED_PIPE_RE = new RegExp(
-  `\\|\\s*(?:[^\\s|;&]{0,256}[\\\\/])?(?:${FED_INTERPRETERS})(?:\\.exe)?(?=\\s|$|[;&|)])`, "i");
-const FED_HERE_RE = new RegExp(
-  `(?:^|[\\s;&|(])(?:[^\\s|;&]{0,256}[\\\\/])?(?:${FED_INTERPRETERS})(?:\\.exe)?(?=\\s)[^;&|\\n<]{0,256}<<`, "i");
-const FED_XARGS_GH_RE = /\|\s*xargs\b[^;&|\n]{0,256}?\s(?:[^\s|;&]{0,256}[\\/])?gh(?:\.exe)?(?=\s|$)/i;
-const FED_XARGS_GIT_PUSH_RE = /\|\s*xargs\b[^;&|\n]{0,256}?\s(?:[^\s|;&]{0,256}[\\/])?git(?:\.exe)?\s[^;&|\n]{0,256}\bpush\b/i;
+// Refused whatever the command mentions. It used to be refused only when the
+// text named gh or git, so `Get-Content payload.txt | iex` — the payload in a
+// file — passed every guard (Codex luna, PR #795, 2026-09-26, finding 3). An
+// agent has its own shell and never needs to pipe commands into another one.
+//
+// Read as each shell reads it, by a small linear lexer, rather than by
+// regexes: bounded regexes missed a wrapper between the pipe and the
+// interpreter (`| env bash`) and anything past their bound (finding 4). The
+// lexer follows quotes, escapes, `$( )` and backtick substitutions (whose
+// commands are real commands), here-document bodies and comments, so an
+// apostrophe in a here-document body cannot desynchronise the quoting and hide
+// a pipe after it. The top-level command gets the POSIX and PowerShell
+// readings; a command nested inside another program also gets cmd's reading,
+// where `'` is not a quote.
+const FED_INTERPRETER_NAMES = new Set([
+  ...POSIX_SHELLS, ...CMD_SHELLS, ...POWERSHELLS, "iex", "invoke-expression",
+]);
+const POWERSHELL_HERE_STRING_RE = /@(['"])[ \t]*\r?\n/y;
 
-function blankQuotedText(text) {
-  let out = "";
-  let quote = "";
-  for (const char of text) {
-    if (quote) { out += char === quote ? char : " "; if (char === quote) quote = ""; continue; }
-    if (char === "'" || char === '"') quote = char;
-    out += char;
+// The pipeline stages of `text` as `shell` reads it: { text, piped, redirected },
+// where `piped` is a stage reading the previous stage's output and `redirected`
+// is a stage with an input redirection (`<`, `<<`, `<<<`, `<( )`).
+function pipelineStages(text, shell) {
+  const posix = shell === "posix";
+  const powershell = shell === "powershell";
+  const stages = [];
+  const newFrame = (close) => ({ close, depth: 0, quote: "", current: "", piped: false, redirected: false, heredocs: [] });
+  const frames = [newFrame(null)];
+  const endStage = (frame, piped) => {
+    if (frame.current.trim()) stages.push({ text: frame.current, piped: frame.piped, redirected: frame.redirected });
+    frame.current = "";
+    frame.piped = piped;
+    frame.redirected = false;
+  };
+  const closeFrame = (closing) => {
+    endStage(frames.pop(), false);
+    frames[frames.length - 1].current += closing;
+  };
+  const lastChar = (frame) => frame.current[frame.current.length - 1] ?? "";
+  const escapes = (char) => (posix && char === "\\") || (powershell && char === "`") || (shell === "cmd" && char === "^");
+  for (let index = 0; index < text.length; index += 1) {
+    const frame = frames[frames.length - 1];
+    const char = text[index];
+    const next = text[index + 1] ?? "";
+    if (frame.quote) {
+      const quote = frame.quote;
+      if (quote === "'") {
+        frame.current += char;
+        if (char === "'") frame.quote = "";
+      } else if (quote === "$'") {
+        frame.current += char;
+        if (char === "\\") { frame.current += next; index += 1; } else if (char === "'") frame.quote = "";
+      } else if (quote === "@'" || quote === '@"') {
+        const close = `${quote[1]}@`;
+        if (char === "\n" && text.startsWith(close, index + 1)) {
+          frame.current += `\n${close}`;
+          index += close.length;
+          frame.quote = "";
+        } else if (quote === '@"' && char === "$" && next === "(") {
+          frame.current += "$(";
+          index += 1;
+          frames.push(newFrame(")"));
+        } else {
+          frame.current += char;
+        }
+      } else if (escapes(char) && shell !== "cmd") {
+        frame.current += char + next;
+        index += 1;
+      } else if (char === "$" && next === "(" && shell !== "cmd") {
+        frame.current += "$(";
+        index += 1;
+        frames.push(newFrame(")"));
+      } else if (posix && char === "`") {
+        frame.current += char;
+        frames.push(newFrame("`"));
+      } else {
+        frame.current += char;
+        if (char === '"') frame.quote = "";
+      }
+      continue;
+    }
+    if (escapes(char)) { frame.current += char + next; index += 1; continue; }
+    if (frame.close === "`" && char === "`") { closeFrame("`"); continue; }
+    if (posix && char === "`") { frame.current += char; frames.push(newFrame("`")); continue; }
+    if (char === "$" && next === "(" && shell !== "cmd") {
+      frame.current += "$(";
+      index += 1;
+      frames.push(newFrame(")"));
+      continue;
+    }
+    if (posix && (char === "<" || char === ">") && next === "(") {
+      if (char === "<") frame.redirected = true;
+      frame.current += char + next;
+      index += 1;
+      frames.push(newFrame(")"));
+      continue;
+    }
+    if (frame.close === ")" && char === "(") { frame.depth += 1; frame.current += char; continue; }
+    if (frame.close === ")" && char === ")") {
+      if (frame.depth === 0) { closeFrame(")"); continue; }
+      frame.depth -= 1;
+      frame.current += char;
+      continue;
+    }
+    if (powershell && char === "@") {
+      POWERSHELL_HERE_STRING_RE.lastIndex = index;
+      const match = POWERSHELL_HERE_STRING_RE.exec(text);
+      if (match) { frame.quote = `@${match[1]}`; frame.current += `@${match[1]}`; index += 1; continue; }
+    }
+    if (char === '"') { frame.quote = '"'; frame.current += char; continue; }
+    if (char === "'" && shell !== "cmd") {
+      frame.quote = posix && lastChar(frame) === "$" ? "$'" : "'";
+      frame.current += char;
+      continue;
+    }
+    if (powershell && char === "<" && next === "#") {
+      const end = text.indexOf("#>", index + 2);
+      index = end === -1 ? text.length : end + 1;
+      continue;
+    }
+    if (char === "#" && shell !== "cmd" && (!frame.current || /\s/.test(lastChar(frame)))) {
+      const end = text.indexOf("\n", index);
+      index = (end === -1 ? text.length : end) - 1;
+      continue;
+    }
+    if (char === "<") {
+      // PowerShell reserves `<`: it is a parse error, and a script that does not
+      // parse runs nothing at all. Reading on would take a bash here-document's
+      // body for PowerShell commands.
+      if (powershell) return [];
+      frame.redirected = true;
+      if (posix && next === "<" && text[index + 2] === "<") { frame.current += "<<<"; index += 2; continue; }
+      if (posix && next === "<") {
+        // A here-document: its delimiter (quotes and escapes removed), and
+        // whether `<<-` strips leading tabs from the closing line.
+        let at = index + 2;
+        const strip = text[at] === "-";
+        if (strip) at += 1;
+        while (text[at] === " " || text[at] === "\t") at += 1;
+        let delimiter = "";
+        while (at < text.length && !/[\s;&|<>()]/.test(text[at])) {
+          if (text[at] === "'" || text[at] === '"') {
+            const close = text.indexOf(text[at], at + 1);
+            const end = close === -1 ? text.length : close;
+            delimiter += text.slice(at + 1, end);
+            at = end + 1;
+          } else if (text[at] === "\\") {
+            delimiter += text[at + 1] ?? "";
+            at += 2;
+          } else {
+            delimiter += text[at];
+            at += 1;
+          }
+        }
+        frame.current += text.slice(index, at);
+        if (delimiter) frame.heredocs.push({ delimiter, strip });
+        index = at - 1;
+        continue;
+      }
+      frame.current += char;
+      continue;
+    }
+    if (char === "\n") {
+      // A here-document's body is the input of its command, not a command: skip
+      // it, up to the line that is exactly its delimiter (or to the end, which
+      // is what bash does when the delimiter never comes).
+      let resume = index + 1;
+      for (const { delimiter, strip } of frame.heredocs) {
+        while (resume < text.length) {
+          const lineEnd = text.indexOf("\n", resume);
+          const end = lineEnd === -1 ? text.length : lineEnd;
+          let line = text.slice(resume, end).replace(/\r$/, "");
+          if (strip) line = line.replace(/^\t+/, "");
+          resume = end + 1;
+          if (line === delimiter) break;
+        }
+      }
+      frame.heredocs = [];
+      endStage(frame, false);
+      index = resume - 1;
+      continue;
+    }
+    if (char === ";") { endStage(frame, false); continue; }
+    if (char === "|") {
+      if (next === "|") { endStage(frame, false); index += 1; } else endStage(frame, true);
+      continue;
+    }
+    if (char === "&") {
+      // `2>&1`, `>&2`, `&>file` are redirections; `&&` separates; a `&` that
+      // starts a stage is PowerShell's call operator (`… | & bash`).
+      if (lastChar(frame) === ">" || lastChar(frame) === "<" || next === ">") { frame.current += char; continue; }
+      if (next === "&") { endStage(frame, false); index += 1; continue; }
+      if (!frame.current.trim()) { frame.current += char; continue; }
+      endStage(frame, false);
+      continue;
+    }
+    frame.current += char;
   }
-  return out;
+  while (frames.length > 1) closeFrame("");
+  endStage(frames[0], false);
+  return stages;
 }
 
-export function commandFedToInterpreter(command) {
+// Does this stage hand an interpreter its input? True for an interpreter that
+// reads a pipe or a redirection, and for anything run by xargs, which builds
+// the command from its input: an interpreter, gh, or a git push.
+function stageFeedsInterpreter({ text, piped, redirected }) {
+  const rawWords = splitShellWordsRaw(text);
+  const words = rawWords.map(shellArgvWord);
+  const firstXargs = words.findIndex((word) => programName(stripGrouping(word)) === "xargs");
+  const namesPush = words.some((word) => word.toLowerCase() === "push");
+  // `Start-Process bash -RedirectStandardInput payload.txt` feeds a file to the
+  // program it starts, with no `<` anywhere on the line.
+  if (words.some((word) => /^-redirectstandardi/i.test(word)) &&
+      words.some((word) => FED_INTERPRETER_NAMES.has(candidateProgram(word)))) {
+    return true;
+  }
+  for (const candidate of programCandidates(words)) {
+    const names = [candidateProgram(words[candidate]), candidateProgram(rawWords[candidate])];
+    const viaXargs = firstXargs !== -1 && firstXargs < candidate;
+    if (names.some((name) => FED_INTERPRETER_NAMES.has(name)) && (piped || redirected || viaXargs)) return true;
+    if (viaXargs && (names.includes("gh") || (names.includes("git") && namesPush))) return true;
+  }
+  return false;
+}
+
+// `nested` is true for a command another program runs (the text inside
+// `cmd /c "…"` may be read by cmd, where `'` is not a quote).
+export function commandFedToInterpreter(command, { nested = false } = {}) {
   const text = String(command || "");
-  if (!mentionsGhOrGit(text)) return false;
-  const bare = blankQuotedText(text);
-  return FED_PIPE_RE.test(bare) || FED_HERE_RE.test(bare) ||
-    FED_XARGS_GH_RE.test(bare) || FED_XARGS_GIT_PUSH_RE.test(bare);
+  const shells = nested ? ["posix", "powershell", "cmd"] : ["posix", "powershell"];
+  return shells.some((shell) => pipelineStages(text, shell).some(stageFeedsInterpreter));
 }
 
 export function commandFedToInterpreterDenial(prefix) {
   return (
-    `${prefix}: this command feeds text to a shell or evaluator on its input (a pipe into bash/pwsh/iex, ` +
-    "a here-string or here-document, or `xargs gh`) and involves gh or git. What the interpreter runs is " +
-    "not on the command line, so the guard cannot check it. Run the gh or git command directly."
+    `${prefix}: this command feeds text to a shell or evaluator on its input (a pipe or redirection into ` +
+    "bash/sh/cmd/pwsh/iex, a here-string or here-document, or xargs running gh, git push or a shell). What " +
+    "the interpreter runs is not on the command line, so the guard cannot check it. Run the command directly."
   );
 }
 
@@ -3376,41 +3597,73 @@ const COMMAND_WRAPPERS = new Set([
   "env", "command", "exec", "time", "nohup", "sudo", "doas", "call", "xargs", "wsl", "&", ".",
   "timeout", "gtimeout", "nice", "ionice", "stdbuf", "setsid", "chrt", "taskset", "unbuffer", "caffeinate",
 ]);
-// After a wrapper, how many words its own options and values may take before
-// the program it runs.
-const WRAPPER_ARGUMENT_WINDOW = 6;
+// Every word that could be the program a segment runs. Environment assignments,
+// grouping and wrapper words come first; after a wrapper, its own options,
+// option values and numeric arguments (`sudo -u root -H`, `timeout 30`,
+// `nice -n 5`) come before the program.
+//
+// Rather than model each wrapper's grammar, an option after a wrapper is read
+// BOTH ways — as a switch, and as taking the next word as its value — and every
+// word either reading lands on is a candidate. The walk only moves forward, so
+// it stays linear. It replaced "the first gh within six words of a wrapper",
+// which missed `sudo -u root -g staff -H -n -E gh mm` (the program was the
+// seventh word) and read the ARGUMENT in `timeout 30 echo gh mm` as the program
+// (Codex luna, PR #795, 2026-09-26, findings 8 and 9).
+const WRAPPER_NUMBER_RE = /^[+-]?\d[\w.:]*$/;
+function stripGrouping(word) {
+  return String(word).replace(/^[({]+/, "").replace(/[)}]+$/, "");
+}
+function programCandidates(words) {
+  const START = 1;
+  const WRAPPED = 2;
+  const reach = new Uint8Array(words.length + 2);
+  reach[0] = START;
+  const candidates = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const state = reach[index];
+    if (!state) continue;
+    const word = stripGrouping(words[index]);
+    const next = (to, value) => { if (to <= words.length) reach[to] |= value; };
+    if (!word || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) { next(index + 1, state); continue; }
+    if (COMMAND_WRAPPERS.has(word.toLowerCase())) { next(index + 1, WRAPPED); continue; }
+    if (state & WRAPPED) {
+      // `--name=value` carries its value; any other option may take the next word.
+      if (/^--[^=]+=/.test(word)) { next(index + 1, WRAPPED); continue; }
+      if (/^-./.test(word)) { next(index + 1, WRAPPED); next(index + 2, WRAPPED); continue; }
+      if (WRAPPER_NUMBER_RE.test(word)) { next(index + 1, WRAPPED); continue; }
+    }
+    candidates.push(index);
+  }
+  return candidates;
+}
+// The program a candidate word names. A word holding whitespace is a command
+// string handed over whole (`env -S 'gh mm 1'`), so its first token is read.
+function candidateProgram(word) {
+  return programName(stripGrouping(String(word).trim().split(/\s+/)[0] || ""));
+}
 
 // The gh command a segment runs, when it is one the guards cannot read: an
 // unknown top-level command (an alias or extension), or `gh alias set|import`.
 // Returns null when the segment does not run gh at its command position.
-const GH_PROGRAM = new Set(["gh"]);
-
 export function ghCommandUnreadable(segment) {
   const rawWords = splitShellWordsRaw(String(segment || ""));
   const words = rawWords.map(shellArgvWord);
-  let index = 0;
-  let wrapped = false;
-  while (index < words.length) {
-    const word = words[index];
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) { index += 1; continue; }
-    if (COMMAND_WRAPPERS.has(word.toLowerCase())) { wrapped = true; index += 1; continue; }
-    break;
-  }
-  // A wrapper's own options and values (`timeout 30`, `sudo -u root`,
-  // `env -u X`, `nice -n 5`) sit between it and the program. Rather than model
-  // each wrapper's grammar, the program is the first gh word within a short
-  // window after it.
-  if (wrapped && !wordIsProgram(rawWords, words, index, GH_PROGRAM)) {
-    const end = Math.min(words.length, index + WRAPPER_ARGUMENT_WINDOW);
-    let found = -1;
-    for (let candidate = index; candidate < end; candidate += 1) {
-      if (wordIsProgram(rawWords, words, candidate, GH_PROGRAM)) { found = candidate; break; }
+  for (const candidate of programCandidates(words)) {
+    if (candidateProgram(words[candidate]) !== "gh" && candidateProgram(rawWords[candidate]) !== "gh") continue;
+    // `env -S 'gh mm 1'`: the command string is read as its own segment.
+    if (/\s/.test(words[candidate].trim())) {
+      const inner = ghCommandUnreadable(words[candidate]);
+      if (inner) return inner;
+      continue;
     }
-    if (found === -1) return null;
-    index = found;
+    const found = ghSubcommandUnreadable(words, candidate + 1);
+    if (found) return found;
   }
-  if (!wordIsProgram(rawWords, words, index, GH_PROGRAM)) return null;
-  index += 1;
+  return null;
+}
+
+function ghSubcommandUnreadable(words, start) {
+  let index = start;
   while (index < words.length && words[index].startsWith("-")) {
     index += ["-r", "--repo"].includes(words[index].toLowerCase()) ? 2 : 1;
   }

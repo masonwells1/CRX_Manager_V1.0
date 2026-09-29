@@ -1,12 +1,37 @@
 # Decision Log
 
-Last verified: 2026-09-26 (autonomous landing entry added)
+Last verified: 2026-09-28 (nested-command residuals entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
+
+**Source:** Mason, in the PR #795 ship session on 2026-09-28. Codex `gpt-6-luna` (xhigh) had
+reported 12 findings on the guards' reading of nested shells. Offered "fix and accept", "keep fixing"
+or "server-side", he replied, in his words: **"fix and accept"**.
+
+**Decision.**
+1. Findings that are bugs in the guards' own logic are fixed: the silent 32-inner-command cutoff, the
+   gh/git precondition on interpreter-fed input, a wrapper between a pipe and its interpreter, the
+   six-word wrapper window and its over-block, the two push guards' different nested-push policies,
+   and the missing hook-level tests.
+2. Three gaps are **accepted residuals**, because reading the command line cannot close them:
+   script files (`bash x.sh`, `pwsh -File x.ps1`); program names built at run time in a syntax other
+   than `$` or a backtick (PowerShell `& ("g" + "h")`, cmd `%VAR%`); and the Codex guard not
+   re-checking a decoded payload that mentions no gh/git against its other rules.
+3. The pre-existing quadratic push-parser timeout stays out of PR #795 and is tracked separately.
+
+**Why.** The line of work from PR #630 had run about 20 review-and-fix rounds since 2026-09-07, and
+each round found new hiding places. Parsing cannot see a script file's contents or a name assembled at
+run time. GitHub's protect-main ruleset still refuses any direct push to `main` whatever the command
+says.
+
+**Rule.** A review that re-raises one of the three accepted residuals is answered by pointing here,
+not by another parser patch. A new, concretely different bypass is still a real finding.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

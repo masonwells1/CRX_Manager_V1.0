@@ -103,7 +103,10 @@ try {
 }
 if (nestedCommands.tooDeep) deny(nestedTooDeepDenial("CODEX GATE"));
 if (nestedCommands.computed) deny(nestedComputedDenial("CODEX GATE"));
-if ([cmd, ...nestedCommands.commands].some(commandFedToInterpreter)) deny(commandFedToInterpreterDenial("CODEX GATE"));
+if (commandFedToInterpreter(cmd) ||
+    nestedCommands.commands.some((inner) => commandFedToInterpreter(inner, { nested: true }))) {
+  deny(commandFedToInterpreterDenial("CODEX GATE"));
+}
 if (nestedCommands.commands.some((inner) =>
   isGitPush(inner) || gitSubcommandIsDynamic(inner) || pushHiddenByShellComposition(inner))) {
   deny("CODEX GATE: this command runs a git push inside another shell or an evaluator (bash -c, cmd /c, pwsh -Command or -EncodedCommand, eval, Invoke-Expression, Start-Process). The review gate reads the outer command's text, so it cannot prove where a push carried that way would go. Run the push as its own plain command: `git -C <repo> push <remote> <refspec>`.");

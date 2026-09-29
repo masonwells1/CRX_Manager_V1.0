@@ -400,6 +400,32 @@ ok(/Mason/.test(r.decision?.permissionDecisionReason || ""), "--admin deny says 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash; gh pr merge 9 --admin" } });
 ok(r.decision?.permissionDecision === "deny", "--admin later in a chain is still denied");
 
+// Nested administrator merges through the REAL hook, not just the library
+// (Codex luna, PR #795, 2026-09-26, finding 12). Each is refused before any gh
+// call, so no network is needed.
+{
+  const NESTED_ADMIN = "gh pr merge 123 --admin --squash";
+  const pad = (word, count) => Array(count).fill(word).join(" ");
+  for (const [command, why] of [
+    [`bash -c "${NESTED_ADMIN}"`, /--admin/],
+    [`pwsh -EncodedCommand ${Buffer.from(NESTED_ADMIN, "utf16le").toString("base64")}`, /--admin/],
+    [`bash ${pad("--norc", 70)} -c "${NESTED_ADMIN}"`, /option words/],
+    [`${Array.from({ length: 40 }, (_, i) => `bash${" ".repeat(i + 1)}-c 'echo ok'; `).join("")}bash -c '${NESTED_ADMIN}'`, /inner commands/],
+    ["Get-Content payload.txt | iex", /on its input/],
+    [`echo '${NESTED_ADMIN}' | env bash`, /on its input/],
+    ['cmd /c "type payload.txt | bash"', /on its input/],
+    ["sudo -u root -g staff -H -n -E gh mm 123", /is not a gh command this guard can read/],
+  ]) {
+    r = runHook({ tool_name: "Bash", tool_input: { command } });
+    ok(r.decision?.permissionDecision === "deny" && why.test(r.decision?.permissionDecisionReason || ""),
+      `the real hook refuses ${JSON.stringify(command.slice(0, 60))} for the expected reason`);
+  }
+  for (const command of ["timeout 30 echo gh mm 123", "git log --oneline | grep -n bash", "bash -c 'echo ok'; bash -c 'echo ok'"]) {
+    r = runHook({ tool_name: "Bash", tool_input: { command } });
+    ok(r.status === 0 && r.decision === null, `CONTROL: the real hook passes ${JSON.stringify(command)}`);
+  }
+}
+
 r = runHook({ tool_name: "mcp__Desktop_Commander__read_file", tool_input: { path: "x" } });
 ok(r.status === 0 && r.decision === null, "unrelated MCP tool passes through");
 
@@ -626,8 +652,9 @@ ok(
   "a nested command built at run time is refused",
 );
 ok(
-  /scannedCommands\.some\(\s*commandFedToInterpreter\s*\)/.test(guardSource),
-  "a command fed to an interpreter on its input is refused",
+  /commandFedToInterpreter\(\s*toolInput\.command\s*\)/.test(guardSource) &&
+    /nested\.commands\.some\(\s*\(inner\)\s*=>\s*commandFedToInterpreter\(\s*inner\s*,\s*\{\s*nested:\s*true\s*\}\s*\)\s*\)/.test(guardSource),
+  "a command fed to an interpreter on its input is refused, nested commands with cmd's reading as well",
 );
 // A single `&` runs both sides — POSIX in the background, cmd sequentially — so
 // it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved
