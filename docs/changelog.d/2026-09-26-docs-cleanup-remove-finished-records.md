@@ -2,7 +2,7 @@
 
 Mason asked for a full docs cleanup. It landed in three PRs. The first (#830) corrected stale
 facts in the living docs and copied every open item out of the records due for removal. The
-second (#833, 138 files) and the third (this change, 139 files) removed those finished records.
+second (#839, 138 files) and the third (this change, 139 files) removed those finished records.
 Splitting the removal kept each PR under CodeRabbit's 150-file limit.
 
 **What was removed (277 files across parts 2 and 3):**
@@ -53,7 +53,7 @@ paths that no longer existed even before this cleanup, and they were not touched
 
 **Source citations:** twelve `(Source: …)` citations in `docs/manual/KNOWN_ISSUES.md` named files
 that parts 2 and 3 remove. Each now says the file was removed in this cleanup and gives a
-`git show 4b6ff6293:<path>` command that recovers it: 4 were edited in #833 and 8 in this change.
+`git show 4b6ff6293:<path>` command that recovers it: 4 were edited in #839 and 8 in this change.
 These edits touch only those lines. A trial merge against the open field-season delivery PR (#832
 at the time), which also edits that file, showed no conflict.
 
