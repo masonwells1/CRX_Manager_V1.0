@@ -101,6 +101,20 @@ ok(!isMachineGenerated(""), "empty not machine");
   ok(isHoldPhrase(authoredByMason("stop.\n\n> quoting the peer here\n")),
     "Mason's stop still latches alongside a blockquote");
 
+  // 5b. Handoff item 5 (Mason, 2026-09-28): a subagent's hand-back report
+  //     arrives wrapped in <agent-message …>. It is another agent's words, so it
+  //     is stripped like a peer block, while Mason's own words around it still
+  //     latch. It is NOT a machine tag: the whole prompt must not go inert.
+  const AGENT_REPORT =
+    '<agent-message from="general-purpose" id="a1">Found it. We should pause the rollout ' +
+    "and stop the loop before shipping.</agent-message>";
+  ok(!isMachineGenerated(AGENT_REPORT), "agent-message is not a machine tag (Mason's words beside it must still count)");
+  ok(!isHoldPhrase(authoredByMason(AGENT_REPORT)), "a subagent report saying pause/stop does not latch");
+  ok(!hasAuthoredText(AGENT_REPORT), "a bare subagent report leaves no Mason-authored text");
+  ok(!isHoldPhrase(authoredByMason('<agent-message from="x">pause everything')), "an unterminated subagent report is stripped to the end");
+  ok(isHoldPhrase(authoredByMason(AGENT_REPORT + "\nstop now")), "Mason's stop after a subagent report still latches");
+  ok(isHoldPhrase(authoredByMason("pause here.\n" + AGENT_REPORT)), "Mason's pause before a subagent report still latches");
+
   // The negation guard added after "going to bed don't stop" is untouched.
   ok(!isHoldPhrase(authoredByMason("going to bed, don't stop")), "negated stop still not a hold");
   ok(!isHoldPhrase(authoredByMason("build me the invoices page")), "normal build still not a hold");
@@ -472,6 +486,11 @@ rmSync(hbProj, { recursive: true, force: true });
     ["a message naming the hook file",
       "take a look at .claude/hooks/stop-wrap.mjs — that is the one, right?", false],
     ["Mason's pause beside a peer block", "pause here.\n" + PEER_BLOCK, true],
+    // Handoff item 5 (2026-09-28): a subagent's hand-back report is data.
+    ["a subagent report saying pause",
+      '<agent-message from="general-purpose">pause the rollout and stop the loop</agent-message>', false],
+    ["Mason's stop after a subagent report",
+      '<agent-message from="general-purpose">all done</agent-message>\nstop everything', true],
     // 2026-09-24: a stop only ONE strip order keeps must still latch end to
     // end — the hook's "not Mason's turn" gate runs after the latch.
     ["Mason's stop after an inline-quoted open tag, before a peer block",

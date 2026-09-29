@@ -130,7 +130,15 @@ export function isMachineGenerated(prompt) {
 
 // Peer-session envelopes are stripped as data even though they are deliberately
 // absent from MACHINE_TAG_NAMES — see the note on that list.
-const NON_AUTHORED_TAG_NAMES = ["cross-session-message", ...MACHINE_TAG_NAMES];
+//
+// "agent-message" (Mason, 2026-09-28, handoff item 5): a subagent's hand-back
+// report arrives wrapped in <agent-message …>. Like a peer's message it is
+// another agent's words, not Mason's, and it repeatedly tripped the gauntlet
+// and ship-intent reminders and could latch hold.json on a word like "pause".
+// Mason chose the same treatment as cross-session-message: strip the block,
+// keep matching whatever he typed around it — NOT a MACHINE_TAG_NAMES entry,
+// which would make his own words in the same prompt inert.
+const NON_AUTHORED_TAG_NAMES = ["cross-session-message", "agent-message", ...MACHINE_TAG_NAMES];
 
 // ``` / ~~~ fenced blocks, line-based. Only a fence that CLOSES is removed.
 //

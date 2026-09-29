@@ -1,11 +1,22 @@
 # Decision Log
 
-Last verified: 2026-09-28 (CodeRabbit follow-up clearance entry added)
+Last verified: 2026-09-29 (subagent-report entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-28 — subagent reports are data, not Mason's words
+
+**Source:** Mason, 2026-09-28, answering the handoff's item-5 question with "Quit asking for
+permissions from me I grant them all."
+
+**Decision.** A subagent's `<agent-message …>` hand-back report is stripped from what the phrase
+hooks read, exactly like a peer's `<cross-session-message>` (2026-08-26): it can neither latch nor
+clear a hold, while anything Mason types in the same prompt still counts. It is not a machine tag.
+
+**Operative rule.** `NON_AUTHORED_TAG_NAMES` in `.claude/hooks/prompt-source-lib.mjs`.
 
 ## 2026-09-28 — a clean CodeRabbit follow-up after an approval clears the head
 
