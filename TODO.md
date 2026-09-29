@@ -309,6 +309,22 @@ then read it with `git show e81853970:<path>`. Re-verify against the live app be
 - **Vendor Purchase Order PDF/email** and a **single combined PDF for batch invoice print** (2026-05-04
   reports audit): neither exists today.
 
+**Deferred by the June 2026 UI overhaul** (source: `docs/archive/2026-summer-closeout/build-loops/ui-overhaul-v2/STATE.md`,
+removed in this cleanup; recover with
+`git show 4b6ff6293:docs/archive/2026-summer-closeout/build-loops/ui-overhaul-v2/STATE.md`; each was still open in code on 2026-09-28)
+- **Owner decision — old A/R pages:** `/ar-aging`, `/payment-history` and the other old money pages still
+  have their own routes and links next to the combined `/accounts-receivable` workspace. Turning them into
+  redirects and dropping the extra links would change where you click, so the overhaul left it to you.
+- **Dashboard alerts not built:** overdue vendor bills (the summary RPC has no AP-due field) and blend
+  tickets awaiting approval.
+- **Act-from-the-list actions not built:** "Create Invoice" from the Orders list (it branches on split
+  allocations, so it stays on the order page) and "Link Order" / "Create Invoice" on Blend Tickets rows (it
+  needs an order picker).
+- **Search and balance gaps:** a by-product filter on Field Invoices / Unbilled Applications (invoice lines
+  need a product join), and a per-field outstanding balance on the customer Fields tab (it needs a new
+  field-level source).
+- Dropped as low value: sticky summary cards on A/R Aging, which shows aging as table columns.
+
 **Proof still owed**
 - **Commission as-of report, live real-path proof** (acceptance #6 of the 2026-09-03 spec, removed in
   this cleanup): create and post a disposable `[E2E]` commission payment (a live-data change — needs Mason's OK first; never use or void a real payment), run the report for a date
