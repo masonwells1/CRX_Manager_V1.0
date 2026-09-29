@@ -55,10 +55,13 @@ const toolInput = payload?.tool_input || payload?.toolInput || {};
 // documentation that merely discusses protected paths allowed.
 const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
 const input = toolInput && typeof toolInput === "object" ? toolInput : {};
-const toolName = String(payload?.tool_name || payload?.toolName || "");
-// A parseable object with no tool name (e.g. `{}`) gives every check below
-// nothing to match, so it is as uninspectable as malformed JSON.
-if (!toolName) skippedCheck("input had no tool name");
+const rawToolName = payload?.tool_name || payload?.toolName;
+// A parseable object with no usable tool name (e.g. `{}`) or no tool input at
+// all gives every check below nothing to match, so it is as uninspectable as
+// malformed JSON. An empty `tool_input: {}` is still a real, readable call.
+if (typeof rawToolName !== "string" || !rawToolName) skippedCheck("input had no tool name");
+if (payload.tool_input == null && payload.toolInput == null) skippedCheck("input had no tool input");
+const toolName = rawToolName;
 const eventCwd = String(payload?.cwd || "");
 // Preserve the event-first cwd used by the shell-state checks below. Patch
 // destinations use pathCandidateCwd instead: an explicit relative tool

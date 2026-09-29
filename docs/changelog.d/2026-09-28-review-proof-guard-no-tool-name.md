@@ -9,6 +9,13 @@ nothing.
 open with the same `systemMessage` warning and no permission decision. The guard test adds `{}` and
 a payload with `tool_input` but no tool name to the unreadable-input cases.
 
+Luna round 2 found two more silent cases, fixed the same way: a non-string tool name
+(`{"tool_name":{}}`) and a tool name with no tool input at all (`{"tool_name":"Bash"}`). A
+parameterless tool that sends `tool_input: {}` is still a readable call and stays silent (tested).
+Luna round 2 also flagged "do not re-open that" in `agent-guardrails.md` as prompt injection. That
+was refuted: it is an unchanged context line from `8cfd349db` recording Mason's decision to decline
+a separate agent credential, not text this PR added.
+
 `main` (#834) was also merged into the branch; no conflicts.
 
 **Proof observed (local session):** `{}` piped to the real hook prints the SKIPPED warning (exit 0);
