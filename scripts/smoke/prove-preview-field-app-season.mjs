@@ -1692,7 +1692,10 @@ try {
   // cohort first would strand them. Read from the directory, not from the selected list, so the
   // check holds whether or not the replay includes the cohort.
   const commissionCohort = readdirSync(MIGRATIONS).filter((name) => /^20260914100\d{3}_.*\.sql$/.test(name)).sort();
-  assert.equal(commissionCohort.length, 8, `expected the eight 20260914100* commission migrations, found ${commissionCohort.length}`);
+  // The cohort is 20260914100100..20260914100900: nine files, the next-invoice-number file included.
+  assert.equal(commissionCohort.length, 9, `expected the nine 20260914100* cohort migrations, found ${commissionCohort.length}`);
+  assert.ok(commissionCohort.at(-1).startsWith('20260914100900_'),
+    `expected the cohort to end at 20260914100900, found ${commissionCohort.at(-1)}`);
   for (const candidate of [CROSS_SEASON_GUARD, UNCHANGED_DATE_GUARD, GENERIC_CUTOVER_BARRIER, GENERIC_CREATION_GUARD]) {
     assert.ok(path.basename(candidate) > commissionCohort.at(-1),
       `${path.basename(candidate)} must sort above ${commissionCohort.at(-1)}: the commission cohort applies first`);

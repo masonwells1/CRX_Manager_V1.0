@@ -137,6 +137,13 @@ rather than absorbed into this delivery. A 2026-09-21 attempt to narrow the row 
 was REVERTED on 2026-09-22 after it was measured to create an unrecoverable mixed-date group (see
 row 931), so this rule stands unchanged and both files still apply in ONE window.
 
+**PRE-APPLY PROOF RULE: run `npm run proof:field-app-season` on the delivery PR's exact head, and see
+both `PREVIEW_SEASON_PROOF_PASS` and `RECEIPT_GATE_NARROWING_PROOF_PASS`, before applying ANY of
+`20260914101000`..`20260914101300`.** The `save_field_app_invoice` smoke chain is container-only, so
+`node scripts/smoke/run-smoke.mjs --all` or `--area billing` announces it as SKIPPED and still exits 0
+when other chains run. A green smoke run is therefore NOT evidence for these files; only the two
+container provers are. (CodeRabbit on the field-season delivery PR, 2026-09-28.)
+
 **Why the effective stamp is not always the authored one.** Row 916
 (`20260904185900_refuse_null_job_field_acres`, PR #606) was recorded under the BARE ledger name
 `refuse_null_job_field_acres`, so the ordering guard synthesizes `<version>_<name>` —
