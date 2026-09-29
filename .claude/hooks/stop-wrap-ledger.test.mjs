@@ -279,6 +279,29 @@ try {
     "a session commit replayed through a conflict-resolved rebase must still warn without a ledger");
   pass++;
 
+  // ── Session 1j (Codex P2, PR #827 round 9): a conflict resolution that only
+  //    RENAMES an existing changelog fragment writes no new record → warns ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side 4\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base a fourth time"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side 4\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base a fourth time"], tmp, { past: true });
+  const s1j = "ledger-test-rename-in-merge";
+  snapshots.push(startSession(s1j));
+  const conflicted4 = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted4.status, 0, "setup: the fourth merge must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "hand-resolved a fourth time\n");
+  git(["mv", "docs/changelog.d/2026-09-27-merge-resolution.md", "docs/changelog.d/2026-09-27-renamed.md"], tmp);
+  git(["add", "base.txt"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const renamedInMerge = runStopWrap(s1j, tmp);
+  assert.match(renamedInMerge.stdout, LEDGER_WARNING,
+    "renaming an existing changelog entry during a merge resolution must not count as a new record");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));

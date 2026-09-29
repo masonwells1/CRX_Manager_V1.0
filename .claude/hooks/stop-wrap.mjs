@@ -556,7 +556,9 @@ function authoredMergeFiles(sha) {
     })
     .filter(Boolean);
   if (/^[0-9a-f]{40,64}$/.test(autoTree)) {
-    return parse(runGit(["diff-tree", "-r", "--name-status", autoTree, sha]), (st) => st === "A");
+    // -M: a resolution that only RENAMES an existing fragment reports "R", not
+    // "A", so it cannot pass as a new record (Codex P2, PR #827 round 9).
+    return parse(runGit(["diff-tree", "-r", "-M", "--name-status", autoTree, sha]), (st) => st === "A");
   }
   // Combined-diff fallback: one status letter per parent; all-"A" = new file.
   return parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
