@@ -48,14 +48,12 @@ const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260921180000_soft
 const SIG = 'public.soft_delete_customer_document(uuid,uuid,text)';
 const SMOKE_CHAIN = path.join(ROOT, 'scripts', 'smoke', 'smoke-customer-document-rep-soft-delete.sql');
 
-// Skipped files. Re-read against the live ledger 2026-09-27 06:48Z (read-only,
-// by name): 20260914100800 is live (20260927060531) and is REPLAYED now, so the
-// proof runs through production's receipt trigger. 20260914100900 is not live;
-// replaying it would build a schema production does not have. It does not
-// touch customer_documents (asserted below). Re-check this list against the
-// ledger before 20260921180000 applies (gpt-6-sol MED on #800).
+// Skipped files. Re-read against the live ledger 2026-09-28 (read-only, by
+// name): 20260914100800 (20260927060531) and 20260914100900 (20260928025520)
+// are live and are REPLAYED, so the proof runs through production's receipt
+// trigger. Re-check this list against the ledger before 20260921180000
+// applies (gpt-6-sol MED on #800).
 const PARKED = new Set([
-  '20260914100900_repair_commission_history_label_snapshots.sql',
   '20260914100700_customer_document_bytes_server_only.sql',
 ]);
 // 20260914100700 (the customer-document bytes change, #764) IS live

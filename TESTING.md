@@ -4,18 +4,20 @@ This guide will walk you through testing the application. No coding experience n
 
 ## Quick Facts
 
-| Metric | Count |
+| What | Where / when |
 |--------|-------|
-| **Unit tests** | 323 Vitest test/spec files in `src/`; run `npm test` for the current assertion/pass total |
-| **E2E specs** | 94 Playwright spec files in `tests/e2e/` |
-| **Pre-commit hook** | Runs `npm run build` + `npm test` before every commit — blocks if anything fails |
+| **Unit tests** | Vitest `*.test.ts(x)` files next to the code in `src/`; `npm test` prints the current file and pass totals |
+| **E2E specs** | Playwright specs in `tests/e2e/`. They run only against a staging Supabase project, and none exists yet, so they cannot run today (see [Running E2E Tests](#running-e2e-tests)) |
+| **Pre-commit hook** | Fast checks: the SQL and frontend validators and the ledger check look at the files you staged; the private-artifact containment check also scans untracked and modified files. It does **not** run the build or the tests |
+| **Pre-push hook** | Private-artifact containment, `npm run typecheck`, and `npm run build` — blocks the push if any fails |
+| **CI (GitHub Actions)** | Lint, typecheck, unit tests with coverage and build run when the `ci-scope` job routes the pull request to full CI (a docs-only change skips them); the documentation and SQL checks run on every pull request. This is the gate a change must pass before it can merge |
 
 ## Table of Contents
 1. [Setting Up Your Computer](#setting-up-your-computer)
 2. [Running the Application Locally](#running-the-application-locally)
 3. [Running Unit Tests](#running-unit-tests)
 4. [Running E2E Tests](#running-e2e-tests)
-5. [Deploying to Staging](#deploying-to-staging)
+5. [Staging (not set up yet)](#staging-not-set-up-yet)
 6. [Pre-Release Checklist](#pre-release-checklist)
 7. [Troubleshooting](#troubleshooting)
 
@@ -30,13 +32,13 @@ Before you start, you need to install a few programs on your computer:
 Node.js is required to run the application.
 
 1. Go to https://nodejs.org/
-2. Download the "LTS" (Long Term Support) version
+2. Download Node.js **24** — the version this project pins in its `.nvmrc` file
 3. Run the installer and follow the instructions
 4. To verify it's installed, open Terminal (Mac) or Command Prompt (Windows) and type:
    ```bash
    node --version
    ```
-   You should see a version number like `v18.17.0`
+   You should see a version number starting with `v24`
 
 ### 2. Install Git
 
@@ -159,7 +161,7 @@ Unit tests check individual pieces of logic (calculations, PDF generation, data 
 npm test
 ```
 
-This runs the full Vitest suite. The repository currently has 323 unit test/spec files in `src/`; assertion and pass totals come from the current runner output rather than a hard-coded documentation count.
+This runs the full Vitest suite. File and pass totals come from the runner's own output rather than a hard-coded documentation count.
 
 ### Running Tests in Watch Mode
 
@@ -180,13 +182,13 @@ This keeps running and automatically re-tests when you save a file. Great during
 - **UI components:** SignatureCanvas, ActivityFeed, CommentsSection
 - **Bulk and worksheet import:** BulkCustomerImport, BulkOrderImport, BulkProductImport, BulkPOImport, BulkQuoteImport, BulkTicketUpload, ManualTicketCreate, and the governed product-pricing `.xlsx` round trip
 
-### Pre-Commit Hook
+### What Runs Automatically
 
-Every time you commit code, the pre-commit hook automatically runs:
-1. `npm run build` — ensures the app compiles
-2. `npm test` — ensures the full unit-test suite passes
+- **On every commit (pre-commit hook):** fast checks — the SQL and frontend validators and the ledger check on the staged files, and the private-artifact containment check, which also scans untracked and modified files (plus agent-workflow and dependency checks when those files changed). It does **not** build the app or run the tests.
+- **On every push (pre-push hook):** private-artifact containment, `npm run typecheck`, and `npm run build`. If any fails, the push is **blocked**.
+- **On every pull request (CI):** the documentation and SQL checks always; lint, typecheck, the full unit-test suite with coverage, and the build when the `ci-scope` job routes the pull request to full CI (a docs-only change skips them). Run `npm test` yourself before pushing if you want the test answer early.
 
-If either fails, the commit is **blocked**. You must fix the issue before committing.
+The hooks live in the tracked `.husky/` folder. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#pre-commit-checks) for the full list.
 
 ---
 
@@ -199,15 +201,33 @@ E2E (end-to-end) tests open a real browser and test the full application — log
 - **Login/Logout:** Can users log in and out?
 - **Customer Management:** Can you create, view, and search for customers?
 - **Permissions:** Can users access the pages they're supposed to?
-- **All 80 pages:** Every lazy-loaded page is covered by the page-loading/basic-functionality inventory
+- **Page loading:** The page-loading/basic-functionality inventory covers selected lazy-loaded pages; it is not a complete inventory of every page
+
+### Before You Can Run Them
+
+**E2E tests cannot run today.** They create and delete test data, so they are locked to a separate
+**staging** Supabase project and refuse to touch production — there is no override. No staging
+project exists yet (it is an open owner action in `TODO.md`), and the CI E2E job is switched off
+for the same reason.
+
+When a staging project exists, set these before any `playwright` command (the `VITE_*` values from
+the section above are not enough — Playwright overwrites them with the staging ones):
+
+- `E2E_TARGET_ENV=staging`
+- `E2E_SUPABASE_URL` (a non-production `https://*.supabase.co` URL)
+- `E2E_SUPABASE_ANON_KEY`
+- `E2E_TEST_EMAIL` and `E2E_TEST_PASSWORD` (the staging test account)
+
+The default E2E Playwright configuration also refuses to start while any TypeScript file under `tests/e2e/` still contains the production
+Supabase address. Full setup and the `[E2E]` test-data rules are in
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#e2e-tests-playwright).
 
 ### Running the Tests
 
-1. Make sure the `.env` file is set up (see previous section)
-2. In your terminal, run:
-   ```bash
-   npm run test:e2e
-   ```
+Once the staging settings above are in place, run:
+```bash
+npm run test:e2e
+```
 
 This will:
 - Start the application automatically
@@ -277,59 +297,15 @@ This opens a special interface where you can:
 
 ---
 
-## Deploying to Staging
+## Staging (not set up yet)
 
-Staging is a separate environment where you can test changes before deploying to production.
+There is **no staging environment** today — no staging Supabase project and no staging branch. The
+live app at croprxsolutions.app is the only deployed environment. Creating a staging Supabase
+project (plus the GitHub secrets the E2E job needs) is an open owner action in `TODO.md`; until it
+exists, the E2E suite and the CI E2E job cannot run.
 
-### Why Use Staging?
-
-- Test with real-world data without affecting your customers
-- Verify everything works in a production-like environment
-- Catch issues before they reach your users
-
-### Setting Up Staging
-
-#### Step 1: Create a Staging Database
-
-**Important:** Never use your production database for testing!
-
-1. Go to https://supabase.com/dashboard
-2. Click "New Project"
-3. Name it something like "YourApp Staging"
-4. Choose the same region as your production database
-5. Set a strong password
-6. Wait for the project to be created (takes 1-2 minutes)
-
-#### Step 2: Get Staging Credentials
-
-1. In your staging project, go to Settings → API
-2. Copy the Project URL and anon key
-3. Keep these handy for the next step
-
-#### Step 3: Deploy to Vercel
-
-Vercel is the hosting service used for this project.
-
-1. Go to https://vercel.com and sign up with GitHub
-2. Click "Add New Project"
-3. Import your GitHub repository
-4. Configure:
-   - **Framework Preset:** Vite
-   - **Build Command:** `npm run build`
-   - **Output Directory:** `dist`
-5. Click "Environment Variables" and add your staging credentials:
-   - `VITE_SUPABASE_URL` → [your staging URL]
-   - `VITE_SUPABASE_ANON_KEY` → [your staging anon key]
-6. Click "Deploy"
-
-After 2-3 minutes, your staging site will be live with a URL like `https://your-project.vercel.app`
-
-#### Step 4: Test Your Staging Site
-
-1. Open the staging URL in your browser
-2. Try logging in
-3. Create a test customer, product, or order
-4. Verify everything works as expected
+Do not treat a Vercel preview deployment as a staging area: nothing here proves which database it
+talks to, so assume it is the live one.
 
 ---
 
@@ -340,20 +316,22 @@ Before deploying any changes to production, run through this checklist:
 ### ✅ Local Testing
 
 - [ ] Code runs locally without errors (`npm run dev`)
-- [ ] All automated tests pass (`npm run test:e2e`)
+- [ ] Unit tests pass (`npm test`) — CI runs them again when its `ci-scope` job routes the pull request to full CI
 - [ ] Production build works (`npm run build` then `npm run preview`)
 - [ ] No console errors in the browser (press F12 to check)
 
-### ✅ Staging Testing
+### ✅ Manual Testing (read-only — there is no staging environment)
 
-- [ ] Deploy changes to staging environment
+The local app talks to the one live database, so these checks must not create, change or delete
+any business record (signing in and out is fine). Creating test customers, orders or other records is a live-data change: it needs Mason's
+explicit OK first, `[E2E]`-tagged fixtures, and a planned cleanup (`AGENTS.md` › Safety and
+Protected Delivery). Until staging exists, prove write paths with automated tests and the
+rolled-back smoke chains instead.
+
 - [ ] Test login/logout functionality
-- [ ] Create a test customer
-- [ ] Create a test order
+- [ ] Open existing customers, orders and invoices and check they display correctly
 - [ ] Test search and filter features
 - [ ] Test on mobile (resize your browser window)
-- [ ] Check that data saves correctly
-- [ ] Verify email notifications work (if applicable)
 
 ### ✅ Code Review
 
@@ -370,12 +348,13 @@ Before deploying any changes to production, run through this checklist:
 
 ### ✅ Deployment
 
-- [ ] Push changes to GitHub
-- [ ] Verify staging deployment succeeded
-- [ ] Monitor staging for 24 hours for any issues
-- [ ] Deploy to production
+- [ ] Push your branch and open a pull request (nobody pushes to `main` directly — it is protected)
+- [ ] Required CI checks pass and review is clean
+- [ ] Merge the pull request — the merge is what deploys production through Vercel
 - [ ] Test production immediately after deployment
-- [ ] Monitor error logs for the first hour
+- [ ] Monitor error logs for the first hour (Vercel keeps one-click rollback if something is wrong)
+
+The full landing procedure is in `.claude/commands/ship.md`; see also [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
@@ -422,17 +401,11 @@ npm install
    - Check Supabase dashboard to see if project is paused
    - Verify RLS policies allow the test user to access data
 
-### Problem: Tests pass locally but fail on staging
+### Problem: E2E tests stop immediately with `E2E_SAFETY: ...`
 
-**Possible causes:**
-1. Environment variables not set correctly on Vercel
-2. Staging database has different data/structure
-3. Migration didn't run on staging database
-
-**Solution:**
-- Check environment variables in hosting dashboard
-- Verify staging database schema matches production
-- Check browser console for errors
+**Cause:** the staging-only guard refused to start. Either the `E2E_*` settings are missing, they
+point at production, or a file under `tests/e2e/` still contains the production Supabase address.
+This is expected until a staging project exists — see [Running E2E Tests](#running-e2e-tests).
 
 ### Problem: "Permission denied" when running tests
 
@@ -496,6 +469,12 @@ npm run lint         # Run ESLint
 ```bash
 npm test                  # Run the full unit-test suite
 npm run test:watch        # Run unit tests in watch mode
+npm run test:coverage     # Full suite with the coverage report CI uses
+npm run test:billing      # One focused area; also test:inventory, test:lifecycle,
+                          # test:pricing, test:security, test:idempotency,
+                          # test:regression, test:drift (all via test:area)
+npm run test:contracts    # RPC contract and idempotency inventory tests
+npm run check:docs        # Documentation consistency check CI runs
 ```
 
 ### E2E Tests (Playwright)
@@ -504,16 +483,42 @@ npm run test:e2e          # Run all E2E tests
 npm run test:e2e:ui       # Interactive test UI
 npm run test:e2e:headed   # Watch tests run in browser
 npm run test:e2e:report   # View test report
+npm run test:e2e:smoke    # Only the @smoke-tagged E2E tests
+```
+(All E2E test-running commands need the staging settings described above; `test:e2e:report` only opens an existing report.)
+
+### Live-database checks
+```bash
+npm run db-sweeps              # Read-only database-invariant sweeps (see scripts/db-invariant-sweeps/README.md)
+npm run smoke -- --list        # List the rolled-back smoke chains
+npm run smoke -- --spec <rpc>  # Run the chain(s) covering one RPC (see scripts/smoke/README.md)
 ```
 
-> **Pre-commit hook:** `npm run build` + `npm test` run automatically before every commit. Commits are blocked if anything fails.
+**Two modes.** With `SUPABASE_DB_URL` set and `psql` on the PATH, `npm run db-sweeps` and
+`npm run smoke -- --spec <rpc>` run their SQL (`--list` only lists chains and never runs any)
+against the database. Without `SUPABASE_DB_URL` (for the sweeps, also without `psql`) — the usual
+case — they only **print** the SQL: the sweeps exit 0, and the smoke runner exits 2 if any selected
+chain is psql-only (it skips that chain; with the URL set but no `psql`, a chain fails instead of
+printing). In print-only mode nothing has run yet: the check counts only once that SQL is actually executed (for example through the
+Supabase MCP `execute_sql` tool) and its result is read. In live mode the runner has already executed it; do not run the same chain again. For the sweeps, `npm run db-sweeps:strict`
+refuses the print-only mode and exits 2 instead; an automated sweep run must use it. The smoke runner
+has no such switch, so an automated smoke check must run with `SUPABASE_DB_URL` and `psql` and
+confirm each chain reported its pass marker, never just a 0 exit.
+
+The sweeps are read-only. The smoke chains always roll back, but they run against the live
+database and are not free of side effects: sequence numbers they consume stay consumed, they take
+brief row locks, and `smoke-auto-expire-draw-skip.sql` briefly locks and expires real quotes inside
+its rolled-back transaction. Run only the chain for the RPC you changed, off-hours when cautious
+(`scripts/smoke/README.md`).
+
+> **Hooks:** pre-commit runs fast staged-file checks; pre-push runs typecheck and build; CI runs lint, tests, and the build when its `ci-scope` job routes the pull request to full CI (a docs-only change skips them); the documentation check runs on every pull request.
 
 ### Git Commands
 ```bash
 git status                    # See what changed
 git add .                     # Stage all changes
 git commit -m "message"       # Commit changes
-git push                      # Push to GitHub
+git push                      # Push your branch to GitHub (never to main)
 git pull                      # Pull latest changes
 ```
 
@@ -522,7 +527,7 @@ git pull                      # Pull latest changes
 ## Testing Best Practices
 
 1. **Test locally first:** Always run tests on your computer before pushing code
-2. **Test staging before production:** Never deploy directly to production
+2. **Land through a pull request:** never push to `main`; the merge is what deploys production
 3. **Run tests regularly:** Run after every significant change
 4. **Check both automated and manual testing:** Automated tests don't catch everything
 5. **Test on multiple browsers:** Chrome, Firefox, Safari when possible
