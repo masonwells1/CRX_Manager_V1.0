@@ -16,7 +16,9 @@ same files; replaces PR #822.
   denies any call that could merge when the guard crashes, fails to load, exits abnormally, prints
   something that is not a verdict, or is still running at 36 seconds (hook timeout now 45 seconds).
   Without it, a guard that crashed or was killed printed nothing, which allowed the merge without the
-  Sol proof (Sol, 2026-09-27). Codex's production guard keeps that gap as a recorded follow-up.
+  Sol proof (Sol, 2026-09-27). Output other than silence or a real PreToolUse decision counts as a
+  failure (Luna). Codex's production guard already denies on a crash; a watchdog for a kill at its
+  timeout is a recorded follow-up.
 - `scripts/check-agent-guidance.mjs`: derives that production-gate set from the hook manifests and
   the import graph and fails if any file lacks its prompt.
 - `scripts/agent-manifest-parity.mjs` and the "wired hooks documented" row of

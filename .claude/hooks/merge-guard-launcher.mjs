@@ -44,7 +44,11 @@ const MAX_OUTPUT_BYTES = 1024 * 1024;
 // decides only what happens when the real guard FAILED, so it over-denies rather
 // than parse. Ordinary work (npm, git status, file reads) keeps running while the
 // guard is broken; anything naming a merge, the gh CLI, GitHub's API or GraphQL
-// waits until the guard is fixed.
+// waits until the guard is fixed. Its reach matches the guard's own: the guard
+// reads command TEXT, so a merge assembled at run time (decoded, or built from
+// separate strings) passes the working guard too — the honest limit recorded in
+// docs/reference/agent-guardrails.md. The test checks this list against every
+// merge form the guard denies.
 export function mayMerge(input) {
   let text = String(input || "");
   try {
@@ -60,14 +64,16 @@ function denial(reason) {
   });
 }
 
-// A guard that exited normally either says nothing (allow) or prints one JSON
-// object (its verdict). Anything else means it did not finish its job.
-function isVerdict(stdout) {
-  const text = stdout.trim();
+// A guard that exited normally either says nothing (allow) or prints one
+// PreToolUse decision. Any other output, including JSON without a decision
+// (which the harness would treat as an allow), means it did not finish its job
+// (Luna, 2026-09-28).
+export function isVerdict(stdout) {
+  const text = String(stdout || "").trim();
   if (!text) return true;
   try {
-    const value = JSON.parse(text);
-    return value !== null && typeof value === "object" && !Array.isArray(value);
+    const decision = JSON.parse(text)?.hookSpecificOutput;
+    return decision?.hookEventName === "PreToolUse" && ["allow", "deny", "ask"].includes(decision?.permissionDecision);
   } catch {
     return false;
   }

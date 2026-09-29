@@ -15,6 +15,7 @@ import {
   KILL_AFTER_MS,
   failureVerdict,
   guardPathAllowed,
+  isVerdict,
   mayMerge,
   superviseGuard,
 } from "./merge-guard-launcher.mjs";
@@ -36,6 +37,7 @@ function ok(condition, message) {
 const payload = (command) => JSON.stringify({ tool_name: "Bash", tool_input: { command } });
 const MERGE = payload("gh pr merge 812 --squash --match-head-commit abc");
 const PLAIN = payload("npm run build");
+const DENY_JSON_FOR_VERDICT = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "no" } });
 const decisionOf = (stdout) => {
   try { return JSON.parse(stdout).hookSpecificOutput; } catch { return null; }
 };
@@ -61,6 +63,39 @@ for (const command of ["npm run build", "git status --short", "ls -la", "node sc
 ok(!mayMerge(JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" }, cwd: "C:\\merge-fix\\gh" })),
   "only the tool call is judged, not the working directory around it");
 
+// Parity with the working guard (Luna, 2026-09-28): every merge form the real
+// guard denies without GitHub must also count as a possible merge here, so a
+// broken guard is never weaker than a working one. Forms the guard cannot see
+// (a merge decoded at run time) are allowed by the working guard too.
+const realGuardDenies = (command) => {
+  const res = spawnSync(process.execPath, [REAL_GUARD], { input: payload(command), encoding: "utf8", timeout: 30_000 });
+  try { return JSON.parse(res.stdout).hookSpecificOutput?.permissionDecision === "deny"; } catch { return false; }
+};
+const guardForms = [
+  "gh api graphql -f query='mutation { mergePullRequest(input: {}) }'",
+  "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/o/r/pulls/12/merge",
+  "Invoke-RestMethod -Method Put -Uri https://api.github.com/repos/o/r/pulls/12/merge",
+  "curl https://api.github.com/graphql -d '{\"query\":\"mutation{mergePullRequest(input:{}){id}}\"}'",
+  "gh pr merge 1 --body \"${SNEAKY}\"",
+  "gh pr merge 5 --admin",
+  "gh.cmd pr merge 625 --admin",
+  "node -e \"require('child_process').execSync(Buffer.from('Z2ggcHIgbWVyZ2UgODEy','base64').toString())\"",
+];
+let deniedForms = 0;
+for (const command of guardForms) {
+  if (!realGuardDenies(command)) continue;
+  deniedForms += 1;
+  ok(mayMerge(payload(command)), `a form the working guard denies is a possible merge here too: ${command}`);
+}
+ok(deniedForms >= 7, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+
+ok(isVerdict("") && isVerdict(DENY_JSON_FOR_VERDICT), "silence and a PreToolUse denial are verdicts");
+ok(!isVerdict('{"error":"check failed"}'), "JSON without a decision is not a verdict (the harness would allow it)");
+ok(!isVerdict(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", permissionDecision: "deny" } })),
+  "a decision for the wrong event is not a verdict");
+ok(!isVerdict(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "maybe" } })),
+  "an unknown decision is not a verdict");
+
 const failed = failureVerdict(MERGE, "exited with code 1");
 ok(decisionOf(failed.stdout)?.permissionDecision === "deny", "a failed guard denies a merge");
 ok(/did not finish \(exited with code 1\)/.test(decisionOf(failed.stdout)?.permissionDecisionReason || ""),
@@ -84,6 +119,7 @@ const guards = {
   missingModule: fake("missing-module.mjs", "import './does-not-exist.mjs';\n"),
   exitThree: fake("exit-three.mjs", "process.exit(3);\n"),
   garbage: fake("garbage.mjs", "process.stdout.write('hello, not a verdict'); process.exit(0);\n"),
+  noDecision: fake("no-decision.mjs", "process.stdout.write('{\"error\":\"check failed\"}'); process.exit(0);\n"),
   earlyExit: fake("early-exit.mjs", "process.exit(0);\n"),
   // A synchronous block, like the guard's execFileSync calls: the event loop is
   // stuck, so nothing inside the guard can react to time passing.
@@ -103,6 +139,7 @@ for (const [name, reason] of [
   ["missingModule", /exited with code 1/],
   ["exitThree", /exited with code 3/],
   ["garbage", /not a verdict/],
+  ["noDecision", /not a verdict/],
 ]) {
   r = await run(guards[name], MERGE);
   ok(decisionOf(r.stdout)?.permissionDecision === "deny", `${name}: a merge is DENIED when the guard fails`);

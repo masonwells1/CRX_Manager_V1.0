@@ -93,10 +93,13 @@ could in principle change the ruleset; only the auto-mode classifier stands in t
 side (Codex's production gate denies unrecognized mutating `gh api` calls). A non-admin token for
 agents is the real fix and is Mason's to authorize. Shell writes to the migration proof writer and
 its helpers are not blocked by `review-proof-guard`; only native edits prompt. Codex's
-`production-action-guard.mjs` has the same gap on its 15-second timeout and no launcher yet, and Codex
-merges without prompts: wrapping it changes `.codex/hooks.json`, which Codex silently skips until the
-hook is re-trusted (item 5), so it is a separate follow-up. Node failing to start the Claude launcher
-itself is not covered; that stops every hook.
+`production-action-guard.mjs` already denies on a runtime crash and budgets its checks inside its
+15-second limit, but it has no watchdog for being killed at that limit or for a module that fails
+to load, and Codex merges without prompts. That gap predates this change. A launcher there changes
+`.codex/hooks.json`, which Codex silently skips until re-trusted (item 5), so it is a separate
+follow-up. Node failing to start the Claude launcher itself is not covered; that stops every hook.
+A merge the command text does not show (decoded or assembled at run time) passes the working guard
+too; the launcher's "could merge" test matches every form the guard denies.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 
