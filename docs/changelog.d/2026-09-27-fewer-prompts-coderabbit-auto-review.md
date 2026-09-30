@@ -29,7 +29,7 @@ same files; replaces PR #822.
   strict built-in reader (CI runs that test before `npm ci`, so it cannot load the `yaml` package)
   that fails on quoted or duplicate keys, flow collections, anchors, tags, merge keys, tabs, extra
   documents, and anything that would make the file invalid YAML (CodeRabbit would ignore it); a
-  second test runs 22 such edits on every CI pass. For a head CodeRabbit skipped, agents post
+  second test runs 23 such edits on every CI pass. For a head CodeRabbit skipped, agents post
   `@coderabbitai review` once (Mason's "Post", 2026-09-27); the `ready-for-coderabbit` label no
   longer triggers a review. Both merge-gate messages and the guidance say so.
 - `scripts/run-claude-review.mjs` stays behind the edit prompt (a proof writer; Sol, 2026-09-27).

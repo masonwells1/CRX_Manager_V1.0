@@ -556,7 +556,10 @@ test('the automatic-review pin fails on every form that could change a setting u
     'a deeper-indented override': [afterEnabled, '$1\n      enabled: false'],
     'a tab-indented override': [afterEnabled, '$1\n\tenabled: false'],
     'an override behind a lone CR in a comment': [afterEnabled, '$1\n    # note\r    enabled: false'],
-    'a line separator': [afterEnabled, '$1     enabled: false'],
+    // Inside a comment, so only the character rule can catch them: YAML 1.1
+    // parsers treat U+2028 and NEL as line breaks and would read the override.
+    'an override behind a line separator in a comment': [afterEnabled, '$1\n    # note     enabled: false'],
+    'an override behind a NEL in a comment': [afterEnabled, '$1\n    # note\x85    enabled: false'],
     'a byte that was not valid UTF-8': [afterEnabled, '$1\n    # �'],
     'a C1 control character': [afterEnabled, '$1\n    # \x9b'],
     'an over-indented blank line opening block text': [firstBlockText, `$1\n${' '.repeat(12)}`],
