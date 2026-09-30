@@ -3380,13 +3380,18 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   assert.equal(pushParseCostExceeded("git -C ".repeat(2_138)), false, "at the edge: 2,138 git × 14,966 chars = 31,997,308");
   assert.equal(pushParseCostExceeded("git -C ".repeat(2_139)), true, "one over: 2,139 git × 14,973 chars = 32,027,247");
   {
-    // Millions of `git` words: refused by counting only up to the limit.
-    const huge = `${"#git\n".repeat(2_000_000)}${push}`;
+    // Many `git` words inside the length ceiling: refused by counting only up to the limit.
+    const dense = `${"#git\n".repeat(50_000)}${push}`;
     const started = process.hrtime.bigint();
-    assert.equal(pushParseCostExceeded(huge), true, "a 10 MB command of `git` words is refused");
+    assert.equal(pushParseCostExceeded(dense), true, "250 KB of `git` words is refused");
     const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
-    assert.ok(elapsedMs < 2_000, `the budget check stays cheap on 2M git words: ${elapsedMs.toFixed(1)}ms`);
+    assert.ok(elapsedMs < 1_000, `the budget check stays cheap on 50K git words: ${elapsedMs.toFixed(1)}ms`);
   }
+  // Linear is not fast enough on its own: one `git` and 31.6 MB of `'a'|` passed
+  // the budget and still outran the Codex hook (Codex GitHub review, #840).
+  assert.equal(pushParseCostExceeded(`${push} ${"'a'|".repeat(7_900_000)}`), true, "31.6 MB with one git is refused");
+  assert.equal(pushParseCostExceeded("a".repeat(256 * 1024)), false, "exactly 256 KiB is inspected");
+  assert.equal(pushParseCostExceeded("a".repeat(256 * 1024 + 1)), true, "one character more is refused");
 
   // The real hooks, end to end.
   const hooksDir = path.dirname(fileURLToPath(import.meta.url));
@@ -3398,7 +3403,13 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ];
   try {
     for (const [hookLabel, hook, payload] of hooks) {
-      for (const [label, input] of [...shapes, ["`git -C ` to 64 KB (over budget)", "git -C ".repeat(9_200) + push]]) {
+      for (const [label, input] of [
+        ...shapes,
+        // The slowest single-push shape measured, just under the length ceiling.
+        ["`$(` to just under 256 KiB", `${push} ${"$(".repeat(130_000)}`],
+        ["`git -C ` to 64 KB (over budget)", "git -C ".repeat(9_200) + push],
+        ["300 KB of `'a'|` (over budget)", `${push} ${"'a'|".repeat(75_000)}`],
+      ]) {
         const started = Date.now();
         const res = spawnSync(process.execPath, [hook], {
           input: JSON.stringify(payload(input)),

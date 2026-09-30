@@ -36,6 +36,7 @@ import {
   riskyFiles,
   pushParseCostExceeded,
   PUSH_PARSE_COST_BUDGET,
+  MAX_INSPECTABLE_COMMAND_LENGTH,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
@@ -1500,7 +1501,8 @@ export function evaluateProductionAction({
   // First, before any parser: a hook killed at its time limit allows the command.
   if (pushParseCostExceeded(command)) {
     return denied(
-      "CODEX PRODUCTION GATE: this command is too large to inspect safely (its `git` count times its length is " +
+      "CODEX PRODUCTION GATE: this command is too large to inspect safely (it is over " +
+      `${MAX_INSPECTABLE_COMMAND_LENGTH.toLocaleString("en-US")} characters, or its \`git\` count times its length is ` +
       `over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command ` +
       "through, so it is refused instead. Split it into smaller commands, or move long text into a file."
     );

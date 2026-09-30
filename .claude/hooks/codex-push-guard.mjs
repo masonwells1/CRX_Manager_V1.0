@@ -60,6 +60,7 @@ import {
   riskyFiles,
   pushParseCostExceeded,
   PUSH_PARSE_COST_BUDGET,
+  MAX_INSPECTABLE_COMMAND_LENGTH,
 } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
@@ -74,7 +75,7 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
 const cmd = String(payload?.tool_input?.command || "");
 // First, before any parser: a hook killed at its time limit allows the command.
 if (pushParseCostExceeded(cmd)) {
-  deny(`CODEX GATE: this command is too large to inspect safely (its \`git\` count times its length is over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
+  deny(`CODEX GATE: this command is too large to inspect safely (it is over ${MAX_INSPECTABLE_COMMAND_LENGTH.toLocaleString("en-US")} characters, or its \`git\` count times its length is over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
 }
 if (gitSubcommandIsDynamic(cmd)) {
   deny("CODEX GATE: Git's subcommand must be written literally. Shell variables, substitutions, splats, and globs are expanded after this review, so a command such as `$verb='push'; git $verb ...` can execute a push while bypassing every destination, force, and proof check. Write the Git operation plainly (for example `git -C <repo> push <remote> <refspec>`).");

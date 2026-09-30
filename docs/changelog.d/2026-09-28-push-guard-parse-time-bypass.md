@@ -46,6 +46,11 @@ Luna on the committed diff, round 2: again no detection counterexample; fixed it
 (early-exit count, "before any parsing" wording, looser whole-hook timing bound for slow CI).
 CodeRabbit (#840): the whole-hook timing test now also requires each guard to exit cleanly, so a
 guard that crashes instead of deciding fails the test.
+Codex GitHub review (#840, P1): with one `git`, 31.6 MB of `'a'|` passed the budget and still
+outran the Codex hook — linear work adds up on that much text. Both guards now also refuse any
+command over 256 KiB (`MAX_INSPECTABLE_COMMAND_LENGTH`); measured, the slowest single-push shapes
+take up to ~5.8 s per MB in the Codex guard, ~1.5 s at the ceiling. A just-under-256 KiB `$(` run
+(the slowest shape) is now a real-hook timing test.
 
 **Not verified.** Separate and pre-existing, not changed here: the Codex guard does not refuse an
 unrecognised git global option before `push` the way the Claude guard does.

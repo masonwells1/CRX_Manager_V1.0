@@ -110,9 +110,18 @@ export function isGitPush(cmd) {
 // removes or replaces non-letters, so no reading can hold more `git` words than
 // this count. Ordinary commands are nowhere near the budget — a long script or PR
 // body with a few mentions of git passes at any realistic size.
+//
+// Linear is not the same as fast. With a single `git`, 31.6 MB of `'a'|` passed
+// the budget and the Codex guard still ran past its limit (Codex GitHub review,
+// #840): every linear pass over that much text adds up. Measured on the slowest
+// single-push shapes, 1 MB takes up to ~5.8 s in the Codex guard, so any command
+// longer than MAX_INSPECTABLE_COMMAND_LENGTH (256 KiB, ~1.5 s) is refused too.
+// Real commands are orders of magnitude shorter; long content belongs in a file.
 export const PUSH_PARSE_COST_BUDGET = 32_000_000;
+export const MAX_INSPECTABLE_COMMAND_LENGTH = 256 * 1024;
 export function pushParseCostExceeded(cmd) {
   const text = String(cmd || "");
+  if (text.length > MAX_INSPECTABLE_COMMAND_LENGTH) return true;
   // Count and stop at the first `git` over the limit, rather than collecting
   // every match: a command with millions of `git` words would otherwise build a
   // millions-long array before it could be refused (Luna, 2026-09-28).
