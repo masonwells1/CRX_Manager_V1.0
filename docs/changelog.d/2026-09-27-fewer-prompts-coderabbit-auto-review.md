@@ -28,7 +28,7 @@ same files; replaces PR #822.
   pausing. The workflow test pins the effective `reviews.auto_review` keys and values with a
   strict built-in reader (CI runs that test before `npm ci`, so it cannot load the `yaml` package)
   that fails on quoted or duplicate keys, flow collections, anchors, tags, merge keys, tabs, extra
-  documents, and anything that would make the file invalid YAML (CodeRabbit would ignore it); a
+  documents, and anything that would make the file invalid YAML (CodeRabbit may then ignore it); a
   second test runs 23 such edits on every CI pass. For a head CodeRabbit skipped, agents post
   `@coderabbitai review` once (Mason's "Post", 2026-09-27); the `ready-for-coderabbit` label no
   longer triggers a review. Both merge-gate messages and the guidance say so.
@@ -53,3 +53,12 @@ same files; replaces PR #822.
 - The CodeRabbit schema check passes (with a negative control).
 - `coderabbit-final-review.test.cjs` 253/253, also from a copy with no `node_modules` (where the
   `yaml` version failed as CI did), plus the agent-workflow and guard suites and the parity tests.
+
+**Not verified:**
+- No PR has yet merged on a CodeRabbit approval under the new ruleset; #841 is the first.
+- That CodeRabbit ignores an invalid `.coderabbit.yaml` and uses its web settings is assumed, not
+  tested against CodeRabbit, and which YAML parser CodeRabbit uses is unknown. The only parser run
+  against the test's edits was the `yaml` package (YAML 1.2); the U+2028/NEL line-break cases rest
+  on the YAML 1.1 rules, not on a run.
+- Two recorded gaps stay open: a watchdog for Codex's production guard, and a merge run from an
+  npm script (DECISION_LOG 2026-09-26 residuals).

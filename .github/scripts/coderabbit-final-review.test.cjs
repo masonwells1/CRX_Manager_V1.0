@@ -411,8 +411,8 @@ test('the workflow binds the CodeRabbit exclusion to the trusted status creator'
 // an anchor, alias, tag or merge key, a document marker, a tab, a duplicate
 // key, uneven indentation, or any unrecognised line throws instead of being
 // skipped, so a setting can never be changed in a form this reader misses. It
-// also refuses what would make the file invalid YAML, because CodeRabbit would
-// then ignore the file and fall back to its web settings.
+// also refuses what would make the file invalid YAML, because CodeRabbit may
+// then ignore the file and use its web settings (assumed, not tested).
 // Returns a Map from dotted key path (list items as `[n]`) to the raw value
 // text, or null for a key that opens a nested block.
 function readStrictYamlSubset(text) {
@@ -534,7 +534,7 @@ test('CodeRabbit reviews every non-draft PR automatically, on open and on every 
 
 // Negative controls that run on every CI pass: each edit below changes what
 // CodeRabbit reads, can be read differently by some YAML parser, makes the file
-// invalid YAML (which CodeRabbit ignores), or uses a construct the reader does
+// invalid YAML (which CodeRabbit may ignore), or uses a construct the reader does
 // not model (an anchor, whose alias could copy values elsewhere); each must
 // fail the pin.
 test('the automatic-review pin fails on every form that could change a setting unseen', () => {
