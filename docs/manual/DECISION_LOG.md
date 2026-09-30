@@ -142,11 +142,11 @@ impossible one. (b) The daily summary reports
 applies as the agents recorded them in `docs/changelog.d/`; it holds no database credential, and
 adding one is a secrets decision that stays Mason's. (c) The plumbing PR that introduced this changed
 the merge gate and lifecycle workflow themselves, so it cannot pass its own new rules: Mason merges it
-by hand, once. (d) `.claude/settings.json` still lists `Bash(gh pr merge:*)` in its `ask` tier,
-which `defaultMode: "dontAsk"` turns into a silent denial; the agent could not change its own permission
-file (the auto-mode classifier refused it as self-modification), so that one line is Mason's to change
-before agents can merge from an ordinary session. Until then the merge gate is correct but the harness
-denies the command first.
+by hand, once. (d) ~~`.claude/settings.json` still lists `Bash(gh pr merge:*)` in its `ask` tier,
+which `defaultMode: "dontAsk"` turns into a silent denial.~~ **Closed 2026-09-27:** after #804 merged,
+Mason approved in chat ("Yes do the settings PR") removing that one `ask` entry, and he merges that
+PR by hand. `pr-merge-guard.mjs` is now the only thing deciding a `gh pr merge`. The GitHub-MCP
+`merge_pull_request` tool is unchanged and stays in `ask`; agents merge with `gh pr merge`.
 
 ## 2026-09-25 — GPT-6 guidance: one priority order, Astra reviews plans, model IDs live in one reference
 
