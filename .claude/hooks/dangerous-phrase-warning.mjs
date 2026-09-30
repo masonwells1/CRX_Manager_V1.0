@@ -14,7 +14,7 @@
 // without realizing what it costs.
 
 import { readFileSync } from "node:fs";
-import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, withoutSubagentReports, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -37,7 +37,9 @@ try {
 // risky-sounding words can't trip the warning.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-const prompt = (payload?.prompt || "").toLowerCase();
+// A subagent's hand-back report is not Mason's either (2026-09-25: one quoting
+// --no-verify fired this warning) — match only what is left around it.
+const prompt = withoutSubagentReports(payload?.prompt).toLowerCase();
 if (!prompt) emit();
 
 // Each rule = { pattern, label, why, alternatives }
