@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const hooksDir = path.dirname(fileURLToPath(import.meta.url));
 const stopWrapPath = path.join(hooksDir, "stop-wrap.mjs");
@@ -375,7 +375,9 @@ try {
     writeFileSync(path.join(tmp, "pulled.txt"), "unrecorded work before a pull\n");
     git(["add", "."], tmp);
     git(["commit", "-qm", "unrecorded work replayed by pull --rebase"], tmp);
-    git(["pull", "-q", "--rebase", other4, "main"], tmp);
+    // A file:// URL puts a colon in the logged command line, as an https://
+    // remote or a Windows drive path does (a Windows CI failure, PR #827).
+    git(["pull", "-q", "--rebase", pathToFileURL(other4).href, "main"], tmp);
   } finally {
     rmSync(other4, { recursive: true, force: true });
   }

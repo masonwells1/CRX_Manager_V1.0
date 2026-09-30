@@ -580,8 +580,10 @@ try {
     // same fail-open as the rest of this hook.
     // Rebase replays are logged under the command that ran them: `rebase (pick)`,
     // or the whole pull command line, e.g. `pull -q --rebase origin main (pick)`
-    // (Codex P2, PR #827 round 12).
-    const AUTHORING_RE =/^(commit|cherry-pick|revert|am)\b|^(pull|rebase)\b[^:]*\((pick|reword|edit|squash|fixup|continue)\)|: Merge made by /;
+    // (Codex P2, PR #827 round 12). That command line can itself contain colons
+    // (a `https://` or `file://` remote, a Windows `D:\` path), so match up to
+    // the first `(<action>): ` rather than excluding colons.
+    const AUTHORING_RE = /^(commit|cherry-pick|revert|am)\b|^(pull|rebase)\b.*?\((pick|reword|edit|squash|fixup|continue)\):|: Merge made by /;
     // Which entries are this session's: everything newer than the anchor entry
     // session-snapshot.mjs recorded at session start (newest entries come
     // first). Entry timestamps are the committer date, which a rebase can

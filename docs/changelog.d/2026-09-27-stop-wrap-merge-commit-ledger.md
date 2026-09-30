@@ -19,7 +19,9 @@ Fix, refined across twelve Codex review rounds (PRs #824 and #827):
   history, so it is ignored. Otherwise a ledger edit amended out of a commit would still
   count. The commit a rebase writes after a conflict resolution
   (`rebase (continue)`) counts like any other replayed commit, as do the commits
-  `git pull --rebase` replays (logged under the whole pull command line). Which reflog entries belong
+  `git pull --rebase` replays (logged under the whole pull command line). That line can
+  contain colons, from an `https://` or `file://` remote or a Windows `D:\` path, so the
+  match does not stop at a colon. Excluding colons failed the Windows CI run. Which reflog entries belong
   to the session comes from an anchor: the newest reflog entry, which `session-snapshot.mjs`
   records at session start. Everything newer than the anchor is the session's. Entry
   timestamps are committer dates, which `rebase --committer-date-is-author-date` backdates,
@@ -58,7 +60,8 @@ Fix, refined across twelve Codex review rounds (PRs #824 and #827):
   - a merge resolution that only renames an existing changelog entry still warns;
   - a session commit backdated by `rebase --committer-date-is-author-date` still warns;
   - a session commit still warns when an old reflog entry expired during the session;
-  - an unrecorded session commit replayed by `git pull --rebase` still warns;
+  - an unrecorded session commit replayed by `git pull --rebase` still warns, pulling from
+    a `file://` URL so the colon case runs on every platform;
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
