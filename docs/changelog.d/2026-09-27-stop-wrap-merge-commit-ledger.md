@@ -39,6 +39,9 @@ Fix, refined across twelve Codex review rounds (PRs #824 and #827):
   `--write-tree`, fall back to the combined diff (`git diff-tree --cc`). An octopus merge
   counts only files it added, because git's octopus strategy refuses any merge that needs a
   hand resolution; its modified files were all merged automatically (CodeRabbit, PR #827).
+  That exception covers only the commit the strategy itself wrote. An octopus later
+  rewritten by `git commit --amend` keeps its parents, but the amend is hand-authored, so
+  its modified files count (Codex P2, PR #827 round 14).
 - **A changelog entry written during a resolution counts.** A file the resolution adds keeps
   its "added" status, so it satisfies the rule that a changelog.d entry must be new. The
   comparison detects renames, so renaming an existing entry during a resolution is not
@@ -61,7 +64,7 @@ rare cases are accepted rather than chased further:
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real SessionStart and Stop hooks in a temp git repo with fifteen cases:
+  It runs the real SessionStart and Stop hooks in a temp git repo with sixteen cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -78,6 +81,7 @@ rare cases are accepted rather than chased further:
   - an unrecorded session commit replayed by `git pull --rebase` still warns, pulling from
     a `file://` URL so the colon case runs on every platform;
   - a clean octopus merge of separate same-file hunks does not warn;
+  - a hand edit amended into that octopus merge still warns;
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -95,5 +99,6 @@ rare cases are accepted rather than chased further:
     reproduced this; the test mirrors it.
   - With the rebase pattern matching only `rebase …`, the pull-rebase case fails.
   - Without the octopus filter in the combined-diff fallback, the octopus case fails.
-- With the final version, all fifteen cases pass. `npm run test:correction-guards`,
+  - With the filter applied to every three-parent commit, the amended-octopus case fails.
+- With the final version, all sixteen cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.

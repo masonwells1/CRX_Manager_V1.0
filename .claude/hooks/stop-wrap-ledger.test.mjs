@@ -411,6 +411,20 @@ try {
     `a clean octopus merge of separate same-file hunks must not warn; got: ${octopus.stdout}`);
   pass++;
 
+  // ── Session 1o (Codex P2, PR #827 round 14): amending that octopus merge with
+  //    a hand edit to an existing file is authored work, even though the
+  //    amended commit keeps its three parents → still warns ──
+  const s1o = "ledger-test-amended-octopus";
+  snapshots.push(startSession(s1o));
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "A one\nb\nc\nD by hand\ne\nf\nG two\n");
+  git(["commit", "-q", "-a", "--amend", "--no-edit"], tmp);
+  assert.equal(git(["rev-list", "--parents", "-n", "1", "HEAD"], tmp).trim().split(/\s+/).length, 4,
+    "setup: the amended commit must still be a three-parent octopus merge");
+  const amendedOctopus = runStopWrap(s1o, tmp);
+  assert.match(amendedOctopus.stdout, LEDGER_WARNING,
+    "a hand edit amended into an octopus merge must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));

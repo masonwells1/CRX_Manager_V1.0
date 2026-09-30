@@ -535,7 +535,7 @@ const porcelainPath = (l) => {
 // during the resolution); every other difference is "M". Octopus merges, or a
 // git too old for --write-tree, fall back to the combined diff, which catches
 // resolutions that differ from every parent.
-function authoredMergeFiles(sha) {
+function authoredMergeFiles(sha, automaticOctopus = false) {
   const parents = runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).slice(1);
   let autoTree = "";
   if (parents.length === 2) {
@@ -563,10 +563,12 @@ function authoredMergeFiles(sha) {
   // Combined-diff fallback: one status letter per parent; all-"A" = new file.
   const combined = parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
   // Git's octopus strategy refuses any merge that needs a hand resolution, so
-  // an octopus "M" row is an automatic same-file merge, not authored work; only
-  // a file the octopus commit itself added can be (CodeRabbit, PR #827). A
-  // two-parent merge on a git without --write-tree keeps both.
-  return parents.length > 2 ? combined.filter(({ status }) => status === "A") : combined;
+  // an "M" row in a commit the strategy itself wrote is an automatic same-file
+  // merge, not authored work; only a file it added can be (CodeRabbit, PR
+  // #827). An octopus later rewritten by `commit --amend` keeps every row: the
+  // amend is hand-authored (Codex P2, PR #827 round 14). A two-parent merge on
+  // a git without --write-tree keeps both.
+  return automaticOctopus ? combined.filter(({ status }) => status === "A") : combined;
 }
 
 try {
@@ -609,9 +611,12 @@ try {
       ? reflogEntries.slice(0, anchorIndex)
       : reflogEntries.filter((entry) => Number(/@\{(\d+)\}/.exec(entry.split("\t")[1] ?? "")?.[1]) >= sessionStartSec);
     const authored = new Set();
+    // Commits written by git's octopus strategy itself (see authoredMergeFiles).
+    const automaticOctopus = new Set();
     for (const entry of sessionEntries) {
       const [sha, , subject = ""] = entry.split("\t");
       if (sha && AUTHORING_RE.test(subject)) authored.add(sha.trim());
+      if (sha && /: Merge made by the 'octopus' strategy/.test(subject)) automaticOctopus.add(sha.trim());
     }
     // Only commits still reachable from HEAD or a branch/remote/tag count: an
     // amended, reset or rebased-away commit stays in the reflog, and counting
@@ -640,7 +645,8 @@ try {
     // merge differs from it was written by hand — conflict fixes, including
     // taking one side, plus anything added — while a clean automatic merge,
     // even of separate hunks in one file, differs in nothing.
-    const mergeResolutionFiles = authoredShas.filter(isMerge).flatMap(authoredMergeFiles);
+    const mergeResolutionFiles = authoredShas.filter(isMerge)
+      .flatMap((sha) => authoredMergeFiles(sha, automaticOctopus.has(sha)));
     if (nonMergeShas.length > 0 || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —
