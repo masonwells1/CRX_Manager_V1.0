@@ -33,8 +33,17 @@ Dashboard, which the database checklist forbids. That blocked the field-season i
   entry, agent-guardrails, and the create-migration, deploy-check and new-rpc skills. AGENTS.md is
   unchanged: it has no room under its startup-context byte budget, and the guard enforces the rule.
 
+**Review fixes (Luna round 1, plus the author's own pass).**
+- The signed findings must equal the classifier's current categories AND reason text, so a
+  hand-built payload cannot soften what Mason reads.
+- The approval is claimed with an exclusive marker file, so two racing applies cannot both use it.
+  A damaged marker still counts as used, and an unreadable directory refuses.
+- The expiry is re-checked just before transmission.
+- The apply script confirms from the LIVE ledger that the migration is not already applied, after
+  invalidating the snapshot so the existing snapshot-before-first-fetch invariant holds.
+
 **Proof observed.**
-- `owner-approval-lib.test.mjs`: 41 assertions. Each check refuses when broken, including:
+- `owner-approval-lib.test.mjs`: 49 assertions. Each check refuses when broken, including:
   - another key's signature;
   - an edited payload;
   - a pinned key that is not the Windows key;
@@ -43,11 +52,12 @@ Dashboard, which the database checklist forbids. That blocked the field-season i
   - a misleading summary;
   - an expired, future-dated, over-long or already-used approval;
   - an already-applied migration.
-- `migration-apply-lib.test.mjs`: 290 assertions (270 before).
+- `migration-apply-lib.test.mjs`: 291 assertions (270 before).
   - For each of the three kinds, a valid approval is allowed through the apply script's door.
   - The MCP door is still refused.
   - An approval never skips the reviewer proof or the landing gate.
-- Mutation check: disabling each of the signature, key-match, expiry, nonce and summary checks, the
+- Mutation check: disabling each of the signature, key-match, expiry, nonce, exclusive-claim,
+  transmit-time expiry, reason-match and summary checks, the
   door check and the final verification made the tests fail.
 - The Windows Hello helper's PublicKey mode ran on Mason's PC (NotFound before setup).
 

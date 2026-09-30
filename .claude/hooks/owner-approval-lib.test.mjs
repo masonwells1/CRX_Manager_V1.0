@@ -26,6 +26,8 @@ import {
   readUsedNonces,
   recordUsedApproval,
   signatureValid,
+  usedMarkerName,
+  assertApprovalStillValid,
   verifyOwnerApproval,
 } from "./owner-approval-lib.mjs";
 
@@ -63,7 +65,7 @@ const expect = {
   queryHash: HASH,
   pullRequest: 843,
   prHead: HEAD,
-  categories: ["changes-access"],
+  categories: CATS,
 };
 const keys = { pinned: der(mason), live: der(mason) };
 const approve = (over = {}, signer = mason) => {
@@ -101,8 +103,12 @@ refuses(check(approve({ pullRequest: 900 })), "pull request #900", "an approval 
 refuses(check(approve({ prHead: "b".repeat(40) })), "not the pull request's current head", "an approval for an older head is refused");
 refuses(check(approve(), { expect: { ...expect, prHead: undefined } }), "head is unknown", "an unknown landing head fails closed");
 refuses(check(approve({ project: "someotherproject" })), "approves project", "an approval for another project is refused");
-refuses(check(approve(), { expect: { ...expect, categories: ["changes-access", "deletes-data"] } }), "deletes data",
+refuses(check(approve(), { expect: { ...expect, categories: [...CATS, { category: "deletes-data", reason: "DROP TABLE" }] } }), "deletes data",
   "an approval that never showed Mason a category the check now flags is refused");
+refuses(check(approve({ categories: [{ category: "changes-access", reason: "adds a comment" }] })), "in the words the safety check uses",
+  "an approval that kept the category but softened the reason Mason read is refused");
+refuses(check(approve({ categories: [...CATS, { category: "deletes-data", reason: "DROP TABLE" }] })), "not what it finds now",
+  "an approval listing extra findings the check no longer makes is refused");
 {
   const selftest = buildSelfTestPayload({ issuedAt: base.issuedAt, nonce: base.nonce });
   refuses(check({ payload: selftest, signature: signAs(mason, selftest) }), "not a migration approval",
@@ -169,8 +175,21 @@ refuses(check(approve(), { appliedNames: ["20260101000000_x", base.migration] })
     recordUsedApproval(dir, a.payload, NOW);
     ok(readUsedNonces([dir]).has(base.nonce), "a recorded approval reads back as used");
     refuses(check(a, { usedNonces: readUsedNonces([dir]) }), "already used", "a recorded approval cannot verify again");
-    ok(JSON.parse(readFileSync(path.join(dir, "owner-approvals-used.json"), "utf8")).used[0].migration === base.migration,
-      "the used record names the migration");
+    ok(JSON.parse(readFileSync(path.join(dir, usedMarkerName(base.nonce)), "utf8")).migration === base.migration,
+      "the used marker names the migration");
+    // Two applies racing on one approval: the second claim must fail (Luna HIGH).
+    assert.throws(() => recordUsedApproval(dir, a.payload, NOW), /EEXIST/); pass++;
+    // A damaged marker still counts as used (Luna MED: fail closed).
+    writeFileSync(path.join(dir, usedMarkerName(base.nonce)), "not json");
+    ok(readUsedNonces([dir]).has(base.nonce), "a damaged marker still reads as used");
+    // An unreadable directory refuses rather than reading as "nothing used".
+    const notADir = path.join(dir, "file-not-dir");
+    writeFileSync(notADir, "x");
+    assert.throws(() => readUsedNonces([notADir])); pass++;
+    // Expiry is re-checked at the moment of transmission (Luna MED).
+    assert.throws(() => assertApprovalStillValid(a.payload, Date.parse(base.expiresAt) + 1), /expired/); pass++;
+    assertApprovalStillValid(a.payload, NOW); pass++;
+    refuses(check(approve({ nonce: "../x" })), "no usable one-time code", "a nonce that cannot be claimed as a file is refused");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

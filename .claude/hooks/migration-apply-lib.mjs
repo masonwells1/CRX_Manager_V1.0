@@ -1141,9 +1141,13 @@ export function evaluateMigrationApply({
         queryHash: currentHash,
         pullRequest: landing.pullRequest,
         prHead: landing.head,
-        categories: parked.map((c) => c.category),
+        categories: parked,
       };
-      const usedNonces = readUsedNonces(proofDirs);
+      let usedNonces;
+      try { usedNonces = readUsedNonces(proofDirs); }
+      catch (error) {
+        return block(`OWNER APPROVAL GUARD: could not read which approvals were already used (${error?.message || error}). Refusing "${migName}" (fail closed).`);
+      }
       const reasons = [];
       for (const candidate of ownerApprovalCandidates) {
         let verdict;

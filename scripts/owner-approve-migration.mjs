@@ -142,7 +142,7 @@ if (!result?.ok || !result.signature) {
 const approval = { payload, signature: result.signature };
 const check = verifyOwnerApproval({
   approval,
-  expect: { project: CRX_PRODUCTION_REF, migration: migName, queryHash, pullRequest: pr.number, prHead: head, categories: categories.map((c) => c.category) },
+  expect: { project: CRX_PRODUCTION_REF, migration: migName, queryHash, pullRequest: pr.number, prHead: head, categories },
   keys,
   now: Date.now(),
 });

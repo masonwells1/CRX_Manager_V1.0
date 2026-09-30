@@ -1711,7 +1711,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     });
     const stateDir = path.join(root, ".claude", "session-state");
     if (approval) writeFileSync(path.join(stateDir, `owner-approval-${SAFE}.json`), JSON.stringify(approval), "utf8");
-    if (used) writeFileSync(path.join(stateDir, "owner-approvals-used.json"), JSON.stringify({ used: [{ nonce: used }] }), "utf8");
+    if (used) writeFileSync(path.join(stateDir, `owner-approval-used-${used}.json`), "{}", "utf8");
     return root;
   };
   const scriptDoor = (root, sql, over = {}) => evaluate(root, {
@@ -1739,6 +1739,8 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "not Mason's", "an approval signed by any other key is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, { prHead: "f".repeat(40) }) }), ACCESS),
     "not the pull request's current head", "an approval for another head is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, { categories: [{ category: "changes-access", reason: "adds a comment" }] }) }), ACCESS),
+    "in the words the safety check uses", "an approval that softened what Mason was told is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
     { landingGate: () => ({ ok: true }) }), "head is unknown", "a landing verdict without a head fails closed");
   {

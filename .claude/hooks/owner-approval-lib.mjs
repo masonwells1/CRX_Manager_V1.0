@@ -31,7 +31,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -45,7 +45,6 @@ export const OWNER_HELLO_SCRIPT = path.join(HERE, "owner-approval-hello.ps1");
 export const OWNER_APPROVAL_PURPOSE = "crx-owner-migration-approval-v1";
 export const OWNER_SELFTEST_PURPOSE = "crx-owner-approval-selftest-v1";
 export const OWNER_APPROVAL_MAX_AGE_MS = 30 * 60 * 1000;
-export const OWNER_APPROVALS_USED_FILE = "owner-approvals-used.json";
 // Mason works in Central time; the window he is shown uses it on every machine.
 const OWNER_TIME_ZONE = "America/Chicago";
 
@@ -186,28 +185,44 @@ export function defaultOwnerKeys() {
   return { pinned: readPinnedOwnerKey(), live: readLiveOwnerKey() };
 }
 
-/** Nonces already used, from every directory approvals may come from. */
+// One marker FILE per used approval, created exclusively ("wx"): two applies
+// racing on the same approval cannot both create it, so only one transmits
+// (Luna HIGH, 2026-09-29). Its existence is what counts, so a damaged marker still
+// reads as used; an unreadable directory refuses (Luna MED: fail closed).
+const USED_MARKER_RE = /^owner-approval-used-([0-9A-Za-z_-]{1,128})\.json$/;
+export const usedMarkerName = (nonce) => `owner-approval-used-${nonce}.json`;
+
+/** Nonces already used, from every directory approvals may come from. Throws if one cannot be read. */
 export function readUsedNonces(dirs) {
   const used = new Set();
   for (const dir of dirs || []) {
-    try {
-      const data = JSON.parse(readFileSync(path.join(dir, OWNER_APPROVALS_USED_FILE), "utf8"));
-      for (const row of data?.used || []) if (row?.nonce) used.add(String(row.nonce));
-    } catch { /* no record in this directory */ }
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      const m = name.match(USED_MARKER_RE);
+      if (m) used.add(m[1]);
+    }
   }
   return used;
 }
 
-/** Mark an approval used BEFORE the apply transmits. Throws if it cannot be recorded. */
+/**
+ * Claim an approval BEFORE the apply transmits. Throws if it was already claimed
+ * (by this or a concurrent run) or cannot be recorded.
+ */
 export function recordUsedApproval(dir, payloadText, now = Date.now()) {
   const p = JSON.parse(payloadText);
+  if (!/^[0-9A-Za-z_-]{1,128}$/.test(String(p.nonce || ""))) throw new Error("the approval's nonce is malformed");
   mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, OWNER_APPROVALS_USED_FILE);
-  let data = { used: [] };
-  try { data = JSON.parse(readFileSync(file, "utf8")); } catch { /* first use */ }
-  if (!Array.isArray(data.used)) data.used = [];
-  data.used.push({ nonce: p.nonce, migration: p.migration, prHead: p.prHead, usedAt: new Date(now).toISOString() });
-  writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  writeFileSync(path.join(dir, usedMarkerName(p.nonce)),
+    `${JSON.stringify({ nonce: p.nonce, migration: p.migration, prHead: p.prHead, usedAt: new Date(now).toISOString() }, null, 2)}\n`,
+    { encoding: "utf8", flag: "wx" });
+}
+
+/** The approval must still be inside its window at the moment of transmission. */
+export function assertApprovalStillValid(payloadText, now = Date.now()) {
+  const p = JSON.parse(payloadText);
+  const expires = Date.parse(p.expiresAt);
+  if (!Number.isFinite(expires) || now > expires) throw new Error(`Mason's approval expired at ${p.expiresAt}`);
 }
 
 /** Every approval file for this migration in the given directories. */
@@ -225,7 +240,8 @@ export function findOwnerApprovals(dirs, safeName) {
  *
  * @param {object} args
  * @param {{payload: string, signature: string}} args.approval
- * @param {object} args.expect  project, migration, queryHash, pullRequest, prHead, categories (names)
+ * @param {object} args.expect  project, migration, queryHash, pullRequest, prHead,
+ *   categories ([{category, reason}] exactly as parkedCategories returns them now)
  * @param {{pinned: Buffer, live: Buffer}} args.keys
  * @param {string[]|null} [args.appliedNames]  the live ledger snapshot; null skips that check
  * @param {Set<string>} [args.usedNonces]
@@ -255,9 +271,18 @@ export function verifyOwnerApproval({ approval, expect, keys, appliedNames = nul
   if (String(p.prHead).toLowerCase() !== String(expect.prHead).toLowerCase()) {
     return no(`it approves version ${String(p.prHead).slice(0, 12)}, not the pull request's current head ${String(expect.prHead).slice(0, 12)}`);
   }
-  const approved = new Set((p.categories || []).map((c) => c?.category));
-  const missing = (expect.categories || []).filter((c) => !approved.has(c));
-  if (missing.length) return no(`Mason was not shown that it ${missing.map((c) => PARKED_LABELS[c] || c).join(" and ").toLowerCase()}`);
+  // What Mason was told the check found must be EXACTLY what it finds now — the
+  // categories and their reasons, in order. Comparing names alone would let a
+  // hand-built payload keep the category and soften the reason he reads.
+  const shown = (p.categories || []).map((c) => `${c?.category}\u0000${c?.reason}`);
+  const actual = (expect.categories || []).map((c) => `${c?.category}\u0000${c?.reason}`);
+  const missing = (expect.categories || []).filter((c) => !shown.includes(`${c?.category}\u0000${c?.reason}`));
+  if (missing.length) {
+    return no(`Mason was not shown that it ${missing.map((c) => PARKED_LABELS[c?.category] || c?.category).join(" and ").toLowerCase()}, in the words the safety check uses`);
+  }
+  if (shown.length !== actual.length || shown.some((s, i) => s !== actual[i])) {
+    return no("what Mason was told the safety check found is not what it finds now");
+  }
   if (JSON.stringify(p.summary) !== JSON.stringify(ownerApprovalSummary(p))) return no("what Mason was shown does not match what the approval covers");
 
   const issued = Date.parse(p.issuedAt);
@@ -266,7 +291,8 @@ export function verifyOwnerApproval({ approval, expect, keys, appliedNames = nul
   if (expires <= issued || expires - issued > OWNER_APPROVAL_MAX_AGE_MS) return no("the approval window is longer than 30 minutes");
   if (now < issued) return no("the approval is dated in the future");
   if (now > expires) return no(`the approval expired at ${p.expiresAt}; ask Mason again`);
-  if (!p.nonce || usedNonces.has(String(p.nonce))) return no("this approval was already used; each one works once");
+  if (!/^[0-9A-Za-z_-]{1,128}$/.test(String(p.nonce || ""))) return no("the approval has no usable one-time code");
+  if (usedNonces.has(String(p.nonce))) return no("this approval was already used; each one works once");
   if (Array.isArray(appliedNames) && appliedNames.includes(expect.migration)) {
     return no(`${expect.migration} is already in the live ledger; an approval covers one install`);
   }

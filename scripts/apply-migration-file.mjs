@@ -66,7 +66,7 @@ import {
   CRX_PRODUCTION_REF,
 } from "../.claude/hooks/migration-apply-lib.mjs";
 import { assertWrappable } from "../.claude/hooks/migration-wrappability-lib.mjs";
-import { recordUsedApproval } from "../.claude/hooks/owner-approval-lib.mjs";
+import { assertApprovalStillValid, recordUsedApproval } from "../.claude/hooks/owner-approval-lib.mjs";
 
 // Every existing ledger row carries this; apply_migration fills it from the
 // authenticated Supabase account, and the personal access token this script uses
@@ -411,20 +411,6 @@ const wrapped =
 // or not. Ordering here matters: delete-then-apply cannot leave a stale snapshot no
 // matter how the apply, the network, or this process ends. The cost when an apply
 // fails is regenerating a cache file, and the guard tells the operator how.
-// ── USE UP MASON'S APPROVAL BEFORE TRANSMITTING ────────────────────────────
-// Recorded first, so no failure after this point can leave it reusable. If the
-// apply then fails, Mason approves again; that is the safe direction.
-if (ownerApproval) {
-  try {
-    recordUsedApproval(ownerApproval.dir, ownerApproval.payload);
-    console.log("Marked Mason's approval as used.");
-  } catch (err) {
-    die(2,
-      `apply-migration-file: could not mark Mason's approval as used (${err?.message || err}). Refusing to ` +
-      `transmit — an approval that cannot be used up could install this migration twice.`);
-  }
-}
-
 const snapshotPath = path.join(projectDir, ".claude", "session-state", "applied-migrations.json");
 try {
   if (existsSync(snapshotPath)) {
@@ -436,6 +422,52 @@ try {
     `apply-migration-file: could not invalidate the applied-migration snapshot at ${snapshotPath} ` +
     `(${err?.message || err}). Refusing to transmit — leaving a stale snapshot in place would let the ` +
     `NEXT apply replay a migration older than this one.`);
+}
+
+// ── USE UP MASON'S APPROVAL BEFORE TRANSMITTING ────────────────────────────
+// Recorded first, so no failure after this point can leave it reusable. If the
+// apply then fails, Mason approves again; that is the safe direction.
+if (ownerApproval) {
+  // One install per approval, checked against the LIVE ledger rather than the
+  // local "used" record and snapshot alone — both are files an agent could delete
+  // or rewrite. migName already matched the canonical-name rule above, and the
+  // tag guard applies here too.
+  if (migName.includes(dq)) die(2, `apply-migration-file: dollar-quote tag ${dq} collides with the name. Refusing.`);
+  let alreadyApplied;
+  try {
+    const ledger = await fetch(`https://api.supabase.com/v1/projects/${projectId}/database/query`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `select count(*)::int as n from supabase_migrations.schema_migrations where name = ${dq}${migName}${dq};`,
+      }),
+    });
+    if (!ledger.ok) throw new Error(`HTTP ${ledger.status}`);
+    const rows = JSON.parse(await ledger.text());
+    const n = Number(rows?.[0]?.n);
+    if (!Number.isInteger(n)) throw new Error("unreadable answer");
+    alreadyApplied = n > 0;
+  } catch (err) {
+    die(2,
+      `apply-migration-file: could not confirm from the live ledger that ${migName} has not been applied ` +
+      `(${err?.message || err}). Refusing — Mason's approval covers one install.`);
+  }
+  if (alreadyApplied) {
+    die(2, `apply-migration-file: ${migName} is already in the live ledger. Mason's approval covers one install; refusing.`);
+  }
+  try {
+    // Exclusive claim: a second apply racing on the same approval fails here.
+    recordUsedApproval(ownerApproval.dir, ownerApproval.payload);
+    console.log("Marked Mason's approval as used.");
+  } catch (err) {
+    die(2,
+      `apply-migration-file: could not claim Mason's approval (${err?.message || err}). Refusing to ` +
+      `transmit — it is already used (perhaps by a concurrent apply), or it cannot be used up and could ` +
+      `install this migration twice.`);
+  }
+  // Last moment before transmission: still inside his 30-minute window?
+  try { assertApprovalStillValid(ownerApproval.payload); }
+  catch (err) { die(2, `apply-migration-file: ${err?.message || err}. Refusing to transmit; ask Mason again.`); }
 }
 
 console.log("");
