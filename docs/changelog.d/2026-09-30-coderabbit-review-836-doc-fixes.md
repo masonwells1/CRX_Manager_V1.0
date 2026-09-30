@@ -1,0 +1,19 @@
+## 2026-09-30 — CodeRabbit review of PR #836: four documentation fixes
+
+CodeRabbit's review of `8205630c` requested changes. All four findings were checked against the files
+and were valid, and all four are fixed:
+
+- `docs/reference/coderabbit-native-review.md`: the fix loop ran the exact-SHA Sol proof *before*
+  applying `ready-for-coderabbit`, which contradicts the landing rule (Sol runs **last**, after
+  CodeRabbit clears the head) and could leave an expired proof after the review wait. The loop now
+  runs Sol after clearance, then the migration apply, then the merge.
+- `docs/reference/gotchas.md`: the merge-evidence rule still required the APPROVED review's
+  `commit_id` to equal the live head, which would reject every follow-up clearance. That match now
+  applies only to exact-head approval; a follow-up requires CodeRabbit's authenticated `Review
+  completed` status on the live head plus the reference's other evidence.
+- `docs/changelog.d/2026-09-29-defer-to-826-hand-back-fix.md` and
+  `docs/changelog.d/2026-09-30-audit-brace-expansion-fast-uri.md`: each now states what was not
+  verified.
+
+No other live command, skill, workflow or reference doc put Sol before the CodeRabbit request. This
+change is documentation only, with no gate logic changed.

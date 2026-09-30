@@ -211,10 +211,11 @@ only its unit shrank from "the PR" to "the candidate epoch".
   the current head, still refuses. The merge gates still deny while the aggregate
   `reviewDecision` is `CHANGES_REQUESTED`.
 
-The loop for a fix is therefore: fix, push to the same PR, wait for checks, run
-the exact-SHA Sol proof, apply `ready-for-coderabbit`, and merge once CodeRabbit
-approves the new head, or, having approved an earlier one, completes a clean
-follow-up review of it. Never post `@coderabbitai` commands by hand and never use
+The loop for a fix is therefore: fix, push to the same PR, wait for checks, apply
+`ready-for-coderabbit`, and wait until CodeRabbit clears the new head (approves
+it, or, having approved an earlier one, completes a clean follow-up review of
+it). Then run the exact-SHA Sol proof **last** (it expires in 30 minutes), apply
+the change's non-destructive migration if it has one, and merge. Never post `@coderabbitai` commands by hand and never use
 `@coderabbitai resume`.
 
 The run API's `head_sha` can expose either the PR head or the execution base.

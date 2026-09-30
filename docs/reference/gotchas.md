@@ -328,8 +328,12 @@ workflow's verified cleanup before any provider call permits a same-head retry. 
 `docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
 `CHANGES_REQUESTED` verdict. An agent merge needs CodeRabbit to have cleared the head — its `APPROVED` review, or a clean follow-up after an earlier approval (Mason's
-autonomous-landing rule, 2026-09-26): require the native receipt's head SHA, that authenticated
-`APPROVED` review's `commit_id`, and the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
+autonomous-landing rule, 2026-09-26). For an exact-head approval, require the native receipt's head
+SHA, that authenticated `APPROVED` review's `commit_id`, and the live PR head to match. For a
+follow-up clearance the approval's `commit_id` is an earlier head by definition, so instead require
+the receipt's head SHA to match the live PR head and CodeRabbit's own authenticated `Review
+completed` status on that head, plus the rest of the evidence in
+`docs/reference/coderabbit-native-review.md` → "Follow-up after an approval". Also require the receipt base SHA and live PR base SHA to match
 the expected base; native delivery validates both head and base commits. The generic Actions-authored marker is dedupe evidence, not an
 independent trust identity.
 

@@ -24,3 +24,6 @@ which is unaffected.
 **Proof.** After the revert, no `.claude/hooks` file references `withoutOtherAgentText` or an
 `"agent-message"` tag entry; the merge of `main` then applies #826 cleanly, and the prompt-hook,
 correction-guard and agent-workflow suites pass on the merged result.
+
+**Not run:** no Codex Luna round and no Sol proof covered this revert; the cloud session had no Codex
+CLI. Both run on Mason's machine before #836 lands.

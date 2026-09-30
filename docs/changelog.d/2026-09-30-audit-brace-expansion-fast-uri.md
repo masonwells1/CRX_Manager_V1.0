@@ -12,7 +12,9 @@ at the audit:
 
 Both reach the app only through build and lint tooling (`minimatch` and `workbox-build`), not the
 shipped bundle. The lockfile was regenerated with npm 11 so only these two entries changed;
-`npm audit --audit-level=high` now reports 0 vulnerabilities.
+`npm audit --audit-level=high` now reports 0 vulnerabilities, and lint, type check, all 5,411 unit
+tests and the production build passed locally. **Not verified:** the PWA service-worker output
+from `workbox-build` in a real browser, and ESLint's glob matching beyond the lint run itself.
 
 Also in this change (Codex review of PR #836):
 - `docs/manual/CURRENT_STATE.md`: the rollout paragraph that still called `20260914100900` "the one
