@@ -959,7 +959,20 @@ has already made twice." **Do not open round seven on this PR.** `DECISION_LOG.m
 gate as the `ask` permission tier, with this hook a speed bump rather than a boundary; under that
 framing these residuals are not load-bearing.
 
-## OPEN 2026-09-02 — `review-proof-guard` fails OPEN, and SILENTLY, when it cannot parse its own input
+## RESOLVED 2026-09-27 (opened 2026-09-02) — `review-proof-guard` failed OPEN, and SILENTLY, when it could not parse its own input
+
+**Resolved 2026-09-27 — the fail-open is now LOUD; it still fails open, by design.** Unparseable
+input, and a parsed payload that is not a JSON object (`null`, an array, a number), now emits a
+top-level `systemMessage` saying the check was SKIPPED, with no permission decision attached, and
+exits 0. An `allow` decision was deliberately NOT added, because it would skip the normal
+permission prompt. `.codex/hooks/codex-hook-adapter.mjs` forwards that warning-only payload to its
+warn channel (stderr) instead of passing it to Codex as hook output. Proof: `review-proof-guard.test.mjs`
+pins all six unreadable shapes plus a silent readable call; `codex-hook-adapter.test.mjs` pins the
+forwarding; a run through the real adapter showed the warning on stderr, a silent `ls`, and a
+proof-file write still denied. **Residual:** on Codex the warning goes to stderr, the same channel the
+schema-registry warnings use. Whether the Codex app shows exit-0 hook stderr has not been observed,
+so on Codex it may still be quiet in practice. The original reasoning is kept below because it still explains why the guard fails open.
+The original entry follows.
 
 `review-proof-guard.mjs` begins:
 
