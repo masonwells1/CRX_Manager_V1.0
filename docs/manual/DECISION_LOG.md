@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-09-27 (fewer prompts / automatic CodeRabbit entry added)
+Last verified: 2026-09-30 (CodeRabbit's first approval under the new ruleset, PR #841)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -62,11 +62,12 @@ showed Mason no permission prompts.
    actors), verified via `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27.
    Only CodeRabbit can supply the approval today: `masonwells1` is the only collaborator and authors
    every PR (no self-approval), GitHub Actions cannot approve, and every approval on the last 40
-   closed PRs came from `coderabbitai[bot]`. **Not yet observed under this ruleset** (CodeRabbit,
-   PR #841): CodeRabbit's approvals satisfied `main`'s required review until 2026-09-02, but no PR
-   has yet landed on a CodeRabbit approval under the new rule; #841 is the first test, and this line
-   is updated when it does. With the autonomous-landing merge gates (CodeRabbit's
-   latest verdict APPROVED on the exact head, `--auto` refused), an unreviewed PR cannot land even if
+   closed PRs came from `coderabbitai[bot]`. **Observed under this ruleset:** CodeRabbit APPROVED
+   #841 at `18cf44114` on 2026-09-30 00:37Z and GitHub then reported `reviewDecision: APPROVED`,
+   so its approval satisfies the new rule. #841's landing is still pending (that approval is
+   dismissed by the next push), and this line is updated again when a PR lands on one. With the
+   autonomous-landing merge gates (CodeRabbit's latest verdict APPROVED on the exact head, `--auto`
+   refused), an unreviewed PR cannot land even if
    a local gate were weakened. Supersedes the 2026-09-02 removal. Cost Mason accepted: if CodeRabbit
    is down, nothing merges until it recovers. The ruleset is his alone to change; agents never
    change or work around it, and no document carries a step-by-step way to switch it off (a Sol

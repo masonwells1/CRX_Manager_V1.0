@@ -25,7 +25,10 @@ same files; replaces PR #822.
   `scripts/check-doc-drift.mjs`: read only each manifest's `hooks` block, so `ask` rules that name
   hook files are not mistaken for hook wiring.
 - `.coderabbit.yaml`: automatic review of every non-draft PR, on open and on every push, never
-  pausing. The workflow test pins it. For a head CodeRabbit skipped, agents post
+  pausing. The workflow test pins the effective `reviews.auto_review` keys and values with a
+  strict built-in reader (CI runs that test before `npm ci`, so it cannot load the `yaml` package)
+  that fails on quoted or duplicate keys, flow collections, anchors, tags, merge keys, tabs and
+  extra documents; a second test runs 18 such edits on every CI pass. For a head CodeRabbit skipped, agents post
   `@coderabbitai review` once (Mason's "Post", 2026-09-27); the `ready-for-coderabbit` label no
   longer triggers a review. Both merge-gate messages and the guidance say so.
 - `scripts/run-claude-review.mjs` stays behind the edit prompt (a proof writer; Sol, 2026-09-27).
@@ -47,5 +50,5 @@ same files; replaces PR #822.
 - The ruleset API reports `required_approving_review_count: 1` and
   `dismiss_stale_reviews_on_push: true`.
 - The CodeRabbit schema check passes (with a negative control).
-- `coderabbit-final-review.test.cjs` 252/252, the agent-workflow and guard suites, and the parity
-  tests all pass.
+- `coderabbit-final-review.test.cjs` 253/253, also from a copy with no `node_modules` (where the
+  `yaml` version failed as CI did), plus the agent-workflow and guard suites and the parity tests.
