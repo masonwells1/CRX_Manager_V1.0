@@ -61,6 +61,7 @@ import {
   pushParseCostExceeded,
   PUSH_PARSE_COST_BUDGET,
   MAX_INSPECTABLE_COMMAND_LENGTH,
+  MAX_HOOK_INPUT_LENGTH,
 } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
@@ -70,7 +71,14 @@ function deny(reason) {
 }
 
 let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
+let rawInput = "";
+try { rawInput = readFileSync(0, "utf8"); } catch { passthrough(); }
+// Measured before decoding: JSON.parse on an unbounded input is itself a way to
+// outrun the hook limit, and a killed hook allows the command.
+if (rawInput.length > MAX_HOOK_INPUT_LENGTH) {
+  deny(`CODEX GATE: this tool call is too large to inspect safely (its hook input is over ${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} characters). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
+}
+try { payload = JSON.parse(rawInput); } catch { passthrough(); }
 
 const cmd = String(payload?.tool_input?.command || "");
 // First, before any parser: a hook killed at its time limit allows the command.

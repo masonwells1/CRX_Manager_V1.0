@@ -51,6 +51,11 @@ outran the Codex hook — linear work adds up on that much text. Both guards now
 command over 256 KiB (`MAX_INSPECTABLE_COMMAND_LENGTH`); measured, the slowest single-push shapes
 take up to ~5.8 s per MB in the Codex guard, ~1.5 s at the ceiling. A just-under-256 KiB `$(` run
 (the slowest shape) is now a real-hook timing test.
+Luna round 4: the hook input itself was decoded (JSON.parse, and the Codex-side trim) before the
+cap could run. Both guards now refuse a raw hook input over 16 MiB (`MAX_HOOK_INPUT_LENGTH`) before
+decoding it, and the Codex guard measures the command before trimming it; a 17 MiB payload is a
+real-hook test. Deferred LOW: the timing cases assert speed, not the allow/deny decision on
+under-budget inputs — those decisions stay covered by the existing guard suites.
 
 **Not verified.** Separate and pre-existing, not changed here: the Codex guard does not refuse an
 unrecognised git global option before `push` the way the Claude guard does.

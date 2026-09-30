@@ -3429,6 +3429,20 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
           assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses ${label}`);
         }
       }
+      // The hook INPUT is bounded before it is decoded: a whitespace-padded push
+      // inside a 17 MiB payload is refused without JSON.parse or trim over it.
+      const started = Date.now();
+      const res = spawnSync(process.execPath, [hook], {
+        input: JSON.stringify(payload(`${" ".repeat(17 * 1024 * 1024)}${push}`)),
+        encoding: "utf8",
+        timeout: 15_000,
+        maxBuffer: 1 << 26,
+        env: { ...scratchHookEnvironment(tmp, process.env), CODEX_PROJECT_DIR: tmp },
+      });
+      assert.equal(res.error, undefined, `${hookLabel} was not killed on a 17 MiB hook input: ${res.error?.message}`);
+      assert.equal(res.status, 0, `${hookLabel} exited cleanly on a 17 MiB hook input: ${res.stderr}`);
+      assert.ok(Date.now() - started < 10_000, `${hookLabel} decides a 17 MiB hook input in time`);
+      assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses a 17 MiB hook input`);
     }
   } finally {
     rmSync(tmp, { recursive: true, force: true });

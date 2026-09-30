@@ -119,6 +119,10 @@ export function isGitPush(cmd) {
 // Real commands are orders of magnitude shorter; long content belongs in a file.
 export const PUSH_PARSE_COST_BUDGET = 32_000_000;
 export const MAX_INSPECTABLE_COMMAND_LENGTH = 256 * 1024;
+// The whole hook input is decoded (JSON.parse) before the command can be
+// measured, so its size is bounded too (Luna, 2026-09-29). 16 MiB, not 256 KiB:
+// the Codex guard sees every tool, including large apply_patch payloads.
+export const MAX_HOOK_INPUT_LENGTH = 16 * 1024 * 1024;
 export function pushParseCostExceeded(cmd) {
   const text = String(cmd || "");
   if (text.length > MAX_INSPECTABLE_COMMAND_LENGTH) return true;
