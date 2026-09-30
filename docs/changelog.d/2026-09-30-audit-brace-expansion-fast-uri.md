@@ -8,11 +8,15 @@ New npm advisories made CI's `npm audit --audit-level=high` step fail on `main` 
 
 Changes:
 
-- `package.json` override for `brace-expansion` changed from the exact `5.0.9` to `^5.0.12`. The exact
-  pin is what blocked `npm audit fix`, the same trap #360 recorded when an exact `5.0.8` pin held the
-  package on a vulnerable version. A caret range lets later 5.x patches in.
-- `package-lock.json`: brace-expansion 5.0.12, minimatch 10.2.6 and fast-uri 3.1.8.
+- `package.json`: the `brace-expansion` override moves from the exact `5.0.9` to the exact `5.0.12`.
+  The project pins this library exactly, so the next advisory needs another manual bump; #360 hit the
+  same situation with `5.0.8`.
+- `package-lock.json`, regenerated from `main`'s lockfile: only brace-expansion (5.0.9 → 5.0.12) and
+  fast-uri (3.1.7 → 3.1.8) change. minimatch stays at 10.2.4.
 
-All three are build and lint tooling (reached through `eslint-plugin-jsx-a11y`) or schema tooling; none
-ships in the app bundle. Verified locally: `npm audit --audit-level=high` reports 0 vulnerabilities (it
-reported 2 high before), `npm run lint` passes with zero warnings, and `npm run build` succeeds.
+Both are build, lint or schema tooling (brace-expansion is reached through `eslint-plugin-jsx-a11y`);
+neither ships in the app bundle. Verified locally after a clean `npm ci`:
+
+- `npm audit --audit-level=high` reports 0 vulnerabilities (it reported 2 high before);
+- `npm run lint` passes with zero warnings;
+- `npm run build` succeeds.
