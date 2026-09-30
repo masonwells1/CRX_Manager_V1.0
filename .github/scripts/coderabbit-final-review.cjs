@@ -905,6 +905,20 @@ async function inspectCodeRabbitFollowUp({ github, owner, repo, pullNumber, head
   const pulls = association?.data;
   if (!Array.isArray(pulls)) throw new Error('CodeRabbit follow-up pull request association was not an array');
   if (pulls.length === 0 || !pulls.every((pull) => Number(pull?.number) === Number(pullNumber))) return null;
+  // A review's inline comments are stored apart from its body (CodeRabbit on
+  // #836), so an empty-body COMMENTED review can still carry new line findings.
+  // A CodeRabbit comment at or after the approval that starts a thread (no
+  // in_reply_to_id) is a later finding; a reply inside an existing thread is
+  // the tolerated artifact. An undated CodeRabbit comment refuses.
+  const reviewComments = await github.paginate(github.rest.pulls.listReviewComments,
+    { owner, repo, pull_number: pullNumber, per_page: 100 });
+  if (!Array.isArray(reviewComments)) throw new Error('CodeRabbit follow-up review-comment listing was not an array');
+  const laterFinding = reviewComments.some((comment) => {
+    if (normalize(comment?.user?.login) !== CODERABBIT_BOT_LOGIN) return false;
+    const at = Date.parse(String(comment?.created_at || ''));
+    return !Number.isFinite(at) || (at >= approval.at && (comment?.in_reply_to_id === null || comment?.in_reply_to_id === undefined));
+  });
+  if (laterFinding) return null;
   // One page, newest first (GitHub's documented order); only the newest
   // CodeRabbit entry matters and it is sorted again below regardless.
   const response = await github.rest.repos.listCommitStatusesForRef({ owner, repo, ref: headSha, per_page: 100 });

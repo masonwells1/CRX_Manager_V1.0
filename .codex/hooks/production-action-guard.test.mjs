@@ -1481,7 +1481,7 @@ try {
     };
     const statusCalls = [];
     const pullsCalls = [];
-    const mergeWithStatuses = (statuses, pulls = [{ number: 123 }]) => evaluateProductionAction({
+    const mergeWithStatuses = (statuses, pulls = [{ number: 123 }], comments = []) => evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: `gh pr merge 123 --squash${PIN}` },
       repoDir: risky.repo,
@@ -1490,6 +1490,9 @@ try {
         if (args[0] === "api" && String(args[1]).endsWith(`/commits/${risky.sha}/statuses?per_page=100`)) {
           statusCalls.push(args);
           return JSON.stringify(statuses);
+        }
+        if (args[0] === "api" && String(args[1]).endsWith("/pulls/123/comments?per_page=100&page=1")) {
+          return JSON.stringify(comments);
         }
         if (args[0] === "api" && String(args[1]).endsWith(`/commits/${risky.sha}/pulls?per_page=100`)) {
           pullsCalls.push(args);
@@ -1504,6 +1507,10 @@ try {
     // Codex P1 on #836: a completion on a commit other PRs also carry is not proof for this PR.
     assert.equal(mergeWithStatuses([completed], [{ number: 123 }, { number: 124 }]).blocked, true,
       "a head shared with another PR does not clear the merge");
+    // CodeRabbit on #836: inline findings live apart from the review body.
+    assert.equal(mergeWithStatuses([completed], [{ number: 123 }],
+      [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-26T12:20:00Z" }]).blocked, true,
+    "a later CodeRabbit inline finding does not clear the merge");
     assert.equal(mergeWithStatuses([{ ...completed, description: "Review skipped: excluded by label configuration" }]).blocked, true,
       "a skipped follow-up does not clear the head");
     assert.equal(mergeWithStatuses([{ ...completed, creator: { login: "masonwells1", type: "User" } }]).blocked, true,

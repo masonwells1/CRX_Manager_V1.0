@@ -1579,7 +1579,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
   };
-  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", statuses = [], pulls = [{ number: 900 }], migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", statuses = [], pulls = [{ number: 900 }], comments = [], migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
     checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
@@ -1595,6 +1595,11 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
         assert.deepEqual(args, ["api", `repos/{owner}/{repo}/commits/${HEAD_SHA}/statuses?per_page=100`]);
         if (statuses instanceof Error) throw statuses;
         return JSON.stringify(statuses);
+      }
+      if (args[0] === "api" && String(args[1]).includes("/pulls/900/comments")) {
+        assert.deepEqual(args, ["api", "repos/{owner}/{repo}/pulls/900/comments?per_page=100&page=1"]);
+        if (comments instanceof Error) throw comments;
+        return JSON.stringify(comments);
       }
       if (args[0] === "api" && String(args[1]).includes(`/commits/${HEAD_SHA}/pulls`)) {
         assert.deepEqual(args, ["api", `repos/{owner}/{repo}/commits/${HEAD_SHA}/pulls?per_page=100`]);
@@ -1682,6 +1687,13 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       "CodeRabbit has not cleared", "a head shared with another PR is refused");
     refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed], pulls: new Error("HTTP 502") }),
       "CodeRabbit has not cleared", "an unreadable PR association fails closed");
+    // CodeRabbit on #836: a new inline finding after the approval refuses the apply.
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
+      comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z" }] }),
+    "CodeRabbit has not cleared", "a later CodeRabbit inline finding is refused");
+    ok(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
+      comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7 }] }).ok === true,
+    "a CodeRabbit thread reply after the approval does not block the apply");
   }
   refused(gate({ pr: { mergeStateStatus: "BLOCKED" } }), "not merge-ready", "a PR that is not CLEAN is refused");
   refused(gate({ pr: { statusCheckRollup: [{ ...readyPr.statusCheckRollup[0], conclusion: "FAILURE" }] } }), "not merge-ready",

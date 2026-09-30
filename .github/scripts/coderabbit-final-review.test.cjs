@@ -486,6 +486,7 @@ function makeHarness({
   checkRunsSequence = null,
   statusesSequence = null,
   associatedPulls = [{ number: 42 }],
+  reviewComments = [],
   resolvedWorkflowPath = '.github/workflows/ci.yml',
   resolvedWorkflowByRunId = null,
   liveLabelSequence = null,
@@ -681,6 +682,7 @@ function makeHarness({
       pulls: {
         get: async () => ({ data: currentPull() }),
         listReviews: async () => ({ data: coderabbitReviews }),
+        listReviewComments: async () => ({ data: reviewComments }),
       },
       repos: {
         getCollaboratorPermissionLevel: async () => ({ data: { permission } }),
@@ -4144,9 +4146,10 @@ function codeRabbitStatus(description, createdAt, overrides = {}) {
     creator: { login: 'coderabbitai[bot]', type: 'Bot' }, ...overrides,
   };
 }
-function relabelFollowUpHarness({ reviews = [earlierApproval], statuses, associatedPulls }) {
+function relabelFollowUpHarness({ reviews = [earlierApproval], statuses, associatedPulls, reviewComments }) {
   const harness = makeNativeHarness({ existingComments: [nativeReceipt()], coderabbitReviews: reviews,
-    statuses: [commitStatus('Vercel'), ...statuses], ...(associatedPulls === undefined ? {} : { associatedPulls }) });
+    statuses: [commitStatus('Vercel'), ...statuses], ...(associatedPulls === undefined ? {} : { associatedPulls }),
+    ...(reviewComments === undefined ? {} : { reviewComments }) });
   harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' },
     created_at: nativeReceipt().created_at });
   return harness;
@@ -4201,6 +4204,11 @@ for (const [name, options] of [
     statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
   ['a completion on a head GitHub links to no PR', { associatedPulls: [],
     statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  // CodeRabbit on #836: inline comments live apart from the review body.
+  ['a new CodeRabbit inline finding after the approval', { reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' },
+    created_at: '2026-09-08T03:49:53Z', body: 'finding' }], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['an undated CodeRabbit inline comment', { reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, body: 'x' }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
 ]) {
   test(`follow-up: ${name} is not a delivered review`, async () => {
     const harness = relabelFollowUpHarness(options);
@@ -4229,6 +4237,24 @@ test('follow-up: an unreadable status list fails closed', async () => {
     if (new Error().stack.includes('inspectCodeRabbitFollowUp')) return Promise.reject(new Error('statuses unavailable'));
     return listStatuses(request);
   };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.notEqual(result.status, 'reviewed');
+  assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);
+});
+
+test('follow-up: a CodeRabbit reply inside an existing thread does not block the follow-up', async () => {
+  const harness = relabelFollowUpHarness({
+    reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T03:10:00Z', in_reply_to_id: 3, body: 'resolved' },
+      { id: 8, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T02:00:00Z', body: 'older finding' }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
+  });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+});
+
+test('follow-up: an unreadable review-comment list fails closed', async () => {
+  const harness = relabelFollowUpHarness({ statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] });
+  harness.github.rest.pulls.listReviewComments = () => Promise.reject(new Error('comments unavailable'));
   const result = await execute(harness, { nativeDispatch: true });
   assert.notEqual(result.status, 'reviewed');
   assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);

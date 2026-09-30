@@ -345,7 +345,8 @@ const pr820 = {
 // fix commit belongs to #820 and no other PR. Every follow-up case below uses
 // that association unless it is testing the association itself.
 const PULLS_820 = [{ number: 820, state: "closed", head: { sha: FIX } }];
-const followUp = (pr, statuses, pulls = PULLS_820) => coderabbitFollowUpClearedHead(pr, statuses, pulls);
+// #820 has no CodeRabbit inline review comments at all (read 2026-09-30).
+const followUp = (pr, statuses, pulls = PULLS_820, comments = []) => coderabbitFollowUpClearedHead(pr, statuses, pulls, comments);
 const statuses820 = [
   crStatus("Review completed", "2026-09-27T07:31:22Z", { id: 5 }),
   crStatus("Review in progress", "2026-09-27T07:26:13Z", { state: "pending", id: 4 }),
@@ -427,30 +428,66 @@ ok(!followUp(pr820, statuses820, null), "an unreadable PR association fails clos
 ok(!followUp(pr820, statuses820, [{}]), "an association entry without a number is refused");
 ok(!followUp({ ...pr820, number: undefined }, statuses820), "a PR view without its number fails closed");
 ok(!followUp({ ...pr820, number: "820x" }, statuses820), "a malformed PR number fails closed");
+// CodeRabbit on #836 (Major): inline comments live apart from a review's body,
+// so an empty-body COMMENTED review can still carry new line findings. A new
+// CodeRabbit thread after the approval refuses; a reply inside a thread (the
+// empty artifact's only content) does not.
+const crComment = (createdAt, extra = {}) => ({ id: 1, user: { login: "coderabbitai[bot]", type: "Bot" }, created_at: createdAt, body: "x", ...extra });
+ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z")]),
+  "a new CodeRabbit inline finding after the approval refuses, even under an empty-body review");
+ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T06:24:24Z")]),
+  "an inline finding in the same second as the approval refuses");
+ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114399661 })]),
+  "a CodeRabbit reply inside an existing thread is the tolerated artifact");
+ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T05:00:00Z")]),
+  "an inline finding the later approval superseded does not block");
+ok(followUp(pr820, statuses820, PULLS_820, [{ ...crComment("2026-09-27T07:00:00Z"), user: { login: "masonwells1" } }]),
+  "a person's inline comment is not CodeRabbit content");
+ok(!followUp(pr820, statuses820, PULLS_820, [crComment("not-a-date")]), "an undated CodeRabbit inline comment fails closed");
+ok(!followUp(pr820, statuses820, PULLS_820, null), "an unreadable inline-comment list fails closed");
 
 // coderabbitClearedHead(): the one predicate every gate calls.
 {
   const calls = [];
   // Answers the two follow-up reads separately: the head's statuses and the
   // pull requests that contain it.
-  const gh = (statusAnswer, pullsAnswer = JSON.stringify(PULLS_820)) => (args) => {
+  const gh = (statusAnswer, pullsAnswer = JSON.stringify(PULLS_820), commentsAnswer = "[]") => (args) => {
     calls.push(args);
-    const answer = /\/pulls\?/.test(String(args[1])) ? pullsAnswer : statusAnswer;
+    const target = String(args[1]);
+    const answer = /\/comments\?/.test(target) ? (typeof commentsAnswer === "function" ? commentsAnswer(target) : commentsAnswer)
+      : /\/pulls\?/.test(target) ? pullsAnswer : statusAnswer;
     if (answer instanceof Error) throw answer;
     return answer;
   };
   ok(coderabbitClearedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }, { gh: gh("[]") }) && calls.length === 0,
     "an exact-head approval clears without any GitHub read");
   ok(coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820)) }), "#820 clears through the follow-up reads");
-  eq(calls.slice(-2), [
+  eq(calls.slice(-3), [
+    ["api", "repos/{owner}/{repo}/pulls/820/comments?per_page=100&page=1"],
     ["api", `repos/{owner}/{repo}/commits/${FIX}/statuses?per_page=100`],
     ["api", `repos/{owner}/{repo}/commits/${FIX}/pulls?per_page=100`],
-  ], "the reads ask for the exact head's statuses and the PRs that contain it");
+  ], "the reads ask for the PR's inline comments, the exact head's statuses and the PRs that contain it");
   ok(coderabbitClearedHead(pr820, { repo: "masonwells1/CRX_Manager_V1.0", gh: gh(JSON.stringify(statuses820)) }), "an explicit --repo is honoured");
-  eq(calls.slice(-2).map((args) => args[1]), [
+  eq(calls.slice(-3).map((args) => args[1]), [
+    "repos/masonwells1/CRX_Manager_V1.0/pulls/820/comments?per_page=100&page=1",
     `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/statuses?per_page=100`,
     `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/pulls?per_page=100`,
-  ], "...and both reads come from that repository");
+  ], "...and every read comes from that repository");
+  // Inline comments are read page by page: a full page of replies, then a page
+  // holding a new CodeRabbit finding, refuses; the same finding absent clears.
+  const reply = { user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 1 };
+  const finding = { user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z" };
+  const paged = (second) => (target) => JSON.stringify(/page=1$/.test(target) ? Array(100).fill(reply) : second);
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), paged([finding])) }),
+    "a CodeRabbit finding on the second page of inline comments refuses");
+  ok(coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), paged([reply])) }),
+    "a second page of thread replies only still clears");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), () => JSON.stringify(Array(100).fill(reply))) }),
+    "more inline comments than the page cap refuses (fail closed)");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), new Error("HTTP 502")) }),
+    "a failed inline-comment read refuses");
+  ok(!coderabbitClearedHead({ ...pr820, number: undefined }, { gh: gh(JSON.stringify(statuses820)) }),
+    "a PR view without its number refuses before any read");
   const before = calls.length;
   ok(!coderabbitClearedHead({ headRefOid: FIX, reviews: [] }, { gh: gh(JSON.stringify(statuses820)) }) && calls.length === before,
     "no standing approval: refused without spending a GitHub read");
