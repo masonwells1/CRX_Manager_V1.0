@@ -27,6 +27,7 @@ import {
   recordUsedApproval,
   signatureValid,
   usedMarkerName,
+  ownerOnceGuardSql,
   assertApprovalStillValid,
   verifyOwnerApproval,
 } from "./owner-approval-lib.mjs";
@@ -193,6 +194,14 @@ refuses(check(approve(), { appliedNames: ["20260101000000_x", base.migration] })
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// The in-transaction one-install guard (proven on a real Postgres in the PR description).
+{
+  const g = ownerOnceGuardSql({ tag: "crx_apply_abc", migName: "20260914101000_x", sql: "select 1;" });
+  ok(g.includes("pg_advisory_xact_lock") && g.includes("OWNER_APPROVAL_ALREADY_APPLIED") && g.includes("$crx_apply_abc$20260914101000_x$crx_apply_abc$"),
+    "the guard locks on the name and refuses a migration already in the ledger");
+  assert.throws(() => ownerOnceGuardSql({ tag: "crx_apply_abc", migName: "20260914101000_x", sql: "select '$crx_apply_abc_guard$';" }), /collides/); pass++;
 }
 
 ok(signatureValid("x", signAs(mason, "x"), der(mason)) && !signatureValid("x", signAs(mason, "x"), der(agent)),

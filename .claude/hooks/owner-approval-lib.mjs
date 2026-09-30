@@ -104,7 +104,7 @@ export function ownerApprovalSummary(p) {
     `File fingerprint: ${String(p.queryHash).slice(0, 16)}`,
     "",
     "The safety check stopped it for you because it:",
-    ...(p.categories || []).map((c) => `- ${PARKED_LABELS[c.category] || c.category}: ${clip(c.reason, 300)}`),
+    ...(p.categories || []).map((c) => `- ${PARKED_LABELS[c.category] || c.category}: ${c.reason}`),
     "",
     `This approval works once, only for this exact file and version, until ${centralTime(p.expiresAt)}.`,
     "Every other safety check still has to pass before it runs.",
@@ -216,6 +216,27 @@ export function recordUsedApproval(dir, payloadText, now = Date.now()) {
   writeFileSync(path.join(dir, usedMarkerName(p.nonce)),
     `${JSON.stringify({ nonce: p.nonce, migration: p.migration, prHead: p.prHead, usedAt: new Date(now).toISOString() }, null, 2)}\n`,
     { encoding: "utf8", flag: "wx" });
+}
+
+/**
+ * SQL placed at the start of an owner-approved apply's transaction (Luna HIGH,
+ * round 2): lock on the migration's name, then refuse if the ledger already holds
+ * it. Local "used" markers are files an agent could delete; this is enforced by the
+ * database, and two racing applies serialize on the lock so the second rolls back.
+ * `tag` is the apply script's dollar-quote tag; both tags are checked absent.
+ */
+export function ownerOnceGuardSql({ tag, migName, sql }) {
+  const dq = `$${tag}$`;
+  const guardTag = `$${tag}_guard$`;
+  for (const t of [dq, guardTag]) {
+    if (String(sql).includes(t) || String(migName).includes(t)) throw new Error(`dollar-quote tag ${t} collides with the payload`);
+  }
+  return `SELECT pg_advisory_xact_lock(hashtext(${dq}crx-owner-approved:${migName}${dq}));\n` +
+    `DO ${guardTag} BEGIN\n` +
+    `  IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE name = ${dq}${migName}${dq}) THEN\n` +
+    `    RAISE EXCEPTION 'OWNER_APPROVAL_ALREADY_APPLIED: % is already in the ledger; one approval covers one install', ${dq}${migName}${dq};\n` +
+    `  END IF;\n` +
+    `END ${guardTag};\n`;
 }
 
 /** The approval must still be inside its window at the moment of transmission. */

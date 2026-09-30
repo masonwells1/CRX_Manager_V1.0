@@ -32,7 +32,8 @@ GitHub token.
    - what the safety check flagged;
    - a 30-minute window and a one-time nonce;
    - the plain-English summary he is shown.
-   The verifier recomputes that summary from the signed fields, so what he read is what he signed.
+   The verifier recomputes that summary and the safety check's findings from the signed fields and
+   the file, so the genuine approval window cannot understate what the approval covers.
 3. The signature is checked **last**, after the reviewer proofs, the Sol proof and the pull-request
    landing gate, against the PR and head that gate confirmed. An approval never skips another check.
 4. The approval is honoured only by `scripts/apply-migration-file.mjs`, never by the MCP
@@ -51,9 +52,20 @@ GitHub token.
 - the 2026-08-01 Factory rule "Do not add Windows Hello, a PIN…", which governed the Software
   Factory's owner touchpoints; the Factory was removed on 2026-08-07.
 
-**Residual (honest):** this is as strong as the rule that agents cannot edit the guard files, the
-same boundary every other gate relies on. It adds no new way around that boundary, and it does not
-remove the existing one.
+**Residuals (honest):**
+- This is as strong as the rule that agents cannot edit the guard files, the same boundary every
+  other gate relies on. It adds no new way around that boundary, and it does not remove the existing
+  one.
+- Windows Hello's own prompt does not show what is being signed (Luna BLOCKER, round 2). Any
+  program running as Mason could draw a look-alike approval window, then trigger the real prompt
+  for a different parked migration.
+  - So the signature proves that Mason was physically present and consented. It does not prove
+    that he read the true summary.
+  - What bounds it: an approval unlocks only a migration committed in an open PR whose exact head
+    CodeRabbit APPROVED and Sol cleared, with both reviewer proofs fresh. A deceived approval can
+    therefore unlock only a change two independent reviewers already passed.
+  - Mason's practice: approve only right after an agent asked for it in chat, and only when the
+    migration name in the window matches that request.
 
 **Operative rule:** a yes typed in chat, a GitHub approve, label or comment, and any file an agent
 writes are not approval for a parked migration. Only a valid Windows Hello signature is. Never

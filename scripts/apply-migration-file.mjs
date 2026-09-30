@@ -66,7 +66,7 @@ import {
   CRX_PRODUCTION_REF,
 } from "../.claude/hooks/migration-apply-lib.mjs";
 import { assertWrappable } from "../.claude/hooks/migration-wrappability-lib.mjs";
-import { assertApprovalStillValid, recordUsedApproval } from "../.claude/hooks/owner-approval-lib.mjs";
+import { assertApprovalStillValid, ownerOnceGuardSql, recordUsedApproval } from "../.claude/hooks/owner-approval-lib.mjs";
 
 // Every existing ledger row carries this; apply_migration fills it from the
 // authenticated Supabase account, and the personal access token this script uses
@@ -388,9 +388,21 @@ if (sql.includes(dq) || migName.includes(dq) || createdBy.includes(dq)) {
   die(2, `apply-migration-file: dollar-quote tag ${dq} collides with the payload. Refusing to transmit.`);
 }
 
+// ONE INSTALL PER OWNER APPROVAL, ENFORCED BY THE DATABASE (Luna HIGH, round 2).
+// The local "used" marker and the snapshot are files an agent could delete, so a
+// migration Mason approved is guarded inside its own transaction as well: take a
+// transaction lock on its name, then refuse if the ledger already holds it. Two
+// racing applies serialize on the lock; the second sees the first's committed row
+// and rolls back with nothing applied.
+let ownerOnceGuard = "";
+if (ownerApproval) {
+  try { ownerOnceGuard = ownerOnceGuardSql({ tag, migName, sql }); }
+  catch (err) { die(2, `apply-migration-file: ${err?.message || err}. Refusing to transmit.`); }
+}
+
 // One transaction: the migration and its ledger row commit together or not at all.
 const wrapped =
-  `BEGIN;\n${sql}\n;\n` +
+  `BEGIN;\n${ownerOnceGuard}${sql}\n;\n` +
   `INSERT INTO supabase_migrations.schema_migrations (version, name, statements, created_by)\n` +
   `VALUES (${dq}${version}${dq}, ${dq}${migName}${dq}, ARRAY[${dq}${sql}${dq}], ${dq}${createdBy}${dq});\n` +
   `COMMIT;`;
@@ -428,33 +440,10 @@ try {
 // Recorded first, so no failure after this point can leave it reusable. If the
 // apply then fails, Mason approves again; that is the safe direction.
 if (ownerApproval) {
-  // One install per approval, checked against the LIVE ledger rather than the
-  // local "used" record and snapshot alone — both are files an agent could delete
-  // or rewrite. migName already matched the canonical-name rule above, and the
-  // tag guard applies here too.
-  if (migName.includes(dq)) die(2, `apply-migration-file: dollar-quote tag ${dq} collides with the name. Refusing.`);
-  let alreadyApplied;
-  try {
-    const ledger = await fetch(`https://api.supabase.com/v1/projects/${projectId}/database/query`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: `select count(*)::int as n from supabase_migrations.schema_migrations where name = ${dq}${migName}${dq};`,
-      }),
-    });
-    if (!ledger.ok) throw new Error(`HTTP ${ledger.status}`);
-    const rows = JSON.parse(await ledger.text());
-    const n = Number(rows?.[0]?.n);
-    if (!Number.isInteger(n)) throw new Error("unreadable answer");
-    alreadyApplied = n > 0;
-  } catch (err) {
-    die(2,
-      `apply-migration-file: could not confirm from the live ledger that ${migName} has not been applied ` +
-      `(${err?.message || err}). Refusing — Mason's approval covers one install.`);
-  }
-  if (alreadyApplied) {
-    die(2, `apply-migration-file: ${migName} is already in the live ledger. Mason's approval covers one install; refusing.`);
-  }
+  // The database enforces one install per approval (ownerOnceGuard above); this
+  // local claim stops a second run earlier and leaves a record. No network call
+  // sits between the gate and the transmission, so the gate's view of the pull
+  // request is as current as it is for every other apply.
   try {
     // Exclusive claim: a second apply racing on the same approval fails here.
     recordUsedApproval(ownerApproval.dir, ownerApproval.payload);
