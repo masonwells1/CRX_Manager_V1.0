@@ -402,6 +402,23 @@ for (const command of [
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   ok(r.decision?.permissionDecision === "deny", `a raw merge inside another shell is denied: ${command.slice(0, 70)}`);
 }
+// Codex GitHub review of PR #795, 2026-09-30: env's attached split-string
+// spellings ran their command unread. Each of these passed before the fix.
+for (const command of [
+  "env --split-string='gh pr merge 123 --admin'",
+  "env --sp='gh pr merge 123 --admin'",
+  "env -S'gh pr merge 123 --admin'",
+  "env -iS'gh mm 1'",
+  "env -Sgh mm 1",
+  "env --split-string='gh mm 1'",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `env's split string is read as a command: ${command}`);
+}
+for (const command of ["env --split-string='gh pr view 12'", "env FOO=1 npm test", "env -u HOME node scripts/check.mjs"]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.status === 0 && r.decision === null, `an ordinary env command is not refused: ${command}`);
+}
 r = runHook({ tool_name: "Bash", tool_input: { command: "bash -c 'git log --oneline --merges -5'" } });
 ok(r.status === 0 && r.decision === null, "a nested command that only mentions merges is not refused");
 

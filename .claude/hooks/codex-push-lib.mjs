@@ -3143,6 +3143,42 @@ function processStarterInner(argvWords, start) {
   return command ? [command] : [];
 }
 
+// `env -S 'gh pr merge 1 --admin'`, `env -S'…'`, `env -iS'…'`,
+// `env --split-string='…'` (or any unambiguous prefix, `--sp=…`): GNU env
+// splits the string into words and runs them, followed by the rest of the
+// line. Only the detached `-S '…'` spelling was read, through the candidate
+// program check; the attached spellings ran an administrator merge past both
+// merge guards (Codex GitHub review of PR #795, 2026-09-30).
+function envSplitStringInner(rawWords, argvWords, start) {
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  // The string (attached, or else the next word) followed by the rest of the
+  // line: `-Sgh mm 1` runs `gh mm 1` too.
+  const splitString = (attached, next) => {
+    const rest = restOfLine(rawWords, argvWords, next);
+    return attached ? [`${attached} ${rest[0] ?? ""}`.trim(), ...rest] : rest;
+  };
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (word === "--" || word === "-" || !word.startsWith("-")) return [];
+    if (word.startsWith("--")) {
+      const [name, ...value] = word.slice(2).split("=");
+      if (name && "split-string".startsWith(name)) return splitString(value.join("="), index + 1);
+      if (!value.length && name && ["unset", "chdir"].some((long) => long.startsWith(name))) index += 1;
+      continue;
+    }
+    for (let at = 1; at < word.length; at += 1) {
+      const letter = word[at];
+      if (letter === "S") return splitString(word.slice(at + 1), index + 1);
+      if ("uCP".includes(letter)) {
+        if (at === word.length - 1) index += 1;
+        break;
+      }
+    }
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
+}
+const ENV_PROGRAMS = new Set(["env"]);
+
 // Is the word at `index` the program this segment runs? True at the start, or
 // after environment assignments and wrapper words (`sudo`, `timeout 30`, `&`).
 function isCommandPosition(argvWords, index) {
@@ -3218,6 +3254,8 @@ function nestedCommandsOneLevel(command, { grouping }) {
         if (found === SCAN_WINDOW_EXCEEDED || found.length) break;
       } else if (is(PROCESS_STARTERS)) {
         add(processStarterInner(argvWords, index + 1));
+      } else if (is(ENV_PROGRAMS)) {
+        add(envSplitStringInner(rawWords, argvWords, index + 1));
       }
     }
   }
