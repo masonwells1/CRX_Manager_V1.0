@@ -33,11 +33,14 @@ if (existsSync(OWNER_KEY_FILE)) {
   die(1, `owner-approval-setup: ${OWNER_KEY_FILE} already exists. Replacing Mason's key takes a reviewed pull request that deletes it first.`);
 }
 
-console.log("Step 1 of 2: creating Mason's approval key (Windows Hello prompt)...");
-let created = runHello("Create", { timeoutMs: 10 * 60 * 1000 });
-if (!created?.ok && created?.status === "CredentialAlreadyExists") {
-  console.log("A key from an earlier setup attempt already exists in Windows; using it.");
-  created = runHello("PublicKey", { timeoutMs: 30_000 });
+// A key left by an earlier, interrupted setup is reused: it is still Windows
+// Hello-bound, and the self-test below proves it signs before anything is pinned.
+let created = runHello("PublicKey", { timeoutMs: 30_000 });
+if (created?.ok) {
+  console.log("Step 1 of 2: Mason's approval key already exists in Windows (from an earlier setup attempt); using it.");
+} else {
+  console.log("Step 1 of 2: creating Mason's approval key (Windows Hello prompt)...");
+  created = runHello("Create", { timeoutMs: 10 * 60 * 1000 });
 }
 if (!created?.ok || !created.publicKey) {
   die(3, `owner-approval-setup: no key was created (${created?.status || "no answer"}${created?.message ? `: ${created.message}` : ""}).`);

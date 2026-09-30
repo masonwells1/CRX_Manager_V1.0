@@ -41,11 +41,21 @@ try {
   [Windows.Security.Credentials.KeyCredentialManager, Windows.Security.Credentials, ContentType = WindowsRuntime] | Out-Null
   [Windows.Security.Credentials.KeyCredentialRetrievalResult, Windows.Security.Credentials, ContentType = WindowsRuntime] | Out-Null
   [Windows.Security.Credentials.KeyCredentialOperationResult, Windows.Security.Credentials, ContentType = WindowsRuntime] | Out-Null
-  [Windows.Security.Cryptography.CryptographicBuffer, Windows.Security.Cryptography, ContentType = WindowsRuntime] | Out-Null
+  [Windows.Storage.Streams.IBuffer, Windows.Storage.Streams, ContentType = WindowsRuntime] | Out-Null
 
   $manager = [Windows.Security.Credentials.KeyCredentialManager]
   $retrieval = [Windows.Security.Credentials.KeyCredentialRetrievalResult]
-  $buffers = [Windows.Security.Cryptography.CryptographicBuffer]
+  # Windows PowerShell 5.1 cannot pass a returned WinRT buffer to another WinRT
+  # method (it arrives as a bare __ComObject; measured 2026-09-30). Calling through
+  # .NET reflection casts it at the CLR level instead, which works.
+  $bufferExt = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]
+  $toArray = $bufferExt.GetMethod('ToArray', [Type[]]@([Windows.Storage.Streams.IBuffer]))
+  $asBuffer = $bufferExt.GetMethod('AsBuffer', [Type[]]@([byte[]]))
+  $credentialType = [Windows.Security.Credentials.KeyCredential]
+  function ConvertTo-Base64FromBuffer($buffer) { [Convert]::ToBase64String([byte[]]$toArray.Invoke($null, @($buffer))) }
+  function Get-PublicKeyBase64($credential) {
+    ConvertTo-Base64FromBuffer ($credentialType.GetMethod('RetrievePublicKey', [Type[]]@()).Invoke($credential, $null))
+  }
 
   function Show-Question([string]$title, [string]$text, [bool]$yesNo) {
     $owner = New-Object System.Windows.Forms.Form
@@ -81,7 +91,7 @@ try {
       Write-Result @{ ok = $false; status = "$($open.Status)" }
       exit 2
     }
-    Write-Result @{ ok = $true; publicKey = $buffers::EncodeToBase64String($open.Credential.RetrievePublicKey()) }
+    Write-Result @{ ok = $true; publicKey = (Get-PublicKeyBase64 $open.Credential) }
     exit 0
   }
 
@@ -100,7 +110,7 @@ try {
       Write-Result @{ ok = $false; status = "$($created.Status)" }
       exit 2
     }
-    Write-Result @{ ok = $true; publicKey = $buffers::EncodeToBase64String($created.Credential.RetrievePublicKey()) }
+    Write-Result @{ ok = $true; publicKey = (Get-PublicKeyBase64 $created.Credential) }
     exit 0
   }
 
@@ -130,12 +140,15 @@ try {
     Write-Result @{ ok = $false; status = "$($open.Status)" }
     exit 2
   }
-  $signed = Wait-WinRt ($open.Credential.RequestSignAsync($buffers::CreateFromByteArray($bytes))) ([Windows.Security.Credentials.KeyCredentialOperationResult])
+  $data = $asBuffer.Invoke($null, @(,$bytes))
+  $signOp = $credentialType.GetMethod('RequestSignAsync').Invoke($open.Credential, @($data))
+  $signed = Wait-WinRt $signOp ([Windows.Security.Credentials.KeyCredentialOperationResult])
   if ("$($signed.Status)" -ne 'Success') {
     Write-Result @{ ok = $false; status = "$($signed.Status)" }
     exit 2
   }
-  Write-Result @{ ok = $true; signature = $buffers::EncodeToBase64String($signed.Result) }
+  $signatureBuffer = [Windows.Security.Credentials.KeyCredentialOperationResult].GetProperty('Result').GetValue($signed)
+  Write-Result @{ ok = $true; signature = (ConvertTo-Base64FromBuffer $signatureBuffer) }
   exit 0
 }
 catch {
