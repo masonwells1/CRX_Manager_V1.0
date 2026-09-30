@@ -12,6 +12,9 @@ settings PR") and merges this PR by hand, because it is a gate change.
   or `production`. A merge into any other branch is not a production landing, so it passes unchecked.
 - Nothing else changed: no `deny` entry, and the GitHub-MCP `merge_pull_request` tool stays in `ask`.
 - DECISION_LOG 2026-09-26 residual (d) is marked closed.
+- `package-lock.json`: test-only `undici` (under `jsdom`) moves from 7.29.0 to 7.30.0 (`npm audit fix`).
+  That clears the new high-severity advisories that failed CI's `npm audit --audit-level=high` step
+  for every branch. This is the same bump as PR #844.
 
 Open PR #822 carries the same one-line change inside a much larger bundle. Whichever lands second
 drops that line in its rebase.
