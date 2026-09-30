@@ -386,6 +386,31 @@ try {
     "a session commit replayed by git pull --rebase must still warn without a ledger");
   pass++;
 
+  // ── Session 1n (CodeRabbit, PR #827): a clean octopus merge of two branches
+  //    that edited separate hunks of the SAME file authors nothing (git's
+  //    octopus strategy refuses hand resolutions) → no warning ──
+  mkdirSync(path.join(tmp, "src"), { recursive: true });
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "octo base"], tmp, { past: true });
+  git(["checkout", "-qb", "octo-one"], tmp);
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "A one\nb\nc\nd\ne\nf\ng\n");
+  git(["commit", "-qam", "octo-one edits top"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  git(["checkout", "-qb", "octo-two"], tmp);
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "a\nb\nc\nd\ne\nf\nG two\n");
+  git(["commit", "-qam", "octo-two edits bottom"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  const s1n = "ledger-test-clean-octopus";
+  snapshots.push(startSession(s1n));
+  git(["merge", "--no-ff", "--no-edit", "-q", "octo-one", "octo-two"], tmp);
+  assert.equal(git(["rev-list", "--parents", "-n", "1", "HEAD"], tmp).trim().split(/\s+/).length, 4,
+    "setup: HEAD must be a three-parent octopus merge");
+  const octopus = runStopWrap(s1n, tmp);
+  assert.ok(!LEDGER_WARNING.test(octopus.stdout),
+    `a clean octopus merge of separate same-file hunks must not warn; got: ${octopus.stdout}`);
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));

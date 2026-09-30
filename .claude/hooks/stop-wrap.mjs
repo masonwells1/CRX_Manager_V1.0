@@ -561,7 +561,12 @@ function authoredMergeFiles(sha) {
     return parse(runGit(["diff-tree", "-r", "-M", "--name-status", autoTree, sha]), (st) => st === "A");
   }
   // Combined-diff fallback: one status letter per parent; all-"A" = new file.
-  return parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
+  const combined = parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
+  // Git's octopus strategy refuses any merge that needs a hand resolution, so
+  // an octopus "M" row is an automatic same-file merge, not authored work; only
+  // a file the octopus commit itself added can be (CodeRabbit, PR #827). A
+  // two-parent merge on a git without --write-tree keeps both.
+  return parents.length > 2 ? combined.filter(({ status }) => status === "A") : combined;
 }
 
 try {

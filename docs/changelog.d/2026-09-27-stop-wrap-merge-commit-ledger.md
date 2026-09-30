@@ -36,7 +36,9 @@ Fix, refined across twelve Codex review rounds (PRs #824 and #827):
   committed merge differs from it was written by the resolver: a conflict fix, including one
   resolved by simply taking one side, or a newly added file. A clean automatic merge, even of
   separate edits to the same file, counts for nothing. Octopus merges, and a git without
-  `--write-tree`, fall back to the combined diff (`git diff-tree --cc`).
+  `--write-tree`, fall back to the combined diff (`git diff-tree --cc`). An octopus merge
+  counts only files it added, because git's octopus strategy refuses any merge that needs a
+  hand resolution; its modified files were all merged automatically (CodeRabbit, PR #827).
 - **A changelog entry written during a resolution counts.** A file the resolution adds keeps
   its "added" status, so it satisfies the rule that a changelog.d entry must be new. The
   comparison detects renames, so renaming an existing entry during a resolution is not
@@ -59,7 +61,7 @@ rare cases are accepted rather than chased further:
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real SessionStart and Stop hooks in a temp git repo with fourteen cases:
+  It runs the real SessionStart and Stop hooks in a temp git repo with fifteen cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -75,6 +77,7 @@ rare cases are accepted rather than chased further:
   - a session commit still warns when an old reflog entry expired during the session;
   - an unrecorded session commit replayed by `git pull --rebase` still warns, pulling from
     a `file://` URL so the colon case runs on every platform;
+  - a clean octopus merge of separate same-file hunks does not warn;
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -91,5 +94,6 @@ rare cases are accepted rather than chased further:
   - With a length-based boundary, the expiry case finds no session entries. Codex
     reproduced this; the test mirrors it.
   - With the rebase pattern matching only `rebase …`, the pull-rebase case fails.
-- With the final version, all fourteen cases pass. `npm run test:correction-guards`,
+  - Without the octopus filter in the combined-diff fallback, the octopus case fails.
+- With the final version, all fifteen cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.
