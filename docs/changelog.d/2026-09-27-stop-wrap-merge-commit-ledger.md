@@ -43,6 +43,19 @@ Fix, refined across twelve Codex review rounds (PRs #824 and #827):
   mistaken for a new one.
 - A session with a real, unrecorded commit is still warned.
 
+### Known limitations
+
+This hook is a reminder at session end. It blocks nothing and never touches data, so these
+rare cases are accepted rather than chased further:
+
+- A commit that was amended or rebased away still counts if some other ref keeps it
+  reachable, such as a backup branch, tag or stale remote-tracking ref. If that
+  superseded commit carried a ledger edit the replacement dropped, the reminder can be
+  skipped (Codex P2, PR #827 round 13).
+- Two reflog entries that are byte-identical (same commit, same second, same action)
+  make the session anchor ambiguous. The newest match wins, which can undercount
+  session entries.
+
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
