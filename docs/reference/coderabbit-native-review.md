@@ -102,6 +102,15 @@ only from data CodeRabbit alone can write:
    carry that PR's completion. An empty, unreadable or shared association
    refuses. On real data, `970052fc` answers only #820 (Codex P1 on #836).
 
+**Base scope.** Neither path binds CodeRabbit's evidence to a base SHA: an
+exact-head APPROVED review and a follow-up completion both stay attached to the
+head when `main` moves or the PR is retargeted without a new push. CodeRabbit
+reviews only PRs whose base is the default branch (`.coderabbit.yaml` sets no
+other `base_branches`, and the lifecycle refuses any other base), so the review
+was always against some `main` tip. The current base is covered by the
+exact-SHA Sol proof, which binds to GitHub's real `baseRefOid` and is required
+last for every merge.
+
 A commit status's creator is the authenticated account that wrote it, so no
 person, agent token or workflow can mint one in CodeRabbit's name; a newer
 same-context status from anyone else refuses. The summary comment is **not** read,

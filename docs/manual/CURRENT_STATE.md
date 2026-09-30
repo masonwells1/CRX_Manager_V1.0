@@ -80,11 +80,12 @@ pre-cutover body is refused and retried); and make balance-report recipient labe
 latest earned-state observation at the requested cutoff, including paid-only rows. `100100`
 through `100600` are applied, and so is the transfer intent wrapper that followed them,
 `20260914100800_bind_transfer_invoice_intent` (formerly `20260908130800`; applied 2026-09-27, ledger
-`20260927060531`). The one still parked:
+`20260927060531`). The last one is applied too:
 - `20260914100900_repair_commission_history_label_snapshots` (renumbered from `20260905020100`, and
-  briefly `20260908130900` on PR #638's closed branch) appends corrected labels for 34 un-settled
-  opening commission snapshots. It is last on purpose: it refuses to run once any commission payment
-  has been posted, and running last means that refusal stops nothing else.
+  briefly `20260908130900` on PR #638's closed branch; applied 2026-09-28, ledger `20260928025520`)
+  appended corrected labels for the 34 un-settled opening commission snapshots. It ran last on
+  purpose: it refuses to run once any commission payment has been posted, and running last meant
+  that refusal could stop nothing else. Nothing in this cohort is parked any more.
 
 **`20260908130000` hold-receipt binding (applied 2026-09-15).** Applied with Mason's explicit
 in-chat approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply checks confirmed the
