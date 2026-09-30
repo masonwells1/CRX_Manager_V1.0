@@ -1,12 +1,34 @@
 # Decision Log
 
-Last verified: 2026-09-28 (nested-command residuals entry added)
+Last verified: 2026-09-29 (nested-command round-4 gaps entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
+
+**Source:** Mason, in the PR #795 ship session on 2026-09-29. Codex `gpt-6-luna` (xhigh) round 4
+found three new ways to hide a command from the guards, after rounds that found 12, 7 and 7. Before
+round 4 he agreed that new serious holes would end the parser fixes. Offered "accept and land" or
+"close it", he replied **"accept and land"**.
+
+**Decision.**
+1. Round 4's findings are recorded as known gaps, not fixed in PR #795: `python3 -W ignore -` reading
+   its program from a pipe; `! powershell.exe "<command>"`; a backslash-newline inside a nested raw
+   REST merge URL; and four over-refusals (`if ($true) { gh … }`, `echo bash -c "…"`,
+   `echo x | node --version`, `Start-Process findstr … -ArgumentList bash`).
+2. PR #795 goes through the normal landing path: CodeRabbit, then the final Sol review, then merge.
+   A new serious finding from Sol goes back to Mason instead of starting another fix round.
+
+**Why.** Each round found holes in places earlier rounds had not reached, so reading every shell's
+syntax from command text was not converging. GitHub's protect-main ruleset has no bypass actors
+(checked 2026-09-29): nobody, administrators included, can merge into `main` without one approving
+review and three green checks, or push to it directly. A command that slips past these guards can at
+most skip the Sol proof on a PR that is already approved and green. Every change in PR #795 adds
+refusals; none loosens a guard.
 
 ## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
 
