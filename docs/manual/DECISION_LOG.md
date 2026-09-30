@@ -62,7 +62,10 @@ showed Mason no permission prompts.
    actors), verified via `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27.
    Only CodeRabbit can supply the approval today: `masonwells1` is the only collaborator and authors
    every PR (no self-approval), GitHub Actions cannot approve, and every approval on the last 40
-   closed PRs came from `coderabbitai[bot]`. With the autonomous-landing merge gates (CodeRabbit's
+   closed PRs came from `coderabbitai[bot]`. **Not yet observed under this ruleset** (CodeRabbit,
+   PR #841): CodeRabbit's approvals satisfied `main`'s required review until 2026-09-02, but no PR
+   has yet landed on a CodeRabbit approval under the new rule; #841 is the first test, and this line
+   is updated when it does. With the autonomous-landing merge gates (CodeRabbit's
    latest verdict APPROVED on the exact head, `--auto` refused), an unreviewed PR cannot land even if
    a local gate were weakened. Supersedes the 2026-09-02 removal. Cost Mason accepted: if CodeRabbit
    is down, nothing merges until it recovers. The ruleset is his alone to change; agents never
@@ -103,9 +106,11 @@ follow-up. If node cannot start the Claude launcher at all, a shell fallback in 
 every shell and MCP call until it is fixed (file edits still work).
 A merge the command text does not show (decoded, assembled at run time, or run from a new script
 file) passes the working guard too; the launcher's "could merge" test matches every form the guard
-denies. `package.json` keeps its prompt because an npm script is the one such route an existing,
-auto-allowed command (`npm run`) reaches; GitHub's required CodeRabbit approval and checks still
-hold for every route.
+denies. `package.json` keeps its native-edit prompt because `npm run` is auto-allowed, but a shell
+write to it (Codex GitHub App, PR #841) or any new script file can still hide a merge. That route
+was just as unprompted before `gh pr merge` moved to `allow`, because only the literal command was
+ever prompted; closing it needs the non-admin agent credential above, not another text check.
+GitHub's required CodeRabbit approval and checks still hold for every route.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 
