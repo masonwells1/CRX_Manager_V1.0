@@ -38,6 +38,7 @@ import {
   PUSH_PARSE_COST_BUDGET,
   MAX_INSPECTABLE_COMMAND_LENGTH,
   MAX_HOOK_INPUT_LENGTH,
+  readHookInputBounded,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
@@ -1827,15 +1828,6 @@ export function evaluateProductionAction({
   return { blocked: false };
 }
 
-function readStdin() {
-  return new Promise((resolve) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => { input += chunk; });
-    process.stdin.on("end", () => resolve(input));
-  });
-}
-
 function writeDenial(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -1847,13 +1839,15 @@ function writeDenial(reason) {
 }
 
 async function main() {
-  const raw = await readStdin();
-  // Measured before decoding: JSON.parse on an unbounded input is itself a way to
-  // outrun the hook limit, and a killed hook allows the action.
-  if (raw.length > MAX_HOOK_INPUT_LENGTH) {
+  // Measured while reading, before decoding: JSON.parse on an unbounded input is
+  // itself a way to outrun the hook limit, and a killed hook allows the action.
+  // A read failure reaches main().catch, which denies.
+  const input = readHookInputBounded();
+  const raw = input.text;
+  if (input.tooLarge) {
     writeDenial(
       "CODEX PRODUCTION GATE: this tool call is too large to inspect safely (its hook input is over " +
-      `${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} characters). A guard that runs out of time lets the ` +
+      `${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} bytes). A guard that runs out of time lets the ` +
       "action through, so it is refused instead. Split it into smaller steps, or move long text into a file."
     );
     return;

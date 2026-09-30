@@ -3449,4 +3449,22 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   }
 }
 
+{
+  // The input limit applies while reading, and the excess is drained, not stored
+  // (Codex GitHub review, #840: reading everything first let a >512 MB input
+  // crash the read, and a failed read allowed the call).
+  const libUrl = new URL("./codex-push-lib.mjs", import.meta.url).href;
+  const readWithLimit = (input, limit) => spawnSync(process.execPath, [
+    "--input-type=module",
+    "-e",
+    `import { readHookInputBounded } from ${JSON.stringify(libUrl)}; process.stdout.write(JSON.stringify(readHookInputBounded(${limit})));`,
+  ], { input, encoding: "utf8" });
+  const under = readWithLimit("é".repeat(5), 10);
+  assert.equal(under.error, undefined, `bounded read under the limit ran: ${under.error?.message}`);
+  assert.deepEqual(JSON.parse(under.stdout), { tooLarge: false, text: "é".repeat(5) }, "input within the byte limit is returned whole");
+  const over = readWithLimit("x".repeat(4 * 1024 * 1024), 1024);
+  assert.equal(over.error, undefined, `writer is not cut off when the input is over the limit: ${over.error?.message}`);
+  assert.deepEqual(JSON.parse(over.stdout), { tooLarge: true, text: "" }, "input over the byte limit is refused, not returned");
+}
+
 console.log("OK - codex push shared library checks passed.");

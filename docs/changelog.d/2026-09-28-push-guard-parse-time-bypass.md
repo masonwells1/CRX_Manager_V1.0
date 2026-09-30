@@ -54,7 +54,15 @@ take up to ~5.8 s per MB in the Codex guard, ~1.5 s at the ceiling. A just-under
 Luna round 4: the hook input itself was decoded (JSON.parse, and the Codex-side trim) before the
 cap could run. Both guards now refuse a raw hook input over 16 MiB (`MAX_HOOK_INPUT_LENGTH`) before
 decoding it, and the Codex guard measures the command before trimming it; a 17 MiB payload is a
-real-hook test. Deferred LOW: the timing cases assert speed, not the allow/deny decision on
+real-hook test.
+Codex GitHub review (#840, second P1): that 16 MiB check still ran only after the whole input had
+been read. Measured on `main`: past ~512 MB Node cannot build the string, the read throws, and the
+Claude guard treats a failed read as nothing to check, so it allowed a 600 MB push; the Codex guard
+crashed (exit 1) with no decision. Both guards now count
+bytes while reading (`readHookInputBounded`), stop storing at 16 MiB, and drain the rest for up to
+5 s so the writer is not cut off. Measured with real hook processes: 20 MB, 600 MB and 1.2 GB
+inputs are refused in 0.06 s, 0.2 s and 0.5 s, with no error on either side of the pipe.
+Deferred LOW: the timing cases assert speed, not the allow/deny decision on
 under-budget inputs — those decisions stay covered by the existing guard suites.
 
 **Not verified.** Separate and pre-existing, not changed here: the Codex guard does not refuse an

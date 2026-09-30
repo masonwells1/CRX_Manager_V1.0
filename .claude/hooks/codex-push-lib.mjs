@@ -1,5 +1,6 @@
 // Shared helpers for Claude's and Codex's production-push guards.
 
+import { readSync } from "node:fs";
 import path from "node:path";
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
@@ -123,6 +124,39 @@ export const MAX_INSPECTABLE_COMMAND_LENGTH = 256 * 1024;
 // measured, so its size is bounded too (Luna, 2026-09-29). 16 MiB, not 256 KiB:
 // the Codex guard sees every tool, including large apply_patch payloads.
 export const MAX_HOOK_INPUT_LENGTH = 16 * 1024 * 1024;
+// Reads the hook input and stops as soon as it passes `limit` bytes, so an
+// oversized tool call is refused without first being held whole. Reading it all
+// and measuring afterwards was not enough (Codex GitHub review, #840): past
+// ~512 MB Node cannot build the string at all, the read throws, and a guard
+// that treats a failed read as "nothing to check" allows the call.
+// Past the limit the rest is read and discarded, never stored, so the caller
+// that is writing the input is not cut off mid-write; the drain stops after
+// `drainMs` so an endless input still gets its refusal before the hook limit.
+export function readHookInputBounded(limit = MAX_HOOK_INPUT_LENGTH, fd = 0, drainMs = 5_000) {
+  const chunks = [];
+  const buffer = Buffer.alloc(1024 * 1024);
+  const drainUntil = Date.now() + drainMs;
+  let total = 0;
+  for (;;) {
+    let bytes;
+    try {
+      bytes = readSync(fd, buffer, 0, buffer.length, null);
+    } catch (error) {
+      if (error?.code === "EAGAIN") continue;
+      if (error?.code === "EOF") break;
+      throw error;
+    }
+    if (bytes === 0) break;
+    total += bytes;
+    if (total > limit) {
+      if (Date.now() > drainUntil) break;
+      continue;
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytes)));
+  }
+  if (total > limit) return { tooLarge: true, text: "" };
+  return { tooLarge: false, text: Buffer.concat(chunks, total).toString("utf8") };
+}
 export function pushParseCostExceeded(cmd) {
   const text = String(cmd || "");
   if (text.length > MAX_INSPECTABLE_COMMAND_LENGTH) return true;
