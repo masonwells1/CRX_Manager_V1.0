@@ -358,6 +358,32 @@ try {
     "a session commit must still warn when an old reflog entry expired during the session");
   pass++;
 
+  // ── Session 1m (Codex P2, PR #827 round 12): `git pull --rebase` replays an
+  //    unrecorded session commit and logs it as `pull --rebase (pick)`; the
+  //    original commit is then unreachable → still warns ──
+  git(["branch", "-f", "main", "feat"], tmp);
+  const other4 = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other4], os.tmpdir());
+    git(["config", "user.email", "other@test"], other4);
+    git(["config", "user.name", "other"], other4);
+    writeFileSync(path.join(other4, "upstream.txt"), "upstream moves on\n");
+    git(["add", "."], other4);
+    git(["commit", "-qm", "upstream adds a file"], other4);
+    const s1m = "ledger-test-pull-rebase";
+    snapshots.push(startSession(s1m));
+    writeFileSync(path.join(tmp, "pulled.txt"), "unrecorded work before a pull\n");
+    git(["add", "."], tmp);
+    git(["commit", "-qm", "unrecorded work replayed by pull --rebase"], tmp);
+    git(["pull", "-q", "--rebase", other4, "main"], tmp);
+  } finally {
+    rmSync(other4, { recursive: true, force: true });
+  }
+  const pulled = runStopWrap("ledger-test-pull-rebase", tmp);
+  assert.match(pulled.stdout, LEDGER_WARNING,
+    "a session commit replayed by git pull --rebase must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
