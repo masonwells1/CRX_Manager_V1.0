@@ -3616,6 +3616,20 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "# a note about | bash\ngit status",
     "git commit -m 'pipe it | bash later'",
     "<<< \"$(printf '\\147\\150 pr merge 123 --admin')\" bash",
+    // Codex luna round 3: a pipeline carried on to the next line (finding 3),
+    // an ANSI-C quoted here-document delimiter (finding 4; each spelling was run
+    // in bash 5.3 and ends at a line reading EOF), and a here-document whose end
+    // cannot be found.
+    "echo 'gh pr merge 123 --admin' |\nbash",
+    "echo 'gh pr merge 123 --admin' |\r\nbash",
+    "echo 'gh pr merge 123 --admin' | # note\nbash",
+    "'gh pr merge 123 --admin' |\n  iex",
+    "cat <<EOF |\nfed-line\nEOF\nbash",
+    "cat <<$'EOF'\nignored\nEOF\necho x | bash",
+    "cat <<$'E\\x4fF'\nit's\nEOF\necho x | bash",
+    "cat <<$'E\\117F'\nit's\nEOF\necho x | bash",
+    "cat <<$\"EOF\"\nit's\nEOF\necho x | bash",
+    "cat <<END\nit's\nEOF\necho x | bash",
   ]) {
     assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command.slice(0, 80))}`);
   }
@@ -3638,13 +3652,15 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "cat data.json | node -e \"process.stdin.pipe(process.stdout)\"",
     "cat data.csv | python3 -c \"import sys; print(len(sys.stdin.read()))\"",
     "(( x = 1 << 2 ))",
+    // Round 3, finding 5: cmd.exe splits `echo 'x | bash'` at the pipe, but its
+    // second stage runs `bash'` (cmd keeps the apostrophe), which is not bash.
+    "echo 'x | bash'",
+    "git log --oneline |\ngrep fix",
+    "git log --oneline\nbash --version",
+    "cat <<$'EOF'\nit's | bash\nEOF\necho done",
   ]) {
     assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
   }
-  // A single-quoted pipe is refused too, because cmd.exe does not treat `'` as a
-  // quote. That over-blocks prose in single quotes that pipes into a shell;
-  // double quotes, which all three shells honour, pass.
-  assert.equal(commandFedToInterpreter("echo 'x | bash'"), true, "cmd reads a single-quoted pipe as a pipe");
   // Linear, like every other scan here: a hook cut off at its limit ALLOWS.
   for (const unit of ["'a'|", "$(", "<<E\n", "sudo -a x ", "`", "\"$(x) ", "@'\n"]) {
     const huge = unit.repeat(Math.ceil(200_000 / unit.length));

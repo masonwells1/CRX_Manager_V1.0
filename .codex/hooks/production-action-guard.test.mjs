@@ -2391,6 +2391,20 @@ try {
   ]) {
     assert.equal(evaluateReady(command).blocked, false, `CONTROL: a harmless command passes: ${command}`);
   }
+  // Codex luna round 3: a raw REST merge escaped or encoded inside another
+  // shell (finding 2), a pipeline carried on to the next line (finding 3) and
+  // an ANSI-C quoted here-document delimiter (finding 4).
+  for (const command of [
+    `pwsh -EncodedCommand ${Buffer.from("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/123/merge", "utf16le").toString("base64")}`,
+    "cmd /c \"curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer^ge\"",
+    "bash -c 'curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer\\ge'",
+  ]) {
+    assert.match(String(evaluateReady(command).reason), /raw GitHub REST merge/, `a nested raw merge is refused: ${command.slice(0, 70)}`);
+  }
+  for (const command of [`echo '${nestedAdmin}' |\nbash`, `cat <<$'EOF'\nignored\nEOF\necho '${nestedAdmin}' | bash`]) {
+    assert.match(String(evaluateReady(command).reason), /on its input/, `a command fed on stdin is refused: ${JSON.stringify(command)}`);
+  }
+  assert.equal(evaluateReady("echo 'x | bash'").blocked, false, "CONTROL: a single-quoted pipe in prose passes");
   // The unwrap stays linear, so the guard answers before its own time limit.
   {
     const huge = `echo (x) a\\b ${"start -x ".repeat(12000)}; ${nestedAdmin}`;

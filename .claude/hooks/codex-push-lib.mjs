@@ -3319,14 +3319,43 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
       // An inner command that feeds an interpreter is returned too, whatever it
       // mentions: `cmd /c "type payload.txt | bash"` hides the pipe inside
       // quotes from the outer reading, so only the inner one can refuse it.
+      // So is one that mentions a merge: a raw REST merge names no gh or git,
+      // and `pwsh -EncodedCommand <base64 of Invoke-RestMethod …/pulls/1/merge>`
+      // shows its endpoint only once decoded (Codex luna, PR #795, 2026-09-29
+      // round 3, finding 2).
       if (mentionsGhOrGit(inner) || nestedCommandsOneLevel(inner, { grouping }).length ||
-          commandFedToInterpreter(inner)) {
+          commandFedToInterpreter(inner) || /merge/i.test(withoutShellQuoting(inner))) {
         found.push(inner);
       }
     }
     frontier = next;
   }
   return { commands: found, tooDeep: false, computed };
+}
+
+// The text left once a shell consumes its quoting and escapes: bash `\`, cmd
+// `^`, PowerShell `` ` `` and quote characters. `…/pulls/1/mer\ge` inside
+// `bash -c '…'` and `…/mer^ge` inside `cmd /c "…"` reach curl as `…/merge`, but
+// their text never matched the merge-endpoint check (Codex luna, PR #795,
+// 2026-09-29 round 3, finding 2).
+function withoutShellQuoting(text) {
+  return String(text || "").replace(/[\\^`'"]/g, "");
+}
+
+// How many raw GitHub REST merge endpoints (`…/pulls/<n>/merge`) a segment
+// names, read both as written and with its shell quoting consumed.
+const MERGE_ENDPOINT_RE = /\/pulls\/[^\s/]+\/merge\b/gi;
+export function rawMergeEndpointCount(segment) {
+  const text = String(segment || "");
+  return Math.max(
+    (text.match(MERGE_ENDPOINT_RE) || []).length,
+    (withoutShellQuoting(text).match(MERGE_ENDPOINT_RE) || []).length,
+  );
+}
+
+// Does a segment name the GraphQL mergePullRequest mutation, however quoted?
+export function mentionsMergePullRequest(segment) {
+  return /\bmergePullRequest\b/i.test(`${segment} ${withoutShellQuoting(segment)}`);
 }
 
 export function nestedComputedDenial(prefix) {
@@ -3362,6 +3391,52 @@ const FED_INTERPRETER_NAMES = new Set([
   ...POSIX_SHELLS, ...CMD_SHELLS, ...POWERSHELLS, "iex", "invoke-expression",
 ]);
 const POWERSHELL_HERE_STRING_RE = /@(['"])[ \t]*\r?\n/y;
+
+// The stage pipelineStages returns alone when it cannot tell where a command's
+// text ends; stageFeedsInterpreter refuses it.
+const UNREADABLE_STAGE = Object.freeze({ text: "", piped: false, redirected: false, unreadable: true });
+
+// Bash's `$'…'` escapes, decoded as bash does for a here-document delimiter.
+const ANSI_C_ESCAPES = {
+  a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v",
+  "\\": "\\", "'": "'", '"': '"', "?": "?",
+};
+function decodeAnsiCQuoted(body) {
+  return body.replace(
+    /\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c([\s\S])|([\s\S]))/g,
+    (match, octal, hex, u4, u8, control, other) => {
+      if (octal) return String.fromCharCode(parseInt(octal, 8) & 0xff);
+      if (hex) return String.fromCharCode(parseInt(hex, 16));
+      if (u4 || u8) return String.fromCodePoint(Math.min(parseInt(u4 || u8, 16), 0x10ffff));
+      if (control) return String.fromCharCode(control.charCodeAt(0) & 0x1f);
+      return ANSI_C_ESCAPES[other] ?? match;
+    },
+  );
+}
+
+// cmd's words: only `"` quotes and `^` escapes. `'` is an ordinary character,
+// so in `echo 'x | bash'` cmd's second stage runs `bash'`, not bash; reading
+// it with POSIX quoting refused that harmless echo (Codex luna, PR #795,
+// 2026-09-29 round 3, finding 5).
+function cmdWords(text) {
+  const words = [];
+  let current = "";
+  let started = false;
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (!quoted && /\s/.test(char)) {
+      if (started) { words.push(current); current = ""; started = false; }
+      continue;
+    }
+    started = true;
+    if (char === '"') { quoted = !quoted; continue; }
+    if (char === "^" && !quoted && index + 1 < text.length) { current += text[index + 1]; index += 1; continue; }
+    current += char;
+  }
+  if (started) words.push(current);
+  return words;
+}
 
 // The pipeline stages of `text` as `shell` reads it: { text, piped, redirected },
 // where `piped` is a stage reading the previous stage's output and `redirected`
@@ -3495,7 +3570,20 @@ function pipelineStages(text, shell) {
         while (text[at] === " " || text[at] === "\t") at += 1;
         let delimiter = "";
         while (at < text.length && !/[\s;&|<>()]/.test(text[at])) {
-          if (text[at] === "'" || text[at] === '"') {
+          if (text[at] === "$" && text[at + 1] === "'") {
+            // `$'…'` is ANSI-C quoted: bash decodes its escapes, so `$'EOF'`
+            // and `$'E\x4fF'` both end at a line reading EOF. Reading the `$`
+            // as part of the word looked for `$EOF` and skipped the commands
+            // after the real end as body (Codex luna, PR #795, 2026-09-29
+            // round 3, finding 4).
+            let end = at + 2;
+            while (end < text.length && text[end] !== "'") end += text[end] === "\\" ? 2 : 1;
+            delimiter += decodeAnsiCQuoted(text.slice(at + 2, Math.min(end, text.length)));
+            at = end + 1;
+          } else if (text[at] === "$" && text[at + 1] === '"') {
+            // `$"…"` is a translatable string; as a delimiter it reads as `"…"`.
+            at += 1;
+          } else if (text[at] === "'" || text[at] === '"') {
             const close = text.indexOf(text[at], at + 1);
             const end = close === -1 ? text.length : close;
             delimiter += text.slice(at + 1, end);
@@ -3522,21 +3610,29 @@ function pipelineStages(text, shell) {
     if (char === "\n" && shell === "cmd") break;
     if (char === "\n") {
       // A here-document's body is the input of its command, not a command: skip
-      // it, up to the line that is exactly its delimiter (or to the end, which
-      // is what bash does when the delimiter never comes).
+      // it, up to the line that is exactly its delimiter.
       let resume = index + 1;
       for (const { delimiter, strip } of frame.heredocs) {
+        let ended = false;
         while (resume < text.length) {
           const lineEnd = text.indexOf("\n", resume);
           const end = lineEnd === -1 ? text.length : lineEnd;
           let line = text.slice(resume, end).replace(/\r$/, "");
           if (strip) line = line.replace(/^\t+/, "");
           resume = end + 1;
-          if (line === delimiter) break;
+          if (line === delimiter) { ended = true; break; }
         }
+        // No line ends it. Bash then reads to the end, but so would a delimiter
+        // this lexer misread, and skipping the rest would hide every command
+        // after the real end. Refused instead: an agent never needs one.
+        if (!ended) return [UNREADABLE_STAGE];
       }
       frame.heredocs = [];
-      endStage(frame, false);
+      // A line that ends with `|` carries on: bash and PowerShell continue the
+      // pipeline on the next line, so `echo "…" |` + newline + `bash` feeds
+      // bash (Codex luna, PR #795, 2026-09-29 round 3, finding 3). A comment
+      // after the `|` was skipped above, so it carries on too.
+      endStage(frame, frame.current.trim() ? false : frame.piped);
       index = resume - 1;
       continue;
     }
@@ -3585,9 +3681,10 @@ function runtimeReadsProgramFromInput(words, candidate) {
 // reads a pipe or a redirection, for a language runtime that would read its
 // program from one, and for anything run by xargs, which builds the command
 // from its input: an interpreter, gh, or a git push.
-function stageFeedsInterpreter({ text, piped, redirected }) {
-  const rawWords = splitShellWordsRaw(text);
-  const words = rawWords.map(shellArgvWord);
+function stageFeedsInterpreter({ text, piped, redirected, unreadable }, shell) {
+  if (unreadable) return true;
+  const rawWords = shell === "cmd" ? cmdWords(text) : splitShellWordsRaw(text);
+  const words = shell === "cmd" ? rawWords : rawWords.map(shellArgvWord);
   const firstXargs = words.findIndex((word) => programName(stripGrouping(word)) === "xargs");
   const namesPush = words.some((word) => word.toLowerCase() === "push");
   const candidates = programCandidates(words);
@@ -3625,7 +3722,7 @@ export function commandFedToInterpreter(command) {
   return ["posix", "powershell", "cmd"].some((shell) => {
     let inputReplaced = false;
     for (const stage of pipelineStages(text, shell)) {
-      if (stageFeedsInterpreter(inputReplaced ? { ...stage, redirected: true } : stage)) return true;
+      if (stageFeedsInterpreter(inputReplaced ? { ...stage, redirected: true } : stage, shell)) return true;
       if (stage.redirected && /^\s*exec(?:\s|$)/.test(stage.text.slice(0, 64))) inputReplaced = true;
     }
     return false;
@@ -3636,7 +3733,8 @@ export function commandFedToInterpreterDenial(prefix) {
   return (
     `${prefix}: this command feeds text to a shell or evaluator on its input (a pipe or redirection into ` +
     "bash/sh/cmd/pwsh/iex, node or python reading its program from input, a here-string or here-document, " +
-    "or xargs running gh, git push or a shell). What " +
+    "or xargs running gh, git push or a shell), or it has a here-document whose closing line the guard " +
+    "cannot find. What " +
     "the interpreter runs is not on the command line, so the guard cannot check it. Run the command directly."
   );
 }

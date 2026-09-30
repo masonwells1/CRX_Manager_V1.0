@@ -30,8 +30,8 @@ each round found new hiding places. Parsing cannot see a script file's contents 
 run time. GitHub's protect-main ruleset still refuses any direct push to `main` whatever the command
 says.
 
-**Rule.** A review that re-raises one of the three accepted residuals is answered by pointing here,
-not by another parser patch. A new, concretely different bypass is still a real finding.
+**Effect.** The three residuals are known, recorded gaps, so the work on PR #795 does not add parser
+code for them. Any other bypass is a new gap and is fixed like any other finding.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

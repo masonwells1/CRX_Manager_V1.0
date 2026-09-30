@@ -37,7 +37,9 @@ import {
   ghCommandUnreadableDenial,
   ghCommandUnreadableIn,
   ghHiddenByShellComposition,
+  mentionsMergePullRequest,
   nestedComputedDenial,
+  rawMergeEndpointCount,
   nestedTooDeepDenial,
   hardGateBudgetDenial,
   hookDeadlineMs,
@@ -160,7 +162,7 @@ function collectMergeRequests(scanned) {
     // merge and a raw call just got a 405. Mason's admin override removed that
     // backstop, and Codex's proof on PR #541 found the transport gap on both
     // guards. Naming the destination beats enumerating the tools that reach it.
-    if (/\bmergePullRequest\b/i.test(segment)) {
+    if (mentionsMergePullRequest(segment)) {
       deny("PR MERGE GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries them — because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
     }
     const api = ghApiMergeRequest(segment);
@@ -182,8 +184,9 @@ function collectMergeRequests(scanned) {
     // Counting occurrences keeps the ONE endpoint a `gh api ... /merge` request
     // legitimately names from denying its own gated route, while any additional
     // mention is treated as a second, unresolvable merge.
-    const endpointMentions = segment.match(/\/pulls\/[^\s/]+\/merge\b/gi) || [];
-    if (endpointMentions.length > (api ? 1 : 0)) {
+    // Counted with the segment's shell quoting consumed too, so `mer\ge` or
+    // `mer^ge` inside a nested shell still counts.
+    if (rawMergeEndpointCount(segment) > (api ? 1 : 0)) {
       deny("PR MERGE GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against .../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, and checks for them. Use `gh pr merge <number>` so the gate can verify the merge.");
     }
     // A merge segment carrying a command substitution is unresolvable, so it is

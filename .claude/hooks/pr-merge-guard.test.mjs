@@ -389,6 +389,22 @@ r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash;
 ok(r.decision?.permissionDecision === "deny", "raw REST merge after a gh merge in the same chain still denied");
 ok(/raw GitHub REST merge/.test(r.decision?.permissionDecisionReason || "") || /fail closed/.test(r.decision?.permissionDecisionReason || ""), "chain deny cites the REST rule or fails closed on PR resolution");
 
+// Codex luna, PR #795, 2026-09-29 round 3, finding 2: a raw REST merge inside
+// another shell names no gh or git, so its inner command was dropped. Only the
+// escaped and encoded spellings hid it: each passed this guard before the fix.
+for (const command of [
+  `pwsh -EncodedCommand ${Buffer.from("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/123/merge", "utf16le").toString("base64")}`,
+  "cmd /c \"curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer^ge\"",
+  "bash -c 'curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer\\ge'",
+  "bash -c 'curl -X PUT https://api.github.com/repos/o/r/pulls/123/merge'",
+  "bash -c 'curl https://api.github.com/graphql -d mergePull\\Request'",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `a raw merge inside another shell is denied: ${command.slice(0, 70)}`);
+}
+r = runHook({ tool_name: "Bash", tool_input: { command: "bash -c 'git log --oneline --merges -5'" } });
+ok(r.status === 0 && r.decision === null, "a nested command that only mentions merges is not refused");
+
 // The --admin deny lands BEFORE the PR is resolved, so it needs no gh and no
 // network — that is deliberate: an agent must never reach GitHub with a request
 // to skip the review, whatever the PR turns out to be.

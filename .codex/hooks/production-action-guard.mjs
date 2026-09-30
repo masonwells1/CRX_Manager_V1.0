@@ -19,8 +19,10 @@ import {
   ghCommandUnreadableIn,
   ghHiddenByShellComposition,
   hardGateBudgetDenial,
+  mentionsMergePullRequest,
   nestedComputedDenial,
   nestedTooDeepDenial,
+  rawMergeEndpointCount,
   hookDeadlineMs,
   splitCommandSegments,
   ghMergeRequest,
@@ -1745,15 +1747,16 @@ export function evaluateProductionAction({
     // in a command substitution (Codex bot P1 on PR #541). Counting occurrences
     // keeps the ONE endpoint a `gh api ... /merge` request legitimately names
     // from denying its own gated route.
-    const endpointMentions = segment.match(/\/pulls\/[^\s/]+\/merge\b/gi) || [];
-    if (endpointMentions.length > (ghApiMergeRequest(segment)?.selector ? 1 : 0)) {
+    // Counted with the segment's shell quoting consumed too, so `mer\ge` or
+    // `mer^ge` inside a nested shell still counts.
+    if (rawMergeEndpointCount(segment) > (ghApiMergeRequest(segment)?.selector ? 1 : 0)) {
       return denied(
         "CODEX PRODUCTION GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against " +
         ".../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, " +
         "and checks for them. Use `gh pr merge <number>` so the gate can verify the merge."
       );
     }
-    if (/\bmergePullRequest\b/i.test(segment)) {
+    if (mentionsMergePullRequest(segment)) {
       return denied(
         "CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries " +
         "them — because the guard cannot resolve and verify the PR's base, head, and checks for them. " +
