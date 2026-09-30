@@ -10,3 +10,6 @@ that a quiet database be confirmed before applying it.
 
 This is on the refreshed delivery branch (lap20: #843's head plus `origin/main`), which replaces
 #843.
+
+**Proof:** `node scripts/check-doc-drift.mjs` passed. Not verified: the query was not run
+against the live database, and no migration was applied. It is an operator step for install day.

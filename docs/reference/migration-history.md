@@ -137,7 +137,8 @@ rather than absorbed into this delivery. A 2026-09-21 attempt to narrow the row 
 was REVERTED on 2026-09-22 after it was measured to create an unrecoverable mixed-date group (see
 row 931), so this rule stands unchanged and both files still apply in ONE window.
 
-**PRE-APPLY PROOF RULE: run `npm run proof:field-app-season` on the delivery PR's exact head, and see
+**PRE-APPLY PROOF RULE: run `npm run proof:field-app-season` on the exact head of the checkout the apply runs from (since
+2026-09-30 that is the owner-approval PR, not the merged delivery PR), and see
 both `PREVIEW_SEASON_PROOF_PASS` and `RECEIPT_GATE_NARROWING_PROOF_PASS`, before applying ANY of
 `20260914101000`..`20260914101300`.** The `save_field_app_invoice` smoke chain is container-only, so
 `node scripts/smoke/run-smoke.mjs --all` or `--area billing` announces it as SKIPPED and still exits 0
@@ -159,6 +160,85 @@ WHERE datname = current_database()
 
 The query shows who is holding a transaction open. The migration's own gate is still what enforces
 the rule. (CodeRabbit full review of PR #843, 2026-09-30.)
+
+**Group-wide date check: the 2026-09-22 measurement** (moved verbatim from the DECISION_LOG entry of
+2026-09-22 on 2026-09-30, CodeRabbit on PR #850; the decision itself stays in the log).
+
+**Source:** Mason's decision in this session on 2026-09-22, after two independent adversarial
+Claude reviews of PR #762 and a measured PostgreSQL 17 reproduction. Presented as a business
+risk trade-off with a recommendation; he chose to keep the stricter guard.
+
+**Background.** CodeRabbit raised a Major on PR #758: `guard_field_app_invoice_season_date()`
+PERFORMs the group-wide `_assert_field_app_invoice_date_in_filed_season`, so a single-invoice date
+edit inside a mixed-season group is refused whenever another member's season differs, even when the
+new date stays inside that invoice's own filed season — stricter than the per-invoice rule recorded
+on 2026-09-08 and clarified on 2026-09-13. The relaxation was implemented (row trigger validates
+only the written row), reviewed clean by Luna, Sol and CodeRabbit, and then caught by an adversarial
+review before merge.
+
+**What was measured** (disposable PostgreSQL 17 container, production shape from the 2026-09-04
+accepted consequence: ONE application, ONE group, ONE shared date, member A filed in the EARLIER
+season and therefore inconsistent with that shared date):
+
+    A_unchanged_date_group_save         = OK        (the group is usable today)
+    single_row_edit_into_A_own_season   = OK        (newly permitted by the relaxation)
+    group_save_at_A_date                = REFUSED
+    group_save_at_B_date                = REFUSED
+    group_save_at_a_third_date          = REFUSED
+    converge_A_back_to_B_date           = REFUSED
+    converge_B_down_to_A_date           = REFUSED
+    preview_group                       = REFUSED
+
+One ordinary, unwarned admin edit leaves the group holding two dates for one physical application.
+The field-app save writes ONE date to every member, so every date then fails on one member or the
+other, and neither member's date can be moved back because each convergence target lies outside
+that member's own filed season. Void-and-reissue becomes the only exit. Before the relaxation that
+state was unreachable.
+
+**Decision.** The row trigger KEEPS the group-wide assertion in both `20260914101000` and
+`20260914101100`. The relaxation is reverted; both files return to their reviewed bytes and their
+original sha256 pins. CodeRabbit's Major is REFUTED with the evidence above rather than implemented.
+
+**Operative rule.** Do not narrow `guard_field_app_invoice_season_date()` to the written row. The
+group-wide check is deliberately stricter than the per-invoice date rule: it refuses some edits the
+rule would allow, always fail-closed and never with wrong money, in exchange for keeping a
+mixed-season group recoverable. The per-invoice rule of 2026-09-08/13 still governs what a date may
+be; it does not authorize splitting one group's shared application date. `prove-preview-field-app-season.mjs`
+(PHASE 8h-mixed / 8i-mixed) asserts both directions, and its mutant reproduces the stranded state,
+so a future attempt fails the proof instead of reaching review.
+
+**Unchanged by this entry:** the 2026-09-04 "invoice season follows the invoice date" decision, the
+2026-09-08/13 filed-season rule itself, and the APPLY-WINDOW RULE requiring `20260914101000` and
+`20260914101100` to apply in one window.
+
+**Filed-season rule: the 2026-09-08 source and 2026-09-13 clarification** (moved verbatim from the
+DECISION_LOG entry of 2026-09-08 on 2026-09-30, CodeRabbit on PR #850).
+
+**Source:** the September 8 continuation of PR #599. Codex's final owner-facing recommendation
+was "preserve season immutability but refuse edits that move an existing invoice across the
+October 1 season boundary." Mason's next response was "continue 599" (September 8 Chicago /
+September 9 UTC). Codex immediately explained that it was continuing with that recommended
+rule. This records approval of the preceding recommendation, not a standalone continuation
+quote interpreted without its context. Reconciled September 12 after #599 merged without
+this follow-up; exact exchange rechecked September 13 during Claude's adversarial review.
+
+**Decision.** Existing field-application invoices keep their filed season. A date can move within
+that season but cannot cross its October 1 boundary. Every database writer must also refuse to
+change the filed season, preventing a season-first/date-second bypass. New **generic** invoices
+still derive season from their invoice date; the dedicated job/blend creators are the documented
+exception, qualified in the compatibility clarification immediately below. Preview and save follow
+the same rule.
+
+**Compatibility clarification, September 13:** an unchanged stored date is not a date edit.
+Dedicated job/blend creators deliberately preserve the source season while stamping today's
+date. Those existing invoices must remain usable and restorable at that same stored date,
+with their own filed-season pricing. A later changed date must still fit the filed season;
+no creator re-seasoning, group-wide price unification, or business-row rewrite is authorized.
+
+This supersedes only the September 4 accepted consequence of editing across October 1 while
+adding a grower. It does not re-season existing invoices, unify mixed historical groups, change
+the filed-season price lookup, or revive the closed posting-date due-date direction (#591).
+The new guard is a separate follow-up to merged #599 and remains unapplied pending live approval.
 
 **Why the effective stamp is not always the authored one.** Row 916
 (`20260904185900_refuse_null_job_field_acres`, PR #606) was recorded under the BARE ledger name

@@ -129,5 +129,8 @@ stale reference is left in place and recorded here instead.
 
 ### Proof
 
-Rerun on this head after every fix above. Repository merge does not apply any migration or
-authorize a live SQL or data change.
+The check results for this head were not recorded when this entry was written (added
+2026-09-30). The current evidence is `npm run proof:field-app-season` on the field-season
+delivery head (see `2026-09-30-field-season-review-round-fixes.md`). Still open: the four
+migrations' live applies and their read-only post-apply checks. Repository merge does not apply
+any migration or authorize a live SQL or data change.

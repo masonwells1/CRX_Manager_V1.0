@@ -38,7 +38,9 @@ transaction (`pg_stat_activity.xact_start IS NOT NULL`) and no prepared transact
 including background workers, autovacuum, and scheduled jobs. This is a hard
 apply-time prerequisite, not merely recommended quiet customer traffic. A refused
 phase 2 rolls back completely, leaving phase 1 and legitimate receipt retries in
-place. In a later separately authorized rollout, wait for natural receipt expiry
+place. In a later separately authorized rollout, wait for natural expiry of the
+BLOCKING receipts only (unexpired ones that resolve to a live `field_application`
+invoice or cannot be identified; receipts of other invoice types never delay phase 2)
 and a genuinely quiet window, rerun the live preconditions, then retry through the
 full governed review/apply gate. Never delete receipts, terminate background work,
 disable jobs, or force the apply to get past a refusal.
