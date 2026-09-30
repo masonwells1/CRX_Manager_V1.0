@@ -7,10 +7,13 @@
 // edited payload is rejected. Only then is the public half written to
 // .claude/hooks/owner-approval-key.json, which must be committed and reviewed.
 //
-//   node scripts/owner-approval-setup.mjs      (Mason at the PC: two Windows Hello prompts)
+//   node scripts/owner-approval-setup.mjs              (Mason at the PC: two Windows Hello prompts)
+//   node scripts/owner-approval-setup.mjs --new-key    (rotation: Windows Hello REPLACES the key)
 //
-// Replacing an existing key is deliberately not a flag here: delete the committed
-// key file in a reviewed pull request first, so the change is visible.
+// Rotation: first delete the committed key file in a reviewed pull request, so the
+// change is visible; then run with --new-key. Without --new-key, a key Windows
+// already holds (e.g. from an interrupted setup) is reused, not replaced (Codex P2,
+// PR #845).
 
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -33,10 +36,19 @@ if (existsSync(OWNER_KEY_FILE)) {
   die(1, `owner-approval-setup: ${OWNER_KEY_FILE} already exists. Replacing Mason's key takes a reviewed pull request that deletes it first.`);
 }
 
-// A key left by an earlier, interrupted setup is reused: it is still Windows
-// Hello-bound, and the self-test below proves it signs before anything is pinned.
-let created = runHello("PublicKey", { timeoutMs: 30_000 });
-if (created?.ok) {
+const args = process.argv.slice(2);
+const unknown = args.filter((a) => a !== "--new-key");
+if (unknown.length) die(1, `owner-approval-setup: unknown option(s) ${unknown.join(" ")}. The only option is --new-key.`);
+const newKey = args.includes("--new-key");
+
+// A key left by an earlier, interrupted setup is reused unless --new-key asks
+// Windows Hello to replace it: it is still Hello-bound, and the self-test below
+// proves it signs before anything is pinned.
+let created = newKey ? { ok: false } : runHello("PublicKey", { timeoutMs: 30_000 });
+if (newKey) {
+  console.log("Step 1 of 2: REPLACING Mason's approval key (Windows Hello prompt)...");
+  created = runHello("Replace", { timeoutMs: 10 * 60 * 1000 });
+} else if (created?.ok) {
   console.log("Step 1 of 2: Mason's approval key already exists in Windows (from an earlier setup attempt); using it.");
 } else {
   console.log("Step 1 of 2: creating Mason's approval key (Windows Hello prompt)...");

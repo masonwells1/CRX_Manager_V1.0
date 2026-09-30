@@ -886,7 +886,7 @@ export function evaluateMigrationApply({
     parked = parkedCategories(migQuery, { history });
     const OWNER_ROUTE =
       `\n\nTHE ONE WAY THROUGH (Mason, 2026-09-29): once every other proof for this exact file is fresh, ` +
-      `ask Mason to approve it with Windows Hello — run \`node scripts/owner-approve-migration.mjs ` +
+      `get Mason's explicit yes in this conversation (AGENTS.md), then ask him to approve it with Windows Hello — run \`node scripts/owner-approve-migration.mjs ` +
       `supabase/migrations/${migName || "<file>"}.sql\` from the PR's checkout while he is at the PC — ` +
       `then apply within 30 minutes through \`node scripts/apply-migration-file.mjs\` (the MCP apply tool ` +
       `never accepts it). Do NOT write, copy or edit the approval file yourself; only his signature counts.`;

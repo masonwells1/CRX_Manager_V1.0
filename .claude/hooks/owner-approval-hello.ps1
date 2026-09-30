@@ -14,7 +14,7 @@
 # PowerShell script on this machine silently).
 
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('Create', 'PublicKey', 'Sign')][string]$Mode,
+  [Parameter(Mandatory = $true)][ValidateSet('Create', 'Replace', 'PublicKey', 'Sign')][string]$Mode,
   [string]$PayloadFile
 )
 
@@ -95,17 +95,23 @@ try {
     exit 0
   }
 
-  if ($Mode -eq 'Create') {
-    $go = Show-Question 'CRX Manager: set up your approval key' ("CRX Manager is creating your personal approval key.`r`n`r`n" +
-      "From now on, a database change that deletes data, overwrites data or changes who can access what " +
+  if ($Mode -eq 'Create' -or $Mode -eq 'Replace') {
+    # Replace makes Windows Hello overwrite the existing key (key rotation); every
+    # approval signed by the old key stops working once the new one is pinned.
+    $intro = if ($Mode -eq 'Replace') {
+      "CRX Manager is REPLACING your approval key with a new one. Approvals made with the old key will stop working.`r`n`r`n"
+    } else { "CRX Manager is creating your personal approval key.`r`n`r`n" }
+    $go = Show-Question 'CRX Manager: set up your approval key' ($intro +
+      "A database change that deletes data, overwrites data or changes who can access what " +
       "can only be installed after you approve it with your Windows Hello PIN or fingerprint.`r`n`r`n" +
       "Click OK, then confirm with Windows Hello.") $false
     if (-not $go) {
       Write-Result @{ ok = $false; status = 'Declined' }
       exit 3
     }
-    $created = Wait-WinRt ($manager::RequestCreateAsync($KeyName,
-        [Windows.Security.Credentials.KeyCredentialCreationOption]::FailIfExists)) $retrieval
+    $option = if ($Mode -eq 'Replace') { [Windows.Security.Credentials.KeyCredentialCreationOption]::ReplaceExisting }
+              else { [Windows.Security.Credentials.KeyCredentialCreationOption]::FailIfExists }
+    $created = Wait-WinRt ($manager::RequestCreateAsync($KeyName, $option)) $retrieval
     if ("$($created.Status)" -ne 'Success') {
       Write-Result @{ ok = $false; status = "$($created.Status)" }
       exit 2

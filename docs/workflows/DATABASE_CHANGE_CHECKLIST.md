@@ -157,8 +157,9 @@ The only sanctioned way to apply a migration to the live database:
    Sol proof, each under 30 minutes), in any session, no ask. Three kinds are Mason's: a
    migration that DELETES data (rows or data-bearing tables/columns), one that OVERWRITES
    existing rows, and one that CHANGES WHO CAN ACCESS WHAT (anything beyond routine lock-down
-   lines on objects it creates). The apply gate refuses them unless Mason has approved that
-   exact file with Windows Hello (Mason, 2026-09-29): once every proof above is fresh, run
+   lines on objects it creates). Each needs Mason's explicit yes in the current conversation
+   (`AGENTS.md`) AND his Windows Hello approval of that exact file (Mason, 2026-09-29); the apply
+   gate refuses them without the signature: once every proof above is fresh, run
    `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql` from the PR's
    checkout while he is at the PC. He sees a plain-English summary, then confirms with his
    Windows Hello PIN or fingerprint. The signed approval covers that file, PR and head, once,

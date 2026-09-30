@@ -67,8 +67,12 @@ GitHub token.
   - Mason's practice: approve only right after an agent asked for it in chat, and only when the
     migration name in the window matches that request.
 
-**Operative rule:** a yes typed in chat, a GitHub approve, label or comment, and any file an agent
-writes are not approval for a parked migration. Only a valid Windows Hello signature is. Never
+**Operative rule:** a parked migration needs BOTH:
+- Mason's explicit yes in the current conversation, per AGENTS.md (Codex P1, PR #845): agents still
+  ask first;
+- his valid Windows Hello signature, which is the part the gate can verify.
+
+A GitHub approve, label or comment, and any file an agent writes, are neither. Never
 paste migration SQL into the Supabase Dashboard.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean

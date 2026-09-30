@@ -162,7 +162,7 @@ Docs updated:
 ## Important Safety Rules
 
 - NEVER modify an existing migration file — only create new ones
-- NEVER apply the migration automatically from this skill — this skill only writes the file. Applying goes through `/migration-review` + migration-apply-guard under Mason's autonomous-landing rule (2026-09-26): non-destructive = full proof + Sol gate, no per-migration ask, after the PR's final reviews are clean; destructive, data-overwriting or access-changing = only after Mason's Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`); a yes in chat does not release it.
+- NEVER apply the migration automatically from this skill — this skill only writes the file. Applying goes through `/migration-review` + migration-apply-guard under Mason's autonomous-landing rule (2026-09-26): non-destructive = full proof + Sol gate, no per-migration ask, after the PR's final reviews are clean; destructive, data-overwriting or access-changing = only after Mason's explicit yes in chat AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`); neither alone releases it.
 - NEVER commit automatically — the user decides when to commit
 - NEVER report a migration verified on `npm run typecheck` alone — typecheck does not read SQL
 - NEVER create a new table without RLS, real policies, and the `updated_at` trigger in the same file

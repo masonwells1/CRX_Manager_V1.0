@@ -9,6 +9,10 @@
 // checkout's .claude/session-state/ and is good for ONE install of this exact
 // file, from this exact pull-request head, for 30 minutes.
 //
+// It never replaces Mason's explicit yes in the current conversation (AGENTS.md;
+// Codex P1, PR #845): ask him in chat first, then run this. The signature is the
+// part the apply gate can verify; the chat yes is the part it cannot.
+//
 // Run it from the pull request's own checkout, with Mason at the PC, only once
 // every other proof for the file is fresh — the approval expires in 30 minutes:
 //   node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql
