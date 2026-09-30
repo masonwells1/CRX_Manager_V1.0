@@ -1201,7 +1201,8 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     );
   }
   // Mason's autonomous-landing rule (2026-09-26) — mirror of pr-merge-guard.mjs.
-  // An agent merges into main only when CodeRabbit APPROVED the exact head, the
+  // An agent merges into main only when CodeRabbit cleared the exact head
+  // (APPROVED it, or a clean follow-up after an earlier approval), the
   // newest run of every check is green, and a fresh exact-SHA Sol proof exists.
   // `--auto` would land commits pushed after this gate ran, so it is refused.
   // An immediate merge has the same race, closed by `--match-head-commit` equal

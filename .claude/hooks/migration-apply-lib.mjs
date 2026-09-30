@@ -1085,7 +1085,7 @@ export function evaluateMigrationApply({
         `migration for Mason. Never self-certify.`);
     }
     // LAST: the pull request carrying this migration must itself be ready to merge
-    // (CodeRabbit APPROVED its exact head, checks green, exact-SHA Sol proof) —
+    // (CodeRabbit cleared its exact head, checks green, exact-SHA Sol proof) —
     // "under the same conditions" as an agent merge (Sol HIGH, 2026-09-26). Run
     // after every local check so a refusal here always means "everything else
     // passed", and fail closed on anything unexpected.

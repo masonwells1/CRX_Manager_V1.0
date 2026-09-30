@@ -144,7 +144,7 @@ emit([
   "Autopilot auto-approves ordinary tool calls but STILL blocks deploys / destructive deletes /",
   "secret writes and every push or merge spelling except a plain branch push and a plain",
   "`gh pr merge <n>` — those two go on to the push and merge gates, which enforce Mason's",
-  "2026-09-26 landing rule (CodeRabbit APPROVED on the exact head, exact-SHA Sol proof, green checks).",
+  "2026-09-26 landing rule (CodeRabbit APPROVED on the exact head or a clean follow-up after an earlier approval, exact-SHA Sol proof, green checks).",
   "A NON-destructive migration applies under the same rule through migration-apply-guard's proofs;",
   "a destructive one (DELETE/TRUNCATE of business rows, DROP of data-bearing tables/columns) is",
   "refused — park it for Mason. Autopilot auto-expires.",

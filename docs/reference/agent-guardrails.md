@@ -31,7 +31,7 @@
 > `production-action-guard` blocks every live apply. The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
 > row below no longer exists. As its LAST check it runs `migration-landing-gate-lib.mjs`: the apply must come from a
 > clean checkout of the PR's branch (migration committed at HEAD, HEAD = the open PR's head into `main`) whose head
-> has CodeRabbit's APPROVED verdict, green checks and a fresh exact-SHA Sol merge proof — so no migration reaches
+> CodeRabbit has cleared (an APPROVED verdict, or a clean follow-up after an earlier approval), green checks and a fresh exact-SHA Sol merge proof — so no migration reaches
 > production before its PR's final reviews. A fixture with no real PR therefore always ends at that refusal. (3) `autopilot-lib.mjs` lets exactly two whole-command shapes through to those guards
 > while armed — `git push [-u] origin [HEAD:]<work-branch>` and `gh pr merge <n> [--squash|--merge|--rebase|
 > --delete-branch] --match-head-commit <40-hex sha>` with the pin required exactly once (`isArmedLandingCommand`) — and

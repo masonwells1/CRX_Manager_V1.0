@@ -6,7 +6,8 @@
 // Claude's risky-diff Codex gate never followed. This hook closes that gap:
 //
 //   * merge into main → allowed only under Mason's autonomous-landing rule
-//     (2026-09-26): CodeRabbit APPROVED the exact head, the newest run of every
+//     (2026-09-26): CodeRabbit cleared the exact head (APPROVED it, or a clean
+//     follow-up after an earlier approval — coderabbitClearedHead), the newest run of every
 //     check is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high
 //     Codex proof is bound to that head and GitHub's real base (minted only by
 //     scripts/write-codex-push-proof.mjs — hand-writing is blocked). Every diff

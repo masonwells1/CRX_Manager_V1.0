@@ -168,5 +168,5 @@ If blocked: List every issue that needs fixing first.
 - NEVER merge with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER trigger CodeRabbit while implementation or Codex review is still changing the branch
-- NEVER merge over a `CHANGES_REQUESTED` verdict, and never without CodeRabbit's APPROVED review bound to the exact candidate commit (Mason's autonomous-landing rule, 2026-09-26)
+- NEVER merge over a `CHANGES_REQUESTED` verdict, and never unless CodeRabbit cleared the exact candidate commit (an APPROVED review bound to it, or a clean follow-up review of it after an earlier approval — `coderabbitClearedHead`) (Mason's autonomous-landing rule, 2026-09-26)
 - Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the reviewed merge path is covered by the autonomous-landing rule. Non-destructive live migrations apply under that rule once migration-apply-guard's full proof + Sol gate passes; destructive migrations are Mason's to apply himself — no agent command can

@@ -117,7 +117,7 @@ Repeat this proof whenever the Codex GitHub credential is replaced or its permis
 
 Before merging a migration PR, the existing local `gpt-5.6-sol`/high exact-head review remains the
 hard pre-push gate. The PR must also receive CodeRabbit's authenticated GitHub App review on that
-same exact head, and the latest exact-head CodeRabbit review state must be `APPROVED`. A plain
+same exact head, and the latest exact-head CodeRabbit review state must be `APPROVED` — or, after an earlier CodeRabbit approval, CodeRabbit's own clean follow-up of that head must have completed (`coderabbitClearedHead`, see `docs/reference/coderabbit-native-review.md`). A plain
 `CodeRabbit` success status is insufficient because it can coexist with a `CHANGES_REQUESTED`
 review.
 

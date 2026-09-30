@@ -378,8 +378,8 @@ PR #800.
   automatically — there is no separate deploy step. Since the `protect-main`
   ruleset landed (2026-07-14) nobody can push to `main` directly. Landing
   follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
-  branch, PR, Luna review rounds, required checks, CodeRabbit APPROVED on the
-  final head, a fresh exact-SHA Sol review run last (every merge, since
+  branch, PR, Luna review rounds, required checks, CodeRabbit clearing the
+  final head (APPROVED, or a clean follow-up after an earlier approval), a fresh exact-SHA Sol review run last (every merge, since
   2026-09-26), then an exact-head merge. The merge is the deploy; a
   non-destructive migration (its grants routine, none widening access) is applied through the proof
   gate under the same conditions; one that deletes or overwrites data or widens

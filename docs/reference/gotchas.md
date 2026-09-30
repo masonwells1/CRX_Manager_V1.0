@@ -313,8 +313,8 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
 CodeRabbit review was submitted. Say so rather than treating green as clean. GitHub no longer
 requires an approving review on `main` (removed 2026-09-02), so since 2026-09-26 the agent merge
-gates themselves require CodeRabbit's APPROVED verdict on the exact head — a green CodeRabbit
-status row never satisfies them. Since 2026-08-30 the normal trigger
+gates themselves require CodeRabbit to have cleared the exact head — its APPROVED verdict, or (since 2026-09-28) its own "Review completed" status on that head after an earlier approval with nothing posted since. Any other green CodeRabbit
+status row ("Review skipped", "in progress") never satisfies them. Since 2026-08-30 the normal trigger
 is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
 accidental duplicate. Native attempts retain a trusted head/base receipt even after a reset.
 For pending or uncertain delivery, preserve requested/dispatch state and check the actual formal
@@ -327,7 +327,7 @@ rare cases the reference names (e.g. a same-head review with no receipt of this 
 workflow's verified cleanup before any provider call permits a same-head retry. Follow
 `docs/reference/coderabbit-native-review.md` for native and bootstrap recovery. Never merge from the ordinary check row alone —
 confirm CodeRabbit actually reviewed the frozen candidate, and never merge over a
-`CHANGES_REQUESTED` verdict. An agent merge needs CodeRabbit's `APPROVED` review (Mason's
+`CHANGES_REQUESTED` verdict. An agent merge needs CodeRabbit to have cleared the head — its `APPROVED` review, or a clean follow-up after an earlier approval (Mason's
 autonomous-landing rule, 2026-09-26): require the native receipt's head SHA, that authenticated
 `APPROVED` review's `commit_id`, and the live PR head to match. Also require the receipt base SHA and live PR base SHA to match
 the expected base; native delivery validates both head and base commits. The generic Actions-authored marker is dedupe evidence, not an

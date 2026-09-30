@@ -2,7 +2,8 @@
 //
 // The rule lets an agent apply a NON-destructive migration live with no in-chat
 // ask — but only "under the same conditions" as an agent merge: CodeRabbit
-// APPROVED the frozen final head, the exact-SHA Sol review of that head is clean,
+// cleared the frozen final head (APPROVED it, or a clean follow-up after an
+// earlier approval), the exact-SHA Sol review of that head is clean,
 // and every check is green. The migration's own reviewer + Sol proofs (the rest
 // of migration-apply-lib.mjs) prove the SQL was reviewed; they say nothing about
 // the pull request carrying it. Sol's exact-SHA review of the introducing PR
@@ -42,7 +43,8 @@ function refuse(why) {
     reason:
       `MIGRATION LANDING GATE: ${why}\n\n` +
       `Under Mason's autonomous-landing rule (2026-09-26) a live apply happens only after the pull request ` +
-      `that carries the migration is ready to merge: CodeRabbit APPROVED its exact head, every check is ` +
+      `that carries the migration is ready to merge: CodeRabbit cleared its exact head (APPROVED it, or a clean ` +
+      `follow-up review after an earlier approval), every check is ` +
       `green, and a fresh exact-SHA gpt-6-sol proof (node scripts/write-codex-push-proof.mjs) is bound to that ` +
       `head. Apply from a clean checkout of the PR's branch with the migration committed, then merge right ` +
       `after. A destructive migration never applies through an agent — it is parked for Mason.`,

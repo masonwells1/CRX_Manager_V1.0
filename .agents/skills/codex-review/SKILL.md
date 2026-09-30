@@ -26,7 +26,7 @@ independent, and it is the one that guards money.
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
 | Every iterating review round | `gpt-6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit approved the frozen head | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit cleared the frozen head (approved it, or a clean follow-up after an earlier approval) | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
 | Genuinely complex work where Luna is plainly out of its depth | `gpt-6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the
@@ -394,7 +394,7 @@ one-line reason. This is still the advisory path — it mints no proof.
 
 **Only after Step 3A is clean, for EVERY change headed for `main`** (Mason's autonomous-landing
 rule, 2026-09-26 — both merge gates now refuse any merge into `main` without this proof, risky diff
-or not). Run it LAST: after CodeRabbit APPROVED the frozen head, immediately before the migration
+or not). Run it LAST: after CodeRabbit cleared the frozen head (APPROVED it, or a clean follow-up after an earlier approval), immediately before the migration
 apply (if any) and the merge. The proof binds to that HEAD and to GitHub's real base and expires
 after 30 minutes, so a later commit, a moved base or a slow CodeRabbit round voids it.
 
@@ -526,7 +526,7 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
-freeze the candidate commit → apply `ready-for-coderabbit` → CodeRabbit APPROVED → Step 3B Sol proof LAST →
+freeze the candidate commit → apply `ready-for-coderabbit` → CodeRabbit clears the head → Step 3B Sol proof LAST →
 apply the non-destructive migration, if any → merge with `--match-head-commit <reviewed-head-sha>`**.
 Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
@@ -544,7 +544,7 @@ review and fix any real issue before merging; nitpicks may be dismissed with a o
 records the new candidate epoch, and once checks pass a relabel earns one follow-up review — no
 replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand, and
 reserve `@coderabbitai full review` for a deliberately justified complete reread. Both agent merge
-gates enforce the rule: CodeRabbit's latest verdict APPROVED on the exact `headRefOid`, the newest
+gates enforce the rule: CodeRabbit cleared the exact `headRefOid` (`coderabbitClearedHead`: APPROVED on it, or a clean follow-up after an earlier approval), the newest
 run of every reported check green with `mergeStateStatus` CLEAN, and the Step 3B Sol proof bound to
 that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
 
