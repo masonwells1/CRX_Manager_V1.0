@@ -2405,6 +2405,19 @@ try {
     assert.match(String(evaluateReady(command).reason), /on its input/, `a command fed on stdin is refused: ${JSON.stringify(command)}`);
   }
   assert.equal(evaluateReady("echo 'x | bash'").blocked, false, "CONTROL: a single-quoted pipe in prose passes");
+  // CodeRabbit, PR #795, 2026-09-30: the `{ }` / `( )` regrouping re-emitted the
+  // outer command, so a plain feature push next to a grouped command was refused
+  // as a NESTED push. (Other rules may still refuse these; this one must not.)
+  for (const command of [
+    "git push origin HEAD:feature/x && (npm test)",
+    "git push origin HEAD:feature/x; if ($LASTEXITCODE) { exit 1 }",
+  ]) {
+    assert.doesNotMatch(String(evaluateReady(command).reason), /runs a git push inside another shell/,
+      `CONTROL: a grouped command beside a push is not a nested push: ${command}`);
+  }
+  for (const command of ["{ git push origin HEAD:main --force; }", "(git push --force origin HEAD:main)"]) {
+    assert.equal(evaluateReady(command).blocked, true, `a grouped force-push to main is still refused: ${command}`);
+  }
   // The unwrap stays linear, so the guard answers before its own time limit.
   {
     const huge = `echo (x) a\\b ${"start -x ".repeat(12000)}; ${nestedAdmin}`;

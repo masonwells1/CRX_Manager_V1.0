@@ -16,3 +16,5 @@
   no harmless command refused; new assertions in `codex-push-lib.test.mjs`; `test:correction-guards`,
   `test:agent-workflows` and `eslint . --max-warnings=0` pass; unwrap timing unchanged (under 0.5 s at
   about 200 KB).
+
+Not verified: the probes read command text on one Windows machine; the guards were not checked against each real shell (zsh, fish, ksh, Windows PowerShell 5.1, cmd) running the same commands.

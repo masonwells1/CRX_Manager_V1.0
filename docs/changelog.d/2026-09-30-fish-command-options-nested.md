@@ -9,3 +9,5 @@ is now a nested command the guards check in full.
 Proof with the real hooks: seven fish merge spellings (including `-C '<merge>' -c 'echo hi'`) are refused
 by both merge guards, the push spelling by both push guards, and `fish -c 'echo hello'` and
 `fish scripts/x.fish` pass. A rerun of every earlier attack and control shows no change.
+
+Not verified: fish itself was not run (it is not installed here); the option rules come from fish's documentation, and the guard reads command text only.

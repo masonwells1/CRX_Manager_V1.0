@@ -11,3 +11,4 @@
 - **Proof:** `test:correction-guards`, `test:agent-workflows`, `check-doc-drift` and
   `eslint . --max-warnings=0` pass on the merge; the option-padding probe still shows every padded
   admin merge refused by all three guards.
+- **Not verified:** no Codex review round and no CodeRabbit review ran on this merge; GitHub CI ran on the push.

@@ -9,3 +9,5 @@ GNU env's split string (attached, detached, clustered, or an abbreviated `--sp=`
 of the line, is now one of the nested commands every guard unwraps and checks in full. Proof with the
 real hooks: all six forms are refused by both merge guards, the push form is refused by both push
 guards, and `env --split-string='gh pr view 12'`, `env FOO=1 npm test` and `env -u HOME node …` pass.
+
+Not verified: the guard reads command text only; GNU env was not run (this machine is Windows), and BSD env's own `-S` rules were not tested.

@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-09-29 (nested-command round-4 gaps entry added)
+Last verified: 2026-09-30 (nested-command entries condensed; full gap list in agent-guardrails.md)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -10,57 +10,25 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
 
-**Source:** Mason, in the PR #795 ship session on 2026-09-29. Codex `gpt-6-luna` (xhigh) round 4
-found three new ways to hide a command from the guards, after rounds that found 12, 7 and 7. Before
-round 4 he agreed that new serious holes would end the parser fixes. Offered "accept and land" or
-"close it", he replied **"accept and land"**.
-
-**Decision.**
-1. Round 4's findings are recorded as known gaps, not fixed in PR #795: `python3 -W ignore -` reading
-   its program from a pipe; `! powershell.exe "<command>"`; a backslash-newline inside a nested raw
-   REST merge URL; and four over-refusals (`if ($true) { gh … }`, `echo bash -c "…"`,
-   `echo x | node --version`, `Start-Process findstr … -ArgumentList bash`).
-2. PR #795 goes through the normal landing path: CodeRabbit, then the final Sol review, then merge.
-   A new serious finding from Sol goes back to Mason instead of starting another fix round.
-3. Added 2026-09-30, again "accept and land": Codex's GitHub reviewer kept finding one new hiding
-   place per push (five that day). Three were fixed (missing gh built-ins, `env --split-string`, fish's
-   `--command`); two are also known gaps: a two-word gh alias under a built-in (`gh pr mm`, which
-   needs an alias created before the guards refused `gh alias set`), and `Start-Process` with
-   `-FilePath` written after `-ArgumentList`. Later GitHub-reviewer findings on PR #795 are answered
-   and recorded as known gaps in the same way, unless one would get past GitHub's own `main`
-   protection, which goes to Mason.
-
-**Why.** Each round found holes in places earlier rounds had not reached, so reading every shell's
-syntax from command text was not converging. GitHub's protect-main ruleset has no bypass actors
-(checked 2026-09-29): nobody, administrators included, can merge into `main` without one approving
-review and three green checks, or push to it directly. A command that slips past these guards can at
-most skip the Sol proof on a PR that is already approved and green. Every change in PR #795 adds
-refusals; none loosens a guard.
+**Source:** Mason, PR #795 ship session: "accept and land" on 2026-09-29 (after Luna round 4) and again
+on 2026-09-30 (after Codex's GitHub reviewer). Detail: `docs/changelog.d/2026-09-29-pr795-stopped-after-luna-round4.md`.
+**Decision.** Parser fixes stop. Round 4's findings and the GitHub-reviewer gaps are recorded known gaps
+(full list: `docs/reference/agent-guardrails.md`, "Accepted residuals"), and PR #795 lands through CodeRabbit,
+the final Sol review and merge. Later GitHub-reviewer findings on it are answered and recorded the same way; one
+that would get past GitHub's own `main` protection, or a new serious Sol finding, goes to Mason.
+**Why.** Every round found holes where earlier rounds had not looked. The protect-main ruleset has no bypass
+actors, so a missed command can at most skip the Sol proof on a PR already approved and green.
 
 ## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
 
-**Source:** Mason, in the PR #795 ship session on 2026-09-28. Codex `gpt-6-luna` (xhigh) had
-reported 12 findings on the guards' reading of nested shells. Offered "fix and accept", "keep fixing"
-or "server-side", he replied, in his words: **"fix and accept"**.
-
-**Decision.**
-1. Findings that are bugs in the guards' own logic are fixed: the silent 32-inner-command cutoff, the
-   gh/git precondition on interpreter-fed input, a wrapper between a pipe and its interpreter, the
-   six-word wrapper window and its over-block, the two push guards' different nested-push policies,
-   and the missing hook-level tests.
-2. Three gaps are **accepted residuals**, because reading the command line cannot close them:
-   script files (`bash x.sh`, `pwsh -File x.ps1`); program names built at run time in a syntax other
-   than `$` or a backtick (PowerShell `& ("g" + "h")`, cmd `%VAR%`); and the Codex guard not
-   re-checking a decoded payload that mentions no gh/git against its other rules.
-3. The pre-existing quadratic push-parser timeout stays out of PR #795 and is tracked separately.
-
-**Why.** The line of work from PR #630 had run about 20 review-and-fix rounds since 2026-09-07, and
-each round found new hiding places. Parsing cannot see a script file's contents or a name assembled at
-run time. GitHub's protect-main ruleset still refuses any direct push to `main` whatever the command
-says.
-
-**Effect.** The three residuals are known, recorded gaps, so the work on PR #795 does not add parser
-code for them. Any other bypass is a new gap and is fixed like any other finding.
+**Source:** Mason, PR #795 ship session, 2026-09-28: **"fix and accept"** after Luna reported 12 findings.
+Detail: `docs/changelog.d/2026-09-28-nested-guard-luna-round1-fixes.md`.
+**Decision.** Bugs in the guards' own logic are fixed. Three gaps no command reader can close are accepted
+residuals: script files, program names built at run time outside `$`/backtick syntax, and the Codex guard not
+re-checking decoded payloads against its other rules. The pre-existing quadratic push-parser timeout is tracked
+separately.
+**Why.** About 20 review rounds since 2026-09-07 each found new hiding places, and parsing cannot see a script's
+contents or a name assembled at run time.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

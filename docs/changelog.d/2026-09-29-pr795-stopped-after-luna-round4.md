@@ -16,5 +16,6 @@ server-side alternative (no administrator bypass on `main`) to him. Round 4 (`gp
   `echo x | node --version`, and `Start-Process findstr … -RedirectStandardInput … -ArgumentList bash`.
 - **Trend:** 12, 7, 7, 7 findings over four rounds, each round in places the previous one did not
   reach. Every fix held, but reading every shell's syntax from text keeps turning up new cases.
-- **Next:** Mason's decision on the server-side backstop. Nothing in this PR loosens a guard; every
-  round's fixes only add refusals.
+- **Next:** Mason's decision on the server-side backstop. The fixes add refusals for real bypasses;
+  the only denials removed were over-refusals of harmless commands (for example `echo 'x | bash'`
+  and `timeout 30 echo gh …`).

@@ -19,7 +19,5 @@
   (bounded runs, one pass per segment), with a fail-closed size backstop, and timing tests asserting
   ~200 KB of `;` and `'a'|` is answered well inside the hook limits. Guard files, so the Luna rounds and
   the exact-SHA `gpt-6-sol` review apply.
-- **Also recorded:** PR #795 was brought up to date with `main` at `bf32063` (#796, GPT-6 review routing);
-  the one conflict (`docs/reference/agent-guardrails.md`, same table row) kept main's `gpt-6-sol` text and
-  re-added #795's push-budget sentence. GitHub had not started the main CI run for `d7b330e`; the merge
-  push started it.
+- **Not verified:** timings were measured on one Windows machine only; inputs other than the two
+  repeated units above were not timed.

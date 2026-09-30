@@ -1518,8 +1518,14 @@ export function evaluateProductionAction({
     // One policy with Claude's push guard: a push carried by another program is
     // refused, not evaluated. Evaluating it here allowed
     // `bash -c "git push origin HEAD:feature"` while Claude's guard refused the
-    // same command (Codex luna, PR #795, 2026-09-26, finding 10).
-    if (nested.commands.some((inner) =>
+    // same command (Codex luna, PR #795, 2026-09-26, finding 10). Read without
+    // the `{ }` / `( )` regrouping, as Claude's push guard reads it: that pass
+    // re-emits the outer command itself, so `git push origin HEAD:feature/x &&
+    // (npm test)` was refused as a nested push (CodeRabbit, PR #795,
+    // 2026-09-30). A push behind grouping is still refused by the whole-command
+    // composition check below.
+    const pushNested = expandNestedCommands(command, { grouping: false });
+    if (pushNested.commands.some((inner) =>
       isGitPush(inner) || gitSubcommandIsDynamic(inner) || pushHiddenByShellComposition(inner))) {
       return denied(
         "CODEX PRODUCTION GATE: this command runs a git push inside another shell or an evaluator (bash -c, " +
