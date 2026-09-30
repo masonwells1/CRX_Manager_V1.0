@@ -745,6 +745,11 @@ const RISKY_PATH_RES = [
   // changes require the same independent verdict (Codex round-7, PR #142).
   /(^|\/)\.claude\/agents\//i,
   /(^|\/)scripts\/write-apply-proofs\.mjs$/i,
+  // The live-apply door and Mason's Windows Hello approval commands (2026-09-29):
+  // the door decides whether a parked migration may look for his signature and
+  // uses it up; the commands build what he is shown and signs.
+  /(^|\/)scripts\/apply-migration-file\.mjs$/i,
+  /(^|\/)scripts\/owner-approv[a-z-]*\.mjs$/i,
   // The hook-REGISTRATION surfaces: every guard is only active because it is
   // wired here. A PR that de-registers a guard (removes the pr-merge-guard line,
   // etc.) touches ONLY these files and would otherwise merge un-gated, disabling

@@ -71,7 +71,7 @@ Compare against the live database (Supabase MCP `list_migrations`). If there are
 ⚠️  You have X new migration(s) not yet applied to production.
     Apply them through /migration-review → scripts/apply-migration-file.mjs
     BEFORE merging (non-destructive: under Mason's 2026-09-26 landing rule
-    once the final reviews are clean; destructive: Mason applies it himself), or the
+    once the final reviews are clean; destructive, data-overwriting or access-changing: only after Mason's Windows Hello approval, scripts/owner-approve-migration.mjs), or the
     app will reference tables/columns/functions that don't exist yet.
     NEVER `supabase db push` — it bypasses the review gate and is blocked.
 ```

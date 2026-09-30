@@ -46,11 +46,14 @@
 //   final exact-SHA Sol review and CodeRabbit review are clean applies with no
 //   per-migration ask, in any session, once the rule book passes — both reviewer
 //   proofs and a fresh content-bound gpt-6-sol/high proof, all under 30 minutes.
-//   A DESTRUCTIVE migration (DELETE/TRUNCATE of business rows, DROP of data-bearing
-//   tables/columns) stays Mason's: the rule book refuses it through this script in
-//   every session. There is deliberately no override flag — a flag the agent can
-//   pass itself cannot prove Mason approved that exact migration (Sol HIGH,
-//   2026-09-26) — so a destructive migration is parked and handed to Mason.
+//   A migration that DELETES data, OVERWRITES existing rows or CHANGES WHO CAN
+//   ACCESS WHAT stays Mason's. There is deliberately no override flag — a flag the
+//   agent can pass itself cannot prove Mason approved that exact migration (Sol
+//   HIGH, 2026-09-26). What can is his Windows Hello signature of this exact file,
+//   pull request and head (scripts/owner-approve-migration.mjs; Mason, 2026-09-29).
+//   This script is the only door that accepts it: the rule book checks it LAST,
+//   after every other proof, and this script marks it used before transmitting,
+//   so each approval installs one migration once.
 
 import { readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -63,6 +66,7 @@ import {
   CRX_PRODUCTION_REF,
 } from "../.claude/hooks/migration-apply-lib.mjs";
 import { assertWrappable } from "../.claude/hooks/migration-wrappability-lib.mjs";
+import { recordUsedApproval } from "../.claude/hooks/owner-approval-lib.mjs";
 
 // Every existing ledger row carries this; apply_migration fills it from the
 // authenticated Supabase account, and the personal access token this script uses
@@ -118,9 +122,9 @@ if (!filePath) {
 
 const confirm = argv.includes("--confirm");
 rejectedFlag("--mason-approved-destructive",
-  "apply-migration-file: --mason-approved-destructive does not exist. A destructive migration never applies " +
-  "through an agent-run command: a flag the agent can pass itself cannot prove Mason approved that exact " +
-  "migration. Park it and hand it to Mason.");
+  "apply-migration-file: --mason-approved-destructive does not exist. A flag the agent can pass itself cannot " +
+  "prove Mason approved that exact migration. Ask Mason to approve it with Windows Hello instead:\n" +
+  "  node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql");
 const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 
 // ── TARGET: pinned, not a parameter ────────────────────────────────────────
@@ -322,6 +326,9 @@ try {
     // The proof must name THIS migration exactly. Substring matching is what let an
     // aliased filename inherit another migration's proof; see the note in the lib.
     requireExactProofName: true,
+    // This door may carry Mason's Windows Hello approval for a parked migration.
+    // It proves nothing alone: the rule book still needs his valid signature.
+    ownerApprovalDoor: true,
   });
 } catch (err) {
   die(2,
@@ -335,11 +342,17 @@ if (verdict?.decision !== "allow") {
 }
 
 console.log("APPLY GATE PASSED — ordering, autopilot state, destructive-content, reviewer proof and Codex gate all satisfied.");
+const ownerApproval = verdict.ownerApproval || null;
+if (ownerApproval) {
+  console.log(`OWNER APPROVAL: Mason approved this exact file, pull request and head with Windows Hello (valid until ${ownerApproval.expiresAt}; one use).`);
+}
 
 if (!confirm) {
   console.log("");
   console.log("DRY RUN — nothing was transmitted. Re-run with --confirm to apply for real.");
-  console.log("Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, whose PR's final Sol and CodeRabbit reviews are clean, may now be applied with --confirm.");
+  console.log(ownerApproval
+    ? "Gate passed with Mason's Windows Hello approval. --confirm uses it up; it expires 30 minutes after he approved."
+    : "Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, whose PR's final Sol and CodeRabbit reviews are clean, may now be applied with --confirm.");
   process.exit(0);
 }
 
@@ -398,6 +411,20 @@ const wrapped =
 // or not. Ordering here matters: delete-then-apply cannot leave a stale snapshot no
 // matter how the apply, the network, or this process ends. The cost when an apply
 // fails is regenerating a cache file, and the guard tells the operator how.
+// ── USE UP MASON'S APPROVAL BEFORE TRANSMITTING ────────────────────────────
+// Recorded first, so no failure after this point can leave it reusable. If the
+// apply then fails, Mason approves again; that is the safe direction.
+if (ownerApproval) {
+  try {
+    recordUsedApproval(ownerApproval.dir, ownerApproval.payload);
+    console.log("Marked Mason's approval as used.");
+  } catch (err) {
+    die(2,
+      `apply-migration-file: could not mark Mason's approval as used (${err?.message || err}). Refusing to ` +
+      `transmit — an approval that cannot be used up could install this migration twice.`);
+  }
+}
+
 const snapshotPath = path.join(projectDir, ".claude", "session-state", "applied-migrations.json");
 try {
   if (existsSync(snapshotPath)) {
