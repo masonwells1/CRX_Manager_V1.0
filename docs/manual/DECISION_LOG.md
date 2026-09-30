@@ -22,6 +22,13 @@ round 4 he agreed that new serious holes would end the parser fixes. Offered "ac
    `echo x | node --version`, `Start-Process findstr … -ArgumentList bash`).
 2. PR #795 goes through the normal landing path: CodeRabbit, then the final Sol review, then merge.
    A new serious finding from Sol goes back to Mason instead of starting another fix round.
+3. Added 2026-09-30, again "accept and land": Codex's GitHub reviewer kept finding one new hiding
+   place per push (five that day). Three were fixed (missing gh built-ins, `env --split-string`, fish's
+   `--command`); two are also known gaps: a two-word gh alias under a built-in (`gh pr mm`, which
+   needs an alias created before the guards refused `gh alias set`), and `Start-Process` with
+   `-FilePath` written after `-ArgumentList`. Later GitHub-reviewer findings on PR #795 are answered
+   and recorded as known gaps in the same way, unless one would get past GitHub's own `main`
+   protection, which goes to Mason.
 
 **Why.** Each round found holes in places earlier rounds had not reached, so reading every shell's
 syntax from command text was not converging. GitHub's protect-main ruleset has no bypass actors
