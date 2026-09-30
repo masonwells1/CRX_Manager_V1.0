@@ -11,6 +11,7 @@ import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  readHookInputBounded,
   createHardGateBudget,
   hardGateBudgetDenial,
   hookDeadlineMs,
@@ -3465,6 +3466,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   const over = readWithLimit("x".repeat(4 * 1024 * 1024), 1024);
   assert.equal(over.error, undefined, `writer is not cut off when the input is over the limit: ${over.error?.message}`);
   assert.deepEqual(JSON.parse(over.stdout), { tooLarge: true, text: "" }, "input over the byte limit is refused, not returned");
+  // A read failure is raised, never returned as empty input: an empty input
+  // would read as "nothing to check" (Luna, 2026-09-30).
+  assert.throws(() => readHookInputBounded(10, 987_654), /EBADF|bad file/i, "a read failure throws to the guard, which refuses");
 }
 
 console.log("OK - codex push shared library checks passed.");

@@ -62,6 +62,13 @@ crashed (exit 1) with no decision. Both guards now count
 bytes while reading (`readHookInputBounded`), stop storing at 16 MiB, and drain the rest for up to
 5 s so the writer is not cut off. Measured with real hook processes: 20 MB, 600 MB and 1.2 GB
 inputs are refused in 0.06 s, 0.2 s and 0.5 s, with no error on either side of the pipe.
+Luna on that fix (4 findings): adopted two — an empty non-blocking stdin is now polled with a
+10 ms pause and refused after 10 s instead of spun on, and the Claude guard now refuses a tool call
+whose input could not be read (it used to allow it; the Codex guard already refused). Refuted one: a
+writer that stalls mid-write still holds the hook, but that was equally true of reading the input
+whole, and the writer is the agent harness writing an input it already holds. Deferred one,
+pre-existing and hook-wide: the Claude guard allows a call whose input is not valid JSON, as the
+other Claude hooks do.
 Deferred LOW: the timing cases assert speed, not the allow/deny decision on
 under-budget inputs — those decisions stay covered by the existing guard suites.
 

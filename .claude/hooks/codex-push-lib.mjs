@@ -132,24 +132,36 @@ export const MAX_HOOK_INPUT_LENGTH = 16 * 1024 * 1024;
 // Past the limit the rest is read and discarded, never stored, so the caller
 // that is writing the input is not cut off mid-write; the drain stops after
 // `drainMs` so an endless input still gets its refusal before the hook limit.
-export function readHookInputBounded(limit = MAX_HOOK_INPUT_LENGTH, fd = 0, drainMs = 5_000) {
+// A non-blocking stdin that stays empty (EAGAIN) is polled with a short pause,
+// not spun on, and throws after `waitMs`; both guards refuse on a read failure.
+// A blocking read cannot be interrupted, so a writer that stalls mid-write still
+// holds the hook, as reading it whole always did; the writer is the agent
+// harness, which writes an input it already holds.
+const READ_PAUSE = new Int32Array(new SharedArrayBuffer(4));
+export function readHookInputBounded(limit = MAX_HOOK_INPUT_LENGTH, fd = 0, drainMs = 5_000, waitMs = 10_000) {
   const chunks = [];
   const buffer = Buffer.alloc(1024 * 1024);
-  const drainUntil = Date.now() + drainMs;
+  const started = Date.now();
   let total = 0;
   for (;;) {
     let bytes;
     try {
       bytes = readSync(fd, buffer, 0, buffer.length, null);
     } catch (error) {
-      if (error?.code === "EAGAIN") continue;
+      if (error?.code === "EAGAIN") {
+        const elapsed = Date.now() - started;
+        if (total > limit && elapsed > drainMs) break;
+        if (elapsed > waitMs) throw new Error(`hook input did not arrive within ${waitMs} ms`);
+        Atomics.wait(READ_PAUSE, 0, 0, 10);
+        continue;
+      }
       if (error?.code === "EOF") break;
       throw error;
     }
     if (bytes === 0) break;
     total += bytes;
     if (total > limit) {
-      if (Date.now() > drainUntil) break;
+      if (Date.now() - started > drainMs) break;
       continue;
     }
     chunks.push(Buffer.from(buffer.subarray(0, bytes)));
