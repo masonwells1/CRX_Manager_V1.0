@@ -3519,6 +3519,8 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "gh alias list", "gh alias delete mm", "gh pr view 123", "gh pr checkout 123", "gh -R o/r pr view 123",
     "gh --version", "gh", "gh auth status", "gh run list", "gh api user", "gh cs list", "gh ext list",
     "echo gh mm", "grep -n gh README.md", "git log --grep gh", "npm run gh-pages",
+    // Built-ins the list was missing (Codex GitHub review of PR #795, 2026-09-30).
+    "gh discussion list", "gh skill --help", "gh telemetry",
   ]) {
     assert.equal(unreadable(allowed), null, `a readable or non-gh command is not refused: ${allowed}`);
   }

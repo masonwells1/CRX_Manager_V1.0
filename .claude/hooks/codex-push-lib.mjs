@@ -3752,13 +3752,17 @@ export function commandFedToInterpreterDenial(prefix) {
 // from gh's manual. `co` is deliberately absent: it is a CONFIG alias
 // (`pr checkout`) that can be redefined, so `gh pr checkout` is the spelling to
 // use. A genuine new gh command, or an extension installed on purpose, is added
-// here after checking what it does.
+// here after checking what it does. `discussion` (gh 2.96), `skill` and
+// `telemetry` (listed by gh 2.92's own `gh help`) were missing, so harmless
+// commands such as `gh discussion list` were refused (Codex GitHub review of
+// PR #795, 2026-09-30). None of the three can merge or push.
 export const GH_BUILTIN_COMMANDS = new Set([
   "accessibility", "a11y", "actions", "agent-task", "alias", "api", "attestation", "auth", "browse",
-  "cache", "codespace", "cs", "completion", "config", "copilot", "environment", "exit-codes",
-  "extension", "extensions", "ext", "formatting", "gist", "gpg-key", "help", "issue", "label",
-  "licenses", "mintty", "org", "pr", "preview", "project", "reference", "release", "repo", "ruleset",
-  "rs", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow",
+  "cache", "codespace", "cs", "completion", "config", "copilot", "discussion", "environment",
+  "exit-codes", "extension", "extensions", "ext", "formatting", "gist", "gpg-key", "help", "issue",
+  "label", "licenses", "mintty", "org", "pr", "preview", "project", "reference", "release", "repo",
+  "ruleset", "rs", "run", "search", "secret", "skill", "ssh-key", "status", "telemetry", "variable",
+  "version", "workflow",
 ]);
 // Words that run the program after them (possibly after their own options and
 // values). `timeout`, `nice`, `sudo -u root` and `env -u X` each hid an alias
