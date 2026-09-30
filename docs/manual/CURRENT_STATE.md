@@ -46,10 +46,10 @@ ships or quarterly, whichever comes first.
   by a link minted under the old policies. It does not rule out a signed upload token minted just
   before the apply, which would stay valid until it expired. Still open: sales reps cannot remove a document; PR #800 carries a parked
   fix migration, `20260921180000_soft_delete_customer_document_rpc`, which waits on an ordering
-  hold until `20260914101300` (on the open field-season delivery PR (#843 on 2026-09-29; it is re-opened under a new number often)) is live, then lands under the autonomous-landing rule
+  hold until `20260914101300` (on `main` since #850 merged 2026-09-30, not yet live) is live, then lands under the autonomous-landing rule
   with no separate ask (Mason, 2026-09-27). Details in `KNOWN_ISSUES.md` and the PR description.
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
-  hours. #800 (above) waits on the ordering hold behind the field-season delivery PR (#843 on 2026-09-29).
+  hours. #800 (above) waits on the ordering hold until the four field-season migrations from #850 (merged 2026-09-30) are live.
 
 ## Migration and rollout record (condensed, point-in-time)
 
