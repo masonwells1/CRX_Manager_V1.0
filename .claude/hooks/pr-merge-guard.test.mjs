@@ -445,6 +445,10 @@ ok(followUp(pr820, statuses820, PULLS_820, [{ ...crComment("2026-09-27T07:00:00Z
   "a person's inline comment is not CodeRabbit content");
 ok(!followUp(pr820, statuses820, PULLS_820, [crComment("not-a-date")]), "an undated CodeRabbit inline comment fails closed");
 ok(!followUp(pr820, statuses820, PULLS_820, null), "an unreadable inline-comment list fails closed");
+for (const [label, entry] of [["null", null], ["an empty object", {}], ["a string", "x"],
+  ["an entry without a login", { user: {}, created_at: "2026-09-27T07:00:00Z" }], ["a blank login", { user: { login: " " } }]]) {
+  ok(!followUp(pr820, statuses820, PULLS_820, [entry]), `a malformed inline-comment entry (${label}) fails closed`);
+}
 
 // coderabbitClearedHead(): the one predicate every gate calls.
 {

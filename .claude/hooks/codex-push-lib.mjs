@@ -3236,11 +3236,14 @@ function headBelongsOnlyTo(pullRequest, associatedPulls) {
 // list for the PR. A CodeRabbit comment created at or after the approval that
 // starts a thread (no `in_reply_to_id`) is a new finding and refuses; a reply
 // inside an existing thread — the empty-body COMMENTED artifact's only content —
-// is tolerated. An unreadable list or an undated CodeRabbit comment refuses.
+// is tolerated. An unreadable list, a malformed entry (not an object, or no
+// author login) and an undated CodeRabbit comment all refuse.
 function codeRabbitInlineFindingSince(reviewComments, approvalAt) {
   if (!Array.isArray(reviewComments)) return true;
   return reviewComments.some((comment) => {
-    if (String(comment?.user?.login || "").toLowerCase().replace(/\[bot\]$/, "") !== "coderabbitai") return false;
+    const login = comment && typeof comment === "object" ? comment.user?.login : undefined;
+    if (typeof login !== "string" || login.trim() === "") return true;
+    if (login.toLowerCase().replace(/\[bot\]$/, "") !== "coderabbitai") return false;
     const at = Date.parse(String(comment?.created_at || ""));
     if (!Number.isFinite(at)) return true;
     return at >= approvalAt && (comment?.in_reply_to_id === null || comment?.in_reply_to_id === undefined);

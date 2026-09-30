@@ -28,3 +28,12 @@ so it still clears. New tests cover:
 
 The results: `pr-merge-guard` 274, `migration-apply-lib` 281, the Codex production guard, and the
 CI suite 275/275. With the CI check switched off, the two new CI refusal tests fail.
+
+**Follow-up (CodeRabbit on `1cec7e5c`, Major):** a malformed comment entry (not an object, or with no
+author login) was skipped as "not CodeRabbit". It now refuses in both paths, with refusal tests for
+`null`, `{}`, a string, a missing login and a blank login in the hook suite, and for `null`, `{}`
+and a missing login in the lifecycle suite.
+
+**Not verified:** no Codex Luna round and no Sol proof covered this change; the cloud session has no
+Codex CLI. Both run on Mason's machine before #836 lands. The live read against a PR whose follow-up
+really carries an inline CodeRabbit finding was not exercised; only fixtures model it.

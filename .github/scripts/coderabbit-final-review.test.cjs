@@ -4209,6 +4209,10 @@ for (const [name, options] of [
     created_at: '2026-09-08T03:49:53Z', body: 'finding' }], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
   ['an undated CodeRabbit inline comment', { reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, body: 'x' }],
     statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['a null review-comment entry', { reviewComments: [null], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['an empty review-comment entry', { reviewComments: [{}], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['a review comment without an author login', { reviewComments: [{ id: 9, user: {}, created_at: '2026-09-08T03:49:53Z' }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
 ]) {
   test(`follow-up: ${name} is not a delivered review`, async () => {
     const harness = relabelFollowUpHarness(options);
