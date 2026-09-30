@@ -15,5 +15,12 @@ and were valid, and all four are fixed:
   `docs/changelog.d/2026-09-30-audit-brace-expansion-fast-uri.md`: each now states what was not
   verified.
 
-No other live command, skill, workflow or reference doc put Sol before the CodeRabbit request. This
-change is documentation only, with no gate logic changed.
+No other live command, skill, workflow or reference doc put the **final** Sol proof before the
+CodeRabbit request; the final proof always runs after CodeRabbit clears the head. The `codex-review`
+skill's early *advisory* Sol round for genuinely complex work is a different thing: it mints no
+proof and is unaffected. This change is documentation only, with no gate logic changed.
+
+Follow-up (CodeRabbit's re-review of `53d14569`): `docs/reference/gotchas.md` and the landing line in `.claude/commands/ship.md` said the follow-up
+needs "nothing posted since" the approval, which is stricter than the gate. It now says "no later
+substantive CodeRabbit content", with the empty `COMMENTED` reply artifact named as tolerated,
+matching `standingCodeRabbitApproval()`.
