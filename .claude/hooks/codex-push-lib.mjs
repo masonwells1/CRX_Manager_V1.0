@@ -3008,13 +3008,14 @@ function restOfLine(rawWords, argvWords, from) {
 // cluster carrying `c`. `-o`/`-O` take a value, and so do `--rcfile` and
 // `--init-file`: reading their value as the command let
 // `bash --rcfile /dev/null -c '<admin merge>'` through (independent Opus review
-// of PR #795). `--` ends the options.
-function posixShellInner(argvWords, start) {
+// of PR #795). `--` ends the options. Returns the inner commands found.
+function posixShellInner(argvWords, start, fish) {
+  if (fish) return fishInner(argvWords, start);
   let sawC = false;
   const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
   for (let index = start; index < end; index += 1) {
     const word = argvWords[index];
-    if (word === "--") return sawC ? argvWords[index + 1] ?? null : null;
+    if (word === "--") return sawC && argvWords[index + 1] !== undefined ? [argvWords[index + 1]] : [];
     if (/^[-+][A-Za-z]+$/.test(word)) {
       if (word.slice(1).includes("c")) sawC = true;
       if (/^[-+][oO]$/.test(word)) index += 1;
@@ -3024,10 +3025,46 @@ function posixShellInner(argvWords, start) {
       if (POSIX_SHELL_VALUE_LONGS.has(word.toLowerCase())) index += 1;
       continue;
     }
-    return sawC ? word : null;
+    return sawC ? [word] : [];
   }
-  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : null;
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
 }
+
+// fish reads its options with getopt, unlike the POSIX shells: `-c`/`--command`
+// and `-C`/`--init-command` each take a value and RUN it, attached (`-c'…'`,
+// `--command=…`), detached, or behind an abbreviated long name (`--comm=…`).
+// Only the POSIX spelling was read, so `fish --command='gh pr merge 1 --admin'`
+// passed both merge guards (Codex GitHub review of PR #795, 2026-09-30). Every
+// such value is returned; the first plain word is the script, which ends the
+// options.
+const FISH_VALUE_SHORTS = "cCdofpD";
+const FISH_VALUE_LONGS = ["debug", "debug-output", "features", "profile", "profile-startup"];
+function fishInner(argvWords, start) {
+  const found = [];
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (word === "--" || word === "-" || !word.startsWith("-")) return found;
+    if (word.startsWith("--")) {
+      const [name, ...attached] = word.slice(2).split("=");
+      const value = attached.length ? attached.join("=") : argvWords[index + 1];
+      const runs = name && ("command".startsWith(name) || (name.length >= 3 && "init-command".startsWith(name)));
+      if (runs && value !== undefined) found.push(value);
+      if (!attached.length && (runs || (name && FISH_VALUE_LONGS.some((long) => long.startsWith(name))))) index += 1;
+      continue;
+    }
+    for (let at = 1; at < word.length; at += 1) {
+      if (!FISH_VALUE_SHORTS.includes(word[at])) continue;
+      const attached = word.slice(at + 1);
+      const value = attached || argvWords[index + 1];
+      if ("cC".includes(word[at]) && value !== undefined) found.push(value);
+      if (!attached) index += 1;
+      break;
+    }
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : found;
+}
+const FISH_SHELLS = new Set(["fish"]);
 
 // `cmd /c …`, `cmd /d /s /k …`, `cmd /c"…"`: everything after /c, /k or /r.
 function cmdInner(rawWords, argvWords, start) {
@@ -3235,9 +3272,7 @@ function nestedCommandsOneLevel(command, { grouping }) {
       }
       const is = (names) => wordIsProgram(rawWords, argvWords, index, names);
       if (is(POSIX_SHELLS)) {
-        const found = posixShellInner(argvWords, index + 1);
-        if (found === SCAN_WINDOW_EXCEEDED) add(found);
-        else if (found) add([found]);
+        add(posixShellInner(argvWords, index + 1, is(FISH_SHELLS)));
       } else if (is(CMD_SHELLS) || is(POWERSHELLS) || is(EXPRESSION_EVALUATORS)) {
         // These run the REST of the line, so their inner command already holds
         // every later word of this segment; the next level unwraps whatever

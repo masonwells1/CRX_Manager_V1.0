@@ -415,7 +415,21 @@ for (const command of [
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   ok(r.decision?.permissionDecision === "deny", `env's split string is read as a command: ${command}`);
 }
-for (const command of ["env --split-string='gh pr view 12'", "env FOO=1 npm test", "env -u HOME node scripts/check.mjs"]) {
+// Same review, next head: fish's getopt spellings of its command options.
+for (const command of [
+  "fish --command='gh pr merge 123 --admin'",
+  "fish --command 'gh pr merge 123 --admin'",
+  "fish --comm='gh pr merge 123 --admin'",
+  "fish -c'gh pr merge 123 --admin'",
+  "fish -C 'gh pr merge 123 --admin' -c 'echo hi'",
+  "fish --init-command='gh pr merge 123 --admin'",
+  "bash -C -c 'gh pr merge 123 --admin'",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `fish's command options are read: ${command}`);
+}
+for (const command of ["env --split-string='gh pr view 12'", "env FOO=1 npm test", "env -u HOME node scripts/check.mjs",
+  "fish -c 'echo hello'", "fish scripts/x.fish"]) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   ok(r.status === 0 && r.decision === null, `an ordinary env command is not refused: ${command}`);
 }
