@@ -25,8 +25,10 @@ try { payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(
 if (isMachineGenerated(payload?.prompt)) emit();
 
 // Strip the spans of THIS prompt that Mason did not author — peer-session
-// <cross-session-message> blocks, machine envelopes, quoted blockquote lines,
-// and code spans — then match only on what is left. Proven 2026-08-26: a peer
+// <cross-session-message> blocks, subagent <~agent-message> hand-backs and the
+// "Another Claude session sent a message:" preamble (2026-09-25), machine
+// envelopes, quoted blockquote lines, and code spans — then match only on what
+// is left. Proven 2026-08-26: a peer
 // session's message ("stand down ... no need to stop the other lane") latched
 // the receiver's hold, the quoted reply latched the sender's, and naming
 // `stop-wrap.mjs` latched it again. Matching the raw prompt is the defect.

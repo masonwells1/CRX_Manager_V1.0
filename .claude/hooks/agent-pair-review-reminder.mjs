@@ -3,7 +3,7 @@
 // Detects requests for Claude and Codex to both review the same work.
 
 import { readFileSync } from "node:fs";
-import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, withoutSubagentReports, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -28,7 +28,8 @@ try {
 // output) are not something Mason typed — stay silent on them.
 if (isMachineGenerated(payload?.prompt)) emit();
 
-const prompt = String(payload?.prompt || "").toLowerCase();
+// A subagent's hand-back report is not Mason's either (2026-09-25).
+const prompt = withoutSubagentReports(payload?.prompt).toLowerCase();
 if (!prompt) emit();
 
 const triggerPatterns = [

@@ -781,4 +781,34 @@ for (const payload of [
 // `|` that splits the segment.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'grep -E "[t]ypecheck" .husky/pre-push' } }).stdout, "");
 
+// Unreadable input still fails OPEN (a "*"-matcher guard must not lock every
+// tool call on a stdin glitch) but now LOUDLY: a systemMessage names the skipped
+// check and no permission decision is emitted, so the normal prompt still runs.
+for (const input of ["{bad", "", '{"tool_name":"Bash","tool_in', "[]", "null", "42", "{}", '{"tool_input":{"command":"ls"}}', '{"tool_name":"Bash"}', '{"tool_name":{},"tool_input":{}}', '{"tool_name":"Bash","tool_input":42}', '{"tool_name":"Bash","tool_input":[]}', '{"tool_name":"  ","tool_input":{}}', '{"tool_name":"Bash","tool_input":"ls"}', '{"tool_name":"Write","tool_input":""}']) {
+  const result = spawnSync(process.execPath, [hookPath], { encoding: "utf8", input });
+  const label = `unreadable input ${JSON.stringify(input)}`;
+  assert.equal(result.status, 0, `${label}: exits 0 (fails open)`);
+  assert.equal(result.stderr, "", `${label}: no stderr`);
+  const response = JSON.parse(result.stdout);
+  assert.match(response.systemMessage || "", /review-proof-guard.*SKIPPED/, `${label}: loud warning`);
+  // Exactly one key: no decision (an "allow" would skip the prompt; `continue:false`
+  // would halt every call), and the Codex adapter forwards only a bare systemMessage.
+  assert.deepEqual(Object.keys(response), ["systemMessage"], `${label}: warning only, no decision`);
+}
+// A readable, harmless call stays silent, so the warning means only "could not check".
+assertEntrypointAllowed({ tool_name: "Bash", tool_input: { command: "ls" } }, "readable harmless call");
+// Sol (PR #823): a missing or unusable tool name must not skip the checks that do
+// not need one. A protected target still DENIES; only a call that reaches the
+// final allow gets the warning.
+for (const [label, payload] of [
+  ["no tool name, proof path", { tool_input: { file_path: ".claude/session-state/codex-review-abc.json" } }],
+  ["object tool name, proof path", { tool_name: {}, tool_input: { file_path: ".claude/session-state/claude-review-push.json" } }],
+  ["blank tool name, proof path", { tool_name: " ", tool_input: { path: ".claude/session-state/codex-review-abc.json" } }],
+  ["no tool name, raw patch to proof", { tool_input: "*** Begin Patch\n*** Add File: .claude/session-state/codex-review-abc.json\n+{}\n*** End Patch" }],
+]) {
+  assertEntrypointDenied(payload, /REVIEW PROOF GUARD/, label);
+}
+// A parameterless tool sends an empty tool_input object; that is readable, not skipped.
+assertEntrypointAllowed({ tool_name: "TodoRead", tool_input: {} }, "parameterless tool call");
+
 console.log("OK - review proof guard checks passed.");

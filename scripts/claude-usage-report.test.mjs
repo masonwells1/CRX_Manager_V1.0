@@ -29,6 +29,14 @@ try {
   writeRecords(path.join(project, "main.jsonl"), [
     user("Review my usage."),
     user([{ type: "text", text: "Keep the report concise." }]),
+    // A subagent's hand-back is not a prompt Mason typed (2026-09-25): before
+    // the fix it fell back to the raw text and counted as a third human prompt.
+    user("Another Claude session sent a message:\n<\\~agent-message from=\"a1\">\n" +
+      "[Subagent hand-back] report\n  all done\n<\\~/agent-message>"),
+    // A TRUNCATED hand-back (no close tag) is not his either. The hold latch
+    // keeps one whole on purpose, which counted it as a prompt (Codex App, #826).
+    user("Another Claude session sent a message:\n<\\~agent-message from=\"a2\">\n" +
+      "[Subagent hand-back] report\n  cut off mid-sentence"),
     assistant("main-response"),
   ]);
   writeRecords(path.join(subagents, "agent-fixture.jsonl"), [

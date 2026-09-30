@@ -45,6 +45,19 @@ assert.match(normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissi
   warnings.length = 0;
   normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }), warn);
   assert.equal(warnings.length, 0, "no systemMessage → no warning");
+
+  // A decision-less warning (review-proof-guard's loud fail-open) is forwarded
+  // to warn and never reaches Codex as hook output.
+  warnings.length = 0;
+  assert.equal(normalizeHookOutput(JSON.stringify({ systemMessage: "⚠ check SKIPPED" }), warn), "");
+  assert.deepEqual(warnings, ["⚠ check SKIPPED\n"], "warning-only payload forwarded once");
+
+  // Anything beyond a bare systemMessage is passed through unchanged.
+  warnings.length = 0;
+  const withDeny = JSON.stringify({ systemMessage: "x", hookSpecificOutput: { permissionDecision: "deny" } });
+  assert.equal(normalizeHookOutput(withDeny, warn), withDeny, "a deny next to a warning is preserved");
+  assert.equal(normalizeHookOutput("[]", warn), "[]", "non-object output is preserved");
+  assert.equal(warnings.length, 0);
 }
 assert.equal(
   resolveSharedHook(root, ".claude/hooks/sql-safety.mjs"),
