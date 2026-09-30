@@ -144,6 +144,22 @@ both `PREVIEW_SEASON_PROOF_PASS` and `RECEIPT_GATE_NARROWING_PROOF_PASS`, before
 when other chains run. A green smoke run is therefore NOT evidence for these files; only the two
 container provers are. (CodeRabbit on the field-season delivery PR, 2026-09-28.)
 
+**QUIET-DATABASE CHECK before `20260914101300` (phase 2).** Its preflight refuses with
+`GENERIC_FIELD_CUTOVER_NOT_QUIET` while ANY other backend, background workers included, has an
+open transaction. That guard stays exactly as written; never narrow it. Right before the apply,
+run this read-only query and apply only when it returns no rows:
+
+```sql
+SELECT pid, backend_type, application_name, state, xact_start
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND pid <> pg_backend_pid()
+  AND xact_start IS NOT NULL;
+```
+
+The query shows who is holding a transaction open. The migration's own gate is still what enforces
+the rule. (CodeRabbit full review of PR #843, 2026-09-30.)
+
 **Why the effective stamp is not always the authored one.** Row 916
 (`20260904185900_refuse_null_job_field_acres`, PR #606) was recorded under the BARE ledger name
 `refuse_null_job_field_acres`, so the ordering guard synthesizes `<version>_<name>` —
