@@ -136,7 +136,6 @@
       "mcp__claude_ai_Supabase__deploy_edge_function",
       "mcp__Vercel__deploy_to_vercel",
       "mcp__Vercel__update_project_deployment_protection",
-      "Bash(gh pr merge:*)",
       "mcp__github__push_files",
       "mcp__github__create_or_update_file",
       "mcp__github__delete_file",
