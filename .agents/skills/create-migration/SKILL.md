@@ -153,7 +153,7 @@ Docs updated:
     scripts/apply-migration-file.mjs, after the PR's final CodeRabbit and
     Sol reviews are clean (Mason's autonomous-landing rule, 2026-09-26:
     non-destructive = no per-migration ask once the full proof + Sol gate
-    passes; destructive, data-overwriting or access-changing = only after Mason's Windows Hello approval of that exact file, `scripts/owner-approve-migration.mjs`). NEVER `supabase db push` and
+    passes; destructive, data-overwriting or access-changing = only after Mason's explicit yes in chat AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`)). NEVER `supabase db push` and
     NEVER the dashboard SQL editor — both bypass the review gate and are blocked.
     After a live apply that changes tables, columns, constraints, or
     status values, refresh the schema registry (/regen-schema-registry).
