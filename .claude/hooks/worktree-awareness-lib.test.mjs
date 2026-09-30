@@ -588,6 +588,7 @@ const oneCandidateHistory = [
 ].join("\n");
 const candidateWithoutHeader = validateParkedMigrationCrossReferences([PARKED_FORWARD], oneCandidateHistory, () => "-- ordinary migration\nSELECT 1;");
 eq(candidateWithoutHeader.state, "unknown", "correction guard fails loud for a candidate history row without its status header");
+ok(candidateWithoutHeader.reason.includes(PARKED_FORWARD.toLowerCase()), "candidate mismatch diagnostic names the unverified migration without accepting it");
 const duplicateHistory = localCandidateMigrationPathsFromHistory(`${mergedHistory}\n| 999 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260729231031_vendor_bill_period_close_lock.sql\`. |`);
 eq(duplicateHistory.state, "unknown", "duplicate candidate history rows are not silently deduped");
 eq(localCandidateMigrationPathsFromHistory(null).state, "unknown", "unreadable history is PARKED STATE UNKNOWN");
@@ -663,7 +664,7 @@ const currentCrossReference = validateParkedMigrationCrossReferences(
   readCanonicalBlob,
   sha256Text,
 );
-eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
+eq(currentCrossReference.state, "known", `repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row: ${currentCrossReference.reason || "no unknown reason"}`);
 // Independent count, deliberately not the lib's parser: how many distinct
 // migration files does the history file itself mark LOCAL CANDIDATE right now?
 // Hard-coding a number goes stale the moment a candidate is applied live (all

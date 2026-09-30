@@ -1,7 +1,8 @@
 # Known Issues — Consolidated
 
 **Last verified: 2026-09-26 against the live migration ledger** (a read-only snapshot of the ledger
-taken that day; the `20260914100800` apply below was read live on 2026-09-27). Every entry's status
+taken that day; the `20260914100800` apply below was read live on 2026-09-27, and the
+`20260914100900` apply was read live the evening of 2026-09-27, Chicago time). Every entry's status
 (open, or fixed/applied/closed) was re-checked on 2026-09-26 against that snapshot and against `main`,
 except where an entry says otherwise; the detailed evidence inside an entry keeps its own date and
 was not all re-measured.
@@ -10,10 +11,12 @@ was not all re-measured.
   (`100100`–`100400` on 2026-09-21, `100500` and `100600` on 2026-09-22), the customer-document
   fix `20260914100700_customer_document_bytes_server_only` (2026-09-26, ledger `20260926163005`), and
   the transfer intent wrapper `20260914100800_bind_transfer_invoice_intent` (2026-09-27, ledger
-  `20260927060531`).
-- **Still parked (written, not applied):** `20260914100900_repair_commission_history_label_snapshots`
-  — see the PARKED entry below. Other parked files (for example PR #800's customer-document fix) are
-  named in their own entries.
+  `20260927060531`), and the label repair `20260914100900_repair_commission_history_label_snapshots`
+  (the evening of 2026-09-27 Chicago time, ledger `20260928025520`). The whole commission cohort
+  `20260914100100`..`20260914100900` is now live — see the RESOLVED entry below.
+- **Nothing from the commission cohort is still parked.** Other parked files (for example PR #800's
+  customer-document fix, and the four field-season candidates `20260914101000`..`20260914101300`
+  carried by the open field-season delivery PR) are named in their own entries.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -30,6 +33,93 @@ with `where name ~ '^[0-9]{14}'`.
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN 2026-09-12 — filed-season date-edit guard is not deployed (field-season delivery PR)
+
+**Status 2026-09-28:** Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session until Mason approves that exact file with Windows Hello (owner-approval route, PR #845). **Order changed by Mason on 2026-09-30:** the delivery PR merges FIRST (its app changes are backward-compatible: a client-side filed-season date guard and plain-English error mapping, using only existing columns). The four migrations then apply from the owner-approval PR's checkout once main is merged into it. The landing gate needs the migration committed at the HEAD of an open, CodeRabbit-approved, Sol-cleared PR, not the PR that introduced it; `20260914100900` was applied the same way. After this PR merges, no PR adding a new migration may merge or apply before `20260914101300` is live. Until then a read-only daily check flags any invoice dated outside its filed season (baseline 2026-09-28: 13 invoices, none outside).
+
+PR #599 merged September 11 with invoice-date season stamping and preview parity. Its
+original migrations are already live and must not be reapplied. The later filed-season edit
+guard is not part of that merge: September 12 read-only live inspection confirms its helpers
+and invoice trigger are absent. A separate current-main candidate adds preview refusal and
+table-level protection against changing the filed season or crossing its date boundary.
+Fresh review also found and closed a restoration bypass in that candidate; the disposable
+proof observes restore-plus-date and restore-only rejection, valid corrected restoration,
+and targeted removal of the new check reproducing the bypass. This is local proof, not deployment.
+
+Fresh whole-branch review of local corrected commit `d93106e8e` then found a HIGH creation
+bypass through generic `save_invoice`, which the UPDATE-only trigger misses. Root reproduced
+it through the public authenticated RPC. Compatibility review rejected a universal INSERT
+guard because legitimate job/blend creators carry source season with today's invoice date.
+The earlier one-phase refusal in `20260914101200_refuse_generic_field_invoice_creation.sql`
+then failed the added COMMITTED-retry transition regression (Sol/high `f6cb05b369`, 18:15Z).
+It remains NOT APPLIED and is now repurposed as phase 1: preserve original generic creation,
+below-cost and key-only receipt semantics while installing a fail-fast shared barrier,
+transitional READ COMMITTED requirement and fresh V1 catalog fence. New phase 2,
+`20260914101300_finish_generic_field_invoice_cutover.sql`, requires phase 1 separately
+committed, no old open/prepared work and no still-valid generic receipt before installing
+NEW-field refusal. Refusal leaves existing legitimate retries working until natural expiry.
+Do not manufacture actor/payload bindings for legacy generic receipts or delete/backfill them.
+Both phases pin the original OID/defaults/owner/search path/ACL and leave source creators alone.
+Corrected full disposable transition/concurrency/mutation proof passed with
+`PREVIEW_SEASON_PROOF_PASS` and both registered business-chain `SMOKE_PASS_ROLLBACK`
+markers. Published corrected head `7a0ed406b1` subsequently passed exact-head Sol/high
+CLEAN and full GitHub implementation/SQL/Windows checks. Both original Codex cutover
+threads have published-head runtime/proof dispositions and are resolved. Current-head
+Codex P2 `3998769135` also requests an explicit LF rule for phase two; the metadata-only
+local correction is verified, but its next current-main exact-head proof/publication
+and actual CodeRabbit review remain pending. The edit guard and both cutover phases
+remain unapplied. September 13 read-only checks reconfirm original live function pins,
+absent guard helpers/trigger and no valid generic receipts or active mixed-season/date
+mismatch cases now. This is not a future apply guarantee. Neither the earlier
+`d93106e8e` nor `f6cb05b369` BLOCKERS is clearance for any later candidate.
+
+The operative decision is in `DECISION_LOG.md` (September 8 continuation). Delivery and live
+apply remain separate gates. The session closeout and still-open audit follow-ups are recorded
+in `docs/handoffs/2026-09-12-pr-comment-session-closeout.md`; historical audit counts do not
+constitute a current defect list or clearance of the remaining P2 inventory.
+
+**SCOPE OF THE TWO CUTOVER PHASES — read this before quoting them.** Phases 1 and 2 close
+`public.save_invoice(jsonb,jsonb,text)` and nothing else. Both pin, fence and replace that one
+function by name and OID. "Generic field-invoice creation is refused" is therefore true of
+`save_invoice` and **NOT true of the database as a whole**: the order-pipeline RPCs remain an open
+creation path, tracked as CRX-LIFE-001 immediately below. Neither the migration filename
+`20260914101200_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
+`finish_generic_field_invoice_cutover` should be read as a claim about any other entry point.
+
+## OPEN 2026-09-20 — CRX-LIFE-001: a sales rep can create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
+
+**Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
+`main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of
+the season-guard candidate on 2026-09-20 and is recorded here because that PR's cutover phases make
+a scoped claim that could otherwise be misread as covering it (see the scope note above).
+
+`create_invoice_from_order(uuid, uuid, text, text)` and `create_split_invoices_from_order(...)` both
+accept a caller-supplied `p_invoice_type text DEFAULT 'chemical_sale'` and insert it into `invoices`
+**unchanged**, with no allow-list and no rejection of `field_application`:
+
+- `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql:108` and `:122`
+- `supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql:157` and `:426`
+- `supabase/migrations/20260719044912_trust_only_post_revoke_split_provenance.sql:382`
+
+Both retain `GRANT EXECUTE` to `authenticated`, and their internal role checks admit **admins and
+sales reps** — ordinary application actors, not database owners. So an authenticated sales rep can
+pass `p_invoice_type => 'field_application'` and produce an order-backed field-application invoice
+with no field, grower-share, job, blend-ticket or season workflow behind it. That breaks the
+documented invariant that field-application invoices never pass through the order pipeline, and can
+corrupt AR, commissions, field reporting and the field-app lifecycle assumptions.
+
+`20260620210000_field_app_invoice_type_lock_trigger` does **not** cover this. It fires only on
+`UPDATE` across the `field_application` boundary, never on `INSERT`.
+
+**Exposure is not yet measured.** No live read has been taken of how many `field_application`
+invoices carry an `order_id`, so the blast radius is unknown; that read needs Mason's approval at
+the time. **Fix shape:** a new migration refusing `field_application` in both order RPCs, plus an
+INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
+reviewed change with its own container proof — not as an add-on to the season guards. Awaiting
+Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped season closure first
+with this gap documented. (The original September 30 target was superseded by his 2026-09-28
+decision to land the four field-season migrations after 2026-10-01; see the entry above.)
 
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 
@@ -101,9 +191,21 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   must every stored customer fact cite a `customer_interaction`?
   (Source: `docs/loops/crm-relationship-intelligence-ledger.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/loops/crm-relationship-intelligence-ledger.md`).)
 
-## PARKED — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots` (written, NOT applied as of 2026-09-27)
+## RESOLVED 2026-09-27 (was PARKED; `20260914100900` applied live as ledger `20260928025520`) — the last commission-cohort migration: `20260914100900_repair_commission_history_label_snapshots`
 
-`20260914100900` is the only cohort file not applied. The transfer intent wrapper
+**Status (2026-09-27 evening, America/Chicago):** APPLIED LIVE under ledger version
+`20260928025520` (UTC, 2026-09-28 02:55:20), from PR #832's branch checkout (PR #832 has since been
+replaced by the open field-season delivery PR); a read-only live read right after took the ledger to 1013 rows and
+confirmed: `public.record_commission_earned_state()` body md5 `5623b0d31181d357b303a36e563a77aa`,
+SECURITY DEFINER, ACL `{postgres=X/postgres}`; settlement recorder and ledger mutation guard
+unchanged; both recorder triggers enabled; 34 `revised` correction rows appended to
+`commission_earned_state_ledger` (35 -> 69 rows); latest labels hold 0 `[Unknown customer]` and 0
+UUID-shaped source numbers; 35 commissions and 8 commission payments unchanged, none posted, 0
+settlement events. The whole cohort `20260914100100`..`20260914100900` is live, and it is the
+effective ordering high-water. `.claude/schema-registry.json` still records only through `100700`.
+Everything below is the pre-apply record, kept as history.
+
+(Historical, before the 2026-09-27 evening apply.) `20260914100900` is the only cohort file not applied. The transfer intent wrapper
 `20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 under ledger version
 `20260927060531` (read live that day), and everything else in the cohort (`20260914100100`–`100700`)
 is live. Read the boundary block at the top of `docs/reference/migration-history.md` before any
@@ -268,7 +370,8 @@ time.
   deliberately below the eight pending `20260914100*` migrations, since the pending-set guard in
   `.claude/hooks/migration-pending-lib.mjs` refuses an apply while an **older** migration is pending.
   **Stale as of 2026-09-27:** `20260914100100`–`100800` have since applied live (only `100900`
-  remains parked), so this stamp now sorts below the live ordering high-water and the file
+  remained parked, and it too applied live the evening of 2026-09-27, ledger `20260928025520`, so
+  the whole cohort is now live), so this stamp now sorts below the live ordering high-water and the file
   would need a restamp before any apply.
 - Superseded: the earlier branch `claude/bind-adjust-inventory-receipt-delivery-20260917` HEAD
   `143da828f` (unpushed) **still cannot be applied** — it edits an applied migration, and its
@@ -2303,7 +2406,8 @@ Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-s
 ## 2. Parked migrations (written, not applied)
 
 The current parked set is recorded in `docs/reference/migration-history.md` (rows marked LOCAL
-CANDIDATE … NOT APPLIED) and in the PARKED entry at the top of this file. The rows below still need a
+CANDIDATE … NOT APPLIED). (The commission-cohort PARKED entry near the top of this file that this
+sentence used to name resolved on 2026-09-27, when `20260914100900` applied live.) The rows below still need a
 warning: two superseded staging files that must not be applied, one open finding about the dispatch
 sync triggers, the shelved earmark engine, and a reminder to check other worktrees. Other rows that
 have since been applied, resolved or retired moved to the archive on 2026-09-26.
@@ -2586,6 +2690,9 @@ block in `docs/reference/migration-history.md` before ordering anything.**
 **Superseded 2026-09-27:** `20260914100100`–`100800` have since applied live; only `100900` is
 still parked. The field-app season files, restamped `20260914101000`–`101300`, are carried by open
 PR #793 (it replaced PR #754, closed unmerged 2026-09-21); they are not on `main`.
+**Update 2026-09-27 evening:** `20260914100900` applied live too (ledger `20260928025520`), so the
+whole `20260914100100`..`20260914100900` cohort is live and nothing from it is parked. The
+field-season files are now carried by the open field-season delivery PR and remain unapplied.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,
@@ -5168,8 +5275,9 @@ with JWT enforcement and rejects supplier price/product lists before OCR.
 
 **SUPERSEDED 2026-09-26 — kept as the historical record only.** These paragraphs used to sit at the top
 of this file as stacked status headers. The current status is the header at the top. In particular the
-first paragraph below is stale: `20260914100100`–`100800` have all applied live, and only `100900`
-remains parked (see the PARKED entry at the top of this file).
+first paragraph below is stale: `20260914100100`–`100800` have all applied live, and `100900`,
+the last one, applied live the evening of 2026-09-27 (ledger `20260928025520`; see the RESOLVED
+entry for it near the top of this file), so the whole cohort is live.
 
 Six local commission candidates (`20260914100200` through `20260914100900`, excluding superseded `20260905200500`
 and the separate transfer wrapper below) remain unapplied;

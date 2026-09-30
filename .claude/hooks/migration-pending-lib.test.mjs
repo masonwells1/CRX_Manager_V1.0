@@ -21,6 +21,9 @@ import {
   fileStamp,
   orderingStamp,
   appliedIndex,
+  stampIdentifies,
+  namesOnlyStamps,
+  matchStampEvidence,
   hasAheadOfPendingMarker,
   checkPendingMigrations,
 } from "./migration-pending-lib.mjs";
@@ -77,6 +80,177 @@ ok(orderingStamp("undated_hotfix.sql") === null, "a name with no leading date ha
   const { stamps, slugs } = appliedIndex(["20260728182141_20260728123224_secdef_pricing"]);
   ok(stamps.has("20260728182141") && stamps.has("20260728123224"), "appliedIndex captures both stamps");
   ok(slugs.has("secdef_pricing"), "appliedIndex captures the slug");
+}
+
+// ---------------------------------------------------------------------------
+// STAMP COLLISION — a 14-digit stamp is not a unique key (CodeRabbit on PR #787)
+// ---------------------------------------------------------------------------
+// Stamps here are hand-written and get reassigned during restamping, so an
+// applied row and an unapplied local candidate can carry the SAME stamp while
+// being different migrations. Accepting that as "applied" drops a genuinely
+// pending migration from the set.
+{
+  const { stampSlugs } = appliedIndex([
+    "20260905210000_other_migration",
+    "20260728182141_20260728123224_secdef_pricing",
+    "20260812130145",
+  ]);
+  ok(stampIdentifies(stampSlugs, "20260905210000", "other_migration"),
+    "a stamp identifies the row whose slug agrees");
+  ok(!stampIdentifies(stampSlugs, "20260905210000", "shared_recorder"),
+    "the SAME stamp does NOT identify a different migration");
+  ok(stampIdentifies(stampSlugs, "20260728123224", "secdef_pricing"),
+    "a renumbered row's trailing stamp still identifies its file by slug");
+  ok(stampIdentifies(stampSlugs, "20260812130145", "fix_thing"),
+    "a slugless row still vouches for its file — nothing contradicts it");
+  ok(!stampIdentifies(stampSlugs, "20260101000000", "anything"),
+    "an unknown stamp identifies nothing");
+  ok(!stampIdentifies(null, "20260905210000", "other_migration"),
+    "a missing index identifies nothing rather than throwing");
+}
+
+// A purely NUMERIC suffix is still a name. Classifying it as "no name" would let
+// 20260905210000_12345 and 20260905210000_67890 vouch for each other and bring
+// the collision straight back. (CodeRabbit on PR #788.)
+{
+  ok(namesOnlyStamps("") === true, "an empty slug names nothing");
+  ok(namesOnlyStamps("20260812130145") === true, "a bare stamp names nothing");
+  ok(namesOnlyStamps("20260728182141_20260728123224") === true, "stamps only, still no name");
+  ok(namesOnlyStamps("20260812130145_") === true, "a trailing separator is not a name");
+  ok(namesOnlyStamps("12345") === false, "a short numeric suffix IS a name");
+  ok(namesOnlyStamps("secdef_pricing") === false, "a descriptive slug is a name");
+  ok(namesOnlyStamps("fix_20260812130145") === false, "a stamp after a word is part of a name");
+
+  const { stampSlugs } = appliedIndex(["20260905210000_12345"]);
+  ok(stampIdentifies(stampSlugs, "20260905210000", "12345"),
+    "the numeric-suffix row identifies its own file");
+  ok(!stampIdentifies(stampSlugs, "20260905210000", "67890"),
+    "a numeric suffix does NOT vouch for a different numeric suffix on the same stamp");
+
+  const numericCollision = checkPendingMigrations({
+    name: "20260905220000_new_candidate",
+    sql: "SELECT 1;\n",
+    appliedNames: [
+      "20260819232000_draw_down_cutover_barrier",
+      "20260905210000_12345",
+    ],
+    trackedFiles: [
+      "supabase/migrations/20260819232000_draw_down_cutover_barrier.sql",
+      "supabase/migrations/20260905210000_67890.sql",
+      "supabase/migrations/20260905220000_new_candidate.sql",
+    ],
+    baselineHighWater: BASELINE,
+  });
+  ok(numericCollision.ok === false,
+    "a numeric-suffix candidate sharing an applied stamp is still reported");
+  ok(JSON.stringify(numericCollision).includes("20260905210000_67890"),
+    "the numeric-suffix pending migration is named in the verdict");
+}
+
+// ONE APPLIED ROW SETTLES AT MOST ONE FILE (CodeRabbit on PR #791).
+// A renumbered row carries BOTH stamps with the SAME slug, so each of two tracked files looks
+// applied from that single row. Settling both drops a genuinely unapplied file from the pending set.
+{
+  const rowsOf = (names) => appliedIndex(names).rows;
+
+  const compound = rowsOf(['20260905200000_20260905100000_shared']);
+  const twoFiles = [
+    { stem: '20260905100000_shared', slug: 'shared', stamp: '20260905100000' },
+    { stem: '20260905200000_shared', slug: 'shared', stamp: '20260905200000' },
+  ];
+  const matched = matchStampEvidence(compound, twoFiles);
+  ok(matched.size === 1, 'one compound-stamp row settles exactly ONE of the two files, not both');
+
+  // A bare-stamp row shared by two tracked files has the same shape.
+  const bare = rowsOf(['20260905100000']);
+  const sameStamp = [
+    { stem: '20260905100000_a', slug: 'a', stamp: '20260905100000' },
+    { stem: '20260905100000_b', slug: 'b', stamp: '20260905100000' },
+  ];
+  ok(matchStampEvidence(bare, sameStamp).size === 1, 'one bare-stamp row settles exactly ONE file');
+
+  // Two rows for two files still settle both — the fix must not over-abstain.
+  const twoRows = rowsOf(['20260905100000_shared', '20260905200000_shared']);
+  ok(matchStampEvidence(twoRows, twoFiles).size === 2, 'two rows settle two files');
+  ok(matchStampEvidence([], twoFiles).size === 0, 'no rows settle nothing');
+
+  // End to end: the unapplied twin must still be REPORTED.
+  const verdict = checkPendingMigrations({
+    name: '20260905300000_new_candidate',
+    sql: 'SELECT 1;\n',
+    appliedNames: [
+      '20260819232000_draw_down_cutover_barrier',
+      '20260905200000_20260905100000_shared',
+    ],
+    trackedFiles: [
+      'supabase/migrations/20260819232000_draw_down_cutover_barrier.sql',
+      'supabase/migrations/20260905100000_shared.sql',
+      'supabase/migrations/20260905200000_shared.sql',
+      'supabase/migrations/20260905300000_new_candidate.sql',
+    ],
+    baselineHighWater: BASELINE,
+  });
+  ok(verdict.ok === false,
+    'one row cannot settle both same-slug files; the leftover is still reported');
+  ok(/20260905100000_shared|20260905200000_shared/.test(JSON.stringify(verdict)),
+    'the unsettled same-slug migration is named in the verdict');
+}
+
+// A SAME-NAME ROW MUST BE SPENT BEFORE A BARE-STAMP ROW (CodeRabbit on PR #792).
+// Two rows carry the earlier file's stamp: a bare one, and a renumbered one that also NAMES it.
+// If the file spends the bare row, the same-name row stays unspent — still counted in slugCounts —
+// and the slug fallback then vouches for the LATER file, which it is no evidence for at all.
+{
+  const rows = appliedIndex(['20260905100000', '20260910000000_20260905100000_shared']).rows;
+  const earlier = [{ stem: '20260905100000_shared', slug: 'shared', stamp: '20260905100000' }];
+  // Row 1 is the one that names it; row 0 is the bare stamp.
+  ok(matchStampEvidence(rows, earlier).get('20260905100000_shared') === 1,
+    'a file spends the row that NAMES it, not the bare-stamp row that merely shares its number');
+
+  // End to end, with a LATER candidate so the unevidenced file is genuinely in the way.
+  const verdict = checkPendingMigrations({
+    name: '20260906000000_next',
+    sql: 'SELECT 1;\n',
+    appliedNames: ['20260905100000', '20260910000000_20260905100000_shared'],
+    trackedFiles: [
+      'supabase/migrations/20260905100000_shared.sql',
+      'supabase/migrations/20260905200000_shared.sql',
+    ],
+    baselineHighWater: '20260901000000',
+  });
+  ok(verdict.ok === false,
+    'a bare row must not free the same-name row to vouch for a file it is no evidence for');
+  ok((verdict.pending ?? []).includes('20260905200000_shared'),
+    'the unevidenced later migration is named as pending');
+
+  // The fix must not over-abstain: when the bare row is the ONLY evidence, it still settles.
+  const bareOnly = matchStampEvidence(appliedIndex(['20260905100000']).rows, earlier);
+  ok(bareOnly.get('20260905100000_shared') === 0,
+    'with no same-name row, the bare-stamp row still settles the file');
+}
+
+// The end-to-end consequence: a candidate sharing an applied row's stamp must
+// still be REPORTED, not silently treated as applied.
+{
+  const collision = checkPendingMigrations({
+    name: "20260905220000_new_candidate",
+    sql: "SELECT 1;\n",
+    appliedNames: [
+      "20260819232000_draw_down_cutover_barrier",
+      // Different migration, same stamp as the pending candidate below.
+      "20260905210000_other_migration",
+    ],
+    trackedFiles: [
+      "supabase/migrations/20260819232000_draw_down_cutover_barrier.sql",
+      "supabase/migrations/20260905210000_shared_recorder.sql",
+      "supabase/migrations/20260905220000_new_candidate.sql",
+    ],
+    baselineHighWater: BASELINE,
+  });
+  ok(collision.ok === false,
+    "an unapplied candidate sharing an applied row's stamp is still reported, not dropped");
+  ok(JSON.stringify(collision).includes("20260905210000_shared_recorder"),
+    "the stamp-colliding pending migration is named in the verdict");
 }
 
 // ---------------------------------------------------------------------------

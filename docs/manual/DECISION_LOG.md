@@ -110,11 +110,11 @@ impossible one. (b) The daily summary reports
 applies as the agents recorded them in `docs/changelog.d/`; it holds no database credential, and
 adding one is a secrets decision that stays Mason's. (c) The plumbing PR that introduced this changed
 the merge gate and lifecycle workflow themselves, so it cannot pass its own new rules: Mason merges it
-by hand, once. (d) `.claude/settings.json` still lists `Bash(gh pr merge:*)` in its `ask` tier,
-which `defaultMode: "dontAsk"` turns into a silent denial; the agent could not change its own permission
-file (the auto-mode classifier refused it as self-modification), so that one line is Mason's to change
-before agents can merge from an ordinary session. Until then the merge gate is correct but the harness
-denies the command first.
+by hand, once. (d) ~~`.claude/settings.json` still lists `Bash(gh pr merge:*)` in its `ask` tier,
+which `defaultMode: "dontAsk"` turns into a silent denial.~~ **Closed 2026-09-27:** after #804 merged,
+Mason approved in chat ("Yes do the settings PR") removing that one `ask` entry, and he merges that
+PR by hand. `pr-merge-guard.mjs` is now the only thing deciding a `gh pr merge`. The GitHub-MCP
+`merge_pull_request` tool is unchanged and stays in `ask`; agents merge with `gh pr merge`.
 
 ## 2026-09-25 — GPT-6 guidance: one priority order, Astra reviews plans, model IDs live in one reference
 
@@ -194,6 +194,13 @@ points agree, the Codex mirror imports the shared validator rather than duplicat
 load-bearing — and caught the merge chicken-and-egg above, an over-authorized unattended merge job
 (since made review-only), and several overclaims now corrected in the changelog.
 
+## 2026-09-22 — the field-app row trigger keeps its group-wide date check; CodeRabbit's per-invoice relaxation is refuted
+
+**Source:** Mason, 2026-09-22, after two adversarial Claude reviews of PR #762 and a measured PostgreSQL 17 reproduction.
+**Decision:** `guard_field_app_invoice_season_date()` keeps its group-wide assertion in `20260914101000` and `20260914101100`; the per-invoice relaxation (CodeRabbit Major, PR #758) is reverted and refuted.
+**Operative rule:** do not narrow it to the written row. It refuses some edits the per-invoice rule would allow (fail-closed, never wrong money) so a mixed-season group stays recoverable; the relaxation made a void-and-reissue-only stranded state reachable in one edit. The 2026-09-04 and 2026-09-08/13 decisions and the one-window APPLY-WINDOW RULE are unchanged.
+**Evidence:** `docs/reference/migration-history.md`, "Group-wide date check: the 2026-09-22 measurement"; `prove-preview-field-app-season.mjs` PHASE 8h-mixed / 8i-mixed asserts both directions.
+
 ## 2026-09-20 — everyday code review moves to Luna at xhigh; Sol becomes a once-at-the-end gate
 
 [Update 2026-09-26: the two-tier shape below still stands, but its model names are **superseded by
@@ -226,6 +233,13 @@ starts, so doing so destroys a valid Sol proof and mints one the guards reject. 
 review with `-C <repo>` on an advisory path: repo agent-instruction files tell the reviewer to run a
 review and it self-recurses (observed 2026-08-23); Step 3A runs from a neutral directory against a
 frozen diff file with the CRX failure classes inlined. Do not "fix" the guards to accept Luna.
+
+## 2026-09-08 — field-application date edits stay inside the invoice's filed season
+
+**Source:** Mason's "continue 599" (September 8 Chicago), approving Codex's preceding recommendation to keep season immutability and refuse edits that cross October 1; exchange rechecked September 13.
+**Decision:** an existing field-application invoice keeps its filed season; its date may move within that season but not across October 1, and every writer refuses a change to the filed season. New generic invoices take their season from their date (dedicated job/blend creators are the documented exception); preview and save follow the same rule. An unchanged stored date is not a date edit (September 13).
+**Scope:** supersedes only the September 4 accepted consequence of editing across October 1; no re-seasoning, group price unification, or revival of #591.
+**Full source and clarification:** `docs/reference/migration-history.md`, "Filed-season rule: the 2026-09-08 source and 2026-09-13 clarification".
 
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 

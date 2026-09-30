@@ -1,15 +1,18 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-09-27 for the migration ledger only (read-only ledger query against project
-`rhyzpcqhnizqbxphqdkr`: 1012 rows / 1005 distinct names, `max(version)` `20260927060531`). Every
+**Last verified:** 2026-09-27 evening (America/Chicago) for the migration ledger only (read-only
+ledger query against project `rhyzpcqhnizqbxphqdkr` right after the `20260914100900` apply: 1013
+rows, `max(version)` `20260928025520`; the earlier 2026-09-27 read had 1012 rows / 1005 distinct
+names, `max(version)` `20260927060531`). Every
 other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-09-27)
 
-- **Effective ordering high-water: `20260914100800_bind_transfer_invoice_intent`** (ledger
-  version `20260927060531`, applied live 2026-09-27). The effective ordering high-water is the
+- **Effective ordering high-water: `20260914100900_repair_commission_history_label_snapshots`**
+  (ledger version `20260928025520`, UTC; applied live the evening of 2026-09-27 Chicago time). It
+  replaced `20260914100800_bind_transfer_invoice_intent` (ledger `20260927060531`). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -21,18 +24,20 @@ ships or quarterly, whichever comes first.
   `20260914100400_enforce_commission_payment_business_date` (`20260921141901`),
   `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`),
   `20260914100600_latest_commission_recipient_label` (`20260922020038`),
-  `20260914100700_customer_document_bytes_server_only` (`20260926163005`), and
-  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`).
-- **Written but NOT applied (parked on `main`):** `20260914100900_repair_commission_history_label_snapshots`.
-  Applying it goes through the `AGENTS.md` › Safety and Protected Delivery migration rules. While it
-  waits on `main`, the pending-migration guard refuses a later-stamped file that steps over it unless
-  that file carries an explicit `ahead-of-pending` marker.
+  `20260914100700_customer_document_bytes_server_only` (`20260926163005`),
+  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`), and
+  `20260914100900_repair_commission_history_label_snapshots` (`20260928025520`, applied from PR
+  #832's branch checkout; #832 has since been replaced by the open field-season delivery PR).
+- **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
+  `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
+  one file written but not applied.) The four field-season candidates `20260914101000`..`20260914101300`
+  are still unapplied and are not on `main`; see "Field-season delivery" below.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
 - **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-09-26 by
   merged PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100` through
-  `100700` but **not** `20260914100800`. Refresh it before relying on it for ordering.
+  `100700` but **not** `20260914100800` or `20260914100900`. Refresh it before relying on it for ordering.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration
@@ -63,7 +68,8 @@ home. Per-migration pins, proofs and postflight live in `docs/reference/migratio
 (row 930, ledger `20260920052149`, 2026-09-20; landed on `main` by PR #739 — #664, which first
 carried the file, closed unmerged — and the `20260908140000_number_generators_year_chicago` six-generator year fix for issue #617 applied
 just before it under `20260920051333`), `20260914100400` (2026-09-21), `20260914100600`
-(2026-09-22), `20260914100700` (2026-09-26) and `20260914100800` (2026-09-27). Counters such as row counts and `max(version)`
+(2026-09-22), `20260914100700` (2026-09-26), `20260914100800` (2026-09-27) and `20260914100900`
+(2026-09-27 evening, ledger `20260928025520`). Counters such as row counts and `max(version)`
 move with every apply by any lane; a stale count is expected drift, not evidence of a problem.
 
 **The 2026-09-14 commission cohort.** The set was restamped together on 2026-09-05 and again on
@@ -78,11 +84,16 @@ pre-cutover body is refused and retried); and make balance-report recipient labe
 latest earned-state observation at the requested cutoff, including paid-only rows. `100100`
 through `100600` are applied, and so is the transfer intent wrapper that followed them,
 `20260914100800_bind_transfer_invoice_intent` (formerly `20260908130800`; applied 2026-09-27, ledger
-`20260927060531`). The one still parked:
+`20260927060531`). The last one, parked until it applied live the evening of 2026-09-27 (ledger
+`20260928025520`):
 - `20260914100900_repair_commission_history_label_snapshots` (renumbered from `20260905020100`, and
   briefly `20260908130900` on PR #638's closed branch) appends corrected labels for 34 un-settled
   opening commission snapshots. It is last on purpose: it refuses to run once any commission payment
-  has been posted, and running last means that refusal stops nothing else.
+  has been posted, and running last means that refusal stops nothing else. Post-apply read-only
+  checks: 34 `revised` correction rows appended to `commission_earned_state_ledger` (35 -> 69 rows);
+  the latest labels hold 0 `[Unknown customer]` and 0 UUID-shaped source numbers; the 35
+  commissions and 8 commission payments unchanged, none posted, 0 settlement events. Pins and the
+  recorder checks are in history row 915.
 
 **`20260908130000` hold-receipt binding (applied 2026-09-15).** Applied with Mason's explicit
 in-chat approval and a fresh CLEAN `gpt-5.6-sol`/high apply proof. Post-apply checks confirmed the
@@ -181,6 +192,13 @@ finished; its guard-policy window ran to 2026-09-25. Of its rows, #599, #630, #6
 issue #747). #605, #612 and #631 are still open. Its follow-up about locked
 pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff recovery steps are in
 `docs/workflows/INVENTORY_RULES.md`. For the live list, run `gh pr list --state open`.
+
+**Field-season delivery (open).** The Oct-1 filed-season guard ships as four migrations,
+`20260914101000`..`20260914101300` (rows 931–934 in `docs/reference/migration-history.md`), all
+LOCAL CANDIDATES, not applied, carried by the open field-season delivery PR (branch `claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line; a fresh PR replaces it whenever `main` moves, because the CodeRabbit lifecycle gate pins head and base). They apply only after
+`20260914100900` (that precondition is now met: it applied live 2026-09-27 evening, ledger
+`20260928025520`), in ascending stamp order, with `101000` and `101100` in one window; see the
+APPLY-WINDOW and COMMISSION-FIRST rules in that file. Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session until Mason approves that exact file with Windows Hello (owner-approval route, PR #845). **Order changed by Mason on 2026-09-30:** the delivery PR merges FIRST (its app changes are backward-compatible: a client-side filed-season date guard and plain-English error mapping, using only existing columns). The four migrations then apply from the owner-approval PR's checkout once main is merged into it. The landing gate needs the migration committed at the HEAD of an open, CodeRabbit-approved, Sol-cleared PR, not the PR that introduced it; `20260914100900` was applied the same way. After this PR merges, no PR adding a new migration may merge or apply before `20260914101300` is live.
 
 ## Recent production deployments
 
