@@ -333,6 +333,7 @@ const crStatus = (description, createdAt, { state = "success", id = 1, sha = FIX
   creator: { login, type },
 });
 const pr820 = {
+  number: 820,
   headRefOid: FIX,
   reviews: [
     cr("APPROVED", APPROVED_ON, "2026-09-27T06:24:24Z"),
@@ -340,6 +341,11 @@ const pr820 = {
     { author: { login: "masonwells1" }, state: "COMMENTED", commit: { oid: FIX }, submittedAt: "2026-09-27T06:53:49Z", body: "" },
   ],
 };
+// GitHub's real `GET …/commits/970052fc…/pulls` answer (read 2026-09-30): the
+// fix commit belongs to #820 and no other PR. Every follow-up case below uses
+// that association unless it is testing the association itself.
+const PULLS_820 = [{ number: 820, state: "closed", head: { sha: FIX } }];
+const followUp = (pr, statuses, pulls = PULLS_820) => coderabbitFollowUpClearedHead(pr, statuses, pulls);
 const statuses820 = [
   crStatus("Review completed", "2026-09-27T07:31:22Z", { id: 5 }),
   crStatus("Review in progress", "2026-09-27T07:26:13Z", { state: "pending", id: 4 }),
@@ -357,75 +363,104 @@ const REAL_820_COMPLETED = {
   created_at: "2026-09-27T07:31:22Z", updated_at: "2026-09-27T07:31:22Z",
   creator: { login: "coderabbitai[bot]", id: 136622811, type: "Bot" },
 };
-ok(coderabbitFollowUpClearedHead(pr820, [REAL_820_COMPLETED]),
+ok(followUp(pr820, [REAL_820_COMPLETED]),
   "GitHub's real status object for #820's head (url ends in the commit SHA) clears it");
 ok(!coderabbitApprovedHead(pr820), "#820: the approval-only rule could never clear the post-approval fix (the bug)");
-ok(coderabbitFollowUpClearedHead(pr820, statuses820), "#820: a clean follow-up of the exact head after the approval clears it");
-ok(coderabbitFollowUpClearedHead(pr820, [...statuses820].reverse()), "list order does not matter; the newest status decides");
+ok(followUp(pr820, statuses820), "#820: a clean follow-up of the exact head after the approval clears it");
+ok(followUp(pr820, [...statuses820].reverse()), "list order does not matter; the newest status decides");
 // Stale approval carried forward: the head was never reviewed to completion.
-ok(!coderabbitFollowUpClearedHead(pr820, statuses820.slice(1)), "a head whose newest CodeRabbit status is 'in progress' is refused");
-ok(!coderabbitFollowUpClearedHead(pr820, statuses820.slice(2)), "a head whose newest CodeRabbit status is 'skipped' is refused");
-ok(!coderabbitFollowUpClearedHead(pr820, []), "a head with no CodeRabbit status is refused");
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T06:20:00Z")]),
+ok(!followUp(pr820, statuses820.slice(1)), "a head whose newest CodeRabbit status is 'in progress' is refused");
+ok(!followUp(pr820, statuses820.slice(2)), "a head whose newest CodeRabbit status is 'skipped' is refused");
+ok(!followUp(pr820, []), "a head with no CodeRabbit status is refused");
+ok(!followUp(pr820, [crStatus("Review completed", "2026-09-27T06:20:00Z")]),
   "a completion OLDER than the approval is not a follow-up of it");
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { state: "failure" })]),
+ok(!followUp(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { state: "failure" })]),
   "a non-success completion is refused");
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed.", "2026-09-27T07:31:22Z")]),
+ok(!followUp(pr820, [crStatus("Review completed.", "2026-09-27T07:31:22Z")]),
   "the description must be exactly 'Review completed'");
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "not-a-date")]), "an undated status is refused");
+ok(!followUp(pr820, [crStatus("Review completed", "not-a-date")]), "an undated status is refused");
 // A different SHA.
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { sha: APPROVED_ON })]),
+ok(!followUp(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { sha: APPROVED_ON })]),
   "a completion recorded on a different commit is refused");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, headRefOid: OLD }, statuses820), "statuses of another commit never clear this head");
+ok(!followUp({ ...pr820, headRefOid: OLD }, statuses820), "statuses of another commit never clear this head");
 // Forgery: a status's creator is the authenticated writer.
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { login: "masonwells1", type: "User" })]),
+ok(!followUp(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { login: "masonwells1", type: "User" })]),
   "a 'CodeRabbit' status written by a person does not count");
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { login: "github-actions[bot]" })]),
+ok(!followUp(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { login: "github-actions[bot]" })]),
   "a 'CodeRabbit' status written by a workflow token does not count");
-ok(!coderabbitFollowUpClearedHead(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { type: "User" })]),
+ok(!followUp(pr820, [crStatus("Review completed", "2026-09-27T07:31:22Z", { type: "User" })]),
   "the creator must be a Bot account");
-ok(!coderabbitFollowUpClearedHead(pr820, [...statuses820, crStatus("Review completed", "2026-09-27T07:40:00Z", { login: "masonwells1", type: "User", id: 9 })]),
+ok(!followUp(pr820, [...statuses820, crStatus("Review completed", "2026-09-27T07:40:00Z", { login: "masonwells1", type: "User", id: 9 })]),
   "a newer same-context status from anyone else refuses (fail closed)");
 // Approval followed by findings or an objection.
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T07:31:15Z", "**Actionable comments posted: 2**")] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T07:31:15Z", "**Actionable comments posted: 2**")] }, statuses820),
   "an approval followed by a follow-up review WITH findings is refused (#797/#818 order: review ~7s before the status)");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("CHANGES_REQUESTED", FIX, "2026-09-27T07:31:15Z", "x")] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [...pr820.reviews, cr("CHANGES_REQUESTED", FIX, "2026-09-27T07:31:15Z", "x")] }, statuses820),
   "an approval followed by CHANGES_REQUESTED is refused");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("DISMISSED", APPROVED_ON, "2026-09-27T07:00:00Z")] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [...pr820.reviews, cr("DISMISSED", APPROVED_ON, "2026-09-27T07:00:00Z")] }, statuses820),
   "a dismissed approval is not a standing approval");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T06:24:24Z", "Outside diff finding")] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T06:24:24Z", "Outside diff finding")] }, statuses820),
   "content submitted in the same second as the approval is refused");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "not-a-date", "")] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [...pr820.reviews, cr("COMMENTED", FIX, "not-a-date", "")] }, statuses820),
   "an undated CodeRabbit review could be a later finding, so it refuses");
-ok(coderabbitFollowUpClearedHead({ ...pr820, reviews: [...pr820.reviews,
+ok(followUp({ ...pr820, reviews: [...pr820.reviews,
   cr("COMMENTED", APPROVED_ON, "2026-09-27T06:24:30Z"), cr("COMMENTED", FIX, "2026-09-27T07:00:00Z", "   ")] }, statuses820),
   "empty thread-reply COMMENTED artifacts after the approval (#810/#816/#818 shape) do not block");
-ok(coderabbitFollowUpClearedHead({ ...pr820, reviews: [cr("CHANGES_REQUESTED", OLD, "2026-09-27T05:00:00Z", "x"), ...pr820.reviews] }, statuses820),
+ok(followUp({ ...pr820, reviews: [cr("CHANGES_REQUESTED", OLD, "2026-09-27T05:00:00Z", "x"), ...pr820.reviews] }, statuses820),
   "an objection the later approval superseded does not block");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [cr("CHANGES_REQUESTED", OLD, "2026-09-27T05:00:00Z", "x")] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [cr("CHANGES_REQUESTED", OLD, "2026-09-27T05:00:00Z", "x")] }, statuses820),
   "with no approval at all, a completed review is delivery, not clearance");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, reviews: [{ ...pr820.reviews[0], author: { login: "masonwells1" } }] }, statuses820),
+ok(!followUp({ ...pr820, reviews: [{ ...pr820.reviews[0], author: { login: "masonwells1" } }] }, statuses820),
   "only CodeRabbit's own approval can be followed up");
-ok(!coderabbitFollowUpClearedHead({ headRefOid: FIX }, statuses820), "a PR view without reviews fails closed");
-ok(!coderabbitFollowUpClearedHead(pr820, null), "an unreadable status list fails closed");
-ok(!coderabbitFollowUpClearedHead({ ...pr820, headRefOid: "" }, statuses820), "an unusable head fails closed");
+ok(!followUp({ headRefOid: FIX }, statuses820), "a PR view without reviews fails closed");
+ok(!followUp(pr820, null), "an unreadable status list fails closed");
+ok(!followUp({ ...pr820, headRefOid: "" }, statuses820), "an unusable head fails closed");
+// Codex P1 on #836: a status belongs to a COMMIT, not a pull request, so a
+// completion earned on one PR must not clear the same commit pushed to another.
+// GitHub's "PRs containing this commit" list binds the head to this PR alone.
+ok(!followUp(pr820, statuses820, [{ number: 820 }, { number: 999 }]),
+  "a head that also belongs to another PR is refused (the status may be that PR's review)");
+ok(!followUp({ ...pr820, number: 999 }, statuses820),
+  "a completion on a commit that belongs to a different PR does not clear this one");
+ok(!followUp(pr820, statuses820, []), "a head GitHub links to no PR is refused");
+ok(!followUp(pr820, statuses820, null), "an unreadable PR association fails closed");
+ok(!followUp(pr820, statuses820, [{}]), "an association entry without a number is refused");
+ok(!followUp({ ...pr820, number: undefined }, statuses820), "a PR view without its number fails closed");
+ok(!followUp({ ...pr820, number: "820x" }, statuses820), "a malformed PR number fails closed");
 
 // coderabbitClearedHead(): the one predicate every gate calls.
 {
   const calls = [];
-  const gh = (answer) => (args) => { calls.push(args); if (answer instanceof Error) throw answer; return answer; };
+  // Answers the two follow-up reads separately: the head's statuses and the
+  // pull requests that contain it.
+  const gh = (statusAnswer, pullsAnswer = JSON.stringify(PULLS_820)) => (args) => {
+    calls.push(args);
+    const answer = /\/pulls\?/.test(String(args[1])) ? pullsAnswer : statusAnswer;
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
   ok(coderabbitClearedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }, { gh: gh("[]") }) && calls.length === 0,
     "an exact-head approval clears without any GitHub read");
-  ok(coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820)) }), "#820 clears through the follow-up read");
-  eq(calls.at(-1), ["api", `repos/{owner}/{repo}/commits/${FIX}/statuses?per_page=100`], "the read asks for the exact head's statuses");
+  ok(coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820)) }), "#820 clears through the follow-up reads");
+  eq(calls.slice(-2), [
+    ["api", `repos/{owner}/{repo}/commits/${FIX}/statuses?per_page=100`],
+    ["api", `repos/{owner}/{repo}/commits/${FIX}/pulls?per_page=100`],
+  ], "the reads ask for the exact head's statuses and the PRs that contain it");
   ok(coderabbitClearedHead(pr820, { repo: "masonwells1/CRX_Manager_V1.0", gh: gh(JSON.stringify(statuses820)) }), "an explicit --repo is honoured");
-  eq(calls.at(-1)[1], `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/statuses?per_page=100`, "...and read from that repository");
+  eq(calls.slice(-2).map((args) => args[1]), [
+    `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/statuses?per_page=100`,
+    `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/pulls?per_page=100`,
+  ], "...and both reads come from that repository");
   const before = calls.length;
   ok(!coderabbitClearedHead({ headRefOid: FIX, reviews: [] }, { gh: gh(JSON.stringify(statuses820)) }) && calls.length === before,
     "no standing approval: refused without spending a GitHub read");
   ok(!coderabbitClearedHead(pr820, { gh: gh(new Error("HTTP 502")) }), "a failed status read refuses (fail closed)");
   ok(!coderabbitClearedHead(pr820, { gh: gh("not json") }), "an unparseable status read refuses");
   ok(!coderabbitClearedHead(pr820, { gh: gh("{}") }), "a non-list status answer refuses");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), new Error("HTTP 502")) }), "a failed PR-association read refuses");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), "not json") }), "an unparseable PR-association read refuses");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify([{ number: 820 }, { number: 836 }])) }),
+    "a head shared with another PR refuses through the gate predicate too");
   ok(!coderabbitClearedHead(pr820, { repo: "not a repo", gh: gh(JSON.stringify(statuses820)) }), "an unrecognizable --repo refuses");
   ok(!coderabbitClearedHead(pr820, {}), "no gh runner: only an exact-head approval can clear");
 }

@@ -894,9 +894,17 @@ function standingCodeRabbitApproval(reviews) {
   return laterContent ? null : approval;
 }
 
-async function inspectCodeRabbitFollowUp({ github, owner, repo, headSha, reviews, requestedAfter }) {
+async function inspectCodeRabbitFollowUp({ github, owner, repo, pullNumber, headSha, reviews, requestedAfter }) {
   const approval = standingCodeRabbitApproval(reviews);
   if (!approval) return null;
+  // A status belongs to a commit, not a pull request: the same head pushed to
+  // another PR carries that PR's CodeRabbit status too. Accept the completion
+  // only when GitHub links this head to this pull request and no other. One
+  // page: any PR besides this one refuses, so a second page could not help.
+  const association = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: headSha, per_page: 100 });
+  const pulls = association?.data;
+  if (!Array.isArray(pulls)) throw new Error('CodeRabbit follow-up pull request association was not an array');
+  if (pulls.length === 0 || !pulls.every((pull) => Number(pull?.number) === Number(pullNumber))) return null;
   // One page, newest first (GitHub's documented order); only the newest
   // CodeRabbit entry matters and it is sorted again below regardless.
   const response = await github.rest.repos.listCommitStatusesForRef({ owner, repo, ref: headSha, per_page: 100 });
@@ -948,7 +956,7 @@ async function inspectExactHeadCodeRabbitReview({ github, owner, repo, pullNumbe
         && (/^\*\*actionable comments posted:\s*\d+\*\*/.test(normalize(body)) || outsideDiffReport);
     });
     if (!review && requestedAfter !== null) {
-      const followUp = await inspectCodeRabbitFollowUp({ github, owner, repo, headSha, reviews, requestedAfter });
+      const followUp = await inspectCodeRabbitFollowUp({ github, owner, repo, pullNumber, headSha, reviews, requestedAfter });
       if (followUp) return { verified: true, reviewed: true, changesRequested: false, followUp: true, review: followUp.review };
     }
     if (review) {

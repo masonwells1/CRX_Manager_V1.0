@@ -485,6 +485,7 @@ function makeHarness({
   existingComments = undefined,
   checkRunsSequence = null,
   statusesSequence = null,
+  associatedPulls = [{ number: 42 }],
   resolvedWorkflowPath = '.github/workflows/ci.yml',
   resolvedWorkflowByRunId = null,
   liveLabelSequence = null,
@@ -688,6 +689,7 @@ function makeHarness({
           const current = sequence[Math.min(statusesIndex++, sequence.length - 1)];
           return { data: current };
         },
+        listPullRequestsAssociatedWithCommit: async () => ({ data: associatedPulls }),
       },
     },
     // Models Octokit's paginate, INCLUDING normalizePaginatedListResponse.
@@ -4142,9 +4144,9 @@ function codeRabbitStatus(description, createdAt, overrides = {}) {
     creator: { login: 'coderabbitai[bot]', type: 'Bot' }, ...overrides,
   };
 }
-function relabelFollowUpHarness({ reviews = [earlierApproval], statuses }) {
+function relabelFollowUpHarness({ reviews = [earlierApproval], statuses, associatedPulls }) {
   const harness = makeNativeHarness({ existingComments: [nativeReceipt()], coderabbitReviews: reviews,
-    statuses: [commitStatus('Vercel'), ...statuses] });
+    statuses: [commitStatus('Vercel'), ...statuses], ...(associatedPulls === undefined ? {} : { associatedPulls }) });
   harness.timeline.push({ event: 'labeled', label: { name: DISPATCH_LABEL }, actor: { login: 'github-actions[bot]' },
     created_at: nativeReceipt().created_at });
   return harness;
@@ -4191,6 +4193,14 @@ for (const [name, options] of [
   statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
   ['an approval later dismissed', { reviews: [earlierApproval, { ...earlierApproval, id: 5329115398,
     submitted_at: '2026-09-08T03:10:00Z', state: 'DISMISSED' }], statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  // Codex P1 on #836: a status belongs to a commit, so the same head on another
+  // PR could carry that PR's completion.
+  ['a completion on a head that another PR also carries', { associatedPulls: [{ number: 42 }, { number: 43 }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['a completion on a head GitHub links only to another PR', { associatedPulls: [{ number: 43 }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
+  ['a completion on a head GitHub links to no PR', { associatedPulls: [],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] }],
 ]) {
   test(`follow-up: ${name} is not a delivered review`, async () => {
     const harness = relabelFollowUpHarness(options);
@@ -4219,6 +4229,22 @@ test('follow-up: an unreadable status list fails closed', async () => {
     if (new Error().stack.includes('inspectCodeRabbitFollowUp')) return Promise.reject(new Error('statuses unavailable'));
     return listStatuses(request);
   };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.notEqual(result.status, 'reviewed');
+  assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);
+});
+
+test('follow-up: an unreadable pull request association fails closed', async () => {
+  const harness = relabelFollowUpHarness({ statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] });
+  harness.github.rest.repos.listPullRequestsAssociatedWithCommit = () => Promise.reject(new Error('association unavailable'));
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.notEqual(result.status, 'reviewed');
+  assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);
+});
+
+test('follow-up: a non-list pull request association fails closed', async () => {
+  const harness = relabelFollowUpHarness({ statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
+    associatedPulls: { number: 42 } });
   const result = await execute(harness, { nativeDispatch: true });
   assert.notEqual(result.status, 'reviewed');
   assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);

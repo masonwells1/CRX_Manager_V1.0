@@ -3215,9 +3215,25 @@ function standingCodeRabbitApproval(reviews) {
   return laterContent ? null : approval;
 }
 
-export function coderabbitFollowUpClearedHead(pullRequest, statuses) {
+// A commit status belongs to a COMMIT, not a pull request (Codex P1 on #836,
+// 2026-09-30): if the same head SHA sat in two PRs, CodeRabbit's completion for
+// one would clear the other, whose base and diff it never reviewed. So the head
+// must belong to THIS pull request and no other. `associatedPulls` is GitHub's
+// `GET repos/{o}/{r}/commits/{head}/pulls` list (the open and merged PRs whose
+// commits include the head) — derived from git history, so nobody can edit it.
+// Any other PR there, or an unknown PR number, refuses; the ordinary
+// exact-head APPROVED path is unaffected. A PR whose head is also inside a
+// stacked PR's branch therefore needs an exact-head approval (fail closed).
+function headBelongsOnlyTo(pullRequest, associatedPulls) {
+  const number = Number(pullRequest?.number);
+  if (!Number.isSafeInteger(number) || number <= 0 || !Array.isArray(associatedPulls) || associatedPulls.length === 0) return false;
+  return associatedPulls.every((pull) => Number(pull?.number) === number);
+}
+
+export function coderabbitFollowUpClearedHead(pullRequest, statuses, associatedPulls) {
   const headSha = String(pullRequest?.headRefOid || "").toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(headSha) || !Array.isArray(statuses)) return false;
+  if (!headBelongsOnlyTo(pullRequest, associatedPulls)) return false;
   const approval = standingCodeRabbitApproval(pullRequest?.reviews);
   if (!approval) return false;
   const newest = statuses
@@ -3236,9 +3252,10 @@ export function coderabbitFollowUpClearedHead(pullRequest, statuses) {
 
 // The single CodeRabbit merge/apply requirement every gate calls: an APPROVED
 // verdict on the exact head, or a clean follow-up of that head (above). The
-// follow-up costs one `gh api` read, made only when the exact-head approval is
-// absent and a standing approval exists. Any failure to read the statuses
-// refuses (fail closed).
+// follow-up costs two `gh api` reads (the head's statuses and the PRs that
+// contain it), made only when the exact-head approval is absent and a standing
+// approval exists. Any failure to read either refuses (fail closed). The PR
+// view must include `number` so the head can be bound to this pull request.
 export function coderabbitClearedHead(pullRequest, { repo, gh } = {}) {
   if (coderabbitApprovedHead(pullRequest)) return true;
   if (typeof gh !== "function" || !standingCodeRabbitApproval(pullRequest?.reviews)) return false;
@@ -3246,14 +3263,18 @@ export function coderabbitClearedHead(pullRequest, { repo, gh } = {}) {
   const repoPath = ghApiRepoPath(repo);
   if (!repoPath || !/^[0-9a-f]{40}$/i.test(headSha)) return false;
   let statuses;
+  let associatedPulls;
   try {
     // One page, newest first (GitHub's documented order for this list); only the
     // newest CodeRabbit entry matters and it is sorted again above regardless.
     statuses = JSON.parse(String(gh(["api", `${repoPath}/commits/${headSha}/statuses?per_page=100`])));
+    // One page: more than 100 PRs sharing a head would refuse anyway, since
+    // any PR other than this one refuses.
+    associatedPulls = JSON.parse(String(gh(["api", `${repoPath}/commits/${headSha}/pulls?per_page=100`])));
   } catch {
     return false;
   }
-  return coderabbitFollowUpClearedHead(pullRequest, statuses);
+  return coderabbitFollowUpClearedHead(pullRequest, statuses, associatedPulls);
 }
 
 // The API path for `gh api` calls about a merge request's repository. `gh pr

@@ -32,9 +32,11 @@ ships or quarterly, whichever comes first.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
-- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-09-26 by
-  merged PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100` through
-  `100700` but **not** `20260914100800`. Refresh it before relying on it for ordering.
+- **Schema registry:** `.claude/schema-registry.json` was regenerated from live introspection on
+  2026-09-29 (`migrations_high_water` `20260928025520`), so it records `20260914100100` through
+  `100900`. The applied-migration snapshot the ordering preflight reads is local to each machine
+  (`.claude/session-state/`); refresh it with `node scripts/refresh-applied-migrations.mjs` before
+  the next apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration

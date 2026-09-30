@@ -30,12 +30,14 @@ by hand**, and that merge is his decision on it.
 also covers the case CodeRabbit produces after an earlier approval: it re-reviews the fix head,
 finds nothing, and posts no new review record. That head is cleared when CodeRabbit's latest
 verdict is APPROVED, nothing it posted since carries content, and its own newest `CodeRabbit`
-status on the exact head reads `Review completed` and is newer than the approval.
+status on the exact head reads `Review completed` and is newer than the approval, and GitHub links
+that head commit to this PR and no other.
 
 **Operative rule.** `coderabbitClearedHead()` in `.claude/hooks/codex-push-lib.mjs` (both merge
 gates and the migration landing gate) and `inspectCodeRabbitFollowUp()` in
 `.github/scripts/coderabbit-final-review.cjs`. Stale approvals, other SHAs, findings after the
-approval, and statuses written by anyone but CodeRabbit still refuse. Detail:
+approval, statuses written by anyone but CodeRabbit, and a head another PR also carries still
+refuse. Detail:
 `docs/reference/coderabbit-native-review.md` → "Follow-up after an approval".
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean

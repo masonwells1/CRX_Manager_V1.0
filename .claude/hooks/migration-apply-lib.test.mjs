@@ -1579,7 +1579,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     statusCheckRollup: [{ __typename: "CheckRun", workflowName: "CI", name: "build", status: "COMPLETED", conclusion: "SUCCESS",
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
   };
-  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", statuses = [], migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
+  const gate = ({ git = {}, pr = {}, prError = null, behindBy = "0", statuses = [], pulls = [{ number: 900 }], migName = MIG, queryHash = HASH } = {}) => evaluateLandingGate({
     checkoutDir: gateDir, migName, queryHash, listWorktrees: () => "",
     runGit: (args) => {
       const key = args.join(" ");
@@ -1595,6 +1595,11 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
         assert.deepEqual(args, ["api", `repos/{owner}/{repo}/commits/${HEAD_SHA}/statuses?per_page=100`]);
         if (statuses instanceof Error) throw statuses;
         return JSON.stringify(statuses);
+      }
+      if (args[0] === "api" && String(args[1]).includes(`/commits/${HEAD_SHA}/pulls`)) {
+        assert.deepEqual(args, ["api", `repos/{owner}/{repo}/commits/${HEAD_SHA}/pulls?per_page=100`]);
+        if (pulls instanceof Error) throw pulls;
+        return JSON.stringify(pulls);
       }
       if (args[0] === "api") {
         const base = pr.baseRefOid || BASE_SHA;
@@ -1672,6 +1677,11 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       "CodeRabbit has not cleared", "a skipped follow-up is refused");
     refused(gate({ pr: { reviews: [olderApproval] }, statuses: new Error("HTTP 502") }),
       "CodeRabbit has not cleared", "an unreadable status list fails closed");
+    // Codex P1 on #836: the completion must belong to this PR's head alone.
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed], pulls: [{ number: 900 }, { number: 901 }] }),
+      "CodeRabbit has not cleared", "a head shared with another PR is refused");
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed], pulls: new Error("HTTP 502") }),
+      "CodeRabbit has not cleared", "an unreadable PR association fails closed");
   }
   refused(gate({ pr: { mergeStateStatus: "BLOCKED" } }), "not merge-ready", "a PR that is not CLEAN is refused");
   refused(gate({ pr: { statusCheckRollup: [{ ...readyPr.statusCheckRollup[0], conclusion: "FAILURE" }] } }), "not merge-ready",

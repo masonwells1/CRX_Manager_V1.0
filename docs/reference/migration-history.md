@@ -31,11 +31,11 @@ applied last on 2026-09-28, while there were still 0 settlement events and every
 payment was unposted). Rows 931–934 and the stamps `20260914101000`..`20260914101300` belong to the
 field-season work first opened as PR #754 (closed unmerged 2026-09-21). Open PR #793 (branch
 `claude/field-season-delivery-lap12-20260923`) carries that work now, so those rows are still
-claimed; they are not on `main` yet. `.claude/schema-registry.json` on `main` was regenerated
-2026-09-26 by PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100`
-through `100700` but not `20260914100800`. Refresh it, and the applied-migration snapshot the
-ordering preflight reads (`node scripts/refresh-applied-migrations.mjs`, see its header), before
-relying on either for ordering.
+claimed; they are not on `main` yet. `.claude/schema-registry.json` was regenerated from live
+introspection on 2026-09-29 (`migrations_high_water` `20260928025520`), so it records
+`20260914100100` through `100900`. The applied-migration snapshot the ordering preflight reads is
+local to each machine; refresh it (`node scripts/refresh-applied-migrations.mjs`, see its header)
+before relying on it for ordering.
 
 **Superseded 2026-09-26 boundary.** A read-only ledger read on
 project `rhyzpcqhnizqbxphqdkr` (about 16:45 UTC) records **1011 ledger rows / 1004 distinct names**, live

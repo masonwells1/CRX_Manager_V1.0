@@ -1473,14 +1473,15 @@ try {
   // follow-up review of the exact head ("Review completed", set by CodeRabbit)
   // clears the merge; a skipped one, or one written by anyone else, does not.
   {
-    const olderApproval = { ...mainPr, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] };
+    const olderApproval = { ...mainPr, number: 123, reviews: [{ ...mainPr.reviews[0], commit: { oid: risky.base } }] };
     const completed = {
       context: "CodeRabbit", state: "success", description: "Review completed", id: 7,
       created_at: "2026-09-26T12:30:00Z", url: `https://api.github.com/repos/o/r/statuses/${risky.sha}`,
       creator: { login: "coderabbitai[bot]", type: "Bot" },
     };
     const statusCalls = [];
-    const mergeWithStatuses = (statuses) => evaluateProductionAction({
+    const pullsCalls = [];
+    const mergeWithStatuses = (statuses, pulls = [{ number: 123 }]) => evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: `gh pr merge 123 --squash${PIN}` },
       repoDir: risky.repo,
@@ -1490,11 +1491,19 @@ try {
           statusCalls.push(args);
           return JSON.stringify(statuses);
         }
+        if (args[0] === "api" && String(args[1]).endsWith(`/commits/${risky.sha}/pulls?per_page=100`)) {
+          pullsCalls.push(args);
+          return JSON.stringify(pulls);
+        }
         return JSON.stringify(olderApproval);
       },
     });
     assert.equal(mergeWithStatuses([completed]).blocked, false, "a clean follow-up of the exact head after an earlier approval merges");
     assert.equal(statusCalls.length, 1, "...after reading the exact head's statuses once");
+    assert.equal(pullsCalls.length, 1, "...and the pull requests that contain it once");
+    // Codex P1 on #836: a completion on a commit other PRs also carry is not proof for this PR.
+    assert.equal(mergeWithStatuses([completed], [{ number: 123 }, { number: 124 }]).blocked, true,
+      "a head shared with another PR does not clear the merge");
     assert.equal(mergeWithStatuses([{ ...completed, description: "Review skipped: excluded by label configuration" }]).blocked, true,
       "a skipped follow-up does not clear the head");
     assert.equal(mergeWithStatuses([{ ...completed, creator: { login: "masonwells1", type: "User" } }]).blocked, true,

@@ -18,7 +18,8 @@
 > `main` unless CodeRabbit's latest verdict (`gh pr view --json reviews`) is APPROVED on the exact `headRefOid`
 > (`coderabbitApprovedHead`) or, after that approval, CodeRabbit finished a clean follow-up review of the exact head
 > (`coderabbitClearedHead`, 2026-09-28: CodeRabbit's own newest `CodeRabbit` status on the head reads "Review
-> completed", is newer than the approval, and nothing CodeRabbit posted since carries content), the NEWEST run of every reported check is green with `mergeStateStatus` CLEAN
+> completed", is newer than the approval, nothing CodeRabbit posted since carries content, and GitHub links the head
+> commit to this PR alone), the NEWEST run of every reported check is green with `mergeStateStatus` CLEAN
 > (`newestCheckRollup` — an older failed run no longer outvotes a later green one), and a fresh `gpt-6-sol`/`high`
 > proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones. Every agent merge must
 > carry `--match-head-commit <the head the gate checked>` (put it before any free-text `--body`), so GitHub refuses a

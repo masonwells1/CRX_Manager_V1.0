@@ -95,7 +95,12 @@ only from data CodeRabbit alone can write:
    created by the `coderabbitai[bot]` Bot account, is `success`, reads exactly
    `Review completed`, and is newer than that approval. In the lifecycle workflow
    it must also be newer than this head's verified dispatch receipt; the
-   pre-dispatch lookup never uses this path.
+   pre-dispatch lookup never uses this path;
+4. GitHub links the head commit to **this pull request and no other**
+   (`GET /repos/{owner}/{repo}/commits/{sha}/pulls`). A status belongs to a
+   commit, not a PR, so the same commit pushed to a second PR would otherwise
+   carry that PR's completion. An empty, unreadable or shared association
+   refuses. On real data, `970052fc` answers only #820 (Codex P1 on #836).
 
 A commit status's creator is the authenticated account that wrote it, so no
 person, agent token or workflow can mint one in CodeRabbit's name; a newer
@@ -108,10 +113,12 @@ with no newer review record means the run posted no findings.
 Still refused: an approval carried forward with no completed review of the head
 (status missing, `Review in progress`, `Review skipped …`, or older than the
 approval), an approval of a different SHA with no completion on this head, and an
-approval followed by findings or an objection. Implemented once for the hooks in
+approval followed by findings or an objection, and a head that another PR also
+carries. Implemented once for the hooks in
 `coderabbitClearedHead()` (`.claude/hooks/codex-push-lib.mjs`, used by both merge
-gates and the migration landing gate; it costs one `gh api` read only when the
-exact-head approval is absent) and mirrored in `inspectCodeRabbitFollowUp()` in
+gates and the migration landing gate; it costs two `gh api` reads — the head's
+statuses and the PRs that contain it — only when the exact-head approval is
+absent) and mirrored in `inspectCodeRabbitFollowUp()` in
 `.github/scripts/coderabbit-final-review.cjs`.
 
 Observed alongside (not changed here): GitHub reported #820's approval, submitted
