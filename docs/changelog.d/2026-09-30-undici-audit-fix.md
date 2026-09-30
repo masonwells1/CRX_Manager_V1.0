@@ -15,3 +15,8 @@ edit was set aside and the three lines were changed by hand.
 - `npm audit --audit-level=high` reports 0 vulnerabilities, where before it reported one high.
 - `npm ci` installs `undici` 7.30.0.
 - `npx vitest run`: 380 test files and 5411 tests pass, with 123 skipped.
+
+### Not verified
+
+- The exact-SHA Sol review was not run, because the cloud session that made this change
+  has no Codex CLI login. It runs on Mason's machine before merge.
