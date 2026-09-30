@@ -17,7 +17,7 @@
 // system reminders) are skipped entirely — only things Mason typed count.
 
 import { readFileSync } from "node:fs";
-import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, withoutSubagentReports, PUSH_POLICY } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -40,7 +40,8 @@ try {
 
 const rawPrompt = String(payload?.prompt || "");
 if (!rawPrompt || isMachineGenerated(rawPrompt)) emit();
-const prompt = rawPrompt.toLowerCase();
+// A subagent's hand-back report is not Mason's either (2026-09-25).
+const prompt = withoutSubagentReports(rawPrompt).toLowerCase();
 
 // Intent to get real work done / ship it / push it. Broad on purpose — Mason talks in
 // plain English and the injected reminder tells Claude to ignore it for questions.
