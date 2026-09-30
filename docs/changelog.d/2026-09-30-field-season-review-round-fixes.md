@@ -9,10 +9,17 @@ Fixes for CodeRabbit's gate-dispatched review of `cce5e02dc` (CHANGES_REQUESTED,
   changes docs only. The PRE-APPLY PROOF RULE now binds the proof to the exact head of the checkout
   the apply runs from. Since 2026-09-30 that is the owner-approval PR, so it is re-run there on
   install day.
-- **Minor, changelog entries lacked observed results.** The 2026-09-13 cutover-reference entry and
-  the 2026-09-20 restamp entry now say that their results were not recorded at the time, point to
-  this proof, and name what is still unverified (the live applies). The 2026-09-30 quiet-database
-  entry states its doc-drift check and that no live query or apply was run.
+- **Minor, changelog entries lacked observed results.** Recorded here rather than in the older
+  entries, which stay unchanged (round 2: "one file per change; do not append to someone else's
+  entry"):
+  - `2026-09-13-field-app-cutover-reference.md`: the outcome of its reference-vs-migration
+    comparison was not recorded when it was written. The current evidence is the proof run above.
+    Production apply was not verified: neither phase is applied live.
+  - `2026-09-20-restamp-the-unchanged-date-correction-and-close-the-review-round.md`: its "rerun on
+    this head" results were not recorded. The current evidence is the proof run above. Still open:
+    the four migrations' live applies and their read-only post-apply checks.
+  - The 2026-09-30 quiet-database entry, added on this branch, states its doc-drift check and that
+    no live query or apply was run.
 - **Minor, over-long DECISION_LOG entries.** The 2026-09-22 (49 → 7 lines) and 2026-09-08
   (28 → 7 lines) entries now keep the source, decision, rule and an evidence pointer. The
   measurement table and full history moved verbatim into `migration-history.md`.
