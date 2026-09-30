@@ -30,6 +30,7 @@ DECLARE
   v_cust_a uuid; v_cust_b uuid;
   v_field uuid;
   v_prod uuid;
+  v_pricing_preview jsonb;
   v_idem text := 'smoke-split-'||v_sfx;
   v_preview jsonb;
   v_grand bigint;
@@ -49,10 +50,12 @@ DECLARE
   v_err text;
   v_save_source text;
   v_post_group_source text;
+  v_post_group_impl_source text;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- Two billing customers + one shared field split 1/3 (A) / 2/3 (B).
   INSERT INTO customers (farm_name, assigned_tier) VALUES ('[SMOKE] Split A '||v_sfx, 1) RETURNING id INTO v_cust_a;
@@ -69,8 +72,34 @@ BEGIN
   -- A product with a manual-override unit price chosen so the grand total lands on
   -- an ODD cent count that does NOT divide evenly across the two customers. The
   -- engine computes each customer's line as ROUND(unit_price_cents * rate * share_acres).
-  INSERT INTO products (product_name, unit_size, current_cost, tier1_price)
-    VALUES ('[SMOKE] Split Prod '||v_sfx, 'gal', 1.00, 10.00) RETURNING id INTO v_prod;
+  -- Creation is a pricing-free shell under supplier-pricing governance. This chain
+  -- supplies its manual unit_price_cents on the invoice line. Establish its cost
+  -- through the public governed pricing route; never disable the cost guard.
+  INSERT INTO products (product_name, unit_size, product_form)
+    VALUES ('[SMOKE] Split Prod '||v_sfx, 'gal', 'liquid') RETURNING id INTO v_prod;
+  v_pricing_preview := public.preview_product_cost_basis_changes(
+    'product_page', NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_prod,
+      'row_version', (SELECT pricing_version FROM products WHERE id = v_prod),
+      'pricing_mode', 'price_driven', 'new_cost', '1.00',
+      'tier1_price', '15.01', 'tier2_price', '15.01', 'tier3_price', '15.01',
+      'change_reason', '[SMOKE] split-chain cost fixture',
+      'basis_type', 'manual_override', 'basis_source', 'product_page',
+      'basis_reason', '[SMOKE] split-chain cost fixture', 'basis_selection', false
+    )), v_admin, 'smoke-split-cost-preview-' || v_sfx
+  );
+  IF (v_pricing_preview->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed cost preview refused: %', v_pricing_preview;
+  END IF;
+  PERFORM public.apply_product_cost_basis_change_set(
+    (v_pricing_preview->>'change_set_id')::uuid,
+    v_pricing_preview->>'request_fingerprint', v_admin,
+    'smoke-split-cost-apply-' || v_sfx
+  );
+  IF (SELECT current_cost FROM products WHERE id = v_prod) IS DISTINCT FROM 1.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed cost fixture was not applied';
+  END IF;
 
   -- One location: applied 100.02 ac. Shares: A = 33.3333% of 100.02 = 33.339...,
   -- B = 66.6667% of 100.02 = 66.68... The chemical rate 1.0/ac at a manual unit
@@ -90,7 +119,7 @@ BEGIN
   v_chemicals := jsonb_build_array(jsonb_build_object(
     'product_id', v_prod, 'description', 'Split Chem',
     'quantity', 0, 'unit_size', 'gal',
-    'unit_price_cents', 1501, 'cost_cents', 0, 'sort_order', 0,
+    'unit_price_cents', 1501, 'cost_cents', 100, 'sort_order', 0,
     'rate_per_acre', 0.01, 'rate_unit', 'gal',
     'manual_override', true
   ));
@@ -215,12 +244,30 @@ BEGIN
   SELECT prosrc INTO v_post_group_source
   FROM pg_proc
   WHERE oid = 'public.post_invoice_group(uuid,uuid,text)'::regprocedure;
-  IF v_post_group_source NOT LIKE '%LIMIT 1%'
+  IF v_post_group_source NOT LIKE '%pg_advisory_xact_lock%'
      OR v_post_group_source NOT LIKE '%ORDER BY id%'
      OR v_post_group_source NOT LIKE '%FOR UPDATE%'
      OR v_post_group_source NOT LIKE '%check_idempotency%'
-     OR v_post_group_source NOT LIKE '%_post_invoice_impl_20260714%' THEN
-    RAISE EXCEPTION 'SMOKE_FAIL(P6): group post lost anchor/ordered locking';
+     OR v_post_group_source NOT LIKE '%IDEMPOTENCY_PAYLOAD_CONFLICT%'
+     OR v_post_group_source NOT LIKE '%_post_invoice_group_customer_scope_impl%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): public group post lost serialized scope/idempotency wrapper';
+  END IF;
+  SELECT prosrc INTO v_post_group_impl_source
+  FROM pg_proc
+  WHERE oid = 'public._post_invoice_group_customer_scope_impl(uuid,uuid,text)'::regprocedure;
+  IF v_post_group_impl_source NOT LIKE '%LIMIT 1%'
+     OR v_post_group_impl_source NOT LIKE '%ORDER BY id%'
+     OR v_post_group_impl_source NOT LIKE '%FOR UPDATE%'
+     OR v_post_group_impl_source NOT LIKE '%check_idempotency%'
+     OR v_post_group_impl_source NOT LIKE '%_post_invoice_impl_20260714%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): private group post lost anchor/ordered locking';
+  END IF;
+  IF has_function_privilege(
+       'authenticated',
+       'public._post_invoice_group_customer_scope_impl(uuid,uuid,text)',
+       'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(P6): authenticated can bypass the group-post scope wrapper';
   END IF;
 
   BEGIN
