@@ -410,7 +410,9 @@ test('the workflow binds the CodeRabbit exclusion to the trusted status creator'
 // (PR #841). It fails closed: a quoted key, a `{...}`/`[...]` flow collection,
 // an anchor, alias, tag or merge key, a document marker, a tab, a duplicate
 // key, uneven indentation, or any unrecognised line throws instead of being
-// skipped, so a setting can never be changed in a form this reader misses.
+// skipped, so a setting can never be changed in a form this reader misses. It
+// also refuses what would make the file invalid YAML, because CodeRabbit would
+// then ignore the file and fall back to its web settings.
 // Returns a Map from dotted key path (list items as `[n]`) to the raw value
 // text, or null for a key that opens a nested block.
 function readStrictYamlSubset(text) {
@@ -418,6 +420,7 @@ function readStrictYamlSubset(text) {
   const itemCounts = new Map();
   const stack = [{ indent: -1, path: '', hasValue: false, childIndent: 0 }];
   let blockTextIndent = null;
+  let blockContentIndent = null;
   const nestUnder = (parent, indent, kind, where) => {
     assert.ok(!parent.hasValue, `${where}: indented under a key that already has a value`);
     parent.childIndent ??= indent;
@@ -430,17 +433,30 @@ function readStrictYamlSubset(text) {
     if (!match || (!match[1].startsWith('"') && /:(\s|$)/.test(match[1]))) return null;
     return match[1];
   };
-  // A lone CR is a YAML line break too, so split where YAML does; a tab, NEL,
-  // U+2028/2029, BOM, NBSP or control character could be a break or an
-  // indent to some reader, so none is allowed.
-  text.split(/\r\n|\r|\n/).forEach((rawLine, index) => {
+  // A lone CR is a YAML line break too, so split where YAML does. Only
+  // printable characters and plain spaces are allowed: a tab, NEL, U+2028/2029,
+  // BOM, NBSP or control character could be a break or an indent to some
+  // reader, and U+FFFD marks bytes that were not valid UTF-8. No trailing
+  // spaces either, so no blank line can carry the extra indentation YAML
+  // rejects at the start of block text.
+  text.split(/\r\n|\r|\n/).forEach((line, index) => {
     const where = `.coderabbit.yaml line ${index + 1}`;
-    assert.doesNotMatch(rawLine, /[^\S ]|[\x00-\x08\x0e-\x1f\x7f\x85]/, `${where}: a tab or special character`);
-    const line = rawLine.trimEnd();
+    assert.match(
+      line,
+      /^(?:(?![^\S ])[\x20-\x7e¡-퟿-￼\u{10000}-\u{10ffff}])*$/u,
+      `${where}: a tab or special character`,
+    );
+    assert.doesNotMatch(line, / $/, `${where}: trailing space`);
     const indent = line.search(/\S/);
     if (blockTextIndent !== null) {
-      if (indent === -1 || indent > blockTextIndent) return;
+      if (indent === -1) return;
+      if (indent > blockTextIndent) {
+        blockContentIndent ??= indent;
+        assert.ok(indent >= blockContentIndent, `${where}: block text indented less than its first line`);
+        return;
+      }
       blockTextIndent = null;
+      blockContentIndent = null;
     }
     if (indent === -1 || line[indent] === '#') return;
     while (stack.at(-1).indent >= indent) stack.pop();
@@ -516,12 +532,16 @@ test('CodeRabbit reviews every non-draft PR automatically, on open and on every 
   assert.match(workflow, /nativeDispatch:\s*true\b/);
 });
 
-// Negative controls that run on every CI pass: each edit below would change or
-// could change what CodeRabbit reads, and each must fail the pin above.
+// Negative controls that run on every CI pass: each edit below changes what
+// CodeRabbit reads, can be read differently by some YAML parser, makes the file
+// invalid YAML (which CodeRabbit ignores), or uses a construct the reader does
+// not model (an anchor, whose alias could copy values elsewhere); each must
+// fail the pin.
 test('the automatic-review pin fails on every form that could change a setting unseen', () => {
   const config = fs.readFileSync(CODERABBIT_CONFIG, 'utf8');
   const afterEnabled = /^( {4}enabled: true)$/m;
   const afterKeyword = /^( {4}description_keyword: "")$/m;
+  const firstBlockText = /^( {6}instructions: >-)$/m;
   const mutations = {
     'a quoted duplicate "enabled": false': [afterEnabled, '$1\n    "enabled": false'],
     'a single-quoted duplicate enabled': [afterEnabled, "$1\n    'enabled': false"],
@@ -537,6 +557,10 @@ test('the automatic-review pin fails on every form that could change a setting u
     'a tab-indented override': [afterEnabled, '$1\n\tenabled: false'],
     'an override behind a lone CR in a comment': [afterEnabled, '$1\n    # note\r    enabled: false'],
     'a line separator': [afterEnabled, '$1     enabled: false'],
+    'a byte that was not valid UTF-8': [afterEnabled, '$1\n    # �'],
+    'a C1 control character': [afterEnabled, '$1\n    # \x9b'],
+    'an over-indented blank line opening block text': [firstBlockText, `$1\n${' '.repeat(12)}`],
+    'block text indented less than its first line': [firstBlockText, '$1\n          deeper first line'],
     'a labels allowlist': [afterKeyword, '$1\n    labels:\n      - ready'],
     'an ignored author': [afterKeyword, '$1\n    ignore_usernames:\n      - masonwells1'],
     'a second document': [/^(chat:)$/m, '---\nreviews:\n  auto_review:\n    enabled: false\n$1'],
