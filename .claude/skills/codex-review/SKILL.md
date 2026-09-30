@@ -564,7 +564,8 @@ ONLY on a terminal CLEAN token with a stable clean worktree does it write the HE
 human-readable transcript, not the proof — the transcript alone never satisfies the gate. If the
 wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify.
 Merging that PR deploys production; under Mason's autonomous-landing rule in `AGENTS.md` the agent
-merges it itself once CodeRabbit approved the head and this proof is fresh.
+merges it itself once CodeRabbit cleared the head (APPROVED it, or a clean follow-up after an
+earlier approval) and this proof is fresh.
 
 ## General task handoff (not just review)
 

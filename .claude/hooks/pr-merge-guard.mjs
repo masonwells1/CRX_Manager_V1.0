@@ -398,7 +398,8 @@ function gateRequest(request) {
 
   // ── AUTONOMOUS LANDING RULE (Mason, 2026-09-26) ────────────────────────────
   // An agent merges into main by itself only when ALL of these hold for the exact
-  // head GitHub will merge: CodeRabbit approved that head, every check's newest
+  // head GitHub will merge: CodeRabbit cleared that head (coderabbitClearedHead:
+  // APPROVED it, or a clean follow-up after an earlier approval), every check's newest
   // run is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high Codex
   // proof is bound to that head and to GitHub's real base. Every change needs the
   // Sol proof now, not only the risky ones — that is the rule Mason confirmed,
