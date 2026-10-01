@@ -383,6 +383,12 @@ and missing from every other tracker. Sources are recoverable with `git show 4b6
   map-drawing tool; tab semantics and arrow-key support on the Customer 360 tab strip; finishing the
   visual refresh on Modal, Breadcrumbs, Combobox and the app shell; and a sidebar link for Payment
   History (today it is reachable only by URL or the A/R workspace).
+- **Ordering (sell-side plan, 2026-06)**: `create_direct_order` checks its idempotency key and then runs
+  with no lock until it saves the key. `create_rush_order` got an advisory lock for exactly this race, and
+  this one never did. Confirm whether two simultaneous same-key submits can both create an order, and add
+  the same lock if so (migration). Separately, field-staff (driver/applicator) rush ordering was scaffolded,
+  then switched off pending scoped RLS and page permissions. Decide whether to finish it or remove the
+  dormant `isFieldStaff` branch in `src/pages/NewOrder.tsx`.
 - **Decide keep or drop** (2026-05-09 implementation plan, "not in this plan"): bank reconciliation, vendor
   1099 tracking, line items on vendor bills, and linking purchase orders to the vendor record instead of a
   typed name. Also optional: a count badge for unpriced rush orders (sell-side plan), and a screen for the

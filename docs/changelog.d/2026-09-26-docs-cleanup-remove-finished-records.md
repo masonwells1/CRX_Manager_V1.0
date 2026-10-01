@@ -57,7 +57,8 @@ block:
 - field-app owner actions and decisions, including the never-done `send-email` deploy that turns on
   application notices;
 - four field-app bugs;
-- field-app polish.
+- field-app polish;
+- two ordering items: a possible idempotency race in `create_direct_order`, and the dormant field-staff rush-order branch.
 
 One agent claim was checked and rejected: the vendor-bill name check it cited exists only in an older
 version of that function.
