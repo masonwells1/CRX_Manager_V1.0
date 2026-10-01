@@ -20,6 +20,10 @@ CodeRabbit request; the final proof always runs after CodeRabbit clears the head
 skill's early *advisory* Sol round for genuinely complex work is a different thing: it mints no
 proof and is unaffected. This change is documentation only, with no gate logic changed.
 
+**Proof.** `npm run test:agent-workflows` and `npm run lint` pass.
+**Not verified:** no Codex Luna round or Sol proof has run on these edits, and the reordered fix
+loop has not yet been followed end to end on a real landing.
+
 Follow-up (CodeRabbit's re-review of `53d14569`): `docs/reference/gotchas.md` and the landing line in `.claude/commands/ship.md` said the follow-up
 needs "nothing posted since" the approval, which is stricter than the gate. It now says "no later
 substantive CodeRabbit content", with the empty `COMMENTED` reply artifact named as tolerated,

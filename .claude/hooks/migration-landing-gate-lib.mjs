@@ -162,7 +162,17 @@ function evaluate({ dir, migName, queryHash, now, git, gh, listWorktrees }) {
   if (pullRequestReviewBlocked(pr)) return refuse(`${number} has an unresolved CHANGES_REQUESTED review.`);
   // Same CodeRabbit requirement as the merge gates: an exact-head APPROVED, or a
   // clean CodeRabbit follow-up of this head after an earlier approval.
-  if (!coderabbitClearedHead(pr, { gh })) {
+  // coderabbitClearedHead() turns any failed read into "not cleared", so a
+  // deadline hit during its follow-up reads is caught here and reported as
+  // out-of-time (CodeRabbit on #836): "not cleared" would wrongly send the
+  // operator to request another review instead of retrying.
+  let clearanceOutOfTime = null;
+  const clearanceGh = (args) => {
+    try { return gh(args); } catch (error) { if (OUT(error)) clearanceOutOfTime = error; throw error; }
+  };
+  const cleared = coderabbitClearedHead(pr, { gh: clearanceGh });
+  if (clearanceOutOfTime) throw clearanceOutOfTime;
+  if (!cleared) {
     return refuse(`CodeRabbit has not cleared ${number}'s exact head ${head.slice(0, 12)} (no APPROVED review of it, and no clean follow-up review of it after an earlier approval).`);
   }
   if (!pullRequestChecksGreen(pr)) {

@@ -25,6 +25,10 @@ linked only to another PR, an empty list, a missing or malformed PR number and a
 non-list read in all three hook suites and the CI suite. With the new CI check switched off,
 three of the new CI tests fail; with it on, all 271 pass.
 
+**Not verified:** the tests use fixtures, and the GitHub reads above only show that three real
+heads map to one PR each. No real head shared between two PRs was observed, no live merge or
+apply has used the follow-up path yet, and no Codex Luna round or Sol proof has run on this change.
+
 Also fixed (Codex P2 on #836): `docs/manual/CURRENT_STATE.md`, `docs/reference/migration-history.md`
 and `2026-09-29-record-100900-apply.md` still said the schema registry stopped at `100700` and
 needed a refresh; it was regenerated on 2026-09-29 (high-water `20260928025520`).

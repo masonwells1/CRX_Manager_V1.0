@@ -13,3 +13,7 @@ CodeRabbit content", and name the tolerated empty reply:
 and is unchanged. Also clarified in `2026-09-30-coderabbit-review-836-doc-fixes.md`: the
 `codex-review` skill's early *advisory* Sol round for complex work is separate from the final Sol
 proof, which always runs after CodeRabbit clears the head. Wording only; no gate logic changed.
+
+**Proof.** The new wording was checked against `standingCodeRabbitApproval()`, and
+`npm run test:agent-workflows` (which checks the `.agents/` copies match their sources) passes.
+**Not verified:** no Codex Luna round or Sol proof has run on these edits.

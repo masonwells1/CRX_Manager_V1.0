@@ -16,3 +16,8 @@ lines could refuse a landing the gates allow. Each one now says CodeRabbit **cle
 
 Historical `docs/manual/DECISION_LOG.md` entries are left as written; the 2026-09-28 entry records
 the change. No gate logic changed.
+
+**Proof.** `npm run test:agent-workflows` (the `.agents/` copy matches its source) and
+`npm run lint` pass.
+**Not verified:** no Codex Luna round or Sol proof has run on these edits, and no agent has yet
+followed the new wording through a real landing.

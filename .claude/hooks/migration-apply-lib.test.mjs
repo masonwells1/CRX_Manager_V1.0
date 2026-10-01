@@ -1688,6 +1688,31 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       "CodeRabbit has not cleared", "a skipped follow-up is refused");
     refused(gate({ pr: { reviews: [olderApproval] }, statuses: new Error("HTTP 502") }),
       "CodeRabbit has not cleared", "an unreadable status list fails closed");
+    // CodeRabbit on #836: the deadline passing during the follow-up reads is
+    // reported as out-of-time, not as missing CodeRabbit clearance.
+    {
+      let t = 1_000_000;
+      const late = evaluateLandingGate({
+        checkoutDir: gateDir, migName: MIG, queryHash: HASH, listWorktrees: () => "",
+        deadlineMs: t + 15_000, clock: () => t,
+        runGit: (args) => {
+          const key = args.join(" ");
+          if (key === "rev-parse HEAD") return HEAD_SHA;
+          if (key === "rev-parse --abbrev-ref HEAD") return "claude/feature";
+          if (key.startsWith("show HEAD:")) return SQL;
+          if (key.startsWith("status --porcelain")) return "";
+          throw new Error(`unexpected git ${key}`);
+        },
+        runGh: (args) => {
+          if (args[0] === "api" && String(args[1]).includes("/statuses")) { t += 14_000; return JSON.stringify([completed]); } // a slow status read
+          if (args[0] === "api") throw new Error("no read may start once the budget is spent");
+          return JSON.stringify({ ...readyPr, reviews: [olderApproval] });
+        },
+      });
+      refused(late, "ran out of time", "a deadline hit during the follow-up reads is reported as out-of-time");
+      assert.ok(!String(late.reason).includes("CodeRabbit has not cleared"),
+        "...and not as missing CodeRabbit clearance");
+    }
     // Codex P1 on #836: the completion must belong to this PR's head alone.
     refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed], pulls: [{ number: 900 }, { number: 901 }] }),
       "CodeRabbit has not cleared", "a head shared with another PR is refused");

@@ -21,24 +21,13 @@ its rationale live in `.claude/hooks/prompt-source-lib.mjs` (#826).
 
 ## 2026-09-28 — a clean CodeRabbit follow-up after an approval clears the head
 
-**Source:** item 3 of the 2026-09-27 PC-session handoff, which Mason approved ("I approve
-everything… see it all through") and sent to the 2026-09-28 session to carry out. It changes the
-merge gates, so it cannot pass its own new rules: **it takes effect only when Mason merges that PR
-by hand**, and that merge is his decision on it.
-
-**Decision.** Under the 2026-09-26 autonomous-landing rule, "CodeRabbit approved the final head"
-also covers the case CodeRabbit produces after an earlier approval: it re-reviews the fix head,
-finds nothing, and posts no new review record. That head is cleared when CodeRabbit's latest
-verdict is APPROVED, nothing it posted since carries content, and its own newest `CodeRabbit`
-status on the exact head reads `Review completed` and is newer than the approval, and GitHub links
-that head commit to this PR and no other.
-
-**Operative rule.** `coderabbitClearedHead()` in `.claude/hooks/codex-push-lib.mjs` (both merge
-gates and the migration landing gate) and `inspectCodeRabbitFollowUp()` in
-`.github/scripts/coderabbit-final-review.cjs`. Stale approvals, other SHAs, findings after the
-approval, statuses written by anyone but CodeRabbit, and a head another PR also carries still
-refuse. Detail:
-`docs/reference/coderabbit-native-review.md` → "Follow-up after an approval".
+**Source:** handoff item 3 (2026-09-27), approved by Mason ("I approve everything… see it all
+through"); it changes the merge gates, so it takes effect only when Mason merges PR #836 by hand.
+**Decision.** "CodeRabbit approved the final head" also covers a clean CodeRabbit follow-up of that
+head after an earlier approval (it re-reviews, finds nothing and posts no new approval).
+**Operative rule.** `coderabbitClearedHead()` (`.claude/hooks/codex-push-lib.mjs`) and
+`inspectCodeRabbitFollowUp()` (`.github/scripts/coderabbit-final-review.cjs`) decide it; every
+condition is in `docs/reference/coderabbit-native-review.md` → "Follow-up after an approval".
 
 ## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
 

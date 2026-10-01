@@ -22,3 +22,7 @@ the rule (history in `docs/changelog.d`, `docs/CHANGELOG.md`, `DECISION_LOG.md` 
 left as written). `npm run test:correction-guards`, `npm run test:agent-workflows` (which checks the
 synced `.agents/` copies and `AGENTS.md`'s required phrases), `npm run lint` and
 `scripts/check-doc-drift.mjs` pass.
+
+**Not verified:** the search was by phrase, so a reworded approval-only rule could have been
+missed. No agent has yet followed the new wording through a real landing, and no Codex Luna
+round or Sol proof has run on these edits.
