@@ -437,8 +437,14 @@ ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z")])
   "a new CodeRabbit inline finding after the approval refuses, even under an empty-body review");
 ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T06:24:24Z")]),
   "an inline finding in the same second as the approval refuses");
-ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114399661 })]),
-  "a CodeRabbit reply inside an existing thread is the tolerated artifact");
+// CodeRabbit's real resolving-reply wording (#818, #836 threads).
+const RESOLVED_REPLY = "`@masonwells1`, thanks for the update.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._";
+ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114399661, body: RESOLVED_REPLY })]),
+  "a CodeRabbit reply that resolves its thread is the tolerated artifact");
+// Codex P1 on #836: a reply can object (#818's real reply kept a thread open).
+ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114209084,
+  body: "PR `#818` still reports `ac3249de` as its head, where the old row remains. I'll leave this thread open until the fix is on the PR branch." })]),
+  "a CodeRabbit reply that keeps a thread open after the approval refuses");
 ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T05:00:00Z")]),
   "an inline finding the later approval superseded does not block");
 ok(followUp(pr820, statuses820, PULLS_820, [{ ...crComment("2026-09-27T07:00:00Z"), user: { login: "masonwells1" } }]),
@@ -453,33 +459,51 @@ for (const [label, entry] of [["null", null], ["an empty object", {}], ["a strin
 // coderabbitClearedHead(): the one predicate every gate calls.
 {
   const calls = [];
-  // Answers the two follow-up reads separately: the head's statuses and the
-  // pull requests that contain it.
-  const gh = (statusAnswer, pullsAnswer = JSON.stringify(PULLS_820), commentsAnswer = "[]") => (args) => {
+  // The REST `pulls/{n}/reviews` shape of a `gh pr view` review list.
+  const restReviews = (reviews) => reviews.map((review) => ({ user: { login: `${review.author.login}${review.author.login === "coderabbitai" ? "[bot]" : ""}` },
+    state: review.state, submitted_at: review.submittedAt, body: review.body ?? "", commit_id: review.commit?.oid }));
+  // Answers each follow-up read: the head's statuses, the PRs that contain it,
+  // and the PR's inline comments and reviews (both paginated).
+  const gh = (statusAnswer, pullsAnswer = JSON.stringify(PULLS_820), commentsAnswer = "[]", reviewsAnswer = JSON.stringify(restReviews(pr820.reviews))) => (args) => {
     calls.push(args);
     const target = String(args[1]);
-    const answer = /\/comments\?/.test(target) ? (typeof commentsAnswer === "function" ? commentsAnswer(target) : commentsAnswer)
-      : /\/pulls\?/.test(target) ? pullsAnswer : statusAnswer;
+    const pick = (answer) => (typeof answer === "function" ? answer(target) : answer);
+    const answer = /\/comments\?/.test(target) ? pick(commentsAnswer)
+      : /\/reviews\?/.test(target) ? pick(reviewsAnswer)
+        : /\/pulls\?/.test(target) ? pullsAnswer : statusAnswer;
     if (answer instanceof Error) throw answer;
     return answer;
   };
   ok(coderabbitClearedHead({ headRefOid: HEAD, reviews: [cr("APPROVED", HEAD, "2026-09-25T03:40:38Z")] }, { gh: gh("[]") }) && calls.length === 0,
     "an exact-head approval clears without any GitHub read");
   ok(coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820)) }), "#820 clears through the follow-up reads");
-  eq(calls.slice(-3), [
-    ["api", "repos/{owner}/{repo}/pulls/820/comments?per_page=100&page=1"],
+  eq(calls.slice(-4), [
     ["api", `repos/{owner}/{repo}/commits/${FIX}/statuses?per_page=100`],
     ["api", `repos/{owner}/{repo}/commits/${FIX}/pulls?per_page=100`],
-  ], "the reads ask for the PR's inline comments, the exact head's statuses and the PRs that contain it");
+    ["api", "repos/{owner}/{repo}/pulls/820/comments?per_page=100&page=1"],
+    ["api", "repos/{owner}/{repo}/pulls/820/reviews?per_page=100&page=1"],
+  ], "the completion status is read first, then the head's PRs, the inline comments and the reviews");
   ok(coderabbitClearedHead(pr820, { repo: "masonwells1/CRX_Manager_V1.0", gh: gh(JSON.stringify(statuses820)) }), "an explicit --repo is honoured");
-  eq(calls.slice(-3).map((args) => args[1]), [
-    "repos/masonwells1/CRX_Manager_V1.0/pulls/820/comments?per_page=100&page=1",
+  eq(calls.slice(-4).map((args) => args[1]), [
     `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/statuses?per_page=100`,
     `repos/masonwells1/CRX_Manager_V1.0/commits/${FIX}/pulls?per_page=100`,
+    "repos/masonwells1/CRX_Manager_V1.0/pulls/820/comments?per_page=100&page=1",
+    "repos/masonwells1/CRX_Manager_V1.0/pulls/820/reviews?per_page=100&page=1",
   ], "...and every read comes from that repository");
-  // Inline comments are read page by page: a full page of replies, then a page
-  // holding a new CodeRabbit finding, refuses; the same finding absent clears.
-  const reply = { user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 1 };
+  // Codex P1 on #836: a finding CodeRabbit posts before its completion status
+  // but after the caller's `gh pr view` is still seen, because the reviews are
+  // re-read after the status. The caller's stale view shows only the approval.
+  const lateFinding = restReviews([...pr820.reviews, cr("COMMENTED", FIX, "2026-09-27T07:31:15Z", "**Actionable comments posted: 1**")]);
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), "[]", JSON.stringify(lateFinding)) }),
+    "a review with findings that only the post-status re-read shows refuses");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), "[]", new Error("HTTP 502")) }),
+    "a failed review re-read refuses");
+  ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), "[]", "{}") }),
+    "a non-list review re-read refuses");
+  // Inline comments are read page by page: a full page of resolving replies,
+  // then a page holding a new CodeRabbit finding, refuses; the same finding
+  // absent clears.
+  const reply = { user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 1, body: RESOLVED_REPLY };
   const finding = { user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z" };
   const paged = (second) => (target) => JSON.stringify(/page=1$/.test(target) ? Array(100).fill(reply) : second);
   ok(!coderabbitClearedHead(pr820, { gh: gh(JSON.stringify(statuses820), JSON.stringify(PULLS_820), paged([finding])) }),

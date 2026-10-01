@@ -1596,6 +1596,12 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
         if (statuses instanceof Error) throw statuses;
         return JSON.stringify(statuses);
       }
+      if (args[0] === "api" && String(args[1]).includes("/pulls/900/reviews")) {
+        assert.deepEqual(args, ["api", "repos/{owner}/{repo}/pulls/900/reviews?per_page=100&page=1"]);
+        // The REST shape of the same reviews the PR view returns.
+        return JSON.stringify(({ ...readyPr, ...pr }).reviews.map((review) => ({ user: { login: `${review.author.login}[bot]` },
+          state: review.state, submitted_at: review.submittedAt, body: review.body ?? "", commit_id: review.commit?.oid })));
+      }
       if (args[0] === "api" && String(args[1]).includes("/pulls/900/comments")) {
         assert.deepEqual(args, ["api", "repos/{owner}/{repo}/pulls/900/comments?per_page=100&page=1"]);
         if (comments instanceof Error) throw comments;
@@ -1692,8 +1698,13 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z" }] }),
     "CodeRabbit has not cleared", "a later CodeRabbit inline finding is refused");
     ok(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
-      comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7 }] }).ok === true,
-    "a CodeRabbit thread reply after the approval does not block the apply");
+      comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7,
+        body: "Thanks.\n\n✅ Review thread resolved." }] }).ok === true,
+    "a CodeRabbit reply that resolves its thread after the approval does not block the apply");
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
+      comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7,
+        body: "I'll leave this thread open until the fix is on the PR branch." }] }),
+    "CodeRabbit has not cleared", "a CodeRabbit reply that keeps a thread open refuses the apply");
   }
   refused(gate({ pr: { mergeStateStatus: "BLOCKED" } }), "not merge-ready", "a PR that is not CLEAN is refused");
   refused(gate({ pr: { statusCheckRollup: [{ ...readyPr.statusCheckRollup[0], conclusion: "FAILURE" }] } }), "not merge-ready",

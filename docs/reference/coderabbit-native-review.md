@@ -92,10 +92,14 @@ only from data CodeRabbit alone can write:
    empty `COMMENTED` thread-reply artifact is tolerated; a review with findings,
    an objection, a dismissal or an undated CodeRabbit review refuses. Inline
    comments are stored apart from a review's body, so the PR's review comments
-   (`GET /repos/{o}/{r}/pulls/{n}/comments`) are read too: a CodeRabbit comment
-   at or after the approval that starts a new thread (no `in_reply_to_id`) is a
-   finding and refuses, while a reply inside an existing thread — the empty
-   artifact's only content — is tolerated;
+   (`GET /repos/{o}/{r}/pulls/{n}/comments`) are read too. Any CodeRabbit
+   comment at or after the approval refuses — a new thread is a finding, and a
+   reply can object (PR #818's reply kept a thread open) — except a thread reply
+   carrying CodeRabbit's own `✅ Review thread resolved.` line, the empty
+   artifact's only content. The completion status is read **first** and the
+   reviews and inline comments are re-read **after** it, so a finding posted
+   before the completion (CodeRabbit posts findings 6-8 s before the status) is
+   always seen;
 3. the **newest** `CodeRabbit`-context status on the exact head commit was
    created by the `coderabbitai[bot]` Bot account, is `success`, reads exactly
    `Review completed`, and is newer than that approval. In the lifecycle workflow

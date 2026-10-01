@@ -1491,6 +1491,10 @@ try {
           statusCalls.push(args);
           return JSON.stringify(statuses);
         }
+        if (args[0] === "api" && String(args[1]).endsWith("/pulls/123/reviews?per_page=100&page=1")) {
+          return JSON.stringify(olderApproval.reviews.map((review) => ({ user: { login: `${review.author.login}[bot]` },
+            state: review.state, submitted_at: review.submittedAt, body: review.body ?? "", commit_id: review.commit?.oid })));
+        }
         if (args[0] === "api" && String(args[1]).endsWith("/pulls/123/comments?per_page=100&page=1")) {
           return JSON.stringify(comments);
         }

@@ -875,6 +875,7 @@ async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha
 // .claude/hooks/codex-push-lib.mjs.
 const CODERABBIT_STATUS_CONTEXT = 'CodeRabbit';
 const CODERABBIT_REVIEW_COMPLETED = 'Review completed';
+const CODERABBIT_THREAD_RESOLVED = '✅ Review thread resolved.';
 
 function standingCodeRabbitApproval(reviews) {
   const mine = reviews
@@ -895,33 +896,12 @@ function standingCodeRabbitApproval(reviews) {
 }
 
 async function inspectCodeRabbitFollowUp({ github, owner, repo, pullNumber, headSha, reviews, requestedAfter }) {
-  const approval = standingCodeRabbitApproval(reviews);
-  if (!approval) return null;
-  // A status belongs to a commit, not a pull request: the same head pushed to
-  // another PR carries that PR's CodeRabbit status too. Accept the completion
-  // only when GitHub links this head to this pull request and no other. One
-  // page: any PR besides this one refuses, so a second page could not help.
-  const association = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: headSha, per_page: 100 });
-  const pulls = association?.data;
-  if (!Array.isArray(pulls)) throw new Error('CodeRabbit follow-up pull request association was not an array');
-  if (pulls.length === 0 || !pulls.every((pull) => Number(pull?.number) === Number(pullNumber))) return null;
-  // A review's inline comments are stored apart from its body (CodeRabbit on
-  // #836), so an empty-body COMMENTED review can still carry new line findings.
-  // A CodeRabbit comment at or after the approval that starts a thread (no
-  // in_reply_to_id) is a later finding; a reply inside an existing thread is
-  // the tolerated artifact. A malformed entry (not an object, or no author
-  // login) and an undated CodeRabbit comment refuse.
-  const reviewComments = await github.paginate(github.rest.pulls.listReviewComments,
-    { owner, repo, pull_number: pullNumber, per_page: 100 });
-  if (!Array.isArray(reviewComments)) throw new Error('CodeRabbit follow-up review-comment listing was not an array');
-  const laterFinding = reviewComments.some((comment) => {
-    const login = comment && typeof comment === 'object' ? comment.user?.login : undefined;
-    if (typeof login !== 'string' || login.trim() === '') return true;
-    if (normalize(login) !== CODERABBIT_BOT_LOGIN) return false;
-    const at = Date.parse(String(comment?.created_at || ''));
-    return !Number.isFinite(at) || (at >= approval.at && (comment?.in_reply_to_id === null || comment?.in_reply_to_id === undefined));
-  });
-  if (laterFinding) return null;
+  if (!standingCodeRabbitApproval(reviews)) return null;
+  // Order matters (Codex P1 on #836): the completion status is read FIRST and
+  // the reviews and inline comments AFTER it, so a finding CodeRabbit posts
+  // before its "Review completed" status (6-8 s before, on every observed run)
+  // is always visible. The caller's earlier review listing is only a cheap
+  // pre-check; the verdict below uses the reviews re-read after the status.
   // One page, newest first (GitHub's documented order); only the newest
   // CodeRabbit entry matters and it is sorted again below regardless.
   const response = await github.rest.repos.listCommitStatusesForRef({ owner, repo, ref: headSha, per_page: 100 });
@@ -933,14 +913,46 @@ async function inspectCodeRabbitFollowUp({ github, owner, repo, pullNumber, head
     .sort((left, right) => (right.at - left.at) || (right.id - left.id))[0];
   if (!newest || !Number.isFinite(newest.at)) return null;
   const { status } = newest;
-  const cleared = normalize(status?.creator?.login) === CODERABBIT_BOT_LOGIN
-    && normalize(status?.creator?.type) === 'bot'
-    && status?.state === 'success'
-    && status?.description === CODERABBIT_REVIEW_COMPLETED
-    && String(status?.url || '').toLowerCase().endsWith(`/statuses/${String(headSha).toLowerCase()}`)
-    && newest.at > approval.at
-    && newest.at > requestedAfter;
-  return cleared ? { review: approval.review, status } : null;
+  if (normalize(status?.creator?.login) !== CODERABBIT_BOT_LOGIN
+    || normalize(status?.creator?.type) !== 'bot'
+    || status?.state !== 'success'
+    || status?.description !== CODERABBIT_REVIEW_COMPLETED
+    || !String(status?.url || '').toLowerCase().endsWith(`/statuses/${String(headSha).toLowerCase()}`)
+    || !(newest.at > requestedAfter)) return null;
+  // A status belongs to a commit, not a pull request: the same head pushed to
+  // another PR carries that PR's CodeRabbit status too. Accept the completion
+  // only when GitHub links this head to this pull request and no other. One
+  // page: any PR besides this one refuses, so a second page could not help.
+  const association = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: headSha, per_page: 100 });
+  const pulls = association?.data;
+  if (!Array.isArray(pulls)) throw new Error('CodeRabbit follow-up pull request association was not an array');
+  if (pulls.length === 0 || !pulls.every((pull) => Number(pull?.number) === Number(pullNumber))) return null;
+  const freshReviews = await github.paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: pullNumber, per_page: 100 });
+  if (!Array.isArray(freshReviews)) throw new Error('CodeRabbit follow-up review listing was not an array');
+  const approval = standingCodeRabbitApproval(freshReviews);
+  if (!approval || !(newest.at > approval.at)) return null;
+  // A review's inline comments are stored apart from its body (CodeRabbit on
+  // #836), so an empty-body COMMENTED review can still carry line findings. Any
+  // CodeRabbit comment at or after the approval refuses — a new thread is a
+  // finding, and a reply can object too (#818) — except a thread reply that
+  // closes the thread with CodeRabbit's "✅ Review thread resolved." line. A
+  // malformed entry (not an object, or no author login) and an undated
+  // CodeRabbit comment refuse.
+  const reviewComments = await github.paginate(github.rest.pulls.listReviewComments,
+    { owner, repo, pull_number: pullNumber, per_page: 100 });
+  if (!Array.isArray(reviewComments)) throw new Error('CodeRabbit follow-up review-comment listing was not an array');
+  const laterFinding = reviewComments.some((comment) => {
+    const login = comment && typeof comment === 'object' ? comment.user?.login : undefined;
+    if (typeof login !== 'string' || login.trim() === '') return true;
+    if (normalize(login) !== CODERABBIT_BOT_LOGIN) return false;
+    const at = Date.parse(String(comment?.created_at || ''));
+    if (!Number.isFinite(at)) return true;
+    if (at < approval.at) return false;
+    const isReply = comment?.in_reply_to_id !== null && comment?.in_reply_to_id !== undefined;
+    return !(isReply && String(comment?.body || '').includes(CODERABBIT_THREAD_RESOLVED));
+  });
+  if (laterFinding) return null;
+  return { review: approval.review, status };
 }
 
 // The dispatch label only asks CodeRabbit to start work. A green CodeRabbit

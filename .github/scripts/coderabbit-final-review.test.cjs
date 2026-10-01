@@ -4246,9 +4246,39 @@ test('follow-up: an unreadable status list fails closed', async () => {
   assert.match(harness.failures.join('\n'), /could not verify whether CodeRabbit reviewed/);
 });
 
+test('follow-up: a CodeRabbit reply that objects inside an existing thread blocks the follow-up', async () => {
+  // PR #818's real reply shape: a thread reply that keeps the finding open.
+  const harness = relabelFollowUpHarness({
+    reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T03:10:00Z', in_reply_to_id: 3,
+      body: "I'll leave this thread open until the fix is on the PR branch." }],
+    statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
+  });
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.equal(result.status, 'pending', harness.failures.join('\n'));
+});
+
+test('follow-up: a finding posted before the completion status is seen, because reviews are re-read after it', async () => {
+  // The caller's listing shows only the approval; the listing read after the
+  // status shows a later review with findings.
+  const harness = relabelFollowUpHarness({ statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')] });
+  const listReviews = harness.github.rest.pulls.listReviews;
+  let calls = 0;
+  harness.github.rest.pulls.listReviews = async (request) => {
+    calls += 1;
+    const response = await listReviews(request);
+    if (!new Error().stack.includes('inspectCodeRabbitFollowUp')) return response;
+    return { data: [...response.data, { ...earlierApproval, id: 5329115400, submitted_at: '2026-09-08T03:49:53Z',
+      state: 'COMMENTED', body: '**Actionable comments posted: 1**' }] };
+  };
+  const result = await execute(harness, { nativeDispatch: true });
+  assert.ok(calls >= 2, 'reviews are listed again inside the follow-up check');
+  assert.equal(result.status, 'pending', harness.failures.join('\n'));
+});
+
 test('follow-up: a CodeRabbit reply inside an existing thread does not block the follow-up', async () => {
   const harness = relabelFollowUpHarness({
-    reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T03:10:00Z', in_reply_to_id: 3, body: 'resolved' },
+    reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T03:10:00Z', in_reply_to_id: 3,
+      body: '`@masonwells1`, thanks for the update.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._' },
       { id: 8, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T02:00:00Z', body: 'older finding' }],
     statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
   });

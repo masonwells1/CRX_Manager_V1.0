@@ -3233,11 +3233,15 @@ function headBelongsOnlyTo(pullRequest, associatedPulls) {
 // A review's inline comments are stored apart from its body (CodeRabbit on
 // #836, 2026-09-30), so an empty-body COMMENTED review could still carry new
 // line findings. `reviewComments` is GitHub's `GET repos/{o}/{r}/pulls/{n}/comments`
-// list for the PR. A CodeRabbit comment created at or after the approval that
-// starts a thread (no `in_reply_to_id`) is a new finding and refuses; a reply
-// inside an existing thread — the empty-body COMMENTED artifact's only content —
-// is tolerated. An unreadable list, a malformed entry (not an object, or no
-// author login) and an undated CodeRabbit comment all refuse.
+// list for the PR. Any CodeRabbit comment created at or after the approval
+// refuses — a new thread is a finding, and a reply can object too (#818: "I'll
+// leave this thread open until the fix is on the PR branch", Codex P1 on #836) —
+// EXCEPT a thread reply that closes the thread with CodeRabbit's own
+// "✅ Review thread resolved." line, the only content of the empty-body
+// COMMENTED artifacts seen on #810/#816/#818. An unreadable list, a malformed
+// entry (not an object, or no author login) and an undated CodeRabbit comment
+// all refuse.
+export const CODERABBIT_THREAD_RESOLVED = "✅ Review thread resolved.";
 function codeRabbitInlineFindingSince(reviewComments, approvalAt) {
   if (!Array.isArray(reviewComments)) return true;
   return reviewComments.some((comment) => {
@@ -3246,7 +3250,9 @@ function codeRabbitInlineFindingSince(reviewComments, approvalAt) {
     if (login.toLowerCase().replace(/\[bot\]$/, "") !== "coderabbitai") return false;
     const at = Date.parse(String(comment?.created_at || ""));
     if (!Number.isFinite(at)) return true;
-    return at >= approvalAt && (comment?.in_reply_to_id === null || comment?.in_reply_to_id === undefined);
+    if (at < approvalAt) return false;
+    const isReply = comment?.in_reply_to_id !== null && comment?.in_reply_to_id !== undefined;
+    return !(isReply && String(comment?.body || "").includes(CODERABBIT_THREAD_RESOLVED));
   });
 }
 
@@ -3273,11 +3279,11 @@ export function coderabbitFollowUpClearedHead(pullRequest, statuses, associatedP
 
 // The single CodeRabbit merge/apply requirement every gate calls: an APPROVED
 // verdict on the exact head, or a clean follow-up of that head (above). The
-// follow-up costs `gh api` reads of the PR's inline review comments (one per
-// 100), the head's statuses and the PRs that contain it, made only when the
-// exact-head approval is absent and a standing approval exists. Any failure to
-// read refuses (fail closed). The PR view must include `number` so the head can
-// be bound to this pull request.
+// follow-up costs `gh api` reads — the head's statuses and the PRs that contain
+// it, then the PR's inline review comments and reviews (one read per 100) —
+// made only when the exact-head approval is absent and a standing approval
+// exists. Any failure to read refuses (fail closed). The PR view must include
+// `number` so the head can be bound to this pull request.
 const CODERABBIT_REVIEW_COMMENT_PAGE_CAP = 10;
 export function coderabbitClearedHead(pullRequest, { repo, gh } = {}) {
   if (coderabbitApprovedHead(pullRequest)) return true;
@@ -3288,27 +3294,49 @@ export function coderabbitClearedHead(pullRequest, { repo, gh } = {}) {
   if (!repoPath || !/^[0-9a-f]{40}$/i.test(headSha) || !Number.isSafeInteger(number) || number <= 0) return false;
   let statuses;
   let associatedPulls;
-  const reviewComments = [];
+  let reviewComments;
+  let reviews;
   try {
-    // Every inline review comment on the PR, oldest first, 100 per page. A
-    // page shorter than 100 is the last; a PR past the page cap refuses.
-    for (let page = 1; ; page += 1) {
-      if (page > CODERABBIT_REVIEW_COMMENT_PAGE_CAP) return false;
-      const batch = JSON.parse(String(gh(["api", `${repoPath}/pulls/${number}/comments?per_page=100&page=${page}`])));
-      if (!Array.isArray(batch)) return false;
-      reviewComments.push(...batch);
-      if (batch.length < 100) break;
-    }
+    // Order matters (Codex P1 on #836): the completion status is read FIRST and
+    // the reviews and inline comments AFTER it, so a finding CodeRabbit posts
+    // before its "Review completed" status (6-8 s before, on every observed run)
+    // is always visible. The caller's earlier `gh pr view` reviews are not used
+    // for the follow-up: they could predate the completion.
     // One page, newest first (GitHub's documented order for this list); only the
     // newest CodeRabbit entry matters and it is sorted again above regardless.
     statuses = JSON.parse(String(gh(["api", `${repoPath}/commits/${headSha}/statuses?per_page=100`])));
     // One page: more than 100 PRs sharing a head would refuse anyway, since
     // any PR other than this one refuses.
     associatedPulls = JSON.parse(String(gh(["api", `${repoPath}/commits/${headSha}/pulls?per_page=100`])));
+    reviewComments = readAllPages(gh, `${repoPath}/pulls/${number}/comments`);
+    const restReviews = readAllPages(gh, `${repoPath}/pulls/${number}/reviews`);
+    if (!reviewComments || !restReviews) return false;
+    // REST review shape → the `gh pr view --json reviews` shape the predicates read.
+    reviews = restReviews.map((review) => (review && typeof review === "object" ? {
+      author: { login: review.user?.login },
+      state: review.state,
+      submittedAt: review.submitted_at,
+      body: review.body,
+      commit: { oid: review.commit_id },
+    } : review));
   } catch {
     return false;
   }
-  return coderabbitFollowUpClearedHead(pullRequest, statuses, associatedPulls, reviewComments);
+  return coderabbitFollowUpClearedHead({ ...pullRequest, reviews }, statuses, associatedPulls, reviewComments);
+}
+
+// Every item of a paginated `gh api` list, 100 per page (oldest first for the
+// PR comment and review lists). A page shorter than 100 is the last. A non-list
+// page, or a list past the page cap, returns null so the caller refuses.
+function readAllPages(gh, path) {
+  const items = [];
+  for (let page = 1; page <= CODERABBIT_REVIEW_COMMENT_PAGE_CAP; page += 1) {
+    const batch = JSON.parse(String(gh(["api", `${path}?per_page=100&page=${page}`])));
+    if (!Array.isArray(batch)) return null;
+    items.push(...batch);
+    if (batch.length < 100) return items;
+  }
+  return null;
 }
 
 // The API path for `gh api` calls about a merge request's repository. `gh pr
