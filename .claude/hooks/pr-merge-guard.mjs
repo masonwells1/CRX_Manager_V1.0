@@ -66,11 +66,20 @@ function deny(reason) {
   process.exit(0);
 }
 
-let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
+// A tool call this guard cannot read was not checked, so it must not report the
+// launcher's token: exiting without it sends merge-guard-launcher.mjs down its
+// fail-closed path, which denies anything that could merge and lets other work
+// run. passthrough() here once signed a truncated `gh pr merge` payload as a
+// checked allow (Codex App P1, PR #841).
+function unreadable() { process.exit(0); }
+const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-const toolName = String(payload?.tool_name || "");
-const toolInput = payload?.tool_input || {};
+let payload;
+try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { unreadable(); }
+if (!isPlainObject(payload) || (payload.tool_input !== undefined && !isPlainObject(payload.tool_input))) unreadable();
+
+const toolName = String(payload.tool_name || "");
+const toolInput = payload.tool_input || {};
 
 // ── detect merge intent — EVERY segment, EVERY request ───────────────────────
 // The parse loop must not stop at the first hit: `gh pr merge <feature-PR>;

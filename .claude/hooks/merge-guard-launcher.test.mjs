@@ -215,6 +215,25 @@ ok(res.status === 0 && res.stdout === "", "real launcher, missing guard: ordinar
 res = launch(LAUNCHER, guards.allow, MERGE);
 ok(decisionOf(res.stdout)?.permissionDecision === "deny", "real launcher refuses a guard outside its own directory");
 
+// A tool call the guard cannot read is not a checked allow (Codex App P1, PR #841):
+// it takes the launcher's fail-closed path, so a merge is denied and other work runs.
+for (const [label, input] of [
+  ["a truncated merge call", '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 812"}'],
+  ["a merge call whose tool_input is a string", '{"tool_name":"Bash","tool_input":"gh pr merge 812"}'],
+  ["a bare JSON string naming a merge", '"gh pr merge 812"'],
+]) {
+  res = launch(LAUNCHER, REAL_GUARD, input);
+  ok(decisionOf(res.stdout)?.permissionDecision === "deny" && /did not finish/.test(decisionOf(res.stdout)?.permissionDecisionReason || ""),
+    `real launcher + real guard: ${label} is denied as unchecked`);
+}
+for (const [label, input] of [
+  ["a truncated ordinary call", '{"tool_name":"Bash","tool_input":{"command":"npm run build"}'],
+  ["a JSON null payload", "null"],
+]) {
+  res = launch(LAUNCHER, REAL_GUARD, input);
+  ok(res.status === 0 && res.stdout === "", `real launcher + real guard: ${label} still runs`);
+}
+
 // The deadline path through main(): a copy of the launcher with a short deadline,
 // next to a hanging guard. Only the one timing constant differs from the real file.
 const source = readFileSync(LAUNCHER, "utf8");
