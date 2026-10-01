@@ -4,9 +4,10 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-10-01 morning (America/Chicago). THIS IS THE CURRENT BOUNDARY.** A
-read-only ledger read on project `rhyzpcqhnizqbxphqdkr` at 2026-10-01 11:07 UTC (06:07 Chicago),
-taken as the pre-apply preflight for the field-season install, records **1013 ledger rows** (1006
+**Live-ledger capture — 2026-10-01 (America/Chicago). THIS IS THE CURRENT BOUNDARY.** Read-only
+ledger reads on project `rhyzpcqhnizqbxphqdkr` at 2026-10-01 11:07 UTC (06:07 Chicago) and again
+at 22:23 UTC (17:23 Chicago), right after PR #857 merged, both taken as the pre-apply preflight for
+the field-season install, record identical results: **1013 ledger rows** (1006
 distinct names), live `max(version)` **`20260928025520`**, and effective ordering high-water
 **`20260914100900_repair_commission_history_label_snapshots`**, computed row by row (the stamp in
 each row's `name`, falling back to its `version` only when the name has none). Nothing has applied
