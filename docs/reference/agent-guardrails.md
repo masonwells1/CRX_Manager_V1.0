@@ -302,9 +302,13 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27 and again on 2026-10-01. Only CodeRabbit
    can supply the approval today: `masonwells1` is the only collaborator and authors every PR (no self-approval),
    GitHub Actions cannot approve, and every approval on the last 40 closed PRs came from `coderabbitai[bot]`.
-   CodeRabbit APPROVED #841 at `18cf44114` on 2026-09-30 00:37Z and GitHub then reported `reviewDecision: APPROVED`.
-   With the autonomous-landing merge gates (CodeRabbit's latest verdict APPROVED on the exact head, `--auto` refused),
-   an unreviewed PR cannot land even if a local gate were weakened. The classic branch protection still shows
+   The ruleset's configuration shows the requirement; it is not evidence that any given PR met it. Observed once:
+   CodeRabbit APPROVED #841's head `18cf44114` on 2026-09-30 00:37Z and GitHub briefly reported
+   `reviewDecision: APPROVED`; the next push dismissed that approval (the review now reads `DISMISSED`), as
+   `dismiss_stale_reviews_on_push` requires, so no PR has yet merged on such an approval. Two separate checks keep an
+   unreviewed PR out: GitHub's ruleset requires the approval server-side, and the local merge guard (the
+   autonomous-landing gates) independently requires CodeRabbit's latest verdict APPROVED on the exact head and refuses
+   `--auto`, so weakening either one alone does not let it land. The classic branch protection still shows
    `enforce_admins` off, but the ruleset has no bypass actors, so its required review binds admins too. Cost Mason
    accepted: if CodeRabbit is down, nothing merges until it recovers. The ruleset is his alone to change; agents never
    change or work around it, and no document carries a step-by-step way to switch it off (a Sol review flagged such
