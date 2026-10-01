@@ -1,6 +1,5 @@
 // Shared helpers for Claude's and Codex's production-push guards.
 
-import { readSync } from "node:fs";
 import path from "node:path";
 
 // Does the git command push (to main)? We fire on any `git push`; the hook then
@@ -129,45 +128,45 @@ export const MAX_HOOK_INPUT_LENGTH = 16 * 1024 * 1024;
 // and measuring afterwards was not enough (Codex GitHub review, #840): past
 // ~512 MB Node cannot build the string at all, the read throws, and a guard
 // that treats a failed read as "nothing to check" allows the call.
-// Past the limit the rest is read and discarded, never stored, so the caller
-// that is writing the input is not cut off mid-write; the drain stops after
-// `drainMs` so an endless input still gets its refusal before the hook limit.
-// A non-blocking stdin that stays empty (EAGAIN) is polled with a short pause,
-// not spun on, and throws after `waitMs`; both guards refuse on a read failure.
-// A blocking read cannot be interrupted, so a writer that stalls mid-write still
-// holds the hook, as reading it whole always did; the writer is the agent
-// harness, which writes an input it already holds.
-const READ_PAUSE = new Int32Array(new SharedArrayBuffer(4));
-export function readHookInputBounded(limit = MAX_HOOK_INPUT_LENGTH, fd = 0, drainMs = 5_000, waitMs = 10_000) {
-  const chunks = [];
-  const buffer = Buffer.alloc(1024 * 1024);
-  const started = Date.now();
-  let total = 0;
-  for (;;) {
-    let bytes;
-    try {
-      bytes = readSync(fd, buffer, 0, buffer.length, null);
-    } catch (error) {
-      if (error?.code === "EAGAIN") {
-        const elapsed = Date.now() - started;
-        if (total > limit && elapsed > drainMs) break;
-        if (elapsed > waitMs) throw new Error(`hook input did not arrive within ${waitMs} ms`);
-        Atomics.wait(READ_PAUSE, 0, 0, 10);
-        continue;
+// Past the limit the rest is read and discarded, never stored, for up to
+// `drainMs` after the limit is crossed, so the writer is not cut off mid-write.
+// The read is asynchronous so a timer can end it: an input that is still open
+// after `waitMs` (a stalled or endless writer) resolves as a failure instead of
+// holding the hook until it is killed (Luna, 2026-09-30). Resolves to
+// { tooLarge, text } or { failed }; both guards refuse `tooLarge` and `failed`.
+export function readHookInputBounded({ limit = MAX_HOOK_INPUT_LENGTH, drainMs = 5_000, waitMs = 10_000, stream = process.stdin } = {}) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let total = 0;
+    let overLimitAt = 0;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.pause();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(total > limit
+      ? { tooLarge: true, text: "" }
+      : { failed: `hook input was still arriving after ${waitMs} ms` }), waitMs);
+    stream.on("data", (chunk) => {
+      total += chunk.length;
+      if (total <= limit) {
+        chunks.push(chunk);
+        return;
       }
-      if (error?.code === "EOF") break;
-      throw error;
-    }
-    if (bytes === 0) break;
-    total += bytes;
-    if (total > limit) {
-      if (Date.now() - started > drainMs) break;
-      continue;
-    }
-    chunks.push(Buffer.from(buffer.subarray(0, bytes)));
-  }
-  if (total > limit) return { tooLarge: true, text: "" };
-  return { tooLarge: false, text: Buffer.concat(chunks, total).toString("utf8") };
+      if (!overLimitAt) {
+        overLimitAt = Date.now();
+        chunks.length = 0;
+      }
+      if (Date.now() - overLimitAt > drainMs) finish({ tooLarge: true, text: "" });
+    });
+    stream.on("end", () => finish(total > limit
+      ? { tooLarge: true, text: "" }
+      : { tooLarge: false, text: Buffer.concat(chunks, total).toString("utf8") }));
+    stream.on("error", (error) => finish({ failed: String(error?.message || error) }));
+  });
 }
 export function pushParseCostExceeded(cmd) {
   const text = String(cmd || "");

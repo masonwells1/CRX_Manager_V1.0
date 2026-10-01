@@ -1841,8 +1841,11 @@ function writeDenial(reason) {
 async function main() {
   // Measured while reading, before decoding: JSON.parse on an unbounded input is
   // itself a way to outrun the hook limit, and a killed hook allows the action.
-  // A read failure reaches main().catch, which denies.
-  const input = readHookInputBounded();
+  const input = await readHookInputBounded();
+  if (input.failed) {
+    writeDenial(`CODEX PRODUCTION GATE: hook input could not be read (${input.failed}), so the action is denied (fail closed).`);
+    return;
+  }
   const raw = input.text;
   if (input.tooLarge) {
     writeDenial(

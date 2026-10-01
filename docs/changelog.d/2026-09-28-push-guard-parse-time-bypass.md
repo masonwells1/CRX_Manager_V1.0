@@ -62,13 +62,16 @@ crashed (exit 1) with no decision. Both guards now count
 bytes while reading (`readHookInputBounded`), stop storing at 16 MiB, and drain the rest for up to
 5 s so the writer is not cut off. Measured with real hook processes: 20 MB, 600 MB and 1.2 GB
 inputs are refused in 0.06 s, 0.2 s and 0.5 s, with no error on either side of the pipe.
-Luna on that fix (4 findings): adopted two — an empty non-blocking stdin is now polled with a
-10 ms pause and refused after 10 s instead of spun on, and the Claude guard now refuses a tool call
-whose input could not be read (it used to allow it; the Codex guard already refused). Refuted one: a
-writer that stalls mid-write still holds the hook, but that was equally true of reading the input
-whole, and the writer is the agent harness writing an input it already holds. Deferred one,
-pre-existing and hook-wide: the Claude guard allows a call whose input is not valid JSON, as the
-other Claude hooks do.
+Luna, two rounds on that fix: a blocking read cannot be timed out, so a writer that stalled
+mid-write still held both guards until the 15 s kill — measured on `main`, both were killed with no
+decision. The read is now asynchronous with a 10 s deadline: a stalled input, a read error, or an
+input still arriving is refused (both guards, measured at 10.05 s, clean exit), and the 5 s drain
+clock starts when the limit is crossed. The Claude guard used to allow a tool call whose input
+could not be read; it now refuses, as the Codex guard did. Deferred, pre-existing and hook-wide:
+the Claude guard allows a call whose input is not valid JSON, as the other Claude hooks do.
+Luna round 3: no BLOCKER or HIGH. Deferred LOW: an input that crosses the limit and then stalls is
+refused at the 10 s deadline rather than 5 s after the crossing, because the drain clock is checked
+when data arrives; it is still refused before the 15 s kill.
 Deferred LOW: the timing cases assert speed, not the allow/deny decision on
 under-budget inputs — those decisions stay covered by the existing guard suites.
 

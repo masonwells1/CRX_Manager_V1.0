@@ -73,12 +73,10 @@ function deny(reason) {
 }
 
 let payload;
-let input = { tooLarge: false, text: "" };
-try {
-  input = readHookInputBounded();
-} catch (error) {
+const input = await readHookInputBounded();
+if (input.failed) {
   // An unread tool call is an uninspected one: refuse it rather than allow it.
-  deny(`CODEX GATE: this tool call's hook input could not be read (${sanitizeForMessage(String(error?.message || error))}), so it is refused. Retry the command; if this repeats, the hook's input pipe is broken.`);
+  deny(`CODEX GATE: this tool call's hook input could not be read (${sanitizeForMessage(input.failed)}), so it is refused. Retry the command; if this repeats, the hook's input pipe is broken.`);
 }
 // Measured while reading, before decoding: JSON.parse on an unbounded input is
 // itself a way to outrun the hook limit, and a killed hook allows the command.

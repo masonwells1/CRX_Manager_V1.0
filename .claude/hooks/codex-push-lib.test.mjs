@@ -3,8 +3,9 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { scratchHookEnvironment } from "./git-test-env.mjs";
@@ -3454,21 +3455,65 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   // The input limit applies while reading, and the excess is drained, not stored
   // (Codex GitHub review, #840: reading everything first let a >512 MB input
   // crash the read, and a failed read allowed the call).
-  const libUrl = new URL("./codex-push-lib.mjs", import.meta.url).href;
-  const readWithLimit = (input, limit) => spawnSync(process.execPath, [
-    "--input-type=module",
-    "-e",
-    `import { readHookInputBounded } from ${JSON.stringify(libUrl)}; process.stdout.write(JSON.stringify(readHookInputBounded(${limit})));`,
-  ], { input, encoding: "utf8" });
-  const under = readWithLimit("é".repeat(5), 10);
-  assert.equal(under.error, undefined, `bounded read under the limit ran: ${under.error?.message}`);
-  assert.deepEqual(JSON.parse(under.stdout), { tooLarge: false, text: "é".repeat(5) }, "input within the byte limit is returned whole");
-  const over = readWithLimit("x".repeat(4 * 1024 * 1024), 1024);
-  assert.equal(over.error, undefined, `writer is not cut off when the input is over the limit: ${over.error?.message}`);
-  assert.deepEqual(JSON.parse(over.stdout), { tooLarge: true, text: "" }, "input over the byte limit is refused, not returned");
-  // A read failure is raised, never returned as empty input: an empty input
-  // would read as "nothing to check" (Luna, 2026-09-30).
-  assert.throws(() => readHookInputBounded(10, 987_654), /EBADF|bad file/i, "a read failure throws to the guard, which refuses");
+  const feed = (parts, { end = true, error } = {}) => {
+    const stream = new PassThrough();
+    for (const part of parts) stream.write(part);
+    if (error) setImmediate(() => stream.destroy(new Error(error)));
+    else if (end) stream.end();
+    return stream;
+  };
+  // "é" is two bytes: five of them sit exactly at a 10-byte limit, split mid-character.
+  const twoByte = Buffer.from("é".repeat(5));
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 10, stream: feed([twoByte.subarray(0, 3), twoByte.subarray(3)]) }),
+    { tooLarge: false, text: "é".repeat(5) },
+    "input within the byte limit is returned whole, even split mid-character",
+  );
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 1024, stream: feed([Buffer.alloc(4096, 120)]) }),
+    { tooLarge: true, text: "" },
+    "input over the byte limit is refused, not returned",
+  );
+  // A read failure, or an input still open at the deadline, is a failure the
+  // guards refuse — never an empty input that reads as "nothing to check".
+  assert.ok((await readHookInputBounded({ stream: feed(["{"], { error: "pipe broke" }) })).failed, "a read error fails");
+  const stalled = feed(['{"tool_input":'], { end: false });
+  const stalledResult = await readHookInputBounded({ waitMs: 200, stream: stalled });
+  assert.match(stalledResult.failed ?? "", /still arriving after 200 ms/, "an input that stalls before the limit fails at the deadline");
+  stalled.destroy();
+  const stalledOver = feed([Buffer.alloc(2048, 120)], { end: false });
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 1024, waitMs: 200, stream: stalledOver }),
+    { tooLarge: true, text: "" },
+    "an input that stalls after the limit is still refused as too large at the deadline",
+  );
+  stalledOver.destroy();
+
+  // The real guards, with a writer that sends part of a push and never closes:
+  // each refuses at its read deadline instead of being killed (a kill allows).
+  const stallHooks = [
+    ["Claude push guard", fileURLToPath(new URL("./codex-push-guard.mjs", import.meta.url))],
+    ["Codex production guard", fileURLToPath(new URL("../../.codex/hooks/production-action-guard.mjs", import.meta.url))],
+  ];
+  const stallRuns = stallHooks.map(([label, hook]) => new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [hook], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    const killer = setTimeout(() => child.kill(), 15_000);
+    child.on("close", (code, signal) => {
+      clearTimeout(killer);
+      child.stdin.destroy();
+      resolve({ label, code, signal, stdout, elapsedMs: Date.now() - started });
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.write('{"tool_name":"Bash","tool_input":{"command":"git push origin HEAD:main');
+  }));
+  for (const run of await Promise.all(stallRuns)) {
+    assert.equal(run.signal, null, `${run.label} decides a stalled input before the 15 s limit (killed after ${run.elapsedMs}ms)`);
+    assert.equal(run.code, 0, `${run.label} exits cleanly on a stalled input`);
+    assert.match(run.stdout, /could not be read/, `${run.label} refuses a stalled input`);
+  }
 }
 
 console.log("OK - codex push shared library checks passed.");
