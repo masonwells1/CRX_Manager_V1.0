@@ -30,6 +30,7 @@ import {
   OWNER_APPROVAL_MAX_AGE_MS,
   PARKED_LABELS,
   approvalFileName,
+  assertOwnerTrustFilesReviewed,
   buildApprovalPayload,
   parkedCategories,
   readLiveOwnerKey,
@@ -104,6 +105,12 @@ if (String(pr?.state).toUpperCase() !== "OPEN" || String(pr?.baseRefName) !== "m
     `owner-approve-migration: pull request #${pr?.number ?? "?"} must be open against main with head ${head.slice(0, 12)} ` +
     `(GitHub: state ${pr?.state}, base ${pr?.baseRefName}, head ${String(pr?.headRefOid || "?").slice(0, 12)}). Push first.`);
 }
+
+// The key, the Windows Hello helper and the code building what Mason signs must be
+// the reviewed bytes at this head, so he never signs through a locally edited
+// helper or summary (Sol HIGH, PR #857). The apply checks the same again.
+try { assertOwnerTrustFilesReviewed({ head }); }
+catch (err) { die(1, `owner-approve-migration: ${err?.message || err}. Refusing.`); }
 
 // Both halves of the key must agree before Mason is asked anything.
 let keys;

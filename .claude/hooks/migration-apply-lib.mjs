@@ -29,6 +29,7 @@ import { flagActive } from "./autopilot-lib.mjs";
 import { readMigrationHistory } from "./migration-access-lib.mjs";
 import {
   approvalFileName,
+  assertOwnerTrustFilesReviewed,
   defaultOwnerKeys,
   findOwnerApprovals,
   parkedCategories,
@@ -340,6 +341,10 @@ export function evaluateMigrationApply({
   // Test injection point: returns { pinned, live } public keys. Real callers
   // leave it unset and get the committed key plus the key Windows holds.
   ownerApprovalKeys,
+  // Test injection point: throws unless the approval files on disk are the
+  // reviewed commit's bytes. Real callers leave it unset and get
+  // assertOwnerTrustFilesReviewed (Sol HIGH, PR #857).
+  ownerTrustCheck,
   // The pull-request half of the autonomous-landing rule — see
   // migration-landing-gate-lib.mjs. Injection point for tests only; both real
   // callers leave it unset and get the real gate. `landingDeadlineMs` is the
@@ -1130,6 +1135,13 @@ export function evaluateMigrationApply({
     // LAST OF ALL, for a parked migration: Mason's Windows Hello signature, bound
     // to this exact SQL and to the PR and head the landing gate just confirmed.
     if (ownerApprovalCandidates) {
+      // The key, the Windows Hello helper and the code that checks them are read
+      // from this checkout: they must be the bytes reviewed at the head the landing
+      // gate just confirmed, or a local edit could stand in for Mason's signature.
+      try { (ownerTrustCheck || assertOwnerTrustFilesReviewed)({ head: landing.head }); }
+      catch (error) {
+        return block(`OWNER APPROVAL GUARD: ${error?.message || error}. Refusing "${migName}" (fail closed).`);
+      }
       let keys;
       try { keys = (ownerApprovalKeys || defaultOwnerKeys)(); }
       catch (error) {

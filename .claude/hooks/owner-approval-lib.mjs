@@ -29,7 +29,7 @@
 // right now. A software key an agent generated and pinned would not match the
 // Windows Hello key; replacing that key needs Mason's Windows Hello prompt.
 
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -240,6 +240,62 @@ export function ownerOnceGuardSql({ tag, migName, sql }) {
 }
 
 /** The approval must still be inside its window at the moment of transmission. */
+// The files an owner approval is created and verified with, repo-relative. They
+// are read from this checkout, so an uncommitted edit to any of them (a software
+// key pinned in place of Mason's, a helper that signs without Windows Hello, a
+// classifier that stops parking) could forge or launder an approval while the
+// migration and PR head stay reviewed (Sol HIGH, PR #857). They must match the
+// reviewed commit byte for byte before an approval is requested or honoured.
+export const OWNER_TRUST_FILES = Object.freeze([
+  ".claude/hooks/owner-approval-key.json",
+  ".claude/hooks/owner-approval-hello.ps1",
+  ".claude/hooks/owner-approval-lib.mjs",
+  ".claude/hooks/live-testdata-lib.mjs",
+  ".claude/hooks/migration-access-lib.mjs",
+  ".claude/hooks/migration-apply-lib.mjs",
+  ".claude/hooks/migration-landing-gate-lib.mjs",
+  ".claude/hooks/codex-push-lib.mjs",
+  "scripts/apply-migration-file.mjs",
+  "scripts/owner-approve-migration.mjs",
+]);
+// The checkout these files were loaded from: this module lives in <root>/.claude/hooks.
+export const OWNER_TRUST_ROOT = path.resolve(HERE, "..", "..");
+
+const lfHash = (bytes) => createHash("sha256").update(String(bytes).replace(/\r\n/g, "\n")).digest("hex");
+
+/**
+ * Throws unless every OWNER_TRUST_FILES file on disk is byte-identical (CRLF→LF,
+ * the repository's line-ending normalization) to that file in the reviewed
+ * commit `head`. Compares file bytes directly, never `git status`, which trusts
+ * the index's cached file times and the assume-unchanged / skip-worktree flags.
+ */
+export function assertOwnerTrustFilesReviewed({
+  head,
+  root = OWNER_TRUST_ROOT,
+  files = OWNER_TRUST_FILES,
+  showCommitted = (rel) => execFileSync("git", ["show", `${head}:${rel}`], {
+    cwd: root, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
+  }),
+  readOnDisk = (rel) => readFileSync(path.join(root, ...rel.split("/")), "utf8"),
+} = {}) {
+  if (!/^[0-9a-f]{40}$/i.test(String(head || ""))) throw new Error("no reviewed commit to compare the approval files against");
+  const changed = [];
+  for (const rel of files) {
+    let committed;
+    try { committed = showCommitted(rel); }
+    catch { changed.push(`${rel} (not in the reviewed commit)`); continue; }
+    let disk;
+    try { disk = readOnDisk(rel); }
+    catch { changed.push(`${rel} (missing on disk)`); continue; }
+    if (lfHash(disk) !== lfHash(committed)) changed.push(rel);
+  }
+  if (changed.length) {
+    throw new Error(
+      `these approval files differ from the reviewed commit ${String(head).slice(0, 12)}: ${changed.join(", ")}. ` +
+      "Only the reviewed bytes may create or check Mason's approval; restore them (git checkout -- <file>) and do not edit them locally");
+  }
+}
+
 export function assertApprovalStillValid(payloadText, now = Date.now()) {
   const p = JSON.parse(payloadText);
   const expires = Date.parse(p.expiresAt);

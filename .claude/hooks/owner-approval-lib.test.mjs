@@ -14,9 +14,13 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   OWNER_APPROVAL_MAX_AGE_MS,
   OWNER_KEY_NAME,
+  OWNER_TRUST_FILES,
+  OWNER_TRUST_ROOT,
+  assertOwnerTrustFilesReviewed,
   buildApprovalPayload,
   buildSelfTestPayload,
   findOwnerApprovals,
@@ -206,5 +210,35 @@ refuses(check(approve(), { appliedNames: ["20260101000000_x", base.migration] })
 
 ok(signatureValid("x", signAs(mason, "x"), der(mason)) && !signatureValid("x", signAs(mason, "x"), der(agent)),
   "signatureValid accepts the signer's key only");
+
+// The approval files must be the reviewed commit's bytes (Sol HIGH, PR #857).
+{
+  const HEAD = "a".repeat(40);
+  const committed = { "k.json": '{"spki":"MASON"}\n', "h.ps1": "Sign-With-Hello\n" };
+  const check = (disk, over = {}) => () => assertOwnerTrustFilesReviewed({
+    head: HEAD,
+    files: ["k.json", "h.ps1"],
+    showCommitted: (rel) => { if (!(rel in committed)) throw new Error("no such path"); return committed[rel]; },
+    readOnDisk: (rel) => { if (!(rel in disk)) throw new Error("ENOENT"); return disk[rel]; },
+    ...over,
+  });
+  const crlfOf = (s) => s.replace(/\n/g, "\r\n");
+  assert.doesNotThrow(check({ ...committed }), "identical bytes pass"); pass++;
+  assert.doesNotThrow(check({ "k.json": crlfOf(committed["k.json"]), "h.ps1": crlfOf(committed["h.ps1"]) }),
+    "a CRLF checkout of the same bytes passes"); pass++;
+  assert.throws(check({ ...committed, "k.json": '{"spki":"AGENT"}\n' }), /differ from the reviewed commit aaaaaaaaaaaa: k\.json/,
+    "a swapped pinned key is refused"); pass++;
+  assert.throws(check({ ...committed, "h.ps1": "Sign-With-SoftwareKey\n" }), /h\.ps1/, "an edited helper is refused"); pass++;
+  assert.throws(check({ "k.json": committed["k.json"] }), /h\.ps1 \(missing on disk\)/, "a missing file is refused"); pass++;
+  assert.throws(check({ ...committed }, { files: ["k.json", "new.mjs"] }), /new\.mjs \(not in the reviewed commit\)/,
+    "a file absent from the reviewed commit is refused"); pass++;
+  assert.throws(check({ ...committed }, { head: "HEAD" }), /no reviewed commit/, "a symbolic or missing head is refused"); pass++;
+  for (const rel of [".claude/hooks/owner-approval-key.json", ".claude/hooks/owner-approval-hello.ps1",
+    ".claude/hooks/owner-approval-lib.mjs", "scripts/apply-migration-file.mjs", "scripts/owner-approve-migration.mjs"]) {
+    ok(OWNER_TRUST_FILES.includes(rel), `${rel} is one of the files checked against the reviewed commit`);
+  }
+  ok(path.resolve(OWNER_TRUST_ROOT, ".claude", "hooks") === path.dirname(fileURLToPath(import.meta.url)),
+    "the files are read from the checkout the approval code was loaded from");
+}
 
 console.log(`owner-approval-lib: ${pass} assertions passed`);

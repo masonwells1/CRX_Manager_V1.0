@@ -1715,7 +1715,7 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     return root;
   };
   const scriptDoor = (root, sql, over = {}) => evaluate(root, {
-    query: sql, ownerApprovalDoor: true, ownerApprovalKeys: masonKeys, landingGate: readyLanding, ...over,
+    query: sql, ownerApprovalDoor: true, ownerApprovalKeys: masonKeys, ownerTrustCheck: () => {}, landingGate: readyLanding, ...over,
   });
 
   for (const [category, sql] of Object.entries(parkedSql)) {
@@ -1761,8 +1761,22 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
     { ownerApprovalKeys: () => ({ pinned: spki(other), live: spki(mason) }) }),
   "not the Windows Hello key", "a pinned key that is not the Windows Hello key is refused");
+  // The approval files must be the reviewed bytes at the landing gate's head, checked
+  // before the key is read (Sol HIGH, PR #857).
+  {
+    let seenHead = null;
+    let keysRead = false;
+    const v = scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS, {
+      ownerTrustCheck: ({ head }) => { seenHead = head; throw new Error("these approval files differ from the reviewed commit eeeeeeeeeeee: .claude/hooks/owner-approval-key.json"); },
+      ownerApprovalKeys: () => { keysRead = true; return masonKeys(); },
+    });
+    denies(v, "differ from the reviewed commit", "a locally edited approval file refuses even a valid approval");
+    ok(seenHead === OWNER_HEAD, "the approval files are compared against the head the landing gate confirmed");
+    ok(!keysRead, "the key is never read when the approval files are not the reviewed bytes");
+  }
   // A routine migration needs no approval and is unaffected by the door.
-  allows(evaluate(fixture(), { ownerApprovalDoor: true, ownerApprovalKeys: () => { throw new Error("must not be read"); } }),
+  allows(evaluate(fixture(), { ownerApprovalDoor: true, ownerApprovalKeys: () => { throw new Error("must not be read"); },
+    ownerTrustCheck: () => { throw new Error("must not be run"); } }),
     "a routine migration through the apply script's door never reads the owner key");
 }
 
