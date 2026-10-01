@@ -32,8 +32,8 @@ section of `docs/manual/KNOWN_ISSUES.md`. An item that appeared in several sourc
 once. Junk-customer rows are recorded by id prefix only, because the repository is public.
 Review of this change found one miss. #830 carried only the click-test from the June UI-overhaul
 ledger (`ui-overhaul-v2/STATE.md`), not its other deferred follow-ups. Those are now in `TODO.md` §5:
-one owner decision (the old A/R page routes), six features never built, and one item recorded as
-dropped. Each was confirmed still open in code on 2026-09-28.
+one owner decision (the old A/R page routes), seven features never built (including the Customer 360
+summary-bar numbers), and one item recorded as dropped. Each was confirmed still open in code on 2026-09-28.
 
 **Pointers:** the archive READMEs (`2026-summer`, `2026-summer-closeout`, `2026-spring`,
 `2026-Q1-brainstorms`) now list only what remains. Mentions inside other historical records, the

@@ -323,6 +323,10 @@ removed in this cleanup; recover with
 - **Search and balance gaps:** a by-product filter on Field Invoices / Unbilled Applications (invoice lines
   need a product join), and a per-field outstanding balance on the customer Fields tab (it needs a new
   field-level source).
+- **Customer 360 summary bar:** add field count, license expiry and next compliance date to the cards on
+  the customer page. `CustomerSummaryBar` shows only AR, orders, deliveries, credit tier and last activity,
+  and `get_customer_summary` returns only those five, so this needs an RPC change or extra queries. Making
+  the bar stay put while scrolling (sticky) was left as visual polish for you to decide.
 - Dropped as low value: sticky summary cards on A/R Aging, which shows aging as table columns.
 
 **Proof still owed**
