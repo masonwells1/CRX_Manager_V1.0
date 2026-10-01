@@ -107,8 +107,14 @@ Same hard rule as `codex-cross-review`: a security/migration/money review must s
 executed live evidence, not claims. Before invoking Codex on a change that touches the DB:
 
 1. `npm run db-sweeps` → execute each predicate read-only via Supabase MCP `execute_sql`
-   (project `rhyzpcqhnizqbxphqdkr`). Any un-allowlisted violation is a real finding — fix
-   or report it before handing Codex a "clean" change.
+   (project `rhyzpcqhnizqbxphqdkr`). Capture each actual `sweep_result` packet (`predicate`,
+   `rows`, `function_contracts`) as a private local JSON array, then run
+   `node scripts/db-invariant-sweeps/run-sweeps.mjs --adjudicate <capture.json>`.
+   Do not compare violation keys alone: the adjudicator applies the same parameter and
+   function/dependency contract matcher as linked execution, and missing, duplicate, unknown or
+   drifting packets fail.
+   Any violation the adjudicator leaves is a real finding — fix or report it before handing Codex
+   a "clean" change.
 2. For each touched RPC, run its smoke chain (`node scripts/smoke/run-smoke.mjs --spec <rpc>`)
    and confirm `SMOKE_PASS_ROLLBACK`.
 
