@@ -300,6 +300,9 @@ then read it with `git show e81853970:<path>`. Re-verify against the live app be
   never real customer data; an agent does this only with Mason's explicit approval in the current conversation: Quotes list
   "Convert to Order", Deliveries list "Complete" (signed-by popup), and Receiving Hub "Receive" on a PO
   line. Each should match its detail-page flow.
+- Import one real John Deere / FieldView / .zip boundary export (a test customer is fine). Confirm it bills
+  on the file's acres, the ±10% difference flag appears, and redrawing the map does not change the billed
+  acres. This was the one check left open at the June field-acre billing go-live.
 
 **Features approved or requested but never built**
 - **Record Payment prefill** (approved 2026-05-04): Record Payment from an order, invoice or customer opens
@@ -315,6 +318,8 @@ removed in this cleanup; recover with
 - **Owner decision — old A/R pages:** `/ar-aging`, `/payment-history` and the other old money pages still
   have their own routes and links next to the combined `/accounts-receivable` workspace. Turning them into
   redirects and dropping the extra links would change where you click, so the overhaul left it to you.
+  Related: each A/R workspace tab still has its own customer picker; the overhaul planned picking the
+  customer once for all tabs (see the comment in `src/pages/AccountsReceivable.tsx`).
 - **Dashboard alerts not built:** overdue vendor bills (the summary RPC has no AP-due field) and blend
   tickets awaiting approval.
 - **Act-from-the-list actions not built:** "Create Invoice" from the Orders list (it branches on split
@@ -327,7 +332,39 @@ removed in this cleanup; recover with
   the customer page. `CustomerSummaryBar` shows only AR, orders, deliveries, credit tier and last activity,
   and `get_customer_summary` returns only those five, so this needs an RPC change or extra queries. Making
   the bar stay put while scrolling (sticky) was left as visual polish for you to decide.
+- **Customer drawer actions:** the slide-out customer drawer was planned with quick actions (new order, new
+  quote, add note) and recent orders / open invoices; it only has "Open full profile".
 - Dropped as low value: sticky summary cards on A/R Aging, which shows aging as table columns.
+
+**Found by a full sweep of every removed doc (2026-09-30)** — each item was checked as still open in code
+and missing from every other tracker. Sources are recoverable with `git show 4b6ff6293:<path>`.
+- **Approved 2026-05-04, never built** (`docs/archive/2026-summer-closeout/build-loops/ui-overhaul/STATE.md`):
+  make the customer name on Order, Invoice and Delivery pages a link with a small balance/credit card;
+  status text under each step of the quote→order→delivery→invoice strip; a "+ Create Invoice ▾" menu on
+  Invoices linking to filtered Orders / Blend Tickets; one main button plus a "More ▾" menu on Order,
+  Invoice and Delivery pages. Optional phone polish: a Map/List/Selected toggle in Select Locations and a
+  phone-first blend ticket page.
+- **Field boundary import** (`docs/build-loops/field-acre-billing/STATE.md` and `HANDOFF.md`): bulk import
+  never runs the existing overlapping-field check, so re-importing a farm creates duplicate fields; add a
+  Skip / Replace / Import-as-new choice at preview. Separately, saving a field, its boundary and its billable
+  acres is not one transaction, so a lost response or a rejected boundary can leave a duplicate or a field
+  with no map. Fixing that needs a migration (your call).
+- **Inventory and loader safety (low)**: the hold function still accepts a "crop program" hold with no
+  quote, which would never auto-release (the app only sends "manual"; narrow the function or require the
+  quote). No check catches a job reservation left active on a cancelled, finished or deleted job (add a
+  read-only sweep that should always count 0). Ticked "loads done" on a loader worksheet survive a change
+  to the job's acres or the tank layout, so a crew can see stale progress.
+- **Field-app parity leftovers (June 2026 parity loop)**: confirm one real job-attachment upload and delete
+  works in production; decide whether you want a fuel-surcharge rate (built, off by default) and whether
+  projected use should count only remaining field acres. On the Dispatch board, the retry key is lost after
+  a reload and failed applicator/recipe loads are not reported.
+- **Cosmetic**: pop-up and toast open/close animations never run, because their Tailwind animation plugin
+  is not installed. Install it or remove the classes.
+- **Decide keep or drop** (2026-05-09 implementation plan, "not in this plan"): bank reconciliation, vendor
+  1099 tracking, line items on vendor bills, and linking purchase orders to the vendor record instead of a
+  typed name. Also optional: a count badge for unpriced rush orders (sell-side plan), and a screen for the
+  product return-policy fields, which nothing in the app edits (product data model D-4, "not yet" on
+  2026-08-18).
 
 **Proof still owed**
 - **Commission as-of report, live real-path proof** (acceptance #6 of the 2026-09-03 spec, removed in

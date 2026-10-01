@@ -34,6 +34,19 @@ Review of this change found one miss. #830 carried only the click-test from the 
 ledger (`ui-overhaul-v2/STATE.md`), not its other deferred follow-ups. Those are now in `TODO.md` §5:
 one owner decision (the old A/R page routes), seven features never built (including the Customer 360
 summary-bar numbers), and one item recorded as dropped. Each was confirmed still open in code on 2026-09-28.
+After a second miss, three read-only agents swept all 277 removed files on 2026-09-30. They checked
+187 unfinished-item markers (unticked boxes, "REMAINING", "DEFERRED") and the text around them against
+current code and every tracker. Most markers were shipped work, items already tracked, or one-off process
+steps. About fifteen open items that no tracker recorded are now in `TODO.md` §5 under "Found by a full
+sweep of every removed doc":
+- the approved 2026-05-04 UI follow-ups;
+- two field-boundary import gaps;
+- three low-severity inventory and loader checks;
+- the field-app parity leftovers;
+- a dead-animation cosmetic issue;
+- a keep-or-drop list of unscheduled accounting features.
+
+One owner smoke test (importing a real field boundary export) was added under "Owner smoke test".
 
 **Pointers:** the archive READMEs (`2026-summer`, `2026-summer-closeout`, `2026-spring`,
 `2026-Q1-brainstorms`) now list only what remains. Mentions inside other historical records, the
