@@ -13,6 +13,20 @@
 
 This PR is the checkout those four install from.
 
+Review chronology, moved here from the decision-log entry (CodeRabbit Minor on PR #862: decision
+entries stay about 8 lines):
+1. Sol's first exact-SHA review of #857 found that the pinned key and the Windows Hello helper were
+   read from the checkout, unchecked against the reviewed commit. Fixed in #857:
+   `assertOwnerTrustFilesReviewed` compares the on-disk bytes of every approval-chain file with the
+   reviewed head before an approval is requested or honoured. A real tamper (key swapped, mtime
+   restored, hidden with `--assume-unchanged`) was refused while `git status` reported clean.
+2. Sol's second review found that the verifier is itself code in that checkout. Sol asked for
+   enforcement "by trusted code outside the mutable checkout". Mason was shown both positions,
+   accepted it as the 2026-09-29 residual, and merged #857 himself. Field-season installs
+   `20260914101000`..`20260914101300` run from this follow-up PR. It must pass CodeRabbit and Sol on
+   its own diff, and the installs need Mason's chat yes plus his Windows Hello approval for
+   `101000`.
+
 Proof: the read-only `select version, name from supabase_migrations.schema_migrations` at 22:23 UTC,
 with the high-water computed by `migrationTimestamp` (`.claude/hooks/migration-ordering-lib.mjs`).
 Not verified: documentation only; nothing was applied by this change.
