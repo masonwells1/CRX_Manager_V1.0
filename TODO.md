@@ -391,7 +391,10 @@ and missing from every other tracker. Sources are recoverable with `git show 4b6
   dormant `isFieldStaff` branch in `src/pages/NewOrder.tsx`.
 - **Decide keep or drop** (2026-05-09 implementation plan, "not in this plan"): bank reconciliation, vendor
   1099 tracking, line items on vendor bills, and linking purchase orders to the vendor record instead of a
-  typed name. Also optional: a count badge for unpriced rush orders (sell-side plan), and a screen for the
+  typed name. Also optional: a count badge for unpriced rush orders (sell-side plan); and, as a decision for you, whether a
+  price-later rush order should count an estimated amount (from its suggested price) against the customer's
+  credit limit before it is priced. Today credit exposure is only checked once the order is priced or
+  invoiced. Last, a screen for the
   product return-policy fields, which nothing in the app edits (product data model D-4, "not yet" on
   2026-08-18).
 
