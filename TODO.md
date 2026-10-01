@@ -359,7 +359,9 @@ and missing from every other tracker. Sources are recoverable with `git show 4b6
   projected use should count only remaining field acres. On the Dispatch board, the retry key is lost after
   a reload and failed applicator/recipe loads are not reported.
 - **Cosmetic**: pop-up and toast open/close animations never run, because their Tailwind animation plugin
-  is not installed. Install it or remove the classes.
+  is not installed. Install it or remove the classes. A short customer statement prints its last-page
+  footer twice: `src/lib/statementPdf.ts` draws it from the table's `didDrawPage` and again after the
+  remittance stub (2026-05-30 p2/p3 sprint handoff).
 - **Decide keep or drop** (2026-05-09 implementation plan, "not in this plan"): bank reconciliation, vendor
   1099 tracking, line items on vendor bills, and linking purchase orders to the vendor record instead of a
   typed name. Also optional: a count badge for unpriced rush orders (sell-side plan), and a screen for the
