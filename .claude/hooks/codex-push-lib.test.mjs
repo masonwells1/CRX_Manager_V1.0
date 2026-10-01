@@ -3,17 +3,27 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  readHookInputBounded,
   createHardGateBudget,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
+  expandNestedCommands,
+  GH_BUILTIN_COMMANDS,
+  ghCommandUnreadable,
+  ghCommandUnreadableDenial,
+  ghCommandUnreadableIn,
   hardGateBudgetDenial,
   hookDeadlineMs,
+  nestedTooDeepDenial,
   shellArgvWord,
   splitShellArgv,
   ghApiMutates,
@@ -67,6 +77,7 @@ import {
   divergentPushLookups,
   configuredMirrorRemotes,
   pushDestinationLookupArgs,
+  pushParseCostExceeded,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -3320,6 +3331,590 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     /^PR MERGE GATE: .*time limit.*fail closed/s,
     "the denial names the gate, the cause, and that it fails closed",
   );
+  assert.match(
+    hardGateBudgetDenial("CODEX PRODUCTION GATE", "push"),
+    /^CODEX PRODUCTION GATE: the push checks .*time limit.*push is denied .*fail closed/s,
+    "a push refused for time says it was the PUSH, not a merge",
+  );
+}
+
+// ── commands carried inside another program's argument (2026-09-24) ──────────
+// Every one of these returned allow from BOTH merge guards on PR #630's head,
+// because the whole inner command was one argv word to every parser.
+{
+  const encode = (text) => Buffer.from(text, "utf16le").toString("base64");
+  const inner = (command, options) => expandNestedCommands(command, options).commands;
+  const carries = (command, expected, message) => {
+    const found = inner(command);
+    assert.ok(found.includes(expected), `${message}: expected ${JSON.stringify(expected)} in ${JSON.stringify(found)}`);
+  };
+  const ADMIN = "gh pr merge 123 --admin --squash";
+  carries(`bash -c "${ADMIN}"`, ADMIN, "bash -c");
+  carries(`bash -lc '${ADMIN}'`, ADMIN, "a -c inside an option cluster");
+  carries(`/usr/bin/sh -e -c '${ADMIN}'`, ADMIN, "a path to the shell and an option before -c");
+  carries(`cmd /c "${ADMIN}"`, ADMIN, "cmd /c with a quoted command");
+  carries(`C:\\Windows\\System32\\cmd.exe /d /s /k ${ADMIN}`, ADMIN, "cmd /k with switches before it and the rest of the line unquoted");
+  carries(`pwsh -Command "${ADMIN}"`, ADMIN, "pwsh -Command");
+  carries(`pwsh -NoProfile -ExecutionPolicy Bypass -c "${ADMIN}"`, ADMIN, "a value-taking host parameter is skipped");
+  carries(`powershell.exe "${ADMIN}"`, ADMIN, "Windows PowerShell's positional -Command");
+  carries(`pwsh -EncodedCommand ${encode(ADMIN)}`, ADMIN, "-EncodedCommand is decoded");
+  carries(`powershell -enc ${encode(ADMIN)}`, ADMIN, "-enc is decoded");
+  carries(`pwsh -e ${encode(ADMIN)}`, ADMIN, "-e is decoded");
+  carries(`eval "${ADMIN}"`, ADMIN, "eval");
+  carries(`Invoke-Expression "${ADMIN}"`, ADMIN, "Invoke-Expression");
+  carries(`iex -Command '${ADMIN}'`, ADMIN, "iex with a named -Command");
+  carries(`Start-Process gh -ArgumentList 'pr','merge','123','--admin','--squash'`, ADMIN, "Start-Process with an array argument list");
+  carries(`Start-Process -FilePath gh -ArgumentList "pr merge 123 --admin --squash" -Wait`, ADMIN, "Start-Process by name");
+  carries(`bash -c "bash -c \\"${ADMIN}\\""`, ADMIN, "two levels of nesting");
+  carries(`cmd /d bash -c '${ADMIN}'`, ADMIN, "a cmd with no /c runs nothing itself, so the scan continues to a later shell");
+  carries(`pwsh -c "bash -c '${ADMIN}'"`, ADMIN, "nesting across shells");
+  assert.ok(inner(`&{${ADMIN}}`).some((text) => splitCommandSegments(text).includes(ADMIN)), "a script block's body is a command");
+  assert.ok(inner(`echo $(${ADMIN})`).some((text) => splitCommandSegments(text).includes(ADMIN)), "a substitution's body is a command");
+
+  // Braces and parens inside QUOTES are data, not grouping.
+  assert.deepEqual(inner(`gh pr merge 123 --squash --body "fix (typo) {x}"`), [], "quoted parens produce no reading");
+  // The push guard asks for no grouping reading; its composition check owns that syntax.
+  assert.deepEqual(inner(`&{git push origin HEAD:main}`, { grouping: false }), [], "grouping: false leaves blocks to the caller");
+  assert.ok(inner(`pwsh -enc ${encode("git push origin HEAD:main")}`, { grouping: false }).includes("git push origin HEAD:main"),
+    "grouping: false still decodes a nested push");
+
+  // Inner commands that cannot reach a gate are not returned.
+  assert.deepEqual(inner(`bash -c "npm test"`), [], "a nested command with no gh/git is not re-inspected");
+  assert.deepEqual(inner(`pwsh -NoProfile -Command "Get-ChildItem"`), [], "…in PowerShell either");
+  assert.deepEqual(inner(`pwsh -File build.ps1 -Target gh`), [], "-File runs a script the guard cannot read, so nothing is inspected");
+  // …but a nested command that carries a FURTHER nested command is, so an
+  // encoded command cannot hide behind one more layer.
+  carries(`bash -c "pwsh -enc ${encode(ADMIN)}"`, ADMIN, "an encoded command inside a shell");
+
+  // Independent Opus review of PR #795 (2026-09-25): spellings the first version missed.
+  carries("Start-Process gh -ArgumentList 'pr', 'merge', '123', '--admin', '--squash'", ADMIN, "an array with spaces after the commas");
+  carries("Start-Process gh -ArgumentList:'pr merge 123 --admin --squash'", ADMIN, "a -Name:value argument list");
+  carries("Start-Process -FilePath:gh -Args 'pr merge 123 --admin --squash'", ADMIN, "a -Name:value program");
+  carries(`bash --rcfile /dev/null -c '${ADMIN}'`, ADMIN, "--rcfile consumes its value");
+  carries(`bash --init-file x -c '${ADMIN}'`, ADMIN, "--init-file consumes its value");
+  carries(`iex -Command:'${ADMIN}'`, ADMIN, "iex -Command:value");
+  carries(`pwsh –EncodedCommand ${encode(ADMIN)}`, ADMIN, "an en dash is a dash to PowerShell");
+  carries(`pwsh —Command "${ADMIN}"`, ADMIN, "so is an em dash");
+  // A shell handed text it builds at run time cannot be read.
+  assert.equal(expandNestedCommands("bash -c '$0 pr merge 123 --admin' gh").computed, true, "a $0 program name is run-time text");
+  assert.equal(expandNestedCommands("bash -c \"git push origin $BRANCH\"").computed, true, "so is a $VAR in a nested git command");
+  assert.equal(expandNestedCommands('pwsh -Command "Get-ChildItem | % { $_.Name }"').computed, false, "without gh or git it is not refused");
+  // A program NAME built at run time never spells gh or git (round 2 of the review).
+  for (const command of [
+    "bash -c 'g$1 pr merge 123 --admin' x h",
+    "bash -c '${P}h pr merge 123 --admin'",
+    "bash -c '$P pr merge 123 --admin'",
+    "sh -c '`echo g`h pr merge 123 --admin'",
+    "bash -c 'gi$1 push origin HEAD:main --force' x t",
+    'pwsh -Command "& $p pr merge 123 --admin"',
+    "bash -c 'FOO=1 $P pr merge 1'",
+  ]) {
+    assert.equal(expandNestedCommands(command).computed, true, `a run-time program name is refused: ${command}`);
+  }
+  for (const command of ["bash -c 'echo $HOME'", 'pwsh -NoProfile -Command "Get-ChildItem | ForEach-Object { $_.Name }"']) {
+    assert.equal(expandNestedCommands(command).computed, false, `a variable in an argument is not: ${command}`);
+  }
+  assert.equal(expandNestedCommands("gh pr view $(git branch --show-current)").computed, false, "a plain substitution is the outer command's, not a nested shell's");
+  // Over-blocks the review found: a bare word after pwsh is a command only when pwsh is the program.
+  assert.deepEqual(inner("which -a pwsh gh git node"), [], "pwsh as an argument runs nothing");
+  assert.deepEqual(inner("for t in pwsh gh node; do echo $t; done"), [], "…nor in a loop list");
+  carries(`powershell.exe "${ADMIN}"`, ADMIN, "while pwsh as the program still runs its first argument");
+  carries(`sudo -u root powershell "${ADMIN}"`, ADMIN, "…after a wrapper too");
+
+  // The unwrap must stay linear: a hook cut off at its time limit ALLOWS. The
+  // review's input took 34.5 s at N=12000 before the scan window.
+  for (const unit of ["start -x ", "--/bash ", "cmd /d ", "pwsh -x "]) {
+    const huge = `echo (x) a\\b ${unit.repeat(12000)}; ${ADMIN}`;
+    const started = Date.now();
+    expandNestedCommands(huge);
+    ghCommandUnreadableIn(huge);
+    commandFedToInterpreter(huge);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 3000, `unwrapping ~100 KB of \`${unit.trim()}\` stays well inside the hook limit (took ${elapsed} ms)`);
+  }
+
+  // Unbounded nesting is refused, not partly inspected.
+  let deep = ADMIN;
+  for (let level = 0; level < 6; level += 1) deep = `pwsh -enc ${encode(deep)}`;
+  assert.equal(expandNestedCommands(deep).tooDeep, true, "more than the maximum depth is reported as too deep");
+  assert.equal(expandNestedCommands(`bash -c "${ADMIN}"`).tooDeep, false, "ordinary nesting is not");
+  assert.match(nestedTooDeepDenial("PR MERGE GATE"), /^PR MERGE GATE: .*refused/s, "the too-deep denial names the gate");
+
+  // Option padding past the scan window (2026-09-27): 70 repeated harmless
+  // options pushed the real -c / /c / -Command out of view and all three guards
+  // allowed the admin merge. A scan that runs out of window is now refused.
+  const pad = (word, count) => Array(count).fill(word).join(" ");
+  for (const command of [
+    `bash ${pad("--norc", 70)} -c "${ADMIN}"`,
+    `bash ${pad("-x", 70)} -c "${ADMIN}"`,
+    `sh ${pad("-e", 70)} -c "${ADMIN}"`,
+    `cmd ${pad("/d", 70)} /c "${ADMIN}"`,
+    `pwsh ${pad("-NoProfile", 70)} -Command "${ADMIN}"`,
+    `powershell ${pad("-NonInteractive", 70)} -Command "${ADMIN}"`,
+    `pwsh ${pad("-NoLogo", 70)} "${ADMIN}"`,
+    `Start-Process ${pad("-NoNewWindow", 70)} gh pr merge 1 --admin`,
+  ]) {
+    assert.equal(expandNestedCommands(command).tooDeep, true, `option padding past the window is refused: ${command.slice(0, 40)}…`);
+  }
+  for (const command of [
+    `bash ${pad("-x", 10)} -c "npm test"`,
+    `pwsh ${pad("-NoProfile", 60)} -Command "Get-Date"`,
+    `bash scripts/build.sh ${pad("arg", 80)}`,
+    `git status ${pad("--short", 80)}`,
+    `echo ${pad("word", 200)}`,
+  ]) {
+    assert.equal(expandNestedCommands(command).tooDeep, false, `ordinary options or arguments are not: ${command.slice(0, 40)}…`);
+  }
+  assert.match(nestedTooDeepDenial("PR MERGE GATE"), /option words/, "the denial explains the padding case");
+
+  // The inner-command cap (Codex luna, 2026-09-26, finding 2): the one-level scan
+  // stopped quietly at 32 entries, the caller de-duplicated the identical harmless
+  // ones below its own cap, and the admin merge after them was never read. The
+  // segments differ only in spacing, so they are distinct segments carrying the
+  // same inner command.
+  const spaced = Array.from({ length: 40 }, (_, i) => `bash${" ".repeat(i + 1)}-c 'echo ok'`).join("; ");
+  assert.equal(expandNestedCommands(`${spaced}; bash -c '${ADMIN}'`).tooDeep, true,
+    "a scan stopped at the inner-command cap is refused, not partly read");
+  assert.equal(expandNestedCommands("bash -c 'echo ok'; bash -c 'echo ok'; bash -c 'npm test'").tooDeep, false,
+    "a few nested commands are not");
+  // An inner command that feeds an interpreter is returned whatever it mentions,
+  // so the pipe hidden inside cmd's quotes is still read (finding 3).
+  assert.ok(expandNestedCommands('cmd /c "type payload.txt | bash"').commands
+    .some((text) => commandFedToInterpreter(text)), "a feed inside cmd /c reaches the caller");
+  // Codex luna round 2 (2026-09-28): a program built at run time at the TOP
+  // level (finding 3), and after a wrapper's options (finding 4).
+  for (const command of [
+    "$p='gh'; & $p pr merge 123 --admin",
+    "P=gh; $P pr merge 123 --admin",
+    "$g = 'git'; & $g push origin HEAD:main --force",
+    "bash -c 'timeout 30 $P push origin HEAD:main --force'",
+  ]) {
+    assert.equal(expandNestedCommands(command).computed, true, `a run-time program name is refused: ${command}`);
+  }
+  for (const command of [
+    "$b = git branch --show-current; gh pr view $b",
+    "\"$CODEX\" --version",
+    "$files = git diff --name-only; npx eslint $files",
+  ]) {
+    assert.equal(expandNestedCommands(command).computed, false, `an assignment or an unrelated variable program is not: ${command}`);
+  }
+}
+
+// ── gh aliases and unknown gh commands (2026-09-24) ──────────────────────────
+// `gh alias set mm 'pr merge --admin'` followed by `gh mm 123` was an
+// administrator merge both guards allowed.
+{
+  const unreadable = (segment) => ghCommandUnreadable(segment);
+  assert.equal(unreadable("gh alias set mm 'pr merge --admin'"), "alias set", "creating an alias is refused");
+  assert.equal(unreadable("gh alias import aliases.yml"), "alias import", "importing aliases is refused");
+  assert.equal(unreadable("gh alias --help set x y"), "alias set", "a flag before the alias subcommand does not hide it");
+  assert.equal(unreadable("gh mm 123 --squash"), "mm", "an unknown top-level command is refused");
+  assert.equal(unreadable("gh.exe mm 123"), "mm", "whatever the binary's extension");
+  assert.equal(unreadable("C:\\Tools\\gh.cmd mm 123"), "mm", "or its path");
+  assert.equal(unreadable("g''h mm 123"), "mm", "or a quote-spliced binary name");
+  assert.equal(unreadable("GH_TOKEN=x gh mm 123"), "mm", "an environment prefix does not hide the command");
+  assert.equal(unreadable("env gh mm 123"), "mm", "nor does env");
+  assert.equal(unreadable("xargs -n1 gh mm"), "mm", "nor xargs with its options");
+  assert.equal(unreadable("gh -R o/r mm 123"), "mm", "a global --repo value is not the command");
+  assert.equal(unreadable("gh co 123"), "co", "`co` is a redefinable CONFIG alias, not a built-in");
+
+  for (const allowed of [
+    "gh alias list", "gh alias delete mm", "gh pr view 123", "gh pr checkout 123", "gh -R o/r pr view 123",
+    "gh --version", "gh", "gh auth status", "gh run list", "gh api user", "gh cs list", "gh ext list",
+    "echo gh mm", "grep -n gh README.md", "git log --grep gh", "npm run gh-pages",
+    // Built-ins the list was missing (Codex GitHub review of PR #795, 2026-09-30).
+    "gh discussion list", "gh skill --help", "gh telemetry",
+  ]) {
+    assert.equal(unreadable(allowed), null, `a readable or non-gh command is not refused: ${allowed}`);
+  }
+  // Independent Opus review of PR #795: a wrapper's own options hid the alias.
+  for (const wrapped of [
+    "timeout 30 gh mm 123", "nice gh mm 123", "nice -n 5 gh mm 123", "sudo -u root gh mm 123",
+    "env -u FOO gh mm 123", "doas gh mm 123", "stdbuf -oL gh mm 123",
+  ]) {
+    assert.equal(unreadable(wrapped), "mm", `a wrapper does not hide the alias: ${wrapped}`);
+  }
+  assert.equal(unreadable("timeout 30 gh alias set mm 'pr merge --admin'"), "alias set", "…nor alias creation");
+  assert.equal(unreadable("timeout 60 npm test"), null, "a wrapper around something other than gh is not refused");
+  assert.equal(unreadable("sudo apt-get install -y gh"), null, "…nor is gh as a package name at the end");
+  // Codex luna, 2026-09-26: a six-word window after the wrapper missed a
+  // program further out (finding 8) and read an argument as the program (finding 9).
+  for (const wrapped of [
+    "sudo -u root -g staff -H -n -E gh mm 123",
+    "timeout --signal KILL 30 gh mm 123",
+    "env -S 'gh mm 123'",
+    "nohup nice -n 5 timeout 30 gh mm 123",
+    "then gh mm 123",
+  ]) {
+    assert.equal(unreadable(wrapped), "mm", `the program after any number of wrapper options is read: ${wrapped}`);
+  }
+  for (const harmless of ["timeout 30 echo gh mm 123", "sudo -u root grep -rn gh mm .", "xargs echo gh mm", "nice --adjustment=5 echo gh mm", "sudo -- echo gh mm"]) {
+    assert.equal(unreadable(harmless), null, `gh as an argument of the wrapped program is not refused: ${harmless}`);
+  }
+
+  // Whole-command check: prose inside quotes is not a command.
+  const unreadableIn = (command) => ghCommandUnreadableIn(command);
+  assert.equal(unreadableIn("git commit -m 'docs: note; gh mm now denied'"), null, "a quoted `;` does not start a gh command");
+  assert.equal(unreadableIn("gh pr comment 5 --body 'cd repo && gh co 5'"), null, "…nor a quoted `&&`");
+  assert.equal(unreadableIn("gh pr view 1; gh mm 2"), "mm", "an unquoted separator still does");
+  assert.equal(unreadableIn("gh pr view 1 \\; gh mm 2"), "mm", "a backslash-escaped `;` is literal only to POSIX; PowerShell splits there");
+  assert.equal(unreadableIn("echo x^& gh mm 2"), "mm", "a caret-escaped `&` is literal only to cmd; PowerShell splits there");
+  assert.equal(unreadableIn("which -a pwsh gh git node"), null, "gh as an argument to another program is not a gh command");
+
+  assert.ok(GH_BUILTIN_COMMANDS.has("pr") && !GH_BUILTIN_COMMANDS.has("co"), "the built-in list excludes config aliases");
+  assert.match(ghCommandUnreadableDenial("PR MERGE GATE", "mm"), /^PR MERGE GATE: `gh mm` .*GH_BUILTIN_COMMANDS/s,
+    "the denial names the command and where to allow a genuine one");
+}
+
+// ── a command fed to an interpreter on its INPUT (independent Opus review of PR #795) ──
+// Nothing on the command line is what the interpreter runs, so no argv parser
+// can see it. The bash, here-string and xargs forms were confirmed in real bash.
+{
+  for (const command of [
+    "'gh pr merge 123 --admin' | iex",
+    "'gh pr merge 123 --admin' | Invoke-Expression",
+    "echo 'gh pr merge 123 --admin' | bash",
+    "echo 'gh pr merge 123 --admin' | /bin/sh",
+    "Get-Content x.txt | pwsh -Command -  # gh",
+    "bash <<< 'gh pr merge 123 --admin'",
+    "bash <<'EOF'\ngh pr merge 123 --admin\nEOF",
+    "echo pr merge 123 --admin | xargs gh",
+    "echo origin HEAD:main | xargs git push",
+    "echo 'git push origin HEAD:main --force' | bash",
+    // Codex luna, 2026-09-26, finding 3: the payload need not be on the line.
+    "Get-Content C:\\Temp\\payload.txt | iex",
+    "echo hello | bash",
+    "bash < payload.txt",
+    "type payload.txt | cmd",
+    "xargs -a payload.txt gh",
+    "Start-Process bash -RedirectStandardInput payload.txt",
+    "bash <(cat payload.txt)",
+    // Finding 4: a wrapper between the pipe and the interpreter, and inputs past
+    // the old regexes' 256-character bounds.
+    "echo 'gh pr merge 123 --admin' | env bash",
+    "echo x | timeout 30 bash",
+    "echo x | sudo -u root sh -s",
+    "echo x | xargs -0 bash -c",
+    `echo x | ${"C:\\very\\long\\".repeat(100)}bash.exe`,
+    `bash ${"-x ".repeat(200)}<<'EOF'\ngh pr merge 123 --admin\nEOF`,
+    "Get-Content p.txt | & pwsh",
+    // A pipe inside a substitution is a real pipe, and a here-document body's
+    // apostrophe must not desynchronise the quoting of what follows it.
+    'echo "$(echo x | bash)"',
+    "cat <<EOF > notes.txt\ndon't\nEOF\necho x | bash",
+    "@'\nit's\n'@ | iex",
+    // Self-review of the lexer (2026-09-28): a keyword before the command, a
+    // shell whose own input was replaced, arithmetic `<<`, and runtimes that run
+    // a program read from their input.
+    "if true; then bash < payload.txt; fi",
+    "! bash < payload.txt",
+    "exec < payload.txt; bash",
+    "(( x = 1 << 2 ))\necho x | bash",
+    "echo \"require('child_process').execSync('gh pr merge 1 --admin')\" | node",
+    "python3 - < payload.py",
+    "node < payload.js",
+    "< payload.txt bash",
+    "bash<payload.txt",
+    // Codex luna round 2: cmd.exe reads `#` as text and `'` as a plain
+    // character (finding 1); a redirection before the program (finding 2).
+    "type C:\\Temp\\payload.txt # note | bash",
+    "# a note about | bash\ngit status",
+    "git commit -m 'pipe it | bash later'",
+    "<<< \"$(printf '\\147\\150 pr merge 123 --admin')\" bash",
+    // Codex luna round 3: a pipeline carried on to the next line (finding 3),
+    // an ANSI-C quoted here-document delimiter (finding 4; each spelling was run
+    // in bash 5.3 and ends at a line reading EOF), and a here-document whose end
+    // cannot be found.
+    "echo 'gh pr merge 123 --admin' |\nbash",
+    "echo 'gh pr merge 123 --admin' |\r\nbash",
+    "echo 'gh pr merge 123 --admin' | # note\nbash",
+    "'gh pr merge 123 --admin' |\n  iex",
+    "cat <<EOF |\nfed-line\nEOF\nbash",
+    "cat <<$'EOF'\nignored\nEOF\necho x | bash",
+    "cat <<$'E\\x4fF'\nit's\nEOF\necho x | bash",
+    "cat <<$'E\\117F'\nit's\nEOF\necho x | bash",
+    "cat <<$\"EOF\"\nit's\nEOF\necho x | bash",
+    "cat <<END\nit's\nEOF\necho x | bash",
+    // CodeRabbit, PR #851: an unquoted delimiter's body runs its substitutions.
+    "cat <<EOF\n$(cat payload.txt | bash)\nEOF",
+    "cat <<EOF\n`cat payload.txt | bash`\nEOF",
+  ]) {
+    assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command.slice(0, 80))}`);
+  }
+  for (const command of [
+    "git log --oneline | head -5",
+    "git diff --name-only | xargs npx eslint",
+    "git ls-files | xargs wc -l",
+    "gh pr list --json number | jq '.[]'",
+    "git commit -m \"pipe it | bash later\"",
+    "npm test 2>&1 | Select-Object -Last 20",
+    "gh pr view 1 | shasum",
+    "git log --oneline | grep -n bash",
+    "node scripts/check.mjs < input.json",
+    "echo \"a | bash\" > notes.txt",
+    "git commit -m \"$(cat <<'EOF'\nfix: don't pipe | bash\nEOF\n)\"",
+    "cat <<'EOF' > notes.md\n| shell | bash |\nEOF",
+    "# a note\ngit status",
+    "echo -RedirectStandardInput bash",
+    "echo x | node scripts/summarize.mjs",
+    "cat data.json | node -e \"process.stdin.pipe(process.stdout)\"",
+    "cat data.csv | python3 -c \"import sys; print(len(sys.stdin.read()))\"",
+    "(( x = 1 << 2 ))",
+    // Round 3, finding 5: cmd.exe splits `echo 'x | bash'` at the pipe, but its
+    // second stage runs `bash'` (cmd keeps the apostrophe), which is not bash.
+    "echo 'x | bash'",
+    "git log --oneline |\ngrep fix",
+    "git log --oneline\nbash --version",
+    "cat <<$'EOF'\nit's | bash\nEOF\necho done",
+    "cat <<'EOF'\n$(cat payload.txt | bash)\nEOF",
+    "cat <<EOF > notes.txt\nhello $HOME\nEOF",
+  ]) {
+    assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
+  }
+  // Linear, like every other scan here: a hook cut off at its limit ALLOWS.
+  for (const unit of ["'a'|", "$(", "<<E\n", "sudo -a x ", "`", "\"$(x) ", "@'\n"]) {
+    const huge = unit.repeat(Math.ceil(200_000 / unit.length));
+    const started = Date.now();
+    commandFedToInterpreter(huge);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 3000, `reading ~200 KB of ${JSON.stringify(unit)} stays well inside the hook limit (took ${elapsed} ms)`);
+  }
+  assert.match(commandFedToInterpreterDenial("PR MERGE GATE"), /^PR MERGE GATE: .*input/s, "the denial names the gate and the cause");
+}
+
+// ── Claude's push guard refuses a push carried by another program (2026-09-24) ──
+// `pwsh -enc <base64 of a force-push to main>` passed this guard untouched.
+{
+  const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-guard-nested-"));
+  const encode = (text) => Buffer.from(text, "utf16le").toString("base64");
+  const runHook = (command) => {
+    const res = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ cwd: tmp, tool_input: { command } }),
+      encoding: "utf8",
+      env: scratchHookEnvironment(tmp, process.env),
+      timeout: 30_000,
+    });
+    assert.equal(res.status, 0, `guard exited ${res.status}: ${res.stderr}`);
+    const out = (res.stdout || "").trim();
+    return out ? JSON.parse(out).hookSpecificOutput : { permissionDecision: "allow" };
+  };
+  try {
+    // The encoded forms are invisible to every other check, so the nested-push
+    // refusal must be the one that fires.
+    for (const command of [
+      `pwsh -enc ${encode("git push origin HEAD:main --force")}`,
+      `git status; powershell -EncodedCommand ${encode("git push origin HEAD:main")}`,
+    ]) {
+      const verdict = runHook(command);
+      assert.equal(verdict.permissionDecision, "deny", `an encoded push is refused: ${command}`);
+      assert.match(verdict.permissionDecisionReason, /inside another shell or an evaluator/, `…for being nested: ${command}`);
+    }
+    // Plain-text forms may be refused first by the composition check; either way
+    // they must not pass.
+    for (const command of [
+      "cmd /c git push origin HEAD:main",
+      `Invoke-Expression 'git push origin HEAD:main'`,
+      "Start-Process git -ArgumentList 'push','origin','HEAD:main'",
+    ]) {
+      assert.equal(runHook(command).permissionDecision, "deny", `a nested push is refused: ${command}`);
+    }
+    assert.equal(runHook(`bash -c "npm test"`).permissionDecision, "allow", "a nested command that is not a push passes");
+    assert.equal(runHook(`pwsh -NoProfile -Command "Get-ChildItem"`).permissionDecision, "allow", "…in PowerShell too");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── parse time is a security property (2026-09-28) ──────────────────────────
+// A hook killed at its 15 s limit ALLOWS the command. On main at fcfab3a2a the
+// Claude push guard took 55 s on 200K `;`, 13 s on 50K `'a'|`, and both guards
+// ran past 60 s on a 116-character `git -c "x" …` command (exponential option
+// backtracking). The parser checks below are the unit bound; the hook checks
+// run the REAL guard processes, because a fast helper inside a slow hook is
+// still a bypass.
+{
+  const push = "git push origin HEAD:main";
+  const shapes = [
+    ["200K `;` (reported)", `${push} ${";".repeat(200_000)}`],
+    ["50K `'a'|` (reported)", `${push} ${"'a'|".repeat(50_000)}`],
+    ['`-c "x"` x24, 190 chars (exponential)', `git${' -c "x"'.repeat(24)} --bogus push origin HEAD:main`],
+    ["`-C x` x24 (exponential, /i duplicate)", `git${" -C x".repeat(24)} --bogus push origin HEAD:main`],
+    ["200K newlines", `${push}${"\n".repeat(200_000)}`],
+    ["`git.a;` x20K (extension tail)", `${"git.a;".repeat(20_000)} ${push}`],
+    ["`git -C ` under the cost budget", `${"git -C ".repeat(2_000)}${push}`],
+    ["dense tokens then push", `git -x ${"a ".repeat(8_000)}push`],
+  ];
+  for (const [label, input] of shapes) {
+    const started = process.hrtime.bigint();
+    for (const parse of [isGitPush, eachPush, gitPushCwd, gitSubcommandIsDynamic, unknownGitGlobalOptions,
+      pushHiddenByShellComposition, pushIsForced, pushSetsInlineEnv, mainPushSource, pushUsesInlineConfig]) {
+      parse(input, "main");
+    }
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 1_000, `push parsers stay fast on ${label} (${input.length} chars): ${elapsedMs.toFixed(1)}ms`);
+  }
+  for (const [label, input] of [["200K `/`", "/".repeat(200_000)], ["200K `\\`", "\\".repeat(200_000)]]) {
+    const started = process.hrtime.bigint();
+    reviewStateDirectoryMentioned(input);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the review-state path check stays linear on ${label}: ${elapsedMs.toFixed(1)}ms`);
+  }
+
+  // The fixes change speed, not what is detected.
+  assert.equal(isGitPush("npm test;C:/tools/git push origin HEAD:main"), true, "a path prefix after `;` still names git");
+  assert.equal(isGitPush("x;y/git push origin HEAD:main"), true, "a prefix that spanned `;` matches from the `;`");
+  assert.equal(isGitPush('git -c "x"y push origin HEAD:main'), true, "a quoted value glued to more text still falls back to one word");
+  assert.equal(isGitPush("git -c 'a b' -C repo push origin HEAD:main"), true, "quoted values with spaces still read");
+  assert.equal(eachPush("git -C repo push origin HEAD:main")[0].args, " origin HEAD:main", "the args capture survived the rename");
+  assert.equal(mainPushSource("git -C repo push origin release:main", "feature"), "release", "and every consumer reads it");
+  assert.equal(pushContextIsAmbiguous("echo ok;\n\n  GIT_DIR=x git push origin HEAD:main"), true, "GIT_DIR after blank lines is still seen");
+  assert.equal(reviewStateDirectoryMentioned("cd ./a/.claude/session-state/"), true, "the session-state path is still seen");
+
+  // The budget: refuse what cannot be parsed in time, and nothing ordinary.
+  assert.equal(pushParseCostExceeded("git -C ".repeat(9_200) + push), true, "`git -C ` to 64 KB is over budget");
+  assert.equal(pushParseCostExceeded('g"i"t -C '.repeat(9_200) + push), true, "quote-spliced `git` words count too");
+  assert.equal(pushParseCostExceeded(`${push} ${";".repeat(200_000)}`), false, "one push in a long command is fine");
+  assert.equal(
+    pushParseCostExceeded(`gh pr create --body "${"We ran git status and git diff. ".repeat(600)}"`),
+    false,
+    "a 20 KB PR body that mentions git 1,200 times is still under budget",
+  );
+  assert.equal(pushParseCostExceeded("git -C ".repeat(2_138)), false, "at the edge: 2,138 git × 14,966 chars = 31,997,308");
+  assert.equal(pushParseCostExceeded("git -C ".repeat(2_139)), true, "one over: 2,139 git × 14,973 chars = 32,027,247");
+  {
+    // Many `git` words inside the length ceiling: refused by counting only up to the limit.
+    const dense = `${"#git\n".repeat(50_000)}${push}`;
+    const started = process.hrtime.bigint();
+    assert.equal(pushParseCostExceeded(dense), true, "250 KB of `git` words is refused");
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 1_000, `the budget check stays cheap on 50K git words: ${elapsedMs.toFixed(1)}ms`);
+  }
+  // Linear is not fast enough on its own: one `git` and 31.6 MB of `'a'|` passed
+  // the budget and still outran the Codex hook (Codex GitHub review, #840).
+  assert.equal(pushParseCostExceeded(`${push} ${"'a'|".repeat(7_900_000)}`), true, "31.6 MB with one git is refused");
+  assert.equal(pushParseCostExceeded("a".repeat(256 * 1024)), false, "exactly 256 KiB is inspected");
+  assert.equal(pushParseCostExceeded("a".repeat(256 * 1024 + 1)), true, "one character more is refused");
+
+  // The real hooks, end to end.
+  const hooksDir = path.dirname(fileURLToPath(import.meta.url));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "push-parse-time-"));
+  const hooks = [
+    ["Claude push guard", path.join(hooksDir, "codex-push-guard.mjs"), (command) => ({ tool_name: "Bash", cwd: tmp, tool_input: { command } })],
+    ["Codex production guard", path.join(hooksDir, "..", "..", ".codex", "hooks", "production-action-guard.mjs"),
+      (command) => ({ tool_name: "shell", cwd: tmp, tool_input: { command } })],
+  ];
+  try {
+    for (const [hookLabel, hook, payload] of hooks) {
+      for (const [label, input] of [
+        ...shapes,
+        // The slowest single-push shape measured, just under the length ceiling.
+        ["`$(` to just under 256 KiB", `${push} ${"$(".repeat(130_000)}`],
+        ["`git -C ` to 64 KB (over budget)", "git -C ".repeat(9_200) + push],
+        ["300 KB of `'a'|` (over budget)", `${push} ${"'a'|".repeat(75_000)}`],
+      ]) {
+        const started = Date.now();
+        const res = spawnSync(process.execPath, [hook], {
+          input: JSON.stringify(payload(input)),
+          encoding: "utf8",
+          timeout: 15_000,
+          env: { ...scratchHookEnvironment(tmp, process.env), CODEX_PROJECT_DIR: tmp },
+        });
+        const elapsedMs = Date.now() - started;
+        assert.equal(res.error, undefined, `${hookLabel} was not killed on ${label}: ${res.error?.message}`);
+        // A crash is not a decision: a guard that exits non-zero produced no
+        // verdict, and the harness treats that like a kill (CodeRabbit, #840).
+        assert.equal(res.status, 0, `${hookLabel} exited cleanly on ${label}: ${res.stderr}`);
+        // The property is "decides before the 15 s kill"; 10 s leaves room for a
+        // loaded CI runner without letting a real regression (tens of seconds) pass.
+        assert.ok(elapsedMs < 10_000, `${hookLabel} decides ${label} before the 15 s hook limit: ${elapsedMs}ms`);
+        if (label.includes("over budget")) {
+          assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses ${label}`);
+        }
+      }
+      // The hook INPUT is bounded before it is decoded: a whitespace-padded push
+      // inside a 17 MiB payload is refused without JSON.parse or trim over it.
+      const started = Date.now();
+      const res = spawnSync(process.execPath, [hook], {
+        input: JSON.stringify(payload(`${" ".repeat(17 * 1024 * 1024)}${push}`)),
+        encoding: "utf8",
+        timeout: 15_000,
+        maxBuffer: 1 << 26,
+        env: { ...scratchHookEnvironment(tmp, process.env), CODEX_PROJECT_DIR: tmp },
+      });
+      assert.equal(res.error, undefined, `${hookLabel} was not killed on a 17 MiB hook input: ${res.error?.message}`);
+      assert.equal(res.status, 0, `${hookLabel} exited cleanly on a 17 MiB hook input: ${res.stderr}`);
+      assert.ok(Date.now() - started < 10_000, `${hookLabel} decides a 17 MiB hook input in time`);
+      assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses a 17 MiB hook input`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+{
+  // The input limit applies while reading, and the excess is drained, not stored
+  // (Codex GitHub review, #840: reading everything first let a >512 MB input
+  // crash the read, and a failed read allowed the call).
+  const feed = (parts, { end = true, error } = {}) => {
+    const stream = new PassThrough();
+    for (const part of parts) stream.write(part);
+    if (error) setImmediate(() => stream.destroy(new Error(error)));
+    else if (end) stream.end();
+    return stream;
+  };
+  // "é" is two bytes: five of them sit exactly at a 10-byte limit, split mid-character.
+  const twoByte = Buffer.from("é".repeat(5));
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 10, stream: feed([twoByte.subarray(0, 3), twoByte.subarray(3)]) }),
+    { tooLarge: false, text: "é".repeat(5) },
+    "input within the byte limit is returned whole, even split mid-character",
+  );
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 1024, stream: feed([Buffer.alloc(4096, 120)]) }),
+    { tooLarge: true, text: "" },
+    "input over the byte limit is refused, not returned",
+  );
+  // A read failure, or an input still open at the deadline, is a failure the
+  // guards refuse — never an empty input that reads as "nothing to check".
+  assert.ok((await readHookInputBounded({ stream: feed(["{"], { error: "pipe broke" }) })).failed, "a read error fails");
+  const stalled = feed(['{"tool_input":'], { end: false });
+  const stalledResult = await readHookInputBounded({ waitMs: 200, stream: stalled });
+  assert.match(stalledResult.failed ?? "", /still arriving after 200 ms/, "an input that stalls before the limit fails at the deadline");
+  stalled.destroy();
+  const stalledOver = feed([Buffer.alloc(2048, 120)], { end: false });
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 1024, waitMs: 200, stream: stalledOver }),
+    { tooLarge: true, text: "" },
+    "an input that stalls after the limit is still refused as too large at the deadline",
+  );
+  stalledOver.destroy();
+
+  // The real guards, with a writer that sends part of a push and never closes:
+  // each refuses at its read deadline instead of being killed (a kill allows).
+  const stallHooks = [
+    ["Claude push guard", fileURLToPath(new URL("./codex-push-guard.mjs", import.meta.url))],
+    ["Codex production guard", fileURLToPath(new URL("../../.codex/hooks/production-action-guard.mjs", import.meta.url))],
+  ];
+  const stallRuns = stallHooks.map(([label, hook]) => new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [hook], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    const killer = setTimeout(() => child.kill(), 15_000);
+    child.on("close", (code, signal) => {
+      clearTimeout(killer);
+      child.stdin.destroy();
+      resolve({ label, code, signal, stdout, elapsedMs: Date.now() - started });
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.write('{"tool_name":"Bash","tool_input":{"command":"git push origin HEAD:main');
+  }));
+  for (const run of await Promise.all(stallRuns)) {
+    assert.equal(run.signal, null, `${run.label} decides a stalled input before the 15 s limit (killed after ${run.elapsedMs}ms)`);
+    assert.equal(run.code, 0, `${run.label} exits cleanly on a stalled input`);
+    assert.match(run.stdout, /could not be read/, `${run.label} refuses a stalled input`);
+  }
 }
 
 console.log("OK - codex push shared library checks passed.");
