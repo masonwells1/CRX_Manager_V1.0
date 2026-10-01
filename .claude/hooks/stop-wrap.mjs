@@ -535,7 +535,7 @@ const porcelainPath = (l) => {
 // during the resolution); every other difference is "M". Octopus merges, or a
 // git too old for --write-tree, fall back to the combined diff, which catches
 // resolutions that differ from every parent.
-function authoredMergeFiles(sha, automaticOctopus = false) {
+function authoredMergeFiles(sha, automaticOctopus = false, octopusBase = null) {
   const parents = runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).slice(1);
   let autoTree = "";
   if (parents.length === 2) {
@@ -559,6 +559,14 @@ function authoredMergeFiles(sha, automaticOctopus = false) {
     // -M: a resolution that only RENAMES an existing fragment reports "R", not
     // "A", so it cannot pass as a new record (Codex P2, PR #827 round 9).
     return parse(runGit(["diff-tree", "-r", "-M", "--name-status", autoTree, sha]), (st) => st === "A");
+  }
+  // An amended octopus is compared against the automatic octopus it rewrote, the
+  // same way a two-parent merge is compared against git's automatic result. The
+  // combined diff below misses a hand edit that makes a file equal to one parent,
+  // e.g. `git checkout <parent> -- f` then `commit --amend` (Codex P2, PR #827
+  // round 15).
+  if (parents.length > 2 && octopusBase) {
+    return parse(runGit(["diff-tree", "-r", "-M", "--name-status", octopusBase, sha]), (st) => st === "A");
   }
   // Combined-diff fallback: one status letter per parent; all-"A" = new file.
   const combined = parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
@@ -645,8 +653,23 @@ try {
     // merge differs from it was written by hand — conflict fixes, including
     // taking one side, plus anything added — while a clean automatic merge,
     // even of separate hunks in one file, differs in nothing.
-    const mergeResolutionFiles = authoredShas.filter(isMerge)
-      .flatMap((sha) => authoredMergeFiles(sha, automaticOctopus.has(sha)));
+    // Every automatic octopus HEAD's reflog still records, keyed by its parents,
+    // so an amended octopus can be compared against the one it rewrote. The
+    // whole reflog is searched: the original may predate this session.
+    const parentsKey = (sha) => runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).slice(1).join(" ");
+    const octopusByParents = new Map();
+    for (const entry of reflogEntries) {
+      const [sha, , subject = ""] = entry.split("\t");
+      if (sha && /: Merge made by the 'octopus' strategy/.test(subject)) {
+        const key = parentsKey(sha.trim());
+        if (key && !octopusByParents.has(key)) octopusByParents.set(key, sha.trim());
+      }
+    }
+    const mergeResolutionFiles = authoredShas.filter(isMerge).flatMap((sha) => {
+      if (automaticOctopus.has(sha)) return authoredMergeFiles(sha, true);
+      const base = octopusByParents.get(parentsKey(sha));
+      return authoredMergeFiles(sha, false, base && base !== sha ? base : null);
+    });
     if (nonMergeShas.length > 0 || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —

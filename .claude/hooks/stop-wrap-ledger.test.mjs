@@ -425,6 +425,21 @@ try {
     "a hand edit amended into an octopus merge must still warn without a ledger");
   pass++;
 
+  // ── Session 1p (Codex P2, PR #827 round 15): amending that octopus so a file
+  //    EQUALS one parent (`checkout <parent> -- f`) drops out of the combined
+  //    diff, which lists only files differing from every parent. Compared
+  //    against the original automatic octopus, it is still a hand edit → warns ──
+  const s1p = "ledger-test-parent-equal-octopus-amend";
+  snapshots.push(startSession(s1p));
+  git(["checkout", "octo-one", "--", "src/octo.txt"], tmp);
+  git(["commit", "-q", "--amend", "--no-edit"], tmp);
+  assert.equal(git(["diff-tree", "--cc", "--no-commit-id", "--name-only", "-r", "HEAD"], tmp).trim(), "",
+    "setup: the parent-equal edit must be invisible to the combined diff");
+  const parentEqualOctopus = runStopWrap(s1p, tmp);
+  assert.match(parentEqualOctopus.stdout, LEDGER_WARNING,
+    "a parent-equal edit amended into an octopus merge must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
