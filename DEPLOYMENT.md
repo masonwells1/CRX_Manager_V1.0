@@ -22,9 +22,11 @@ page summarises it and does not replace it.
   through the migration-apply-guard proof gate, once its pull request has CodeRabbit's approval of
   the final head, a clean exact-SHA Sol review and green required checks. A destructive migration
   (one that deletes rows or drops data), one that overwrites existing rows, and one that changes
-  access are refused by the apply gate in every session unless Mason approved that exact file
-  with Windows Hello (`scripts/owner-approve-migration.mjs`, 2026-09-29). Every Edge Function
-  deploy still needs Mason's explicit approval in the current conversation.
+  access are refused by the apply gate in every session. Such a migration applies only with BOTH
+  Mason's explicit approval in the current conversation AND his Windows Hello approval of that
+  exact file (`scripts/owner-approve-migration.mjs`, 2026-09-29). The gate verifies only the
+  signature; asking first in the conversation stays the agent's obligation (`AGENTS.md`). Every
+  Edge Function deploy still needs Mason's explicit approval in the current conversation.
 
 ## Before you open the pull request
 
