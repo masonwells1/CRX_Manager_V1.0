@@ -15,6 +15,7 @@ import {
   ghApiRepoPath,
   ghMergeRequest,
   headContainsBaseOnGitHub,
+  isCodeRabbitResolvingReply,
   mcpMergeRequest,
   newestCheckRollup,
   proofSearchDirs,
@@ -437,10 +438,35 @@ ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z")])
   "a new CodeRabbit inline finding after the approval refuses, even under an empty-body review");
 ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T06:24:24Z")]),
   "an inline finding in the same second as the approval refuses");
-// CodeRabbit's real resolving-reply wording (#818, #836 threads).
-const RESOLVED_REPLY = "`@masonwells1`, thanks for the update.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._";
+// CodeRabbit's real resolving replies, verbatim (#836 comment 4145530811; #810
+// comment 4113490811, which opens with a zero-width space after the "@").
+const CR_REPLY_TAIL = "\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->";
+const RESOLVED_REPLY = "`@masonwells1`, the updated fix loop addresses this finding. Sol now runs after CodeRabbit clears the head and before migration apply or merge.\n\n✅ Review thread resolved." + CR_REPLY_TAIL;
+const RESOLVED_REPLY_ZWSP = "@​masonwells1, thanks for fixing the table row in `cc763fb68`. Writing out both alternatives addresses the unescaped-pipe finding.\n\n✅ Review thread resolved." + CR_REPLY_TAIL;
 ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114399661, body: RESOLVED_REPLY })]),
   "a CodeRabbit reply that resolves its thread is the tolerated artifact");
+ok(followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114399661, body: RESOLVED_REPLY_ZWSP })]),
+  "a real resolving reply with a zero-width space in the mention is tolerated too");
+// Second Codex P1 on #836: the marker anywhere in a reply is not enough.
+for (const [label, body] of [
+  ["quotes the marker and then objects",
+    "> ✅ Review thread resolved.\n\nThe attempted fix is still incorrect; keep this thread open." + CR_REPLY_TAIL],
+  ["ends with the marker but then objects, with no CodeRabbit tail",
+    "Thanks.\n\n✅ Review thread resolved.\n\nThe attempted fix is still incorrect; keep this thread open."],
+  ["names the marker twice",
+    "You wrote \"✅ Review thread resolved.\" but the fix is still incorrect.\n\n✅ Review thread resolved." + CR_REPLY_TAIL],
+  ["is the marker alone, without the tail", "Thanks.\n\n✅ Review thread resolved."],
+  ["is only the tail, with no acknowledgement", "\n\n✅ Review thread resolved." + CR_REPLY_TAIL],
+  ["keeps the thread open (real #818 shape with tail)",
+    "I'll leave this thread open until the fix is on the PR branch." + CR_REPLY_TAIL],
+]) {
+  ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114399661, body })]),
+    `a CodeRabbit reply that ${label} refuses`);
+}
+ok(isCodeRabbitResolvingReply({ in_reply_to_id: 1, body: RESOLVED_REPLY }), "isCodeRabbitResolvingReply accepts the real shape");
+ok(!isCodeRabbitResolvingReply({ body: RESOLVED_REPLY }), "...but not as a thread-opening comment");
+ok(!isCodeRabbitResolvingReply({ in_reply_to_id: 1, body: null }), "...and not a missing body");
+ok(!isCodeRabbitResolvingReply({ in_reply_to_id: 1, body: RESOLVED_REPLY + "\n" }), "...and not with anything after the tail");
 // Codex P1 on #836: a reply can object (#818's real reply kept a thread open).
 ok(!followUp(pr820, statuses820, PULLS_820, [crComment("2026-09-27T07:00:00Z", { in_reply_to_id: 4114209084,
   body: "PR `#818` still reports `ac3249de` as its head, where the old row remains. I'll leave this thread open until the fix is on the PR branch." })]),

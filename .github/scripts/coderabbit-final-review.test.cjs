@@ -4278,12 +4278,29 @@ test('follow-up: a finding posted before the completion status is seen, because 
 test('follow-up: a CodeRabbit reply inside an existing thread does not block the follow-up', async () => {
   const harness = relabelFollowUpHarness({
     reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T03:10:00Z', in_reply_to_id: 3,
-      body: '`@masonwells1`, thanks for the update.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._' },
+      body: '`@masonwells1`, thanks for the update.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->' },
       { id: 8, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T02:00:00Z', body: 'older finding' }],
     statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
   });
   const result = await execute(harness, { nativeDispatch: true });
   assert.equal(result.status, 'reviewed', harness.failures.join('\n'));
+});
+
+test('follow-up: a CodeRabbit reply that quotes the resolved marker but objects blocks the follow-up', async () => {
+  // Second Codex P1 on #836: the marker anywhere in a reply is not enough; only
+  // CodeRabbit's real resolving tail, naming the marker once, is tolerated.
+  for (const body of [
+    '> ✅ Review thread resolved.\n\nThe attempted fix is still incorrect; keep this thread open.\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+    'Thanks.\n\n✅ Review thread resolved.\n\nThe attempted fix is still incorrect; keep this thread open.',
+    'You wrote "✅ Review thread resolved." but the fix is still incorrect.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+  ]) {
+    const harness = relabelFollowUpHarness({
+      reviewComments: [{ id: 9, user: { login: 'coderabbitai[bot]' }, created_at: '2026-09-08T03:10:00Z', in_reply_to_id: 3, body }],
+      statuses: [codeRabbitStatus('Review completed', '2026-09-08T03:50:00Z')],
+    });
+    const result = await execute(harness, { nativeDispatch: true });
+    assert.equal(result.status, 'pending', harness.failures.join('\n'));
+  }
 });
 
 test('follow-up: an unreadable review-comment list fails closed', async () => {

@@ -876,6 +876,21 @@ async function inspectExistingRequest({ github, owner, repo, pullNumber, headSha
 const CODERABBIT_STATUS_CONTEXT = 'CodeRabbit';
 const CODERABBIT_REVIEW_COMPLETED = 'Review completed';
 const CODERABBIT_THREAD_RESOLVED = '✅ Review thread resolved.';
+// The marker anywhere in a reply is not enough: a reply could quote it and still
+// object (second Codex P1 on #836). All 79 real resolving replies on 21 PRs
+// (#605-#850) end in exactly this tail and name the marker once; none of the 8
+// objecting replies or 105 thread-opening comments do. The same check is
+// isCodeRabbitResolvingReply() in .claude/hooks/codex-push-lib.mjs.
+const CODERABBIT_RESOLVED_TAIL = `\n\n${CODERABBIT_THREAD_RESOLVED}\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->`;
+
+function isCodeRabbitResolvingReply(comment) {
+  const body = comment?.body;
+  return comment?.in_reply_to_id !== null && comment?.in_reply_to_id !== undefined
+    && typeof body === 'string'
+    && body.endsWith(CODERABBIT_RESOLVED_TAIL)
+    && body.split('Review thread resolved').length === 2
+    && body.slice(0, -CODERABBIT_RESOLVED_TAIL.length).trim() !== '';
+}
 
 function standingCodeRabbitApproval(reviews) {
   const mine = reviews
@@ -948,8 +963,7 @@ async function inspectCodeRabbitFollowUp({ github, owner, repo, pullNumber, head
     const at = Date.parse(String(comment?.created_at || ''));
     if (!Number.isFinite(at)) return true;
     if (at < approval.at) return false;
-    const isReply = comment?.in_reply_to_id !== null && comment?.in_reply_to_id !== undefined;
-    return !(isReply && String(comment?.body || '').includes(CODERABBIT_THREAD_RESOLVED));
+    return !isCodeRabbitResolvingReply(comment);
   });
   if (laterFinding) return null;
   return { review: approval.review, status };

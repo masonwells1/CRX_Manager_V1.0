@@ -1699,8 +1699,13 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "CodeRabbit has not cleared", "a later CodeRabbit inline finding is refused");
     ok(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
       comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7,
-        body: "Thanks.\n\n✅ Review thread resolved." }] }).ok === true,
+        body: "`@masonwells1`, thanks for the update.\n\n✅ Review thread resolved.\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->" }] }).ok === true,
     "a CodeRabbit reply that resolves its thread after the approval does not block the apply");
+    // Second Codex P1 on #836: a reply that quotes the marker and objects refuses.
+    refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
+      comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7,
+        body: "> ✅ Review thread resolved.\n\nThe attempted fix is still incorrect; keep this thread open.\n\n_You are interacting with an AI system._\n\n<!-- This is an auto-generated reply by CodeRabbit -->" }] }),
+    "CodeRabbit has not cleared", "a CodeRabbit reply that quotes the resolved marker but objects refuses the apply");
     refused(gate({ pr: { reviews: [olderApproval] }, statuses: [completed],
       comments: [{ user: { login: "coderabbitai[bot]" }, created_at: "2026-09-27T07:00:00Z", in_reply_to_id: 7,
         body: "I'll leave this thread open until the fix is on the PR branch." }] }),

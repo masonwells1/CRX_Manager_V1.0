@@ -95,8 +95,12 @@ only from data CodeRabbit alone can write:
    (`GET /repos/{o}/{r}/pulls/{n}/comments`) are read too. Any CodeRabbit
    comment at or after the approval refuses — a new thread is a finding, and a
    reply can object (PR #818's reply kept a thread open) — except a thread reply
-   carrying CodeRabbit's own `✅ Review thread resolved.` line, the empty
-   artifact's only content. The completion status is read **first** and the
+   in CodeRabbit's exact resolving shape, the empty artifact's only content: it
+   names `✅ Review thread resolved.` once, and ends with that line followed by
+   CodeRabbit's fixed "_You are interacting with an AI system._" and
+   auto-generated-reply footer. The marker anywhere else (quoted, followed by
+   an objection, or named twice) refuses. All 79 real resolving replies on 21
+   PRs have that shape, and no other CodeRabbit comment does. The completion status is read **first** and the
    reviews and inline comments are re-read **after** it, so a finding posted
    before the completion (CodeRabbit posts findings 6-8 s before the status) is
    always seen;
