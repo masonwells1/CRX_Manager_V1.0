@@ -1,12 +1,26 @@
 # Decision Log
 
-Last verified: 2026-09-26 (autonomous landing entry added)
+Last verified: 2026-09-30 (nested-command entries condensed; full gap list in agent-guardrails.md)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
+
+**Source:** Mason, "accept and land" (2026-09-29 and 2026-09-30); detail in `docs/changelog.d/2026-09-29-pr795-stopped-after-luna-round4.md`.
+**Decision.** Parser fixes stop; remaining findings are recorded known gaps (`docs/reference/agent-guardrails.md`,
+"Accepted residuals") and the work lands. One that beats GitHub's `main` protection, or a serious Sol finding, goes to Mason.
+**Why.** Each round found new holes, and the protect-main ruleset (no bypass actors) still requires review and green checks.
+
+## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
+
+**Source:** Mason, "fix and accept" (2026-09-28); detail in `docs/changelog.d/2026-09-28-nested-guard-luna-round1-fixes.md`.
+**Decision.** Guard logic bugs are fixed; script files, run-time program names outside `$`/backtick syntax, and the
+Codex guard not re-checking decoded payloads are accepted residuals. The push-parser timeout is tracked separately.
+**Why.** Parsing cannot see a script's contents or a name assembled at run time.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 
