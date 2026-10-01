@@ -362,6 +362,27 @@ and missing from every other tracker. Sources are recoverable with `git show 4b6
   is not installed. Install it or remove the classes. A short customer statement prints its last-page
   footer twice: `src/lib/statementPdf.ts` draws it from the table's `didDrawPage` and again after the
   remittance stub (2026-05-30 p2/p3 sprint handoff).
+- **Access gaps (low, same class as the tracked field-app access lows)**: `save_field` lets any sales rep
+  edit any customer's fields and billing defaults (no per-customer ownership check, the pattern already
+  closed for `save_customer`); every active user, including drivers and applicators, can read every
+  customer's addresses (the July change added only an active-user check, on purpose); and the By-Customer
+  invoice summary on Field Invoices under-totals for a sales rep, because it reads only the invoices that
+  rep can see. Narrow each, or record that you accept it in KNOWN_ISSUES.
+- **Owner actions and decisions (field app)**: the pre- and post-application customer notification emails
+  are built, but code comments say the `send-email` Edge Function deploy that turns them on was never
+  done. Confirm the live version, then the deploy needs your approval. Decide whether an over-label
+  chemical rate should block the save or keep warning (warn is today's default). Decide whether to build
+  the "wrong field" alert (as-applied acres far from the job's planned acres) and the F2 in-field acre
+  nudge, or keep today's display-only "Full field / Edited" badge.
+- **Field-app bugs (low)**: the Jobs list's tag, crop, county, state, chemical and field-name filters only
+  see the first 500 jobs fetched; bulk Loader Worksheet print stamps "printed" on jobs that dropped out of
+  the PDF; auto-created split draft invoices on delivery completion raise no bell notification; and on a
+  blend ticket, a product line with a saved name but no catalog match shows a blank "Select Product".
+- **Field-app polish**: a recipe filter on mobile FieldView and the Dispatched List (only the office
+  Dispatch Board has one; `get_dispatched_list` returns no recipe); "undo last point" in the guided
+  map-drawing tool; tab semantics and arrow-key support on the Customer 360 tab strip; finishing the
+  visual refresh on Modal, Breadcrumbs, Combobox and the app shell; and a sidebar link for Payment
+  History (today it is reachable only by URL or the A/R workspace).
 - **Decide keep or drop** (2026-05-09 implementation plan, "not in this plan"): bank reconciliation, vendor
   1099 tracking, line items on vendor bills, and linking purchase orders to the vendor record instead of a
   typed name. Also optional: a count badge for unpriced rush orders (sell-side plan), and a screen for the

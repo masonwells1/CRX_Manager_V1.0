@@ -48,6 +48,20 @@ sweep of every removed doc":
 
 One owner smoke test (importing a real field boundary export) was added under "Owner smoke test".
 
+Codex then found a third miss written as free text rather than as a checkbox: a statement PDF that prints
+its footer twice. Six more read-only agents read all 616 free-text phrases that mark open work ("future
+fix", "follow-up", "out of scope", "owner call" and similar) across 192 removed files, again checking each
+against current code and every tracker. About twenty more open items are now in the same `TODO.md` §5
+block:
+- three low-severity access gaps;
+- field-app owner actions and decisions, including the never-done `send-email` deploy that turns on
+  application notices;
+- four field-app bugs;
+- field-app polish.
+
+One agent claim was checked and rejected: the vendor-bill name check it cited exists only in an older
+version of that function.
+
 **Pointers:** the archive READMEs (`2026-summer`, `2026-summer-closeout`, `2026-spring`,
 `2026-Q1-brainstorms`) now list only what remains. Mentions inside other historical records, the
 changelog and applied-migration comments were left alone as history. Four code comments point at
