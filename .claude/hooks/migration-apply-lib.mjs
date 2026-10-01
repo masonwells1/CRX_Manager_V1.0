@@ -26,8 +26,16 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
-import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { accessChangeCheck, dataRewriteCheck, readMigrationHistory } from "./migration-access-lib.mjs";
+import { readMigrationHistory } from "./migration-access-lib.mjs";
+import {
+  approvalFileName,
+  assertOwnerTrustFilesReviewed,
+  defaultOwnerKeys,
+  findOwnerApprovals,
+  parkedCategories,
+  readUsedNonces,
+  verifyOwnerApproval,
+} from "./owner-approval-lib.mjs";
 import { sessionProofDirs, sessionCheckoutRoots, resolveSessionWorktree } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 import { checkPendingMigrations } from "./migration-pending-lib.mjs";
@@ -322,8 +330,21 @@ export function evaluateMigrationApply({
   // still matching by substring. Flipping the default closes that; both known callers
   // are the PreToolUse hook and apply-migration-file.mjs, and both want exact.
   requireExactProofName = true,
-  // (No destructive-approval input exists, deliberately: an agent-run command
-  // cannot prove Mason approved an exact migration — Sol HIGH, 2026-09-26.)
+  // (No approval FLAG exists, deliberately: an agent-run command cannot prove
+  // Mason approved an exact migration — Sol HIGH, 2026-09-26. What can is his
+  // Windows Hello signature — owner-approval-lib.mjs, Mason 2026-09-29.)
+  // `ownerApprovalDoor` only says which door is asking: scripts/apply-migration-file.mjs
+  // sets it, so a parked migration may go on to look for that signature; the MCP
+  // hook leaves it unset and a parked migration is refused there as before. It
+  // proves nothing by itself — without a valid signature the refusal stands.
+  ownerApprovalDoor = false,
+  // Test injection point: returns { pinned, live } public keys. Real callers
+  // leave it unset and get the committed key plus the key Windows holds.
+  ownerApprovalKeys,
+  // Test injection point: throws unless the approval files on disk are the
+  // reviewed commit's bytes. Real callers leave it unset and get
+  // assertOwnerTrustFilesReviewed (Sol HIGH, PR #857).
+  ownerTrustCheck,
   // The pull-request half of the autonomous-landing rule — see
   // migration-landing-gate-lib.mjs. Injection point for tests only; both real
   // callers leave it unset and get the real gate. `landingDeadlineMs` is the
@@ -495,6 +516,9 @@ export function evaluateMigrationApply({
   // (Codex P1, PR #348). A missing, unreadable, or stale snapshot therefore
   // refuses the apply and tells the operator how to produce one. Only the
   // library's internal "this name has no timestamp" case abstains.
+  // Hoisted: the owner-approval check at the end refuses a migration the ledger
+  // already holds (an approval covers one install).
+  let appliedNames = [];
   {
     const snapPath = path.join(stateDir, "applied-migrations.json");
     // The recapture target must be the project THIS apply is aimed at. Reading it
@@ -515,7 +539,6 @@ export function evaluateMigrationApply({
       `The snapshot is gitignored and per-checkout, so a fresh clone or a newer apply elsewhere ` +
       `means it must be regenerated. Do NOT hand-write it.`;
 
-    let appliedNames = [];
     let snapshotAgeMs = null;
     try {
       if (!existsSync(snapPath)) {
@@ -847,62 +870,71 @@ export function evaluateMigrationApply({
   // fresh content-bound gpt-6-sol/high Codex proof applies with no per-migration
   // ask. That is what Mason confirmed; the proof checks below are unchanged, they
   // simply stopped being optional outside autopilot. A DESTRUCTIVE migration is
-  // still Mason's: refused for agents in every session, with no agent-assertable
-  // override (an approval flag an agent could pass itself is not approval).
+  // still Mason's: refused for agents in every session unless Mason signed THIS
+  // exact migration with Windows Hello (owner-approval-lib.mjs, Mason 2026-09-29).
+  // An approval flag, label, comment or review an agent could produce is not
+  // approval. The same holds for the two other parked kinds below.
+  //
+  // With a signature the migration is not waved through: it goes on to the SAME
+  // reviewer proofs, Sol proof and landing gate as every other migration, and the
+  // signature itself is checked last, against the landing gate's PR and head.
+  let ownerApprovalCandidates = null;
+  let parked = [];
   if (migQuery) {
-    // Fail CLOSED: a classifier error counts as destructive.
-    let d;
-    try { d = destructiveMigrationCheck(migQuery); }
-    catch (e) { d = { destructive: true, reason: `destructive-check error (${e && e.message ? e.message : e}) — failing closed` }; }
-    if (d.destructive) {
-      return block(
+    // The migration files that sort before this one: the history the rewrite and
+    // access checks read (Sol rounds 10-11). If they cannot be read, both run
+    // without it and anything that depends on it waits for Mason.
+    let history;
+    try { history = migrationSourceFile ? readMigrationHistory(path.dirname(migrationSourceFile), path.basename(migrationSourceFile)) : undefined; }
+    catch { history = undefined; }
+    // Fail CLOSED inside parkedCategories: a classifier error counts as a hit.
+    parked = parkedCategories(migQuery, { history });
+    const OWNER_ROUTE =
+      `\n\nTHE ONE WAY THROUGH (Mason, 2026-09-29): once every other proof for this exact file is fresh, ` +
+      `get Mason's explicit yes in this conversation (AGENTS.md), then ask him to approve it with Windows Hello — run \`node scripts/owner-approve-migration.mjs ` +
+      `supabase/migrations/${migName || "<file>"}.sql\` from the PR's checkout while he is at the PC — ` +
+      `then apply within 30 minutes through \`node scripts/apply-migration-file.mjs\` (the MCP apply tool ` +
+      `never accepts it). Do NOT write, copy or edit the approval file yourself; only his signature counts.`;
+    const refusals = {
+      // Deleted data has no point-in-time recovery on this Supabase plan
+      // (settled 2026-07-13, kept by the autonomous-landing rule 2026-09-26).
+      "deletes-data": (c) =>
         `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" contains a destructive statement ` +
-        `(${d.reason}). Destructive migrations are Mason's decision and NEVER apply through an agent — ` +
+        `(${c.reason}). Destructive migrations are Mason's decision and never apply on an agent's say-so — ` +
         `Mason's autonomous-landing rule (2026-09-26), which keeps the settled 2026-07-13 refusal — because ` +
         `deleted data has no point-in-time recovery on this Supabase plan, and no agent-run command can ` +
         `prove that Mason approved this exact migration (Sol HIGH, 2026-09-26). PARK it ` +
         `(scripts/.staging-migrations/ + a docs/manual/KNOWN_ISSUES.md entry with the plain-English risk) ` +
         `and hand it to Mason. Do NOT disarm autopilot, rename, split or rewrite the SQL to route around ` +
-        `this (an EXPIRED flag also refuses, deliberately).`);
-    }
-    // The migration files that sort before this one: the history the next two
-    // checks read (Sol rounds 10-11). If they cannot be read, both run without
-    // it and anything that depends on it waits for Mason.
-    let history;
-    try { history = migrationSourceFile ? readMigrationHistory(path.dirname(migrationSourceFile), path.basename(migrationSourceFile)) : undefined; }
-    catch { history = undefined; }
-    // OVERWRITING existing rows is Mason's too (Sol HIGH, round 11; Mason's
-    // in-chat choice 2026-09-27: "Data rewrites wait"). Fail CLOSED.
-    let rewrite;
-    try { rewrite = dataRewriteCheck(migQuery, { history }); }
-    catch (e) { rewrite = { rewrites: true, reason: `data-rewrite check error (${e && e.message ? e.message : e}) — failing closed` }; }
-    if (rewrite.rewrites) {
-      return block(
-        `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" changes existing data — ${rewrite.reason}. ` +
+        `this (an EXPIRED flag also refuses, deliberately).`,
+      // Sol HIGH, round 11; Mason's in-chat choice 2026-09-27: "Data rewrites wait".
+      "overwrites-data": (c) =>
+        `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" changes existing data — ${c.reason}. ` +
         `Under Mason's autonomous-landing rule (2026-09-27, "Data rewrites wait") a migration that overwrites ` +
         `existing rows (UPDATE, INSERT ... ON CONFLICT DO UPDATE, MERGE, a column type conversion, or a function ` +
         `run while applying that does any of these) is his, like one that deletes them. PARK it with a ` +
         `plain-English explanation of which rows change and how, and hand it to Mason. Do NOT split or rewrite ` +
-        `the SQL to route around this.`);
-    }
-    // PERMISSIONS are Mason's too (Sol HIGH, round 9; Mason's in-chat choice
-    // 2026-09-26: "Routine auto, widening waits"). The routine lock-down lines
-    // on objects this migration creates apply by themselves; anything that
-    // widens access or changes access that already exists does not. A REPLACED
-    // object's earlier access is rebuilt from the history (Sol HIGH #2, round 10).
-    // Fail CLOSED: a classifier error counts as an access change.
-    let access;
-    try { access = accessChangeCheck(migQuery, { history }); }
-    catch (e) { access = { changesAccess: true, reason: `access-check error (${e && e.message ? e.message : e}) — failing closed` }; }
-    if (access.changesAccess) {
-      return block(
+        `the SQL to route around this.`,
+      // Sol HIGH, round 9; Mason's in-chat choice 2026-09-26: "Routine auto,
+      // widening waits". The routine lock-down lines on objects this migration
+      // creates apply by themselves; a REPLACED object's earlier access is
+      // rebuilt from the history (Sol HIGH #2, round 10).
+      "changes-access": (c) =>
         `MIGRATION APPLY GUARD: migration "${migName || "(unnamed)"}" changes who can access what — ` +
-        `${access.reason}. Under Mason's autonomous-landing rule (2026-09-26) only the routine lock-down lines ` +
+        `${c.reason}. Under Mason's autonomous-landing rule (2026-09-26) only the routine lock-down lines ` +
         `on objects the same migration creates apply without him; anything that widens access or changes ` +
         `access that already exists (a GRANT to anon/PUBLIC, a GRANT or REVOKE on an existing object, ` +
         `ALTER/DROP POLICY, disabling row-level security, roles, owners, the auth/storage/vault schemas, ` +
         `a SECURITY DEFINER body that reaches them, dynamic SQL) is his. PARK it with a plain-English explanation of what access changes, and hand it ` +
-        `to Mason. Do NOT split or rewrite the SQL to route around this.`);
+        `to Mason. Do NOT split or rewrite the SQL to route around this.`,
+    };
+    if (parked.length) {
+      const refusal = refusals[parked[0].category](parked[0]) + OWNER_ROUTE;
+      if (!ownerApprovalDoor) return block(refusal);
+      ownerApprovalCandidates = findOwnerApprovals(proofDirs, safeName);
+      if (!ownerApprovalCandidates.length) {
+        return block(`${refusal}\n\nNo approval from Mason was found for it (${approvalFileName(safeName)}).`);
+      }
     }
   }
 
@@ -1099,6 +1131,61 @@ export function evaluateMigrationApply({
     }
     if (!landing || landing.ok !== true) {
       return block(landing?.reason || "MIGRATION LANDING GATE: the pull-request landing check did not pass (fail closed).");
+    }
+    // LAST OF ALL, for a parked migration: Mason's Windows Hello signature, bound
+    // to this exact SQL and to the PR and head the landing gate just confirmed.
+    if (ownerApprovalCandidates) {
+      // The key, the Windows Hello helper and the code that checks them are read
+      // from this checkout: they must be the bytes reviewed at the head the landing
+      // gate just confirmed, or a local edit could stand in for Mason's signature.
+      try { (ownerTrustCheck || assertOwnerTrustFilesReviewed)({ head: landing.head }); }
+      catch (error) {
+        return block(`OWNER APPROVAL GUARD: ${error?.message || error}. Refusing "${migName}" (fail closed).`);
+      }
+      let keys;
+      try { keys = (ownerApprovalKeys || defaultOwnerKeys)(); }
+      catch (error) {
+        return block(`OWNER APPROVAL GUARD: ${error?.message || error}. Refusing "${migName}" (fail closed).`);
+      }
+      const expect = {
+        project: CRX_PRODUCTION_REF,
+        migration: migName,
+        queryHash: currentHash,
+        pullRequest: landing.pullRequest,
+        prHead: landing.head,
+        categories: parked,
+      };
+      let usedNonces;
+      try { usedNonces = readUsedNonces(proofDirs); }
+      catch (error) {
+        return block(`OWNER APPROVAL GUARD: could not read which approvals were already used (${error?.message || error}). Refusing "${migName}" (fail closed).`);
+      }
+      const reasons = [];
+      for (const candidate of ownerApprovalCandidates) {
+        let verdict;
+        try {
+          verdict = verifyOwnerApproval({ approval: candidate.approval, expect, keys, appliedNames, usedNonces, now });
+        } catch (error) {
+          verdict = { ok: false, reason: `the check itself failed (${error?.message || error})` };
+        }
+        if (verdict.ok) {
+          return {
+            decision: "allow",
+            ownerApproval: {
+              file: candidate.file,
+              dir: candidate.dir,
+              payload: candidate.approval.payload,
+              expiresAt: verdict.payload.expiresAt,
+            },
+          };
+        }
+        reasons.push(`${candidate.file}: ${verdict.reason}`);
+      }
+      return block(
+        `OWNER APPROVAL GUARD: "${migName}" needs Mason's Windows Hello approval of this exact file, pull ` +
+        `request and head, and none found is valid:\n${reasons.map((r) => `  - ${r}\n`).join("")}` +
+        `Ask Mason again with \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName}.sql\`. ` +
+        `Do NOT edit or copy an approval file; only his signature counts.`);
     }
     return allow();
   }
