@@ -63,6 +63,12 @@ import {
   configuredMirrorRemotes,
   urlIsGuardedApp,
   riskyFiles,
+  pushParseCostExceeded,
+  PUSH_PARSE_COST_BUDGET,
+  MAX_INSPECTABLE_COMMAND_LENGTH,
+  MAX_HOOK_INPUT_LENGTH,
+  readHookInputBounded,
+  sanitizeForMessage,
 } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
@@ -72,9 +78,24 @@ function deny(reason) {
 }
 
 let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
+const input = await readHookInputBounded();
+if (input.failed) {
+  // An unread tool call is an uninspected one: refuse it rather than allow it.
+  deny(`CODEX GATE: this tool call's hook input could not be read (${sanitizeForMessage(input.failed)}), so it is refused. Retry the command; if this repeats, the hook's input pipe is broken.`);
+}
+// Measured while reading, before decoding: JSON.parse on an unbounded input is
+// itself a way to outrun the hook limit, and a killed hook allows the command.
+if (input.tooLarge) {
+  deny(`CODEX GATE: this tool call is too large to inspect safely (its hook input is over ${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} bytes). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
+}
+const rawInput = input.text;
+try { payload = JSON.parse(rawInput); } catch { passthrough(); }
 
 const cmd = String(payload?.tool_input?.command || "");
+// First, before any parser: a hook killed at its time limit allows the command.
+if (pushParseCostExceeded(cmd)) {
+  deny(`CODEX GATE: this command is too large to inspect safely (it is over ${MAX_INSPECTABLE_COMMAND_LENGTH.toLocaleString("en-US")} characters, or its \`git\` count times its length is over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
+}
 if (gitSubcommandIsDynamic(cmd)) {
   deny("CODEX GATE: Git's subcommand must be written literally. Shell variables, substitutions, splats, and globs are expanded after this review, so a command such as `$verb='push'; git $verb ...` can execute a push while bypassing every destination, force, and proof check. Write the Git operation plainly (for example `git -C <repo> push <remote> <refspec>`).");
 }
