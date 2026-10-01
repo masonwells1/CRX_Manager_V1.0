@@ -198,6 +198,11 @@ const ACRES = 10;
 // Boundary dates are DERIVED from the season the container is actually in, never hardcoded,
 // so this prover does not start failing on 2026-10-01 and read as a broken migration.
 let SEASON_NOW = 0;
+// The season of the America/Chicago business date -- the fallback the 5-argument preview uses
+// when it is called without p_invoice_date. It is NOT always SEASON_NOW: current_season() reads
+// CURRENT_DATE on this UTC container, so from 19:00 to 24:00 Chicago time on Sep 30 the UTC date
+// is already Oct 1 and SEASON_NOW is one season AHEAD of this. See PHASE 1d and PHASE 4d.
+let BUSINESS_SEASON = 0;
 let DATE_IN_SEASON = '';   // Y-09-30: the ambient season
 let DATE_NEXT_SEASON = ''; // Y-10-01: the next season
 
@@ -486,9 +491,12 @@ const AUTHENTICATE = `
  *
  * `withDate` is false before the candidate, where the function has no date parameter at
  * all -- which is precisely why this could never be fixed in the frontend.
+ * `season` is the season the RATE_CUR row is seeded under (RATE_NEXT goes one season later).
+ * It defaults to SEASON_NOW; only a probe that leans on the preview's Chicago fallback
+ * passes BUSINESS_SEASON instead.
  * Everything the probe writes is rolled back by its own terminating exception.
  */
-function parityProbe(label, { mode, invoiceDate, createDate = null, withDate, named = false }) {
+function parityProbe(label, { mode, invoiceDate, createDate = null, withDate, named = false, season = SEASON_NOW }) {
   const locations = `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}))`;
   // `named` emits PostgreSQL's named notation (p_locations => ...). PostgREST resolves an RPC by
   // the SET OF ARGUMENT NAMES in the JSON body, which is the entire reason this migration does
@@ -523,7 +531,7 @@ ${AUTHENTICATE}
   INSERT INTO application_services (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
     VALUES ('[SMOKE] service ${label}', ${RATE_DEFAULT}, 0, true) RETURNING id INTO v_svc;
   INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season)
-    VALUES (v_cust, v_svc, ${RATE_CUR}, ${SEASON_NOW}), (v_cust, v_svc, ${RATE_NEXT}, ${SEASON_NOW + 1});
+    VALUES (v_cust, v_svc, ${RATE_CUR}, ${season}), (v_cust, v_svc, ${RATE_NEXT}, ${season + 1});
 ${createStep}
 
   -- What Mason sees on the Customers tab, for the form as it stands right now.
@@ -1767,7 +1775,16 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   DATE_NEXT_SEASON = `${SEASON_NOW}-10-01`;
   assert.equal(Number(scalar(`SELECT compute_season(DATE '${DATE_IN_SEASON}')`)), SEASON_NOW, `${DATE_IN_SEASON} must be in the ambient season`);
   assert.equal(Number(scalar(`SELECT compute_season(DATE '${DATE_NEXT_SEASON}')`)), SEASON_NOW + 1, `${DATE_NEXT_SEASON} must be in the next season`);
-  log(`PHASE 1d: boundary derived from the container clock -- ambient season ${SEASON_NOW}; ${DATE_IN_SEASON} is ${SEASON_NOW}, ${DATE_NEXT_SEASON} is ${SEASON_NOW + 1}`);
+  // Two clocks, read separately on purpose. SEASON_NOW stays on current_season() (UTC) because
+  // the old body phases 2 and 6a run prices from exactly that read. The 5-argument preview called
+  // WITHOUT a date falls back to the America/Chicago business date instead -- the product's rule --
+  // and the two disagree from 19:00 to 24:00 Chicago time on Sep 30. Moving SEASON_NOW to Chicago
+  // would only move the failure into phase 2 for that window, so PHASE 4d seeds and dates its
+  // probe from BUSINESS_SEASON. Chicago is always behind UTC, so it is this season or the one before.
+  BUSINESS_SEASON = Number(scalar(`SELECT compute_season((now() AT TIME ZONE 'America/Chicago')::date)`));
+  assert.ok(BUSINESS_SEASON === SEASON_NOW || BUSINESS_SEASON === SEASON_NOW - 1,
+    `the Chicago business season must equal the UTC season or trail it by one: ${BUSINESS_SEASON} vs ${SEASON_NOW}`);
+  log(`PHASE 1d: boundary derived from the container clock -- ambient season ${SEASON_NOW}; ${DATE_IN_SEASON} is ${SEASON_NOW}, ${DATE_NEXT_SEASON} is ${SEASON_NOW + 1}; Chicago business season ${BUSINESS_SEASON}`);
 
   // ---- PHASE 2: reproduce the defect through the REAL installed functions ------------
   const beforeSameSeason = parityProbe('BEFORE_NEW_SAME_SEASON', { mode: 'new', invoiceDate: DATE_IN_SEASON, withDate: false });
@@ -1883,9 +1900,14 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   // correctly. Named notation, not positional: positional would only re-prove that PL/pgSQL
   // defaults work, which was never in doubt, while the claim under test is about resolution by
   // argument NAME.
-  // Dated in-season so the Chicago fallback and the invoice date land in the same season, which is
-  // what makes agreement the right expectation rather than a coincidence.
-  const fourArgCaller = parityProbe('AFTER_FOUR_ARGUMENT_CALLER', { mode: 'new', invoiceDate: DATE_IN_SEASON, withDate: false, named: true });
+  // With no date argument the preview prices at the Chicago business date's season, so the probe is
+  // seeded and dated in BUSINESS_SEASON, not SEASON_NOW: then the Chicago fallback and the invoice
+  // date land in the same season by construction, which is what makes agreement the right
+  // expectation rather than a coincidence. Using SEASON_NOW here failed every Sep 30 from 19:00 to
+  // 24:00 Chicago time (observed 2026-09-30 21:00 CDT): the UTC season had rolled over, the Chicago
+  // one had not, and the preview found no seeded rate at all.
+  const fourArgCaller = parityProbe('AFTER_FOUR_ARGUMENT_CALLER',
+    { mode: 'new', invoiceDate: `${BUSINESS_SEASON}-09-30`, season: BUSINESS_SEASON, withDate: false, named: true });
   assertAgrees(fourArgCaller);
   assert.equal(fourArgCaller.previewRate, RATE_CUR,
     `a 4-argument caller must still resolve through the DEFAULTs and price at ${RATE_CUR}: ${JSON.stringify(fourArgCaller)}`);
