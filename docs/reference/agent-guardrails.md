@@ -305,10 +305,12 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    The ruleset's configuration shows the requirement; it is not evidence that any given PR met it. Observed once:
    CodeRabbit APPROVED #841's head `18cf44114` on 2026-09-30 00:37Z and GitHub briefly reported
    `reviewDecision: APPROVED`; the next push dismissed that approval (the review now reads `DISMISSED`), as
-   `dismiss_stale_reviews_on_push` requires, so no PR has yet merged on such an approval. Two separate checks keep an
-   unreviewed PR out: GitHub's ruleset requires the approval server-side, and the local merge guard (the
-   autonomous-landing gates) independently requires CodeRabbit's latest verdict APPROVED on the exact head and refuses
-   `--auto`, so weakening either one alone does not let it land. The classic branch protection still shows
+   `dismiss_stale_reviews_on_push` requires, so no PR has yet merged on such an approval. GitHub's ruleset requires the
+   approval server-side, and the local merge guard (the autonomous-landing gates) also requires CodeRabbit's latest
+   verdict APPROVED on the exact head and refuses `--auto`. Weakening the local guard alone does not bypass GitHub's
+   required approval. The reverse does not hold: a merge the local guard cannot see (assembled at run time, run from a
+   script, or the Bash line continuation in the residuals below) passes the guard and its launcher, so GitHub's rule is
+   the only review check on that route, and without it an unreviewed PR could land once its other requirements pass. The classic branch protection still shows
    `enforce_admins` off, but the ruleset has no bypass actors, so its required review binds admins too. Cost Mason
    accepted: if CodeRabbit is down, nothing merges until it recovers. The ruleset is his alone to change; agents never
    change or work around it, and no document carries a step-by-step way to switch it off (a Sol review flagged such
