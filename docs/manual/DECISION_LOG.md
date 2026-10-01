@@ -11,7 +11,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 ## 2026-10-01 — Mason accepts the owner-approval "self-verifier" residual and hand-merges PR #857
 
 **Source:** Mason, "I'll merge 857" (2026-10-01); he merged #857 himself (`653addd6b`). Detail in `docs/changelog.d/2026-10-01-owner-approval-hand-merge-and-install-preflight.md`.
-**Decision.** Sol's second #857 finding (the approval verifier is code in the same checkout, so a local edit could disable it) is the 2026-09-29 residual, accepted, not open. Only that one finding is settled: do not re-raise it against PRs that only use the route, but every new defect in the route or its callers still gets full independent review.
+**Decision.** Sol's second #857 finding (the approval verifier is code in the same checkout, so a local edit could disable it) is the 2026-09-29 residual. Mason accepted it for the #857 merge only; it remains a known, open weakness of the route, and reviewers stay free to raise it and anything else.
 **Why.** On one PC any process running as Mason can edit any local check and read the Supabase token directly; the boundary is the hook-enforced rule that agents do not edit guard files or call the database API outside the gated doors.
 **Closing it** needs parked-migration applies in a GitHub Actions workflow on protected `main` (token as a repository secret): a separate project that needs Mason's go.
 
