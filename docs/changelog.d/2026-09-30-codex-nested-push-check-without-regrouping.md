@@ -6,7 +6,7 @@ which re-emits the outer command itself. So `git push origin HEAD:feature/x && (
 shell", while Claude's push guard, which reads without regrouping, allowed them. The Codex guard now reads
 nested pushes the same way; a push behind grouping is still refused by its whole-command composition check.
 
-Proof with the real hooks: neither command is refused as a nested push any more (each is still refused by
+Proof with the real hooks: neither command is refused as a nested push anymore (each is still refused by
 an older, separate rule: the Codex guard's computed-text rule for `(npm test)`, and the accepted
 `if ($…)` over-refusal), while `{ git push origin HEAD:main --force; }`, `(git push --force origin HEAD:main)`
 and `bash -c 'git push …'` are still refused by both push guards.

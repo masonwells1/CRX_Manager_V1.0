@@ -10,25 +10,17 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
 
-**Source:** Mason, PR #795 ship session: "accept and land" on 2026-09-29 (after Luna round 4) and again
-on 2026-09-30 (after Codex's GitHub reviewer). Detail: `docs/changelog.d/2026-09-29-pr795-stopped-after-luna-round4.md`.
-**Decision.** Parser fixes stop. Round 4's findings and the GitHub-reviewer gaps are recorded known gaps
-(full list: `docs/reference/agent-guardrails.md`, "Accepted residuals"), and PR #795 lands through CodeRabbit,
-the final Sol review and merge. Later GitHub-reviewer findings on it are answered and recorded the same way; one
-that would get past GitHub's own `main` protection, or a new serious Sol finding, goes to Mason.
-**Why.** Every round found holes where earlier rounds had not looked. The protect-main ruleset has no bypass
-actors, so a missed command can at most skip the Sol proof on a PR already approved and green.
+**Source:** Mason, "accept and land" (2026-09-29 and 2026-09-30); detail in `docs/changelog.d/2026-09-29-pr795-stopped-after-luna-round4.md`.
+**Decision.** Parser fixes stop; remaining findings are recorded known gaps (`docs/reference/agent-guardrails.md`,
+"Accepted residuals") and the work lands. One that beats GitHub's `main` protection, or a serious Sol finding, goes to Mason.
+**Why.** Each round found new holes, and the protect-main ruleset (no bypass actors) still requires review and green checks.
 
 ## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
 
-**Source:** Mason, PR #795 ship session, 2026-09-28: **"fix and accept"** after Luna reported 12 findings.
-Detail: `docs/changelog.d/2026-09-28-nested-guard-luna-round1-fixes.md`.
-**Decision.** Bugs in the guards' own logic are fixed. Three gaps no command reader can close are accepted
-residuals: script files, program names built at run time outside `$`/backtick syntax, and the Codex guard not
-re-checking decoded payloads against its other rules. The pre-existing quadratic push-parser timeout is tracked
-separately.
-**Why.** About 20 review rounds since 2026-09-07 each found new hiding places, and parsing cannot see a script's
-contents or a name assembled at run time.
+**Source:** Mason, "fix and accept" (2026-09-28); detail in `docs/changelog.d/2026-09-28-nested-guard-luna-round1-fixes.md`.
+**Decision.** Guard logic bugs are fixed; script files, run-time program names outside `$`/backtick syntax, and the
+Codex guard not re-checking decoded payloads are accepted residuals. The push-parser timeout is tracked separately.
+**Why.** Parsing cannot see a script's contents or a name assembled at run time.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

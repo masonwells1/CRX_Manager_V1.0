@@ -3018,7 +3018,10 @@ function posixShellInner(argvWords, start, fish) {
     if (word === "--") return sawC && argvWords[index + 1] !== undefined ? [argvWords[index + 1]] : [];
     if (/^[-+][A-Za-z]+$/.test(word)) {
       if (word.slice(1).includes("c")) sawC = true;
-      if (/^[-+][oO]$/.test(word)) index += 1;
+      // Each `o`/`O` in the cluster takes the next word as its value, so in
+      // `bash -oc xtrace '<command>'` the command is the word after `xtrace`
+      // (CodeRabbit, PR #851, 2026-09-30).
+      index += (word.slice(1).match(/[oO]/g) || []).length;
       continue;
     }
     if (word.startsWith("--")) {
@@ -3376,8 +3379,11 @@ export function expandNestedCommands(command, { grouping = true } = {}) {
     for (const text of frontier) {
       for (const entry of nestedCommandsOneLevel(text, { grouping })) {
         if (entry.windowExceeded) return { commands: found, tooDeep: true, computed };
+        // The inner text's own gh/git mention counts too: a decoded
+        // `-EncodedCommand` payload such as `$f='--admin'; gh pr merge 1 $f`
+        // names gh only once decoded (CodeRabbit, PR #851, 2026-09-30).
         if (!entry.grouped && RUNTIME_TEXT_RE.test(entry.text) &&
-            (outerMentionsGhOrGit || programBuiltAtRuntime(entry.text))) {
+            (outerMentionsGhOrGit || mentionsGhOrGit(entry.text) || programBuiltAtRuntime(entry.text))) {
           computed = true;
         }
         if (seen.has(entry.text)) continue;
@@ -3642,6 +3648,9 @@ function pipelineStages(text, shell) {
         if (strip) at += 1;
         while (text[at] === " " || text[at] === "\t") at += 1;
         let delimiter = "";
+        // Any quoting in the delimiter makes the body literal; an unquoted one
+        // lets bash run the `$( )` and backtick substitutions inside the body.
+        const delimiterStart = at;
         while (at < text.length && !/[\s;&|<>()]/.test(text[at])) {
           if (text[at] === "$" && text[at + 1] === "'") {
             // `$'…'` is ANSI-C quoted: bash decodes its escapes, so `$'EOF'`
@@ -3670,7 +3679,8 @@ function pipelineStages(text, shell) {
           }
         }
         frame.current += text.slice(index, at);
-        if (delimiter) frame.heredocs.push({ delimiter, strip });
+        const quoted = /['"\\]/.test(text.slice(delimiterStart, at));
+        if (delimiter) frame.heredocs.push({ delimiter, strip, quoted });
         index = at - 1;
         continue;
       }
@@ -3685,7 +3695,7 @@ function pipelineStages(text, shell) {
       // A here-document's body is the input of its command, not a command: skip
       // it, up to the line that is exactly its delimiter.
       let resume = index + 1;
-      for (const { delimiter, strip } of frame.heredocs) {
+      for (const { delimiter, strip, quoted } of frame.heredocs) {
         let ended = false;
         while (resume < text.length) {
           const lineEnd = text.indexOf("\n", resume);
@@ -3694,6 +3704,11 @@ function pipelineStages(text, shell) {
           if (strip) line = line.replace(/^\t+/, "");
           resume = end + 1;
           if (line === delimiter) { ended = true; break; }
+          // An unquoted delimiter's body runs its substitutions:
+          // `cat <<EOF` + `$(cat payload.txt | bash)` feeds bash, and skipping
+          // the body hid it (CodeRabbit, PR #851, 2026-09-30). Refused rather
+          // than parsed; quote the delimiter (`<<'EOF'`) for literal text.
+          if (!quoted && /\$\(|`/.test(line)) return [UNREADABLE_STAGE];
         }
         // No line ends it. Bash then reads to the end, but so would a delimiter
         // this lexer misread, and skipping the rest would hide every command

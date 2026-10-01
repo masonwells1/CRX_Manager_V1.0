@@ -3632,6 +3632,9 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "cat <<$'E\\117F'\nit's\nEOF\necho x | bash",
     "cat <<$\"EOF\"\nit's\nEOF\necho x | bash",
     "cat <<END\nit's\nEOF\necho x | bash",
+    // CodeRabbit, PR #851: an unquoted delimiter's body runs its substitutions.
+    "cat <<EOF\n$(cat payload.txt | bash)\nEOF",
+    "cat <<EOF\n`cat payload.txt | bash`\nEOF",
   ]) {
     assert.equal(commandFedToInterpreter(command), true, `a command fed on stdin is refused: ${JSON.stringify(command.slice(0, 80))}`);
   }
@@ -3660,6 +3663,8 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "git log --oneline |\ngrep fix",
     "git log --oneline\nbash --version",
     "cat <<$'EOF'\nit's | bash\nEOF\necho done",
+    "cat <<'EOF'\n$(cat payload.txt | bash)\nEOF",
+    "cat <<EOF > notes.txt\nhello $HOME\nEOF",
   ]) {
     assert.equal(commandFedToInterpreter(command), false, `an ordinary pipeline is not refused: ${JSON.stringify(command)}`);
   }
