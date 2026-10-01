@@ -154,15 +154,24 @@ The only sanctioned way to apply a migration to the live database:
    has APPROVED the frozen final head (or cleared it in a clean follow-up review after an earlier approval — `coderabbitClearedHead`), a fresh exact-SHA Sol review of that head is clean, and
    every required check is green, the agent applies the change's NON-destructive migration
    (its GRANT/REVOKE lines routine, none widening access) through the migration-apply-guard proof gate (both reviewer proofs and a fresh content-bound
-   Sol proof, each under 30 minutes), in any session, no ask. A DESTRUCTIVE migration (one that
-   deletes rows or drops data) needs Mason's explicit approval in the current conversation, and
-   the apply gate refuses it for agents in every session: park it and hand it to Mason
-   (`docs/manual/OWNER_PLAYBOOK.md`). The gate holds two more kinds for Mason the same way: a
-   migration that overwrites existing rows, and one that widens access (a non-routine grant).
+   Sol proof, each under 30 minutes), in any session, no ask. Three kinds are Mason's: a
+   migration that DELETES data (rows or data-bearing tables/columns), one that OVERWRITES
+   existing rows, and one that CHANGES WHO CAN ACCESS WHAT (anything beyond routine lock-down
+   lines on objects it creates). Each needs Mason's explicit yes in the current conversation
+   (`AGENTS.md`) AND his Windows Hello approval of that exact file (Mason, 2026-09-29); the apply
+   gate refuses them without the signature: once every proof above is fresh, run
+   `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql` from the PR's
+   checkout while he is at the PC. He sees a plain-English summary, then confirms with his
+   Windows Hello PIN or fingerprint. The signed approval covers that file, PR and head, once,
+   for 30 minutes, and every other check in this list still applies. A "yes" typed in chat,
+   a GitHub approval, label or comment is not that approval (agents act through his GitHub
+   token). See `docs/manual/OWNER_PLAYBOOK.md`.
 4. Apply through the gated file-bytes caller: dry run with
    `node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql` (transmits nothing),
    then the same command with `--confirm`. It asks the same rule book as the apply-guard hook
-   (`.claude/hooks/migration-apply-lib.mjs`) and transmits only on "allow"; see
+   (`.claude/hooks/migration-apply-lib.mjs`) and transmits only on "allow". It is the only
+   door that accepts Mason's Windows Hello approval, and it uses the approval up before
+   transmitting; see
    `docs/reference/agent-guardrails.md`. The Supabase MCP `apply_migration` tool goes through
    the same gate, but the current tool sends only `{name, query}` with no `project_id`, so the
    gate's exact-project check refuses it — do not try to work around that.

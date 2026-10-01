@@ -23,6 +23,8 @@ import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 import { evaluateLandingGate } from "./migration-landing-gate-lib.mjs";
+import { generateKeyPairSync, sign as signWith } from "node:crypto";
+import { OWNER_APPROVAL_MAX_AGE_MS, buildApprovalPayload, parkedCategories } from "./owner-approval-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -1747,6 +1749,117 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   writeFileSync(path.join(gateDir, ".claude", "session-state", `codex-review-${HEAD_SHA}.json`),
     JSON.stringify({ ...goodProof, timestamp: new Date(Date.now() - 31 * 60_000).toISOString() }));
   refused(gate(), "no fresh gpt-6-sol/high proof", "a stale proof is refused");
+}
+
+// ── OWNER APPROVAL (Mason, 2026-09-29): his Windows Hello signature lets a parked
+// migration continue to the SAME checks as every other one — through the apply
+// script's door only, never the MCP tool's, and never past a missing proof or a
+// PR that is not ready. A software key stands in for the Windows Hello key; the
+// signature format is proven on the real key by scripts/owner-approval-setup.mjs.
+{
+  const OWNER_HEAD = "e".repeat(40);
+  const mason = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const spki = (kp) => kp.publicKey.export({ type: "spki", format: "der" });
+  const masonKeys = () => ({ pinned: spki(mason), live: spki(mason) });
+  const readyLanding = () => ({ ok: true, pullRequest: 843, head: OWNER_HEAD });
+  const parkedSql = {
+    "deletes-data": "DROP TABLE public.customers;\n",
+    "overwrites-data": "UPDATE public.invoices SET total_amount_cents = 0;\n",
+    "changes-access": "GRANT SELECT ON public.customers TO anon;\n",
+  };
+  const approvalFor = (sql, over = {}, signer = mason) => {
+    const issued = Date.now() - 60_000;
+    const payload = buildApprovalPayload({
+      project: "rhyzpcqhnizqbxphqdkr",
+      migration: MIG,
+      queryHash: createHash("sha256").update(sql).digest("hex"),
+      pullRequest: 843,
+      prHead: OWNER_HEAD,
+      categories: parkedCategories(sql),
+      issuedAt: new Date(issued).toISOString(),
+      expiresAt: new Date(issued + OWNER_APPROVAL_MAX_AGE_MS).toISOString(),
+      nonce: `nonce-${Math.random().toString(16).slice(2)}`,
+      ...over,
+    });
+    return { payload, signature: signWith("sha256", Buffer.from(payload, "utf8"), signer.privateKey).toString("base64") };
+  };
+  const ownerFixture = (sql, { approval, proofs = true, used = null } = {}) => {
+    const h = createHash("sha256").update(sql).digest("hex");
+    const root = fixture({
+      migrationFile: sql,
+      proof: proofs ? { migration: MIG, timestamp: iso(0), reviewers: ["rls-security-reviewer", "migration-drift-reviewer"], findings: "clean", queryHash: h } : null,
+      codexProof: proofs ? { ...goodCodex, queryHash: h } : null,
+    });
+    const stateDir = path.join(root, ".claude", "session-state");
+    if (approval) writeFileSync(path.join(stateDir, `owner-approval-${SAFE}.json`), JSON.stringify(approval), "utf8");
+    if (used) writeFileSync(path.join(stateDir, `owner-approval-used-${used}.json`), "{}", "utf8");
+    return root;
+  };
+  const scriptDoor = (root, sql, over = {}) => evaluate(root, {
+    query: sql, ownerApprovalDoor: true, ownerApprovalKeys: masonKeys, ownerTrustCheck: () => {}, landingGate: readyLanding, ...over,
+  });
+
+  for (const [category, sql] of Object.entries(parkedSql)) {
+    const approval = approvalFor(sql);
+    const v = scriptDoor(ownerFixture(sql, { approval }), sql);
+    allows(v, `${category}: Mason's valid Windows Hello approval lets it through the apply script's door`);
+    ok(v.ownerApproval && v.ownerApproval.payload === approval.payload, `${category}: the allow carries the approval to be used up`);
+    denies(evaluate(ownerFixture(sql, { approval }), { query: sql, landingGate: readyLanding }),
+      "THE ONE WAY THROUGH", `${category}: the MCP door (no ownerApprovalDoor) refuses even with a valid approval`);
+  }
+
+  const ACCESS = parkedSql["changes-access"];
+  denies(scriptDoor(ownerFixture(ACCESS), ACCESS), "No approval from Mason was found",
+    "the apply script's door without an approval refuses");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS), proofs: false }), ACCESS),
+    "without subagent review proof", "an approval never skips the reviewer proof");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
+    { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: CodeRabbit has not APPROVED" }) }),
+  "CodeRabbit has not APPROVED", "an approval never skips the pull-request landing gate");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, other) }), ACCESS),
+    "not Mason's", "an approval signed by any other key is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, { prHead: "f".repeat(40) }) }), ACCESS),
+    "not the pull request's current head", "an approval for another head is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, { categories: [{ category: "changes-access", reason: "adds a comment" }] }) }), ACCESS),
+    "in the words the safety check uses", "an approval that softened what Mason was told is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
+    { landingGate: () => ({ ok: true }) }), "head is unknown", "a landing verdict without a head fails closed");
+  {
+    const approval = approvalFor(ACCESS);
+    const nonce = JSON.parse(approval.payload).nonce;
+    denies(scriptDoor(ownerFixture(ACCESS, { approval, used: nonce }), ACCESS), "already used", "a used approval is refused");
+  }
+  {
+    // An approval of one parked file cannot carry a different parked file.
+    const approval = approvalFor(ACCESS);
+    const DROP = parkedSql["deletes-data"];
+    denies(scriptDoor(ownerFixture(DROP, { approval }), DROP), "file changed",
+      "an approval of different SQL under the same name is refused");
+  }
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
+    { ownerApprovalKeys: () => { throw new Error("could not read Mason's approval key from Windows (NotFound)"); } }),
+  "could not read Mason's approval key", "an unreadable Windows key fails closed");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
+    { ownerApprovalKeys: () => ({ pinned: spki(other), live: spki(mason) }) }),
+  "not the Windows Hello key", "a pinned key that is not the Windows Hello key is refused");
+  // The approval files must be the reviewed bytes at the landing gate's head, checked
+  // before the key is read (Sol HIGH, PR #857).
+  {
+    let seenHead = null;
+    let keysRead = false;
+    const v = scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS, {
+      ownerTrustCheck: ({ head }) => { seenHead = head; throw new Error("these approval files differ from the reviewed commit eeeeeeeeeeee: .claude/hooks/owner-approval-key.json"); },
+      ownerApprovalKeys: () => { keysRead = true; return masonKeys(); },
+    });
+    denies(v, "differ from the reviewed commit", "a locally edited approval file refuses even a valid approval");
+    ok(seenHead === OWNER_HEAD, "the approval files are compared against the head the landing gate confirmed");
+    ok(!keysRead, "the key is never read when the approval files are not the reviewed bytes");
+  }
+  // A routine migration needs no approval and is unaffected by the door.
+  allows(evaluate(fixture(), { ownerApprovalDoor: true, ownerApprovalKeys: () => { throw new Error("must not be read"); },
+    ownerTrustCheck: () => { throw new Error("must not be run"); } }),
+    "a routine migration through the apply script's door never reads the owner key");
 }
 
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }
