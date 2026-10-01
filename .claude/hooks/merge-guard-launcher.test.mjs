@@ -17,6 +17,7 @@ import {
   guardPathAllowed,
   isVerdict,
   mayMerge,
+  readableCall,
   superviseGuard,
 } from "./merge-guard-launcher.mjs";
 
@@ -57,6 +58,25 @@ for (const command of [
 ok(mayMerge(JSON.stringify({ tool_name: "mcp__github__merge_pull_request", tool_input: { pullNumber: 9 } })),
   "the GitHub MCP merge tool is a possible merge");
 ok(mayMerge("not json but says gh pr merge"), "unparseable input is judged on its raw text");
+// Shell quoting cannot hide a merge from the text test (Luna, PR #841): Bash runs
+// each of these as an ordinary `gh pr merge`.
+for (const command of ["g''h pr me''rge 812", 'g""h pr me""rge 812', "gh pr m\\erge 812", "g^h pr me^rge 812", "g`h pr me`rge 812"]) {
+  ok(mayMerge(payload(command)), `a quote- or escape-split merge is still a possible merge: ${command}`);
+}
+
+// Only a JSON object whose tool_input (if any) is an object is a call the launcher
+// can judge; anything else is denied whatever it says (Luna, PR #841).
+ok(readableCall(PLAIN) && readableCall(JSON.stringify({ tool_name: "Read" })), "a well-formed call, with or without tool_input, is readable");
+for (const [label, input] of [
+  ["truncated JSON", '{"tool_name":"Bash","tool_input":{"command":"npm run build"}'],
+  ["JSON null", "null"],
+  ["a JSON string", '"npm run build"'],
+  ["a JSON array", "[]"],
+  ["a string tool_input", '{"tool_name":"Bash","tool_input":"npm run build"}'],
+  ["an empty input", ""],
+]) {
+  ok(!readableCall(input), `not a readable tool call: ${label}`);
+}
 for (const command of ["npm run build", "git status --short", "ls -la", "node scripts/check-agent-guidance.mjs"]) {
   ok(!mayMerge(payload(command)), `ordinary work keeps running while the guard is broken: ${command}`);
 }
@@ -80,6 +100,7 @@ const guardForms = [
   "gh pr merge 5 --admin",
   "gh.cmd pr merge 625 --admin",
   "node -e \"require('child_process').execSync(Buffer.from('Z2ggcHIgbWVyZ2UgODEy','base64').toString())\"",
+  "g''h pr me''rge 812",
 ];
 let deniedForms = 0;
 for (const command of guardForms) {
@@ -87,7 +108,7 @@ for (const command of guardForms) {
   deniedForms += 1;
   ok(mayMerge(payload(command)), `a form the working guard denies is a possible merge here too: ${command}`);
 }
-ok(deniedForms >= 7, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+ok(deniedForms >= 8, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
 
 ok(isVerdict("") && isVerdict(DENY_JSON_FOR_VERDICT), "silence and a PreToolUse denial are verdicts");
 ok(!isVerdict('{"error":"check failed"}'), "JSON without a decision is not a verdict (the harness would allow it)");
@@ -105,6 +126,8 @@ ok(/did not finish \(exited with code 1\)/.test(decisionOf(failed.stdout)?.permi
 const allowed = failureVerdict(PLAIN, "exited with code 1");
 ok(allowed.stdout === "" && /cannot merge, so it is allowed/.test(allowed.stderr),
   "a failed guard allows a call that cannot merge, and says so on stderr");
+ok(decisionOf(failureVerdict('{"tool_name":"Bash","tool_input":{"command":"npm run build"}', "exited silently").stdout)?.permissionDecision === "deny",
+  "a failed guard denies a call it could not read, even one that names no merge");
 
 // ── the supervisor, against guards that misbehave on purpose ─────────────────
 const tmp = mkdtempSync(path.join(os.tmpdir(), "merge-guard-launcher-"));
@@ -162,7 +185,9 @@ for (const [name, reason] of [
   ok(r.stdout === "", `${name}: a call that cannot merge is still allowed`);
 }
 
-r = await run(guards.earlyExit, "x".repeat(4 * 1024 * 1024));
+// A well-formed call, so the only question is whether the launcher survives the
+// guard's early exit (a bare non-JSON blob is now denied as unreadable).
+r = await run(guards.earlyExit, payload(`echo ${"x".repeat(4 * 1024 * 1024)}`));
 ok(r.stdout === "", "a guard that exits before reading a large input does not crash the launcher");
 
 let started = Date.now();
@@ -215,24 +240,24 @@ ok(res.status === 0 && res.stdout === "", "real launcher, missing guard: ordinar
 res = launch(LAUNCHER, guards.allow, MERGE);
 ok(decisionOf(res.stdout)?.permissionDecision === "deny", "real launcher refuses a guard outside its own directory");
 
-// A tool call the guard cannot read is not a checked allow (Codex App P1, PR #841):
-// it takes the launcher's fail-closed path, so a merge is denied and other work runs.
+// A tool call the guard cannot read is not a checked allow (Codex App P1, PR #841),
+// and its text cannot rule a merge out (Luna, same PR: `g''h pr me''rge` in a
+// truncated call), so it is denied whatever it says. A well-formed call still runs.
 for (const [label, input] of [
   ["a truncated merge call", '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 812"}'],
+  ["a truncated quote-split merge call", `{"tool_name":"Bash","tool_input":{"command":"g''h pr me''rge 812"}`],
   ["a merge call whose tool_input is a string", '{"tool_name":"Bash","tool_input":"gh pr merge 812"}'],
   ["a bare JSON string naming a merge", '"gh pr merge 812"'],
+  ["a truncated ordinary call", '{"tool_name":"Bash","tool_input":{"command":"npm run build"}'],
+  ["a JSON null payload", "null"],
 ]) {
   res = launch(LAUNCHER, REAL_GUARD, input);
   ok(decisionOf(res.stdout)?.permissionDecision === "deny" && /did not finish/.test(decisionOf(res.stdout)?.permissionDecisionReason || ""),
     `real launcher + real guard: ${label} is denied as unchecked`);
 }
-for (const [label, input] of [
-  ["a truncated ordinary call", '{"tool_name":"Bash","tool_input":{"command":"npm run build"}'],
-  ["a JSON null payload", "null"],
-]) {
-  res = launch(LAUNCHER, REAL_GUARD, input);
-  ok(res.status === 0 && res.stdout === "", `real launcher + real guard: ${label} still runs`);
-}
+res = launch(LAUNCHER, REAL_GUARD, PLAIN);
+ok(res.status === 0 && res.stdout === "" && !/did not finish/.test(res.stderr),
+  "real launcher + real guard: a well-formed ordinary call still runs as a checked allow");
 
 // The deadline path through main(): a copy of the launcher with a short deadline,
 // next to a hanging guard. Only the one timing constant differs from the real file.

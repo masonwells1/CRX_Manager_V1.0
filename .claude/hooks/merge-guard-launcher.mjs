@@ -15,9 +15,9 @@
 // the guard loads cannot stop this launcher from answering. When the guard exits
 // normally its verdict is forwarded unchanged. When it crashes, exits non-zero,
 // prints something that is not a verdict, exits silently without reporting that
-// it finished, or is still running at the launcher's deadline, or when the tool
-// call itself cannot be read, a call that could merge is denied and every other
-// call is allowed
+// it finished, or is still running at the launcher's deadline, a call that could
+// merge is denied and every other call is allowed. A tool call that cannot be read,
+// or is not a readable JSON tool call, is denied whatever it is
 // (@proven-by .claude/hooks/merge-guard-launcher.test.mjs).
 //
 // The launcher always exits 0. The hook entry in .claude/settings.json adds a
@@ -71,7 +71,25 @@ export function mayMerge(input) {
       text = `${payload.tool_name || ""} ${JSON.stringify(payload.tool_input)}`;
     }
   } catch { /* unparseable: judge the raw text */ }
+  // Shell quoting and escapes are removed first: Bash runs `g''h pr me''rge 1` as
+  // `gh pr merge 1`, and the working guard denies it, so this test must see it too
+  // (Luna, PR #841). Removing them can only widen what counts as a possible merge.
+  text = text.replace(/['"`\\^]/g, "");
   return /merge|graphql|api\.github|\bgh(?:\.(?:exe|cmd|bat|ps1))?\b/i.test(text);
+}
+
+// Is this a tool call the launcher can judge: a JSON object whose tool_input, if
+// present, is an object? pr-merge-guard.mjs reports no token for any other shape,
+// and mayMerge's text test alone cannot rule a merge out of a call nothing parsed,
+// so such a call is denied like one that could not be read at all (Luna, PR #841).
+export function readableCall(input) {
+  const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  try {
+    const payload = JSON.parse(String(input ?? ""));
+    return isPlainObject(payload) && (payload.tool_input === undefined || isPlainObject(payload.tool_input));
+  } catch {
+    return false;
+  }
 }
 
 function denial(reason) {
@@ -99,10 +117,13 @@ export function isVerdict(stdout) {
 // What to print when the guard did not finish: a denial for anything that could
 // merge, silence (allow) for everything else, and a note on stderr either way.
 // `input` is null when the tool call itself could not be read; nothing is known
-// about it, so it is treated as a possible merge (Luna, 2026-09-28).
+// about it, so it is treated as a possible merge (Luna, 2026-09-28). The same goes
+// for a call that arrived but is not a readable tool call (readableCall).
 export function failureVerdict(input, detail) {
   const note = `${LABEL}: the merge check did not finish (${detail}).`;
-  if (input !== null && !mayMerge(input)) return { stdout: "", stderr: `${note} This call cannot merge, so it is allowed.\n` };
+  if (input !== null && readableCall(input) && !mayMerge(input)) {
+    return { stdout: "", stderr: `${note} This call cannot merge, so it is allowed.\n` };
+  }
   return {
     stdout: denial(
       `${note} This call could merge a pull request, so it is denied (fail closed) — a check that ` +
