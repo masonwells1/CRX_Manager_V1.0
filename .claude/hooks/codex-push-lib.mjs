@@ -53,13 +53,30 @@ const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
 // cannot open on the BASENAME of `C:\Tools\git.cmd`. They lose only their
 // extension list, not their structure.
 const BIN_TAIL = `(?:\\.[^\\s'".\\\\/]*)?["']?`;
-const GIT_BIN = `(?:"[^"]*[\\\\/]git|'[^']*[\\\\/]git|(?:\\S*[\\\\/])?git)\\b${BIN_TAIL}`;
+// The unquoted path prefix stops at `;`, `&` and `|`. It was `\S*`, which from
+// EVERY command-start position ran to the end of a separator-dense command and
+// backtracked — quadratic, so 200K `;` took ~95 s in the Codex guard and a hook
+// killed at its 15 s limit ALLOWS the command. Detection is unchanged: a prefix
+// that spanned a separator has a match starting AT the last separator in it,
+// because CMD_START accepts that separator. PATH_PREFIX is shared with GH_BIN_RE.
+const PATH_PREFIX = `(?:[^\\s;&|]*[\\\\/])?`;
+const GIT_BIN = `(?:"[^"]*[\\\\/]git|'[^']*[\\\\/]git|${PATH_PREFIX}git)\\b${BIN_TAIL}`;
 const GIT_GLOBAL_OPTS =
   // `--config-env` must be listed here or the whole command stops looking like a
   // push: without it `git --config-env=remote.origin.pushurl=VAR push origin main`
   // failed `isGitPush` and skipped EVERY check in this guard (found while testing
   // Codex's 2026-07-30 inline-config finding).
-  `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--config-env(?:=${GIT_ARG}|\\s+${GIT_ARG})|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
+  //
+  // Each option is read ATOMICALLY (`(?=(?<gitOpt>…))\k<gitOpt>` — JavaScript has
+  // no atomic group, and a lookahead capture replayed by backreference is one).
+  // Without it the run was EXPONENTIAL: under /i `-C` and `-c` both match the same
+  // text, and a space-free quoted value matches both `"[^"]*"` and `\S+`, so each
+  // repeated option doubled the paths tried when the push match finally failed —
+  // `git -c "x"` repeated 14 times, a 108-character command, took 3 s, and every
+  // extra repeat doubled it. The trailing `(?=\s)` sits INSIDE the atomic part, so
+  // a quoted value not followed by whitespace (`-c "x"y`) still falls back to
+  // `\S+` before the option commits.
+  `(?:(?=(?<gitOpt>\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--config-env(?:=${GIT_ARG}|\\s+${GIT_ARG})|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?)(?=\\s)))\\k<gitOpt>)*`;
 // A command can START right after a separator with no space: `npm test&&git push
 // origin HEAD:main` is a perfectly ordinary shell line, and requiring whitespace
 // before `git` meant the hook saw no push at all and exited before the force,
@@ -70,10 +87,103 @@ const GIT_GLOBAL_OPTS =
 // this test so the substitution check above refuses it outright rather than
 // inspecting a command whose text the shell rewrites.
 const CMD_START = `(?:^|[\\s;&|])`;
-const GIT_PUSH_RE = new RegExp(`${CMD_START}${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`, "i");
+// The push arguments are the NAMED group `args`: GIT_GLOBAL_OPTS now carries a
+// capture of its own, so a numbered `[1]` would silently read the wrong group.
+const GIT_PUSH_RE = new RegExp(`${CMD_START}${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b(?<args>[^;&|]*)`, "i");
 const GIT_PUSH_PREFIX_RE = new RegExp(`${CMD_START}${GIT_BIN}(${GIT_GLOBAL_OPTS})\\s+push\\b`, "i");
 export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
+}
+
+// A hook killed at its time limit ALLOWS the command, so a parse that is slow
+// enough IS a bypass. One shape stays super-linear after the fixes above: every
+// `git` word can start its own option run (`git -C git -C git …` — each `git` is
+// both an option value and a new command start), so the push parsers cost about
+// (number of `git` words) × (command length). Measured with ~25 parser calls per
+// guard run: 32M of that product takes ~65 ms at worst, while `git -C ` repeated
+// to 64 KB (~600M) took ~11 s. The guards refuse a command above the budget
+// before any command parser runs (only reading the hook's JSON input and, on the
+// Codex side, trimming the command come first — both single linear passes).
+//
+// `git` is counted in the LETTERS ONLY: every alternate reading the parsers take
+// (quote splicing, escape removal, `("gi"+"t")` joining, argv splitting) only
+// removes or replaces non-letters, so no reading can hold more `git` words than
+// this count. Ordinary commands are nowhere near the budget — a long script or PR
+// body with a few mentions of git passes at any realistic size.
+//
+// Linear is not the same as fast. With a single `git`, 31.6 MB of `'a'|` passed
+// the budget and the Codex guard still ran past its limit (Codex GitHub review,
+// #840): every linear pass over that much text adds up. Measured on the slowest
+// single-push shapes, 1 MB takes up to ~5.8 s in the Codex guard, so any command
+// longer than MAX_INSPECTABLE_COMMAND_LENGTH (256 KiB, ~1.5 s) is refused too.
+// Real commands are orders of magnitude shorter; long content belongs in a file.
+export const PUSH_PARSE_COST_BUDGET = 32_000_000;
+export const MAX_INSPECTABLE_COMMAND_LENGTH = 256 * 1024;
+// The whole hook input is decoded (JSON.parse) before the command can be
+// measured, so its size is bounded too (Luna, 2026-09-29). 16 MiB, not 256 KiB:
+// the Codex guard sees every tool, including large apply_patch payloads.
+export const MAX_HOOK_INPUT_LENGTH = 16 * 1024 * 1024;
+// Reads the hook input and stops as soon as it passes `limit` bytes, so an
+// oversized tool call is refused without first being held whole. Reading it all
+// and measuring afterwards was not enough (Codex GitHub review, #840): past
+// ~512 MB Node cannot build the string at all, the read throws, and a guard
+// that treats a failed read as "nothing to check" allows the call.
+// Past the limit the rest is read and discarded, never stored, for up to
+// `drainMs` after the limit is crossed, so the writer is not cut off mid-write.
+// The read is asynchronous so a timer can end it: an input that is still open
+// after `waitMs` (a stalled or endless writer) resolves as a failure instead of
+// holding the hook until it is killed (Luna, 2026-09-30). Resolves to
+// { tooLarge, text } or { failed }; both guards refuse `tooLarge` and `failed`.
+export function readHookInputBounded({ limit = MAX_HOOK_INPUT_LENGTH, drainMs = 5_000, waitMs = 10_000, stream = process.stdin } = {}) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let total = 0;
+    let overLimitAt = 0;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.pause();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(total > limit
+      ? { tooLarge: true, text: "" }
+      : { failed: `hook input was still arriving after ${waitMs} ms` }), waitMs);
+    stream.on("data", (chunk) => {
+      total += chunk.length;
+      if (total <= limit) {
+        chunks.push(chunk);
+        return;
+      }
+      if (!overLimitAt) {
+        overLimitAt = Date.now();
+        chunks.length = 0;
+      }
+      if (Date.now() - overLimitAt > drainMs) finish({ tooLarge: true, text: "" });
+    });
+    stream.on("end", () => finish(total > limit
+      ? { tooLarge: true, text: "" }
+      : { tooLarge: false, text: Buffer.concat(chunks, total).toString("utf8") }));
+    stream.on("error", (error) => finish({ failed: String(error?.message || error) }));
+  });
+}
+export function pushParseCostExceeded(cmd) {
+  const text = String(cmd || "");
+  if (text.length > MAX_INSPECTABLE_COMMAND_LENGTH) return true;
+  // Count and stop at the first `git` over the limit, rather than collecting
+  // every match: a command with millions of `git` words would otherwise build a
+  // millions-long array before it could be refused (Luna, 2026-09-28).
+  // `count > floor(budget / length)` is exactly `count × length > budget`.
+  const allowed = Math.floor(PUSH_PARSE_COST_BUDGET / Math.max(text.length, 1));
+  const gitWord = /git/gi;
+  const letters = text.replace(/[^a-z]+/gi, "");
+  let count = 0;
+  while (gitWord.exec(letters) !== null) {
+    count += 1;
+    if (count > allowed) return true;
+  }
+  return false;
 }
 
 // The hook must see a literal Git subcommand. Shell variables, command
@@ -313,7 +423,7 @@ export function eachPush(cmd) {
   const found = [];
   let match;
   while ((match = scanner.exec(text)) !== null) {
-    found.push({ args: match[1] || "", index: match.index });
+    found.push({ args: match.groups.args || "", index: match.index });
     if (scanner.lastIndex === match.index) scanner.lastIndex += 1; // zero-width safety
   }
   return found;
@@ -525,7 +635,10 @@ export function pushContextIsAmbiguous(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return false;
   return /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|popd|set-location|pop-location)\s+/i.test(text) ||
-    /(?:\$env:|\benv\s+|\bset\s+|^|[;&|\r\n]\s*)(?:GIT_DIR|GIT_WORK_TREE)\s*=/i.test(text);
+    // `[^\S\r\n]*`, not `\s*`: `\s*` re-read a whole run of newlines from every
+    // newline in it (quadratic). A later newline in the run is itself a separator
+    // start, so what matches is unchanged.
+    /(?:\$env:|\benv\s+|\bset\s+|^|[;&|\r\n][^\S\r\n]*)(?:GIT_DIR|GIT_WORK_TREE)\s*=/i.test(text);
 }
 
 export function reviewProofPathMentioned(value) {
@@ -550,8 +663,10 @@ export function reviewProofPathMentioned(value) {
 
 export function reviewStateDirectoryMentioned(value) {
   const text = String(value || "").replace(/\\/g, "/");
-  return /(?:^|[\s"'=:\/])(?:\.?\/?(?:[^\s"']+\/)*\.claude\/session-state)(?:$|[\s/"'])/i.test(text) ||
-    /\.claude\/session-state/i.test(text) ||
+  // A bounded path pattern used to precede this one; it hung past the hook limit
+  // on a long run of `/` (nested quantifier) and could never add a match, since
+  // everything it matched contains `.claude/session-state`.
+  return /\.claude\/session-state/i.test(text) ||
     // Deny the component steps too. Otherwise `cd .claude` followed by `cd
     // session-state` can assemble the protected cwd without either command
     // containing the contiguous full path.
@@ -573,7 +688,7 @@ export function mainPushSource(cmd, currentBranch) {
   // only PowerShell's reading exposes is still a deletion. Positions differ
   // between readings, so each reading is resolved whole rather than by unioning
   // tokens (which would shift remote/refspec positions).
-  const sources = pushArgReadings(m[1])
+  const sources = pushArgReadings(m.groups.args)
     .map((tokens) => mainPushSourceFromTokens(tokens, currentBranch));
   if (sources.includes("DELETE")) return "DELETE";
   return sources.find((source) => source !== null) ?? null;
@@ -617,7 +732,7 @@ export function pushTargetsMain(cmd, currentBranch) {
 // True when the push sends only the current checkout's HEAD to the matching
 // feature branch on origin. Protected branches land through the PR merge gate.
 export function pushTargetsCurrentHead(cmd, currentBranch) {
-  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
+  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.groups.args;
   const normalizedBranch = String(currentBranch || "")
     .trim()
     .replace(/^refs\/heads\//i, "")
@@ -661,7 +776,7 @@ function tokensPushCurrentHeadOnly(tokens, normalizedBranch) {
 // before force-pushing ANY branch, and an implicit target such as `--all` must
 // not make force intent disappear.
 export function pushIsForced(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   return pushArgReadings(args).some((tokens) => {
     // Any long option starting "--force" is force intent: git accepts unambiguous
     // abbreviations (`--force-w` = --force-with-lease), and every valid abbreviation
@@ -688,7 +803,7 @@ export function mainPushIsForced(cmd, currentBranch) {
 // ambiguous prefixes git would reject anyway, and over-denying them is safe.
 const BULK_PUSH_OPTS = ["--all", "--branches", "--mirror", "--prune"];
 export function pushUsesBulkMode(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   return pushArgReadings(args).some((tokens) => tokens.some((token) => {
     if (!token.startsWith("--") || token.length < 3) return false;
     const bare = token.split("=")[0];
@@ -1137,7 +1252,7 @@ export function unknownPushOptions(cmd) {
 // The destination this push writes to: a remote NAME, a URL, or null when the
 // command names none (git then resolves its own default — see the guard).
 export function pushDestinationToken(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   const tokens = splitShellArgs(args);
   // `--repo=<url>` names a destination, but git-push documents that "if both are
   // specified, the command-line argument takes precedence" — and git 2.54 really
@@ -1191,7 +1306,7 @@ export function pushNamesRefspec(cmd) {
   // a push that is really bare. The guard denies unknown options anyway, but it
   // does so AFTER this comparison, so this cannot rely on that ordering.
   if (unknownPushOptions(cmd).length > 0) return false;
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   const tokens = splitShellArgs(args);
   let positionals = 0;
   for (let i = 0; i < tokens.length; i += 1) {
@@ -2422,7 +2537,7 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // `pr` and `merge`, and the file already accepts over-matching as fail-safe
 // ("gh token anywhere still matches" in pr-merge-guard.test.mjs).
 const GH_BIN_RE = new RegExp(
-  `${CMD_START}(?:"[^"]*[\\\\/]gh|'[^']*[\\\\/]gh|(?:\\S*[\\\\/])?gh)\\b${BIN_TAIL}(?:\\s|$)`,
+  `${CMD_START}(?:"[^"]*[\\\\/]gh|'[^']*[\\\\/]gh|${PATH_PREFIX}gh)\\b${BIN_TAIL}(?:\\s|$)`,
   "i",
 );
 

@@ -44,6 +44,11 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  pushParseCostExceeded,
+  PUSH_PARSE_COST_BUDGET,
+  MAX_INSPECTABLE_COMMAND_LENGTH,
+  MAX_HOOK_INPUT_LENGTH,
+  readHookInputBounded,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
@@ -789,11 +794,19 @@ function interpreterArgumentIsUnresolvable(command) {
   return SHELL_EXPANSION_RE.test(text);
 }
 
+// Both option spellings below are DISJOINT on purpose. The single-dash form was
+// `-{1,2}[a-z-]+`, which also matched every `--name` the first form matches, so
+// each repeated option doubled the paths tried on a failing match: `node --a`
+// repeated 20 times, an 86-character command, took 26 s — past the hook limit,
+// and a killed hook allows the command. The pipe form's path prefix stops at `|`
+// for the same reason `\S*` did not: from every `|` it ran to the end of the
+// command and backtracked (quadratic). A prefix that spanned a `|` has a match
+// starting at that later `|`, so what matches is unchanged in both.
 function usesDynamicProcessEval(command) {
   const text = String(command || "");
-  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
+  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-[a-z][a-z-]*)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
     /(?:^|[|;&]\s*)node(?:\.exe)?["']?\s*(?:-|$)/i.test(text) ||
-    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
+    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:[^\s|]*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
 }
 
 function denied(reason) {
@@ -1497,9 +1510,21 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: direct GitHub write tools are blocked because they bypass the reviewed git push and Husky pipeline. Use a normal feature-branch commit/push workflow.");
   }
 
-  const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
+  // Measured BEFORE the trim, so the trim never runs over unbounded input.
+  const untrimmedCommand = String(toolInput.command ?? toolInput.cmd ?? "");
+  const command = untrimmedCommand.length > MAX_INSPECTABLE_COMMAND_LENGTH ? untrimmedCommand : untrimmedCommand.trim();
   if (!command) return { blocked: false };
 
+  // First, before any parser (the nested-shell expansion below included): a
+  // hook killed at its time limit allows the command.
+  if (pushParseCostExceeded(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this command is too large to inspect safely (it is over " +
+      `${MAX_INSPECTABLE_COMMAND_LENGTH.toLocaleString("en-US")} characters, or its \`git\` count times its length is ` +
+      `over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command ` +
+      "through, so it is refused instead. Split it into smaller commands, or move long text into a file."
+    );
+  }
   // A command handed to another program as one argument — `bash -c "…"`,
   // `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand …`, `eval`,
   // `Invoke-Expression`, `Start-Process`, a `&{ … }` block — is one word to every
@@ -1890,15 +1915,6 @@ export function evaluateProductionAction({
   return { blocked: false };
 }
 
-function readStdin() {
-  return new Promise((resolve) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => { input += chunk; });
-    process.stdin.on("end", () => resolve(input));
-  });
-}
-
 function writeDenial(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -1910,7 +1926,22 @@ function writeDenial(reason) {
 }
 
 async function main() {
-  const raw = await readStdin();
+  // Measured while reading, before decoding: JSON.parse on an unbounded input is
+  // itself a way to outrun the hook limit, and a killed hook allows the action.
+  const input = await readHookInputBounded();
+  if (input.failed) {
+    writeDenial(`CODEX PRODUCTION GATE: hook input could not be read (${input.failed}), so the action is denied (fail closed).`);
+    return;
+  }
+  const raw = input.text;
+  if (input.tooLarge) {
+    writeDenial(
+      "CODEX PRODUCTION GATE: this tool call is too large to inspect safely (its hook input is over " +
+      `${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} bytes). A guard that runs out of time lets the ` +
+      "action through, so it is refused instead. Split it into smaller steps, or move long text into a file."
+    );
+    return;
+  }
   let payload;
   try {
     payload = raw.trim() ? JSON.parse(raw) : {};
