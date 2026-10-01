@@ -12,7 +12,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 **Source:** Mason, "I'll merge 857" (2026-10-01); he merged #857 himself (`653addd6b`). Detail in `docs/changelog.d/2026-10-01-owner-approval-hand-merge-and-install-preflight.md`.
 **Decision.** Sol's second #857 finding (the approval verifier is code in the same checkout, so a local edit could disable it) is the 2026-09-29 residual. Mason accepted it for the #857 merge only; it remains a known, open weakness of the route, and reviewers stay free to raise it and anything else.
-**Why.** On one PC any process running as Mason can edit any local check and read the Supabase token directly; the boundary is the hook-enforced rule that agents do not edit guard files or call the database API outside the gated doors.
+**Why.** On one PC any process running as Mason can edit any local check and read the Supabase token directly, so this cannot be closed locally. What stands in the way is policy: agents must not edit guard files or call the database API outside the gated doors. Hooks and permission prompts only narrow the supported agent tool paths (native edits to guard files ask Mason; they are not denied), and a same-user process outside those paths is not stopped.
 **Closing it** needs parked-migration applies in a GitHub Actions workflow on protected `main` (token as a repository secret): a separate project that needs Mason's go.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
