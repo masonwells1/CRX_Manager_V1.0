@@ -58,10 +58,15 @@ for (const command of [
 ok(mayMerge(JSON.stringify({ tool_name: "mcp__github__merge_pull_request", tool_input: { pullNumber: 9 } })),
   "the GitHub MCP merge tool is a possible merge");
 ok(mayMerge("not json but says gh pr merge"), "unparseable input is judged on its raw text");
-// Shell quoting cannot hide a merge from the text test (Luna, PR #841): Bash runs
-// each of these as an ordinary `gh pr merge`.
-for (const command of ["g''h pr me''rge 812", 'g""h pr me""rge 812', "gh pr m\\erge 812", "g^h pr me^rge 812", "g`h pr me`rge 812"]) {
-  ok(mayMerge(payload(command)), `a quote- or escape-split merge is still a possible merge: ${command}`);
+// Shell quoting, escapes and line continuations cannot hide a merge from the text
+// test (Luna, PR #841). Each of these runs as an ordinary `gh pr merge` in at least
+// one shell: quotes and backslashes in Bash, carets in cmd, backticks in
+// PowerShell, and a continuation (escape + newline) in the shell that uses it.
+for (const command of [
+  "g''h pr me''rge 812", 'g""h pr me""rge 812', "gh pr m\\erge 812", "g^h pr me^rge 812", "g`h pr me`rge 812",
+  "g`\nh pr me`\nrge 812", "g\\\nh pr me\\\nrge 812", "g^\r\nh pr me^\r\nrge 812",
+]) {
+  ok(mayMerge(payload(command)), `a quote-, escape- or continuation-split merge is still a possible merge: ${JSON.stringify(command)}`);
 }
 
 // Only a JSON object whose tool_input (if any) is an object is a call the launcher

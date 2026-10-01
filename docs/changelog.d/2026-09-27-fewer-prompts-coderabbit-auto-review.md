@@ -18,8 +18,9 @@ same files; replaces PR #822.
   Without it, a guard that crashed or was killed printed nothing, which allowed the merge without the
   Sol proof (Sol, 2026-09-27). Output other than silence or a real PreToolUse decision counts as a
   failure (Luna). A tool call that cannot be read is not signed as finished and is denied whatever
-  it says (Codex App P1, Luna), and the "could merge" test ignores shell quotes and escapes, so
-  `g''h pr me''rge` still counts as a merge (Luna). Codex's production
+  it says (Codex App P1, Luna), and the "could merge" test joins line continuations and ignores
+  shell quotes and escapes, so `g''h pr me''rge` or a word split across lines still counts as a
+  merge (Luna). Codex's production
   guard already denies on a crash; a watchdog for a kill at its timeout is a recorded follow-up.
 - `scripts/check-agent-guidance.mjs`: derives that production-gate set from the hook manifests and
   the import graph and fails if any file lacks its prompt.
@@ -62,5 +63,6 @@ same files; replaces PR #822.
   tested against CodeRabbit, and which YAML parser CodeRabbit uses is unknown. The only parser run
   against the test's edits was the `yaml` package (YAML 1.2); the U+2028/NEL line-break cases rest
   on the YAML 1.1 rules, not on a run.
-- Two recorded gaps stay open: a watchdog for Codex's production guard, and a merge run from an
-  npm script (DECISION_LOG 2026-09-26 residuals).
+- Three recorded gaps stay open: a watchdog for Codex's production guard, a merge run from an
+  npm script, and a Bash line continuation splitting `gh pr merge` across lines, which the working
+  guard misses (DECISION_LOG 2026-09-26 residuals).

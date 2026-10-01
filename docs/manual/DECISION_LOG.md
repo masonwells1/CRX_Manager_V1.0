@@ -111,7 +111,11 @@ denies. `package.json` keeps its native-edit prompt because `npm run` is auto-al
 write to it (Codex GitHub App, PR #841) or any new script file can still hide a merge. That route
 was just as unprompted before `gh pr merge` moved to `allow`, because only the literal command was
 ever prompted; closing it needs the non-admin agent credential above, not another text check.
-GitHub's required CodeRabbit approval and checks still hold for every route.
+The working guard also misses a Bash line continuation inside a word (a backslash before a newline,
+so `g\`, newline, `h pr merge 1` runs as `gh pr merge 1`); it predates this change, the old `ask`
+rule did not match that spelling either, and it is a recorded follow-up. The launcher's fallback
+test does catch it (Luna, PR #841). GitHub's required CodeRabbit approval and checks still hold for
+every route.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

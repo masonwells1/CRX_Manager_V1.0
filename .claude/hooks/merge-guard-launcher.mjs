@@ -66,16 +66,34 @@ export function mayMerge(input) {
   try {
     const payload = JSON.parse(text);
     // Only a well-formed call is narrowed to its name and input; anything else is
-    // judged on its whole text (Luna, 2026-09-28).
+    // judged on its whole text (Luna, 2026-09-28). The input's keys and string
+    // values are read as they are, not JSON-encoded, so a newline in a command
+    // stays a newline instead of becoming the two characters `\n`.
     if (payload?.tool_input && typeof payload.tool_input === "object") {
-      text = `${payload.tool_name || ""} ${JSON.stringify(payload.tool_input)}`;
+      text = [payload.tool_name || "", ...wordsIn(payload.tool_input)].join(" ");
     }
   } catch { /* unparseable: judge the raw text */ }
-  // Shell quoting and escapes are removed first: Bash runs `g''h pr me''rge 1` as
-  // `gh pr merge 1`, and the working guard denies it, so this test must see it too
-  // (Luna, PR #841). Removing them can only widen what counts as a possible merge.
-  text = text.replace(/['"`\\^]/g, "");
+  // A shell can rebuild `gh pr merge 1` from pieces this test would otherwise miss
+  // (Luna, PR #841): a line continuation — a backslash (Bash), backtick
+  // (PowerShell) or caret (cmd) before a newline — joins two lines into one word,
+  // and quotes and those same escapes vanish inside a word (`g''h pr me''rge 1`,
+  // `gh pr me^rge 1`). The working guard denies these spellings, so continuations
+  // are joined first, then quotes and escapes removed. Both steps can only widen
+  // what counts as a possible merge.
+  text = text.replace(/[`\\^]\r?\n/g, "").replace(/['"`\\^]/g, "");
   return /merge|graphql|api\.github|\bgh(?:\.(?:exe|cmd|bat|ps1))?\b/i.test(text);
+}
+
+// Every key and string value in a tool call's input, in order.
+function wordsIn(value, out = []) {
+  if (typeof value === "string") out.push(value);
+  else if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      out.push(key);
+      wordsIn(item, out);
+    }
+  }
+  return out;
 }
 
 // Is this a tool call the launcher can judge: a JSON object whose tool_input, if
