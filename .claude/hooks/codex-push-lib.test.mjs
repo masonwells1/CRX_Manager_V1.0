@@ -3,14 +3,16 @@
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
+  readHookInputBounded,
   createHardGateBudget,
   commandFedToInterpreter,
   commandFedToInterpreterDenial,
@@ -75,6 +77,7 @@ import {
   divergentPushLookups,
   configuredMirrorRemotes,
   pushDestinationLookupArgs,
+  pushParseCostExceeded,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -3720,6 +3723,197 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     assert.equal(runHook(`pwsh -NoProfile -Command "Get-ChildItem"`).permissionDecision, "allow", "…in PowerShell too");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── parse time is a security property (2026-09-28) ──────────────────────────
+// A hook killed at its 15 s limit ALLOWS the command. On main at fcfab3a2a the
+// Claude push guard took 55 s on 200K `;`, 13 s on 50K `'a'|`, and both guards
+// ran past 60 s on a 116-character `git -c "x" …` command (exponential option
+// backtracking). The parser checks below are the unit bound; the hook checks
+// run the REAL guard processes, because a fast helper inside a slow hook is
+// still a bypass.
+{
+  const push = "git push origin HEAD:main";
+  const shapes = [
+    ["200K `;` (reported)", `${push} ${";".repeat(200_000)}`],
+    ["50K `'a'|` (reported)", `${push} ${"'a'|".repeat(50_000)}`],
+    ['`-c "x"` x24, 190 chars (exponential)', `git${' -c "x"'.repeat(24)} --bogus push origin HEAD:main`],
+    ["`-C x` x24 (exponential, /i duplicate)", `git${" -C x".repeat(24)} --bogus push origin HEAD:main`],
+    ["200K newlines", `${push}${"\n".repeat(200_000)}`],
+    ["`git.a;` x20K (extension tail)", `${"git.a;".repeat(20_000)} ${push}`],
+    ["`git -C ` under the cost budget", `${"git -C ".repeat(2_000)}${push}`],
+    ["dense tokens then push", `git -x ${"a ".repeat(8_000)}push`],
+  ];
+  for (const [label, input] of shapes) {
+    const started = process.hrtime.bigint();
+    for (const parse of [isGitPush, eachPush, gitPushCwd, gitSubcommandIsDynamic, unknownGitGlobalOptions,
+      pushHiddenByShellComposition, pushIsForced, pushSetsInlineEnv, mainPushSource, pushUsesInlineConfig]) {
+      parse(input, "main");
+    }
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 1_000, `push parsers stay fast on ${label} (${input.length} chars): ${elapsedMs.toFixed(1)}ms`);
+  }
+  for (const [label, input] of [["200K `/`", "/".repeat(200_000)], ["200K `\\`", "\\".repeat(200_000)]]) {
+    const started = process.hrtime.bigint();
+    reviewStateDirectoryMentioned(input);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 250, `the review-state path check stays linear on ${label}: ${elapsedMs.toFixed(1)}ms`);
+  }
+
+  // The fixes change speed, not what is detected.
+  assert.equal(isGitPush("npm test;C:/tools/git push origin HEAD:main"), true, "a path prefix after `;` still names git");
+  assert.equal(isGitPush("x;y/git push origin HEAD:main"), true, "a prefix that spanned `;` matches from the `;`");
+  assert.equal(isGitPush('git -c "x"y push origin HEAD:main'), true, "a quoted value glued to more text still falls back to one word");
+  assert.equal(isGitPush("git -c 'a b' -C repo push origin HEAD:main"), true, "quoted values with spaces still read");
+  assert.equal(eachPush("git -C repo push origin HEAD:main")[0].args, " origin HEAD:main", "the args capture survived the rename");
+  assert.equal(mainPushSource("git -C repo push origin release:main", "feature"), "release", "and every consumer reads it");
+  assert.equal(pushContextIsAmbiguous("echo ok;\n\n  GIT_DIR=x git push origin HEAD:main"), true, "GIT_DIR after blank lines is still seen");
+  assert.equal(reviewStateDirectoryMentioned("cd ./a/.claude/session-state/"), true, "the session-state path is still seen");
+
+  // The budget: refuse what cannot be parsed in time, and nothing ordinary.
+  assert.equal(pushParseCostExceeded("git -C ".repeat(9_200) + push), true, "`git -C ` to 64 KB is over budget");
+  assert.equal(pushParseCostExceeded('g"i"t -C '.repeat(9_200) + push), true, "quote-spliced `git` words count too");
+  assert.equal(pushParseCostExceeded(`${push} ${";".repeat(200_000)}`), false, "one push in a long command is fine");
+  assert.equal(
+    pushParseCostExceeded(`gh pr create --body "${"We ran git status and git diff. ".repeat(600)}"`),
+    false,
+    "a 20 KB PR body that mentions git 1,200 times is still under budget",
+  );
+  assert.equal(pushParseCostExceeded("git -C ".repeat(2_138)), false, "at the edge: 2,138 git × 14,966 chars = 31,997,308");
+  assert.equal(pushParseCostExceeded("git -C ".repeat(2_139)), true, "one over: 2,139 git × 14,973 chars = 32,027,247");
+  {
+    // Many `git` words inside the length ceiling: refused by counting only up to the limit.
+    const dense = `${"#git\n".repeat(50_000)}${push}`;
+    const started = process.hrtime.bigint();
+    assert.equal(pushParseCostExceeded(dense), true, "250 KB of `git` words is refused");
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(elapsedMs < 1_000, `the budget check stays cheap on 50K git words: ${elapsedMs.toFixed(1)}ms`);
+  }
+  // Linear is not fast enough on its own: one `git` and 31.6 MB of `'a'|` passed
+  // the budget and still outran the Codex hook (Codex GitHub review, #840).
+  assert.equal(pushParseCostExceeded(`${push} ${"'a'|".repeat(7_900_000)}`), true, "31.6 MB with one git is refused");
+  assert.equal(pushParseCostExceeded("a".repeat(256 * 1024)), false, "exactly 256 KiB is inspected");
+  assert.equal(pushParseCostExceeded("a".repeat(256 * 1024 + 1)), true, "one character more is refused");
+
+  // The real hooks, end to end.
+  const hooksDir = path.dirname(fileURLToPath(import.meta.url));
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "push-parse-time-"));
+  const hooks = [
+    ["Claude push guard", path.join(hooksDir, "codex-push-guard.mjs"), (command) => ({ tool_name: "Bash", cwd: tmp, tool_input: { command } })],
+    ["Codex production guard", path.join(hooksDir, "..", "..", ".codex", "hooks", "production-action-guard.mjs"),
+      (command) => ({ tool_name: "shell", cwd: tmp, tool_input: { command } })],
+  ];
+  try {
+    for (const [hookLabel, hook, payload] of hooks) {
+      for (const [label, input] of [
+        ...shapes,
+        // The slowest single-push shape measured, just under the length ceiling.
+        ["`$(` to just under 256 KiB", `${push} ${"$(".repeat(130_000)}`],
+        ["`git -C ` to 64 KB (over budget)", "git -C ".repeat(9_200) + push],
+        ["300 KB of `'a'|` (over budget)", `${push} ${"'a'|".repeat(75_000)}`],
+      ]) {
+        const started = Date.now();
+        const res = spawnSync(process.execPath, [hook], {
+          input: JSON.stringify(payload(input)),
+          encoding: "utf8",
+          timeout: 15_000,
+          env: { ...scratchHookEnvironment(tmp, process.env), CODEX_PROJECT_DIR: tmp },
+        });
+        const elapsedMs = Date.now() - started;
+        assert.equal(res.error, undefined, `${hookLabel} was not killed on ${label}: ${res.error?.message}`);
+        // A crash is not a decision: a guard that exits non-zero produced no
+        // verdict, and the harness treats that like a kill (CodeRabbit, #840).
+        assert.equal(res.status, 0, `${hookLabel} exited cleanly on ${label}: ${res.stderr}`);
+        // The property is "decides before the 15 s kill"; 10 s leaves room for a
+        // loaded CI runner without letting a real regression (tens of seconds) pass.
+        assert.ok(elapsedMs < 10_000, `${hookLabel} decides ${label} before the 15 s hook limit: ${elapsedMs}ms`);
+        if (label.includes("over budget")) {
+          assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses ${label}`);
+        }
+      }
+      // The hook INPUT is bounded before it is decoded: a whitespace-padded push
+      // inside a 17 MiB payload is refused without JSON.parse or trim over it.
+      const started = Date.now();
+      const res = spawnSync(process.execPath, [hook], {
+        input: JSON.stringify(payload(`${" ".repeat(17 * 1024 * 1024)}${push}`)),
+        encoding: "utf8",
+        timeout: 15_000,
+        maxBuffer: 1 << 26,
+        env: { ...scratchHookEnvironment(tmp, process.env), CODEX_PROJECT_DIR: tmp },
+      });
+      assert.equal(res.error, undefined, `${hookLabel} was not killed on a 17 MiB hook input: ${res.error?.message}`);
+      assert.equal(res.status, 0, `${hookLabel} exited cleanly on a 17 MiB hook input: ${res.stderr}`);
+      assert.ok(Date.now() - started < 10_000, `${hookLabel} decides a 17 MiB hook input in time`);
+      assert.match(res.stdout, /too large to inspect safely/, `${hookLabel} refuses a 17 MiB hook input`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+{
+  // The input limit applies while reading, and the excess is drained, not stored
+  // (Codex GitHub review, #840: reading everything first let a >512 MB input
+  // crash the read, and a failed read allowed the call).
+  const feed = (parts, { end = true, error } = {}) => {
+    const stream = new PassThrough();
+    for (const part of parts) stream.write(part);
+    if (error) setImmediate(() => stream.destroy(new Error(error)));
+    else if (end) stream.end();
+    return stream;
+  };
+  // "é" is two bytes: five of them sit exactly at a 10-byte limit, split mid-character.
+  const twoByte = Buffer.from("é".repeat(5));
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 10, stream: feed([twoByte.subarray(0, 3), twoByte.subarray(3)]) }),
+    { tooLarge: false, text: "é".repeat(5) },
+    "input within the byte limit is returned whole, even split mid-character",
+  );
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 1024, stream: feed([Buffer.alloc(4096, 120)]) }),
+    { tooLarge: true, text: "" },
+    "input over the byte limit is refused, not returned",
+  );
+  // A read failure, or an input still open at the deadline, is a failure the
+  // guards refuse — never an empty input that reads as "nothing to check".
+  assert.ok((await readHookInputBounded({ stream: feed(["{"], { error: "pipe broke" }) })).failed, "a read error fails");
+  const stalled = feed(['{"tool_input":'], { end: false });
+  const stalledResult = await readHookInputBounded({ waitMs: 200, stream: stalled });
+  assert.match(stalledResult.failed ?? "", /still arriving after 200 ms/, "an input that stalls before the limit fails at the deadline");
+  stalled.destroy();
+  const stalledOver = feed([Buffer.alloc(2048, 120)], { end: false });
+  assert.deepEqual(
+    await readHookInputBounded({ limit: 1024, waitMs: 200, stream: stalledOver }),
+    { tooLarge: true, text: "" },
+    "an input that stalls after the limit is still refused as too large at the deadline",
+  );
+  stalledOver.destroy();
+
+  // The real guards, with a writer that sends part of a push and never closes:
+  // each refuses at its read deadline instead of being killed (a kill allows).
+  const stallHooks = [
+    ["Claude push guard", fileURLToPath(new URL("./codex-push-guard.mjs", import.meta.url))],
+    ["Codex production guard", fileURLToPath(new URL("../../.codex/hooks/production-action-guard.mjs", import.meta.url))],
+  ];
+  const stallRuns = stallHooks.map(([label, hook]) => new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [hook], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    const killer = setTimeout(() => child.kill(), 15_000);
+    child.on("close", (code, signal) => {
+      clearTimeout(killer);
+      child.stdin.destroy();
+      resolve({ label, code, signal, stdout, elapsedMs: Date.now() - started });
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.write('{"tool_name":"Bash","tool_input":{"command":"git push origin HEAD:main');
+  }));
+  for (const run of await Promise.all(stallRuns)) {
+    assert.equal(run.signal, null, `${run.label} decides a stalled input before the 15 s limit (killed after ${run.elapsedMs}ms)`);
+    assert.equal(run.code, 0, `${run.label} exits cleanly on a stalled input`);
+    assert.match(run.stdout, /could not be read/, `${run.label} refuses a stalled input`);
   }
 }
 
