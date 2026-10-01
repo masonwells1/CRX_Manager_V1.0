@@ -62,6 +62,14 @@ vi.mock('../lib/db', () => ({
   },
 }));
 
+// The page defaults its transaction date to todayInBusinessTz(). Several tests "move" the date to
+// 2026-10-01 and expect a change; on 2026-10-01 (Chicago) itself that is no change at all, and they
+// failed. Pin "today" to a fixed in-season date so these tests no longer depend on the real clock.
+vi.mock('../lib/dateUtils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/dateUtils')>()),
+  todayInBusinessTz: () => '2026-09-15',
+}));
+
 vi.mock('../lib/sentry', () => ({
   Sentry: { captureException: vi.fn() },
 }));
