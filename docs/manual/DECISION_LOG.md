@@ -1,12 +1,42 @@
 # Decision Log
 
-Last verified: 2026-09-30 (nested-command entries condensed; owner Windows Hello approval entry added)
+Last verified: 2026-10-01 (Mason hand-merged PR #857 over Sol's self-verifier HIGH)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-01 — Mason hand-merges the owner-approval route over Sol's "self-verifier" HIGH
+
+**Source:** Mason, in the field-season install session on 2026-10-01. He was shown both positions
+and replied **"I'll merge 857"**, then merged PR #857 himself in GitHub (`653addd6b`).
+
+**What Sol found.**
+1. First exact-SHA review of #857: the pinned key and the Windows Hello helper were read from the
+   checkout, unchecked against the reviewed commit. **Fixed** in #857:
+   `assertOwnerTrustFilesReviewed` compares the on-disk bytes of every approval-chain file with the
+   reviewed head before an approval is requested or honoured.
+2. Second review: the verifier is itself code in that checkout, so a local edit could switch the
+   check off. Sol asked for enforcement "by trusted code outside the mutable checkout."
+
+**Decision.** The second finding is the residual already recorded in the 2026-09-29 entry. It was
+not fixed in code: on one PC, any process running as Mason can edit any local check. It can also
+read the Supabase token from Windows Credential Manager and send SQL directly, past every gate.
+The boundary is the hook-enforced rule that agents do not edit guard files and do not call the
+database API outside the gated doors. Mason accepted that residual and merged #857 himself; no
+agent merged over a Sol HIGH.
+
+**Operative rule.**
+- Sol's second #857 finding is accepted, not open. Do not re-raise it as a defect of later PRs
+  that only use the route.
+- The way to close it is to move parked-migration applies into a GitHub Actions workflow on
+  protected `main`, with the token as a repository secret. That is a separate project; it needs
+  Mason's go.
+- Field-season installs `20260914101000`..`20260914101300` run from a follow-up PR off `main`
+  that passes CodeRabbit and Sol on its own diff, with Mason's chat yes and his Windows Hello
+  approval for `101000`.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
 
