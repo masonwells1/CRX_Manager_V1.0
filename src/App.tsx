@@ -94,7 +94,7 @@ const VendorBillDetail = lazy(() => import('./pages/VendorBillDetail'));
 const Vendors = lazy(() => import('./pages/Vendors'));
 const SalesReports = lazy(() => import('./pages/SalesReports'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
-const FieldApplicationInvoice = lazy(() => import('./pages/FieldApplicationInvoice'));
+const FieldApplicationInvoiceRoute = lazy(() => import('./components/FieldApplicationInvoiceRoute'));
 // Per-line split-billing editor — flag-gated (per_line_split_billing_enabled). The page
 // self-gates on the flag (renders a "not enabled" notice when OFF), so the route is safe
 // even by hand-typed URL; the nav link is only shown when the flag is ON.
@@ -227,8 +227,8 @@ const router = createBrowserRouter([
           { path: 'to-ship', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ToShip /></ProtectedRoute> },
           { path: 'inventory', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InventoryPage /></ProtectedRoute> },
           { path: 'invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Invoices /></ProtectedRoute> },
-          { path: 'invoices/field-app/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },
-          { path: 'invoices/field-app/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },
+          { path: 'invoices/field-app/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoiceRoute /></ProtectedRoute> },
+          { path: 'invoices/field-app/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoiceRoute /></ProtectedRoute> },
           { path: 'invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail routeArea="chemical" /></ProtectedRoute> },
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
           // Per-line split-billing editor (flag-gated; page self-gates on per_line_split_billing_enabled).
