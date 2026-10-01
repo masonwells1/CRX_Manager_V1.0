@@ -138,6 +138,15 @@ vi.mock('../components/field-app/SelectLocationsModal', () => ({
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /**
+ * A transaction date on the other side of the Oct 1 season boundary that is guaranteed to
+ * differ from the field's current value. The field defaults to today, so a hard-coded
+ * '2026-10-01' stopped being a change once the calendar reached that day.
+ */
+function crossSeasonDate(dateInput: HTMLInputElement): string {
+  return dateInput.value === '2026-10-01' ? '2026-09-30' : '2026-10-01';
+}
+
+/**
  * Build a chainable `from('table')` mock where every terminal call resolves
  * to { data, error }. The page calls .single() (for the invoice fetch),
  * .order() (twice — sort_order + sort_order), and .eq() (multiple), so we
@@ -480,7 +489,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
 
     const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
-    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: crossSeasonDate(dateInput as HTMLInputElement) } });
 
     await waitFor(() => {
       expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
@@ -519,7 +528,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
     // Operator moves the date across the season boundary while the request is still open.
     const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
-    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: crossSeasonDate(dateInput as HTMLInputElement) } });
 
     // The old-date answer lands now. It must be discarded, not rendered.
     await act(async () => {
