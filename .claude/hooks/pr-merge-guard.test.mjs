@@ -626,6 +626,57 @@ r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash;
 ok(r.decision?.permissionDecision === "deny", "raw REST merge after a gh merge in the same chain still denied");
 ok(/raw GitHub REST merge/.test(r.decision?.permissionDecisionReason || "") || /fail closed/.test(r.decision?.permissionDecisionReason || ""), "chain deny cites the REST rule or fails closed on PR resolution");
 
+// Codex luna, PR #795, 2026-09-29 round 3, finding 2: a raw REST merge inside
+// another shell names no gh or git, so its inner command was dropped. Only the
+// escaped and encoded spellings hid it: each passed this guard before the fix.
+for (const command of [
+  `pwsh -EncodedCommand ${Buffer.from("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/123/merge", "utf16le").toString("base64")}`,
+  "cmd /c \"curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer^ge\"",
+  "bash -c 'curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer\\ge'",
+  "bash -c 'curl -X PUT https://api.github.com/repos/o/r/pulls/123/merge'",
+  "bash -c 'curl https://api.github.com/graphql -d mergePull\\Request'",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `a raw merge inside another shell is denied: ${command.slice(0, 70)}`);
+}
+// Codex GitHub review of PR #795, 2026-09-30: env's attached split-string
+// spellings ran their command unread. Each of these passed before the fix.
+for (const command of [
+  "env --split-string='gh pr merge 123 --admin'",
+  "env --sp='gh pr merge 123 --admin'",
+  "env -S'gh pr merge 123 --admin'",
+  "env -iS'gh mm 1'",
+  "env -Sgh mm 1",
+  "env --split-string='gh mm 1'",
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `env's split string is read as a command: ${command}`);
+}
+// Same review, next head: fish's getopt spellings of its command options.
+for (const command of [
+  "fish --command='gh pr merge 123 --admin'",
+  "fish --command 'gh pr merge 123 --admin'",
+  "fish --comm='gh pr merge 123 --admin'",
+  "fish -c'gh pr merge 123 --admin'",
+  "fish -C 'gh pr merge 123 --admin' -c 'echo hi'",
+  "fish --init-command='gh pr merge 123 --admin'",
+  "bash -C -c 'gh pr merge 123 --admin'",
+  // CodeRabbit, PR #851: a clustered -o takes its value, and a decoded payload
+  // that names gh and builds its flags at run time is refused.
+  "bash -oc xtrace 'gh pr merge 123 --admin'",
+  `pwsh -EncodedCommand ${Buffer.from("$f='--admin'; gh pr merge 123 --squash $f", "utf16le").toString("base64")}`,
+]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.decision?.permissionDecision === "deny", `fish's command options are read: ${command}`);
+}
+for (const command of ["env --split-string='gh pr view 12'", "env FOO=1 npm test", "env -u HOME node scripts/check.mjs",
+  "fish -c 'echo hello'", "fish scripts/x.fish", "bash -o pipefail -c 'npm test'"]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  ok(r.status === 0 && r.decision === null, `an ordinary env command is not refused: ${command}`);
+}
+r = runHook({ tool_name: "Bash", tool_input: { command: "bash -c 'git log --oneline --merges -5'" } });
+ok(r.status === 0 && r.decision === null, "a nested command that only mentions merges is not refused");
+
 // The --admin deny lands BEFORE the PR is resolved, so it needs no gh and no
 // network — that is deliberate: an agent must never reach GitHub with a request
 // to skip the review, whatever the PR turns out to be.
@@ -636,6 +687,32 @@ ok(/Mason/.test(r.decision?.permissionDecisionReason || ""), "--admin deny says 
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "gh pr merge 5 --squash; gh pr merge 9 --admin" } });
 ok(r.decision?.permissionDecision === "deny", "--admin later in a chain is still denied");
+
+// Nested administrator merges through the REAL hook, not just the library
+// (Codex luna, PR #795, 2026-09-26, finding 12). Each is refused before any gh
+// call, so no network is needed.
+{
+  const NESTED_ADMIN = "gh pr merge 123 --admin --squash";
+  const pad = (word, count) => Array(count).fill(word).join(" ");
+  for (const [command, why] of [
+    [`bash -c "${NESTED_ADMIN}"`, /--admin/],
+    [`pwsh -EncodedCommand ${Buffer.from(NESTED_ADMIN, "utf16le").toString("base64")}`, /--admin/],
+    [`bash ${pad("--norc", 70)} -c "${NESTED_ADMIN}"`, /option words/],
+    [`${Array.from({ length: 40 }, (_, i) => `bash${" ".repeat(i + 1)}-c 'echo ok'; `).join("")}bash -c '${NESTED_ADMIN}'`, /inner commands/],
+    ["Get-Content payload.txt | iex", /on its input/],
+    [`echo '${NESTED_ADMIN}' | env bash`, /on its input/],
+    ['cmd /c "type payload.txt | bash"', /on its input/],
+    ["sudo -u root -g staff -H -n -E gh mm 123", /is not a gh command this guard can read/],
+  ]) {
+    r = runHook({ tool_name: "Bash", tool_input: { command } });
+    ok(r.decision?.permissionDecision === "deny" && why.test(r.decision?.permissionDecisionReason || ""),
+      `the real hook refuses ${JSON.stringify(command.slice(0, 60))} for the expected reason`);
+  }
+  for (const command of ["timeout 30 echo gh mm 123", "git log --oneline | grep -n bash", "bash -c 'echo ok'; bash -c 'echo ok'"]) {
+    r = runHook({ tool_name: "Bash", tool_input: { command } });
+    ok(r.status === 0 && r.decision === null, `CONTROL: the real hook passes ${JSON.stringify(command)}`);
+  }
+}
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__read_file", tool_input: { path: "x" } });
 ok(r.status === 0 && r.decision === null, "unrelated MCP tool passes through");
@@ -839,9 +916,34 @@ ok(gateRequestSource.indexOf("request.matchHeadCommit") < gateRequestSource.inde
 // applied to a single segment inside the loop would type-check, read as the fix,
 // and miss every case, because a spliced merge verb is not a merge to the parser
 // that produced that segment either.
+// Since 2026-09-24 both checks run inside collectMergeRequests(scanned), which is
+// called for the WHOLE command and then for every nested command it carries
+// (`bash -c "…"`, `pwsh -EncodedCommand …`), so the subject is `scanned` and the
+// call-site pins below also pin that the whole command is what gets scanned.
 ok(
-  /if\s*\(\s*ghHiddenByShellComposition\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
-  "the gh composition refusal runs on the WHOLE command, before the segment loop",
+  /const\s+scannedCommands\s*=\s*\[\s*toolInput\.command\s*,\s*\.\.\.nested\.commands\s*\]/.test(guardSource) &&
+    /for\s*\(\s*const\s+scanned\s+of\s+scannedCommands\s*\)\s*collectMergeRequests\(\s*scanned\s*\)/.test(guardSource),
+  "the whole command and every nested command it carries are each scanned for merges",
+);
+ok(
+  /nested\s*=\s*expandNestedCommands\(\s*toolInput\.command\s*\)/.test(guardSource),
+  "nested commands are expanded from the whole command",
+);
+ok(
+  /if\s*\(\s*ghHiddenByShellComposition\(\s*scanned\s*\)\s*\)/.test(guardSource),
+  "the gh composition refusal runs on the WHOLE scanned command, before the segment loop",
+);
+ok(
+  /const\s+unreadableGh\s*=\s*ghCommandUnreadableIn\(\s*scanned\s*\)/.test(guardSource),
+  "every scanned command is checked for a gh alias or unknown gh command",
+);
+ok(
+  /if\s*\(\s*nested\.computed\s*\)\s*deny\(/.test(guardSource),
+  "a nested command built at run time is refused",
+);
+ok(
+  /scannedCommands\.some\(\s*\(text\)\s*=>\s*commandFedToInterpreter\(\s*text\s*\)\s*\)/.test(guardSource),
+  "a command fed to an interpreter on its input is refused, the whole command and every nested one",
 );
 // A single `&` runs both sides — POSIX in the background, cmd sequentially — so
 // it must separate segments. Without it `gh pr merge 1 & gh pr merge 2` resolved
@@ -853,7 +955,7 @@ ok(
 // (Codex sol, 2026-09-08, SEC-001). Asserting the call site, not the helper,
 // for the same reason the assertion above does.
 ok(
-  /for\s*\(\s*const\s+segment\s+of\s+splitCommandSegments\(\s*toolInput\.command\s*\)\s*\)/.test(guardSource),
+  /for\s*\(\s*const\s+segment\s+of\s+splitCommandSegments\(\s*scanned\s*\)\s*\)/.test(guardSource),
   "the segment loop uses the shared quote-aware segmenter on the whole command",
 );
 ok(
