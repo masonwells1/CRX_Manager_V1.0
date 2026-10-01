@@ -18,11 +18,16 @@ import {
   contentIsRisky,
   describeRiskyContent,
   eachPush,
+  expandNestedCommands,
   gitPushCwd,
   gitSubcommandIsDynamic,
   isGitPush,
   pushUsesExecPathOption,
   mainPushSource,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
+  nestedComputedDenial,
+  nestedTooDeepDenial,
   proofValid,
   pushContextIsAmbiguous,
   pushHiddenByShellComposition,
@@ -58,6 +63,12 @@ import {
   configuredMirrorRemotes,
   urlIsGuardedApp,
   riskyFiles,
+  pushParseCostExceeded,
+  PUSH_PARSE_COST_BUDGET,
+  MAX_INSPECTABLE_COMMAND_LENGTH,
+  MAX_HOOK_INPUT_LENGTH,
+  readHookInputBounded,
+  sanitizeForMessage,
 } from "./codex-push-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
@@ -67,9 +78,24 @@ function deny(reason) {
 }
 
 let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
+const input = await readHookInputBounded();
+if (input.failed) {
+  // An unread tool call is an uninspected one: refuse it rather than allow it.
+  deny(`CODEX GATE: this tool call's hook input could not be read (${sanitizeForMessage(input.failed)}), so it is refused. Retry the command; if this repeats, the hook's input pipe is broken.`);
+}
+// Measured while reading, before decoding: JSON.parse on an unbounded input is
+// itself a way to outrun the hook limit, and a killed hook allows the command.
+if (input.tooLarge) {
+  deny(`CODEX GATE: this tool call is too large to inspect safely (its hook input is over ${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} bytes). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
+}
+const rawInput = input.text;
+try { payload = JSON.parse(rawInput); } catch { passthrough(); }
 
 const cmd = String(payload?.tool_input?.command || "");
+// First, before any parser: a hook killed at its time limit allows the command.
+if (pushParseCostExceeded(cmd)) {
+  deny(`CODEX GATE: this command is too large to inspect safely (it is over ${MAX_INSPECTABLE_COMMAND_LENGTH.toLocaleString("en-US")} characters, or its \`git\` count times its length is over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command through, so it is refused instead. Split it into smaller commands, or move long text into a file.`);
+}
 if (gitSubcommandIsDynamic(cmd)) {
   deny("CODEX GATE: Git's subcommand must be written literally. Shell variables, substitutions, splats, and globs are expanded after this review, so a command such as `$verb='push'; git $verb ...` can execute a push while bypassing every destination, force, and proof check. Write the Git operation plainly (for example `git -C <repo> push <remote> <refspec>`).");
 }
@@ -80,6 +106,30 @@ if (gitSubcommandIsDynamic(cmd)) {
 // proves nothing about where the objects go.
 if (pushHiddenByShellComposition(cmd)) {
   deny("CODEX GATE: shell quoting or command substitution changes this push's meaning or reveals an additional push (for example `git p\"us\"h`, `HEAD:ma\"in\"`, `$(git push …)`, or a backtick). The review gate reads command text, so analysing a spelling the shell rewrites would not prove the executed destination, force intent, or refspec. Write each push plainly: `git -C <repo> push <remote> <refspec>`.");
+}
+// A push handed to another program as one argument — `bash -c "git push …"`,
+// `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand <base64>`, `eval`,
+// or `Invoke-Expression`/`Start-Process` — is text the parsers below do not read
+// as a push; the base64 form in particular passed this guard untouched (measured
+// on PR #630's head, 2026-09-24). An agent never needs that shape to push, so it
+// is refused rather than analysed, like a substitution. A `{ }` / `( )` block is
+// left to pushHiddenByShellComposition above, which already refuses it.
+// A hook that throws emits no decision, and that ALLOWS — so an unexpected
+// failure here denies instead of skipping every check below.
+let nestedCommands;
+try {
+  nestedCommands = expandNestedCommands(cmd, { grouping: false });
+} catch (error) {
+  deny(`CODEX GATE: could not unwrap the commands nested in this one, so it is denied (fail closed). ${error?.message || error}`);
+}
+if (nestedCommands.tooDeep) deny(nestedTooDeepDenial("CODEX GATE"));
+if (nestedCommands.computed) deny(nestedComputedDenial("CODEX GATE"));
+if ([cmd, ...nestedCommands.commands].some((text) => commandFedToInterpreter(text))) {
+  deny(commandFedToInterpreterDenial("CODEX GATE"));
+}
+if (nestedCommands.commands.some((inner) =>
+  isGitPush(inner) || gitSubcommandIsDynamic(inner) || pushHiddenByShellComposition(inner))) {
+  deny("CODEX GATE: this command runs a git push inside another shell or an evaluator (bash -c, cmd /c, pwsh -Command or -EncodedCommand, eval, Invoke-Expression, Start-Process). The review gate reads the outer command's text, so it cannot prove where a push carried that way would go. Run the push as its own plain command: `git -C <repo> push <remote> <refspec>`.");
 }
 if (pushUsesExecPathOption(cmd)) {
   deny("CODEX GATE: git --exec-path is denied for pushes. It replaces Git's transport helpers, so a planted git-remote-https program can ignore the destination this guard verified. Use Git's normal executable path.");

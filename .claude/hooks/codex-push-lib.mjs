@@ -53,13 +53,30 @@ const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
 // cannot open on the BASENAME of `C:\Tools\git.cmd`. They lose only their
 // extension list, not their structure.
 const BIN_TAIL = `(?:\\.[^\\s'".\\\\/]*)?["']?`;
-const GIT_BIN = `(?:"[^"]*[\\\\/]git|'[^']*[\\\\/]git|(?:\\S*[\\\\/])?git)\\b${BIN_TAIL}`;
+// The unquoted path prefix stops at `;`, `&` and `|`. It was `\S*`, which from
+// EVERY command-start position ran to the end of a separator-dense command and
+// backtracked — quadratic, so 200K `;` took ~95 s in the Codex guard and a hook
+// killed at its 15 s limit ALLOWS the command. Detection is unchanged: a prefix
+// that spanned a separator has a match starting AT the last separator in it,
+// because CMD_START accepts that separator. PATH_PREFIX is shared with GH_BIN_RE.
+const PATH_PREFIX = `(?:[^\\s;&|]*[\\\\/])?`;
+const GIT_BIN = `(?:"[^"]*[\\\\/]git|'[^']*[\\\\/]git|${PATH_PREFIX}git)\\b${BIN_TAIL}`;
 const GIT_GLOBAL_OPTS =
   // `--config-env` must be listed here or the whole command stops looking like a
   // push: without it `git --config-env=remote.origin.pushurl=VAR push origin main`
   // failed `isGitPush` and skipped EVERY check in this guard (found while testing
   // Codex's 2026-07-30 inline-config finding).
-  `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--config-env(?:=${GIT_ARG}|\\s+${GIT_ARG})|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
+  //
+  // Each option is read ATOMICALLY (`(?=(?<gitOpt>…))\k<gitOpt>` — JavaScript has
+  // no atomic group, and a lookahead capture replayed by backreference is one).
+  // Without it the run was EXPONENTIAL: under /i `-C` and `-c` both match the same
+  // text, and a space-free quoted value matches both `"[^"]*"` and `\S+`, so each
+  // repeated option doubled the paths tried when the push match finally failed —
+  // `git -c "x"` repeated 14 times, a 108-character command, took 3 s, and every
+  // extra repeat doubled it. The trailing `(?=\s)` sits INSIDE the atomic part, so
+  // a quoted value not followed by whitespace (`-c "x"y`) still falls back to
+  // `\S+` before the option commits.
+  `(?:(?=(?<gitOpt>\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--config-env(?:=${GIT_ARG}|\\s+${GIT_ARG})|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?)(?=\\s)))\\k<gitOpt>)*`;
 // A command can START right after a separator with no space: `npm test&&git push
 // origin HEAD:main` is a perfectly ordinary shell line, and requiring whitespace
 // before `git` meant the hook saw no push at all and exited before the force,
@@ -70,10 +87,103 @@ const GIT_GLOBAL_OPTS =
 // this test so the substitution check above refuses it outright rather than
 // inspecting a command whose text the shell rewrites.
 const CMD_START = `(?:^|[\\s;&|])`;
-const GIT_PUSH_RE = new RegExp(`${CMD_START}${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`, "i");
+// The push arguments are the NAMED group `args`: GIT_GLOBAL_OPTS now carries a
+// capture of its own, so a numbered `[1]` would silently read the wrong group.
+const GIT_PUSH_RE = new RegExp(`${CMD_START}${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b(?<args>[^;&|]*)`, "i");
 const GIT_PUSH_PREFIX_RE = new RegExp(`${CMD_START}${GIT_BIN}(${GIT_GLOBAL_OPTS})\\s+push\\b`, "i");
 export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
+}
+
+// A hook killed at its time limit ALLOWS the command, so a parse that is slow
+// enough IS a bypass. One shape stays super-linear after the fixes above: every
+// `git` word can start its own option run (`git -C git -C git …` — each `git` is
+// both an option value and a new command start), so the push parsers cost about
+// (number of `git` words) × (command length). Measured with ~25 parser calls per
+// guard run: 32M of that product takes ~65 ms at worst, while `git -C ` repeated
+// to 64 KB (~600M) took ~11 s. The guards refuse a command above the budget
+// before any command parser runs (only reading the hook's JSON input and, on the
+// Codex side, trimming the command come first — both single linear passes).
+//
+// `git` is counted in the LETTERS ONLY: every alternate reading the parsers take
+// (quote splicing, escape removal, `("gi"+"t")` joining, argv splitting) only
+// removes or replaces non-letters, so no reading can hold more `git` words than
+// this count. Ordinary commands are nowhere near the budget — a long script or PR
+// body with a few mentions of git passes at any realistic size.
+//
+// Linear is not the same as fast. With a single `git`, 31.6 MB of `'a'|` passed
+// the budget and the Codex guard still ran past its limit (Codex GitHub review,
+// #840): every linear pass over that much text adds up. Measured on the slowest
+// single-push shapes, 1 MB takes up to ~5.8 s in the Codex guard, so any command
+// longer than MAX_INSPECTABLE_COMMAND_LENGTH (256 KiB, ~1.5 s) is refused too.
+// Real commands are orders of magnitude shorter; long content belongs in a file.
+export const PUSH_PARSE_COST_BUDGET = 32_000_000;
+export const MAX_INSPECTABLE_COMMAND_LENGTH = 256 * 1024;
+// The whole hook input is decoded (JSON.parse) before the command can be
+// measured, so its size is bounded too (Luna, 2026-09-29). 16 MiB, not 256 KiB:
+// the Codex guard sees every tool, including large apply_patch payloads.
+export const MAX_HOOK_INPUT_LENGTH = 16 * 1024 * 1024;
+// Reads the hook input and stops as soon as it passes `limit` bytes, so an
+// oversized tool call is refused without first being held whole. Reading it all
+// and measuring afterwards was not enough (Codex GitHub review, #840): past
+// ~512 MB Node cannot build the string at all, the read throws, and a guard
+// that treats a failed read as "nothing to check" allows the call.
+// Past the limit the rest is read and discarded, never stored, for up to
+// `drainMs` after the limit is crossed, so the writer is not cut off mid-write.
+// The read is asynchronous so a timer can end it: an input that is still open
+// after `waitMs` (a stalled or endless writer) resolves as a failure instead of
+// holding the hook until it is killed (Luna, 2026-09-30). Resolves to
+// { tooLarge, text } or { failed }; both guards refuse `tooLarge` and `failed`.
+export function readHookInputBounded({ limit = MAX_HOOK_INPUT_LENGTH, drainMs = 5_000, waitMs = 10_000, stream = process.stdin } = {}) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let total = 0;
+    let overLimitAt = 0;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.pause();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(total > limit
+      ? { tooLarge: true, text: "" }
+      : { failed: `hook input was still arriving after ${waitMs} ms` }), waitMs);
+    stream.on("data", (chunk) => {
+      total += chunk.length;
+      if (total <= limit) {
+        chunks.push(chunk);
+        return;
+      }
+      if (!overLimitAt) {
+        overLimitAt = Date.now();
+        chunks.length = 0;
+      }
+      if (Date.now() - overLimitAt > drainMs) finish({ tooLarge: true, text: "" });
+    });
+    stream.on("end", () => finish(total > limit
+      ? { tooLarge: true, text: "" }
+      : { tooLarge: false, text: Buffer.concat(chunks, total).toString("utf8") }));
+    stream.on("error", (error) => finish({ failed: String(error?.message || error) }));
+  });
+}
+export function pushParseCostExceeded(cmd) {
+  const text = String(cmd || "");
+  if (text.length > MAX_INSPECTABLE_COMMAND_LENGTH) return true;
+  // Count and stop at the first `git` over the limit, rather than collecting
+  // every match: a command with millions of `git` words would otherwise build a
+  // millions-long array before it could be refused (Luna, 2026-09-28).
+  // `count > floor(budget / length)` is exactly `count × length > budget`.
+  const allowed = Math.floor(PUSH_PARSE_COST_BUDGET / Math.max(text.length, 1));
+  const gitWord = /git/gi;
+  const letters = text.replace(/[^a-z]+/gi, "");
+  let count = 0;
+  while (gitWord.exec(letters) !== null) {
+    count += 1;
+    if (count > allowed) return true;
+  }
+  return false;
 }
 
 // The hook must see a literal Git subcommand. Shell variables, command
@@ -313,7 +423,7 @@ export function eachPush(cmd) {
   const found = [];
   let match;
   while ((match = scanner.exec(text)) !== null) {
-    found.push({ args: match[1] || "", index: match.index });
+    found.push({ args: match.groups.args || "", index: match.index });
     if (scanner.lastIndex === match.index) scanner.lastIndex += 1; // zero-width safety
   }
   return found;
@@ -525,7 +635,10 @@ export function pushContextIsAmbiguous(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return false;
   return /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|popd|set-location|pop-location)\s+/i.test(text) ||
-    /(?:\$env:|\benv\s+|\bset\s+|^|[;&|\r\n]\s*)(?:GIT_DIR|GIT_WORK_TREE)\s*=/i.test(text);
+    // `[^\S\r\n]*`, not `\s*`: `\s*` re-read a whole run of newlines from every
+    // newline in it (quadratic). A later newline in the run is itself a separator
+    // start, so what matches is unchanged.
+    /(?:\$env:|\benv\s+|\bset\s+|^|[;&|\r\n][^\S\r\n]*)(?:GIT_DIR|GIT_WORK_TREE)\s*=/i.test(text);
 }
 
 export function reviewProofPathMentioned(value) {
@@ -550,8 +663,10 @@ export function reviewProofPathMentioned(value) {
 
 export function reviewStateDirectoryMentioned(value) {
   const text = String(value || "").replace(/\\/g, "/");
-  return /(?:^|[\s"'=:\/])(?:\.?\/?(?:[^\s"']+\/)*\.claude\/session-state)(?:$|[\s/"'])/i.test(text) ||
-    /\.claude\/session-state/i.test(text) ||
+  // A bounded path pattern used to precede this one; it hung past the hook limit
+  // on a long run of `/` (nested quantifier) and could never add a match, since
+  // everything it matched contains `.claude/session-state`.
+  return /\.claude\/session-state/i.test(text) ||
     // Deny the component steps too. Otherwise `cd .claude` followed by `cd
     // session-state` can assemble the protected cwd without either command
     // containing the contiguous full path.
@@ -573,7 +688,7 @@ export function mainPushSource(cmd, currentBranch) {
   // only PowerShell's reading exposes is still a deletion. Positions differ
   // between readings, so each reading is resolved whole rather than by unioning
   // tokens (which would shift remote/refspec positions).
-  const sources = pushArgReadings(m[1])
+  const sources = pushArgReadings(m.groups.args)
     .map((tokens) => mainPushSourceFromTokens(tokens, currentBranch));
   if (sources.includes("DELETE")) return "DELETE";
   return sources.find((source) => source !== null) ?? null;
@@ -617,7 +732,7 @@ export function pushTargetsMain(cmd, currentBranch) {
 // True when the push sends only the current checkout's HEAD to the matching
 // feature branch on origin. Protected branches land through the PR merge gate.
 export function pushTargetsCurrentHead(cmd, currentBranch) {
-  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
+  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.groups.args;
   const normalizedBranch = String(currentBranch || "")
     .trim()
     .replace(/^refs\/heads\//i, "")
@@ -661,7 +776,7 @@ function tokensPushCurrentHeadOnly(tokens, normalizedBranch) {
 // before force-pushing ANY branch, and an implicit target such as `--all` must
 // not make force intent disappear.
 export function pushIsForced(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   return pushArgReadings(args).some((tokens) => {
     // Any long option starting "--force" is force intent: git accepts unambiguous
     // abbreviations (`--force-w` = --force-with-lease), and every valid abbreviation
@@ -688,7 +803,7 @@ export function mainPushIsForced(cmd, currentBranch) {
 // ambiguous prefixes git would reject anyway, and over-denying them is safe.
 const BULK_PUSH_OPTS = ["--all", "--branches", "--mirror", "--prune"];
 export function pushUsesBulkMode(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   return pushArgReadings(args).some((tokens) => tokens.some((token) => {
     if (!token.startsWith("--") || token.length < 3) return false;
     const bare = token.split("=")[0];
@@ -1137,7 +1252,7 @@ export function unknownPushOptions(cmd) {
 // The destination this push writes to: a remote NAME, a URL, or null when the
 // command names none (git then resolves its own default — see the guard).
 export function pushDestinationToken(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   const tokens = splitShellArgs(args);
   // `--repo=<url>` names a destination, but git-push documents that "if both are
   // specified, the command-line argument takes precedence" — and git 2.54 really
@@ -1191,7 +1306,7 @@ export function pushNamesRefspec(cmd) {
   // a push that is really bare. The guard denies unknown options anyway, but it
   // does so AFTER this comparison, so this cannot rely on that ordering.
   if (unknownPushOptions(cmd).length > 0) return false;
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.groups.args || "";
   const tokens = splitShellArgs(args);
   let positionals = 0;
   for (let i = 0; i < tokens.length; i += 1) {
@@ -2422,7 +2537,7 @@ export function sessionProofDirs(root, hookCwd, listWorktrees) {
 // `pr` and `merge`, and the file already accepts over-matching as fail-safe
 // ("gh token anywhere still matches" in pr-merge-guard.test.mjs).
 const GH_BIN_RE = new RegExp(
-  `${CMD_START}(?:"[^"]*[\\\\/]gh|'[^']*[\\\\/]gh|(?:\\S*[\\\\/])?gh)\\b${BIN_TAIL}(?:\\s|$)`,
+  `${CMD_START}(?:"[^"]*[\\\\/]gh|'[^']*[\\\\/]gh|${PATH_PREFIX}gh)\\b${BIN_TAIL}(?:\\s|$)`,
   "i",
 );
 
@@ -2903,6 +3018,1110 @@ export function mergeRequestKey(request) {
   );
 }
 
+// ── Commands carried inside ANOTHER program's argument ──────────────────────
+//
+// Every parser above reads the argv of the command it is handed. A command
+// passed to another program as ONE argument — `bash -c "gh pr merge 1 --admin"`,
+// `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand <base64>`, `eval`,
+// `Invoke-Expression`, `Start-Process gh -ArgumentList …`, a `&{ … }` script
+// block — is a single word to them, so `pr` and `merge` were never separate
+// words and both merge guards let an administrator merge through (measured on
+// PR #630's head, 2026-09-24: all of those returned allow from both guards, as
+// did `bash -c "gh api -X DELETE …/git/refs/heads/main"`).
+//
+// expandNestedCommands returns the command text each such program would run,
+// recursively, so the callers can inspect it exactly like a top-level command.
+// It is an EXTRA reading, never a replacement: the outer command is still
+// inspected as typed. Where the inner text is ambiguous (a rest-of-line program
+// such as `cmd /c` re-reads its arguments with its own quoting) it yields more
+// than one reading, and callers deny when ANY reading is refused.
+//
+// Only inner commands that could reach a gate — ones that mention `gh` or `git`,
+// feed an interpreter on its input, or themselves carry a further nested
+// command — are returned. The guards exist
+// for merges, pushes and GitHub writes; re-inspecting `bash -c "npm test"` buys
+// nothing and costs the chance of a false refusal.
+//
+// Accepted residuals, named rather than half-covered (Mason, 2026-09-28, after
+// Codex luna's review of PR #795): no command-line reader can close these, and
+// GitHub's protect-main ruleset still refuses any direct push to main.
+//   - A script FILE (`bash x.sh`, `pwsh -File x.ps1`, `node x.mjs`) runs text
+//     the guard cannot see from the command line (finding 6).
+//   - A program name assembled at run time in a syntax other than `$` or a
+//     backtick — PowerShell `& ("g" + "h")`, cmd `%VAR%` (finding 5).
+//   - The Codex guard re-checks only nested commands that mention gh or git,
+//     carry further nesting, or feed an interpreter, so a decoded
+//     -EncodedCommand payload doing something else is not re-checked against
+//     its other rules (finding 7).
+const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "mksh", "ash", "fish"]);
+const CMD_SHELLS = new Set(["cmd"]);
+const POWERSHELLS = new Set(["powershell", "pwsh"]);
+const EXPRESSION_EVALUATORS = new Set(["eval", "invoke-expression", "iex"]);
+const PROCESS_STARTERS = new Set(["start-process", "saps", "start"]);
+// PowerShell host parameters that take a value, as full names plus their
+// documented short forms. A parameter may be abbreviated to any unambiguous
+// prefix, so full names are matched by prefix (3+ letters) as well.
+const POWERSHELL_VALUE_PARAMS = [
+  "executionpolicy", "windowstyle", "outputformat", "inputformat", "workingdirectory",
+  "configurationname", "psconsolefile", "version", "settingsfile", "custompipename", "encodedarguments",
+];
+const POWERSHELL_VALUE_SHORTS = new Set(["ex", "ep", "w", "of", "o", "if", "wd", "config", "v", "settings", "ea"]);
+const NESTED_MAX_DEPTH = 4;
+const NESTED_MAX_COMMANDS = 32;
+// How far past a program word its own options are read. Every per-program
+// scan below stops here, so the unwrap stays linear in the command's length:
+// an unbounded forward scan from each of thousands of `start -x` words took
+// 34 s on a 108 KB command and walked the hook past its time limit, which a
+// cut-off hook turns into an ALLOW (independent Opus review of PR #795,
+// 2026-09-25). No real program invocation carries 64 option words before the
+// command it runs.
+const NESTED_SCAN_WINDOW = 64;
+// Returned by a per-program scan that reached NESTED_SCAN_WINDOW with words
+// still left to read. Padding 70 repeated `--norc` / `/d` / `-NoProfile` words
+// pushed a real `-c` / `/c` / `-Command` past the window, the scan saw no inner
+// command, and all three guards allowed an administrator merge (probe of the
+// open question in PR #795, 2026-09-27). The caller refuses the command
+// (tooDeep) rather than inspect part of it.
+const SCAN_WINDOW_EXCEEDED = Symbol("scan window exceeded");
+function windowExceeded(argvWords, end) {
+  return end < argvWords.length;
+}
+// Long bash options that consume the next word as their value, so the word
+// after them is not the command even when it looks like one.
+const POSIX_SHELL_VALUE_LONGS = new Set(["--rcfile", "--init-file"]);
+
+// The program a command word names: basename, no extension, lowercased — so
+// `C:\Windows\System32\cmd.exe`, `"/usr/bin/bash"` and `PWSH.EXE` compare equal
+// to `cmd`, `bash` and `pwsh`.
+function programName(word) {
+  const base = String(word || "").split(/[\\/]/).pop().toLowerCase();
+  return base.includes(".") ? base.slice(0, base.lastIndexOf(".")) : base;
+}
+
+// Is the word at `index` the named program? Asked of the argv word (quotes and
+// POSIX escapes consumed, so `g''h` is gh) AND of the raw word, because a
+// Windows path's backslashes are separators there, not escapes: the argv reading
+// of `C:\Tools\gh.cmd` is `C:Toolsgh.cmd`.
+function wordIsProgram(rawWords, argvWords, index, names) {
+  return names.has(programName(argvWords[index])) || names.has(programName(rawWords[index]));
+}
+
+function mentionsGhOrGit(text) {
+  const words = splitShellArgv(text).join(" ");
+  return /(?:^|[^a-z0-9_-])(?:gh|git)(?:$|[^a-z0-9_-])/i.test(`${text} ${words}`);
+}
+
+// A program that runs the REST of its line as one command gets two readings:
+// the argv words joined (quotes consumed, as the program receives them) and the
+// raw words joined (quotes kept, as the program may re-read them).
+function restOfLine(rawWords, argvWords, from) {
+  if (from >= argvWords.length) return [];
+  return [argvWords.slice(from).join(" "), rawWords.slice(from).join(" ")];
+}
+
+// `-c`, `-lc`, `-xc`: a POSIX shell runs its first non-option argument after a
+// cluster carrying `c`. `-o`/`-O` take a value, and so do `--rcfile` and
+// `--init-file`: reading their value as the command let
+// `bash --rcfile /dev/null -c '<admin merge>'` through (independent Opus review
+// of PR #795). `--` ends the options. Returns the inner commands found.
+function posixShellInner(argvWords, start, fish) {
+  if (fish) return fishInner(argvWords, start);
+  let sawC = false;
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (word === "--") return sawC && argvWords[index + 1] !== undefined ? [argvWords[index + 1]] : [];
+    if (/^[-+][A-Za-z]+$/.test(word)) {
+      if (word.slice(1).includes("c")) sawC = true;
+      // Each `o`/`O` in the cluster takes the next word as its value, so in
+      // `bash -oc xtrace '<command>'` the command is the word after `xtrace`
+      // (CodeRabbit, PR #851, 2026-09-30).
+      index += (word.slice(1).match(/[oO]/g) || []).length;
+      continue;
+    }
+    if (word.startsWith("--")) {
+      if (POSIX_SHELL_VALUE_LONGS.has(word.toLowerCase())) index += 1;
+      continue;
+    }
+    return sawC ? [word] : [];
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
+}
+
+// fish reads its options with getopt, unlike the POSIX shells: `-c`/`--command`
+// and `-C`/`--init-command` each take a value and RUN it, attached (`-c'…'`,
+// `--command=…`), detached, or behind an abbreviated long name (`--comm=…`).
+// Only the POSIX spelling was read, so `fish --command='gh pr merge 1 --admin'`
+// passed both merge guards (Codex GitHub review of PR #795, 2026-09-30). Every
+// such value is returned; the first plain word is the script, which ends the
+// options.
+const FISH_VALUE_SHORTS = "cCdofpD";
+const FISH_VALUE_LONGS = ["debug", "debug-output", "features", "profile", "profile-startup"];
+function fishInner(argvWords, start) {
+  const found = [];
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (word === "--" || word === "-" || !word.startsWith("-")) return found;
+    if (word.startsWith("--")) {
+      const [name, ...attached] = word.slice(2).split("=");
+      const value = attached.length ? attached.join("=") : argvWords[index + 1];
+      const runs = name && ("command".startsWith(name) || (name.length >= 3 && "init-command".startsWith(name)));
+      if (runs && value !== undefined) found.push(value);
+      if (!attached.length && (runs || (name && FISH_VALUE_LONGS.some((long) => long.startsWith(name))))) index += 1;
+      continue;
+    }
+    for (let at = 1; at < word.length; at += 1) {
+      if (!FISH_VALUE_SHORTS.includes(word[at])) continue;
+      const attached = word.slice(at + 1);
+      const value = attached || argvWords[index + 1];
+      if ("cC".includes(word[at]) && value !== undefined) found.push(value);
+      if (!attached) index += 1;
+      break;
+    }
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : found;
+}
+const FISH_SHELLS = new Set(["fish"]);
+
+// `cmd /c …`, `cmd /d /s /k …`, `cmd /c"…"`: everything after /c, /k or /r.
+function cmdInner(rawWords, argvWords, start) {
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  for (let index = start; index < end; index += 1) {
+    const match = /^\/([ckr])(.*)$/i.exec(argvWords[index]);
+    if (match) {
+      const attached = match[2];
+      const rest = restOfLine(rawWords, argvWords, index + 1);
+      return attached ? [`${attached} ${rest[0] ?? ""}`.trim(), ...rest] : rest;
+    }
+    if (!argvWords[index].startsWith("/")) return [];
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
+}
+
+// `-Name:value` carries its value in the same word. Returns the value, or null
+// when the word has no colon.
+function attachedValue(word) {
+  const colon = word.indexOf(":");
+  return colon === -1 ? null : word.slice(colon + 1);
+}
+
+// `commandPosition` is whether the PowerShell host word is the program this
+// segment runs. Only then does a bare first argument mean -Command: reading
+// `which -a pwsh gh git node` as "pwsh runs `gh git node`" refused a harmless
+// lookup (independent Opus review of PR #795). The -Command/-EncodedCommand
+// forms are read wherever the host word appears, which only adds inspection.
+function powershellInner(rawWords, argvWords, start, commandPosition) {
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (!/^[-/]/.test(word)) {
+      // Windows PowerShell reads a bare first argument as -Command. (pwsh reads it
+      // as -File; inspecting it as a command as well only adds inspection.)
+      return commandPosition ? restOfLine(rawWords, argvWords, index) : [];
+    }
+    const name = word.replace(/^[-/]+/, "").replace(/:.*$/, "").toLowerCase();
+    if (!name) continue;
+    const attached = attachedValue(word);
+    if (name === "cwa" || (name.length >= 8 && "commandwithargs".startsWith(name))) {
+      const value = attached ?? argvWords[index + 1];
+      return value !== undefined ? [value] : [];
+    }
+    if ("command".startsWith(name)) {
+      const rest = restOfLine(rawWords, argvWords, index + 1);
+      return attached !== null ? [`${attached} ${rest[0] ?? ""}`.trim(), ...rest] : rest;
+    }
+    if (name === "e" || name === "ec" || (name.startsWith("en") && "encodedcommand".startsWith(name))) {
+      const encoded = attached ?? argvWords[index + 1];
+      if (!encoded) return [];
+      // -EncodedCommand is base64 over UTF-16LE. Decoding is deterministic, so the
+      // command is inspected rather than refused.
+      return [Buffer.from(encoded, "base64").toString("utf16le")];
+    }
+    if (name === "f" || (name.length >= 2 && "file".startsWith(name))) return [];
+    if (POWERSHELL_VALUE_SHORTS.has(name) ||
+        (name.length >= 3 && POWERSHELL_VALUE_PARAMS.some((param) => param.startsWith(name)))) {
+      index += 1;
+    }
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
+}
+
+function evaluatorInner(rawWords, argvWords, start) {
+  let from = start;
+  const first = argvWords[from] || "";
+  const name = first.replace(/:.*$/, "");
+  if (/^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?$/i.test(name)) {
+    const attached = attachedValue(first);
+    const rest = restOfLine(rawWords, argvWords, from + 1);
+    if (attached !== null) return [`${attached} ${rest[0] ?? ""}`.trim(), ...rest];
+    from += 1;
+  }
+  return restOfLine(rawWords, argvWords, from);
+}
+
+// Start-Process parameters: which ones name the program or its arguments,
+// which take a value that is neither, and which are bare switches.
+const PROCESS_TARGET_PARAMS = ["filepath", "fp", "path", "argumentlist", "args"];
+const PROCESS_VALUE_PARAMS = [
+  "workingdirectory", "verb", "windowstyle", "redirectstandardinput", "redirectstandardoutput",
+  "redirectstandarderror", "credential", "environment",
+];
+
+// Start-Process <FilePath> <ArgumentList>, positionally or by name, read as ONE
+// flat command: the program followed by every argument word. Picking out "the"
+// argument list word missed two real spellings (independent Opus review of
+// PR #795): `-ArgumentList 'pr', 'merge'` splits into `pr,` `merge,` words, and
+// `-ArgumentList:'pr merge 1'` carries its value after a colon. Flattening
+// keeps every argument whatever the spelling; commas separate array elements.
+// A stray word that reaches gh this way only makes the parse fail closed.
+function processStarterInner(argvWords, start) {
+  const flat = [];
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (/^-[A-Za-z]/.test(word)) {
+      const name = word.slice(1).replace(/:.*$/, "").toLowerCase();
+      const attached = attachedValue(word);
+      const matches = (params) => params.some((param) => name.length >= 1 && param.startsWith(name));
+      if (matches(PROCESS_TARGET_PARAMS)) {
+        if (attached !== null) flat.push(attached);
+        continue;
+      }
+      if (matches(PROCESS_VALUE_PARAMS) && attached === null) index += 1;
+      continue;
+    }
+    flat.push(word);
+  }
+  if (windowExceeded(argvWords, end)) return SCAN_WINDOW_EXCEEDED;
+  const command = flat.join(" ").replace(/,/g, " ").replace(/\s+/g, " ").trim();
+  return command ? [command] : [];
+}
+
+// `env -S 'gh pr merge 1 --admin'`, `env -S'…'`, `env -iS'…'`,
+// `env --split-string='…'` (or any unambiguous prefix, `--sp=…`): GNU env
+// splits the string into words and runs them, followed by the rest of the
+// line. Only the detached `-S '…'` spelling was read, through the candidate
+// program check; the attached spellings ran an administrator merge past both
+// merge guards (Codex GitHub review of PR #795, 2026-09-30).
+function envSplitStringInner(rawWords, argvWords, start) {
+  const end = Math.min(argvWords.length, start + NESTED_SCAN_WINDOW);
+  // The string (attached, or else the next word) followed by the rest of the
+  // line: `-Sgh mm 1` runs `gh mm 1` too.
+  const splitString = (attached, next) => {
+    const rest = restOfLine(rawWords, argvWords, next);
+    return attached ? [`${attached} ${rest[0] ?? ""}`.trim(), ...rest] : rest;
+  };
+  for (let index = start; index < end; index += 1) {
+    const word = argvWords[index];
+    if (word === "--" || word === "-" || !word.startsWith("-")) return [];
+    if (word.startsWith("--")) {
+      const [name, ...value] = word.slice(2).split("=");
+      if (name && "split-string".startsWith(name)) return splitString(value.join("="), index + 1);
+      if (!value.length && name && ["unset", "chdir"].some((long) => long.startsWith(name))) index += 1;
+      continue;
+    }
+    for (let at = 1; at < word.length; at += 1) {
+      const letter = word[at];
+      if (letter === "S") return splitString(word.slice(at + 1), index + 1);
+      if ("uCP".includes(letter)) {
+        if (at === word.length - 1) index += 1;
+        break;
+      }
+    }
+  }
+  return windowExceeded(argvWords, end) ? SCAN_WINDOW_EXCEEDED : [];
+}
+const ENV_PROGRAMS = new Set(["env"]);
+
+// Is the word at `index` the program this segment runs? True at the start, or
+// after environment assignments and wrapper words (`sudo`, `timeout 30`, `&`).
+function isCommandPosition(argvWords, index) {
+  let sawWrapper = false;
+  for (let before = 0; before < index; before += 1) {
+    const word = argvWords[before];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+    if (COMMAND_WRAPPERS.has(word.toLowerCase())) { sawWrapper = true; continue; }
+    // An option or value that belongs to a wrapper: `timeout 30`, `sudo -u root`.
+    if (sawWrapper && (word.startsWith("-") || /^\d/.test(word) || argvWords[before - 1].startsWith("-"))) continue;
+    return false;
+  }
+  return true;
+}
+
+// One level of nesting: the inner commands this command's segments carry, each
+// as { text, grouped } — `grouped` marks the brace/paren reading, which is the
+// same text regrouped rather than a command another program will run.
+function nestedCommandsOneLevel(command, { grouping }) {
+  const inner = [];
+  const text = String(command || "");
+  // Grouping: `&{ gh … }`, `.{ … }`, `( … )`. Only UNQUOTED braces and parens are
+  // syntax, so a `--body "fix (typo)"` stays one argument.
+  let grouped = "";
+  let quote = "";
+  for (const char of text) {
+    if (quote) { grouped += char; if (char === quote) quote = ""; continue; }
+    if (char === "'" || char === '"') { quote = char; grouped += char; continue; }
+    grouped += "{}()".includes(char) ? " ; " : char;
+  }
+  if (grouping && grouped !== text) inner.push({ text: grouped, grouped: true });
+  const add = (values) => {
+    if (values === SCAN_WINDOW_EXCEEDED) {
+      inner.push({ text: "", grouped: false, windowExceeded: true });
+      return;
+    }
+    for (const value of values) inner.push({ text: value, grouped: false });
+  };
+  for (const segment of splitCommandSegments(text)) {
+    const rawWords = splitShellWordsRaw(segment);
+    // PowerShell's parser reads an en dash, em dash or horizontal bar as `-`, so
+    // `pwsh –EncodedCommand …` is the flag every check below looks for.
+    const argvWords = rawWords.map(shellArgvWord).map((word) => word.replace(/^[–—―]/, "-"));
+    for (let index = 0; index < argvWords.length; index += 1) {
+      // Stopping at the cap keeps a command with thousands of `cmd /c` words from
+      // spending the hook's time limit — a hook cut off at its limit ALLOWS. The
+      // stop is reported as exceeded so the caller refuses (tooDeep): returning
+      // quietly let 33 identical harmless `bash -c` words, which the caller
+      // de-duplicates below its own cap, hide a later admin merge that was never
+      // read (Codex luna, PR #795, 2026-09-26, finding 2).
+      if (inner.length > NESTED_MAX_COMMANDS) {
+        inner.push({ text: "", grouped: false, windowExceeded: true });
+        return finishNested(inner, text);
+      }
+      const is = (names) => wordIsProgram(rawWords, argvWords, index, names);
+      if (is(POSIX_SHELLS)) {
+        add(posixShellInner(argvWords, index + 1, is(FISH_SHELLS)));
+      } else if (is(CMD_SHELLS) || is(POWERSHELLS) || is(EXPRESSION_EVALUATORS)) {
+        // These run the REST of the line, so their inner command already holds
+        // every later word of this segment; the next level unwraps whatever
+        // program is nested there. Stopping here keeps each level linear instead
+        // of re-reading the rest of the line once per nested program.
+        // A program that found no inner command (`cmd /d` with no /c) runs
+        // nothing from this line, so the scan continues to the later words.
+        const found = is(CMD_SHELLS)
+          ? cmdInner(rawWords, argvWords, index + 1)
+          : is(POWERSHELLS)
+            ? powershellInner(rawWords, argvWords, index + 1, isCommandPosition(argvWords, index))
+            : evaluatorInner(rawWords, argvWords, index + 1);
+        add(found);
+        if (found === SCAN_WINDOW_EXCEEDED || found.length) break;
+      } else if (is(PROCESS_STARTERS)) {
+        add(processStarterInner(argvWords, index + 1));
+      } else if (is(ENV_PROGRAMS)) {
+        add(envSplitStringInner(rawWords, argvWords, index + 1));
+      }
+    }
+  }
+  return finishNested(inner, text);
+}
+
+function finishNested(inner, text) {
+  return inner
+    .map((entry) => ({ ...entry, text: String(entry.text).trim() }))
+    .filter((entry) => entry.windowExceeded || (entry.text && entry.text !== text));
+}
+
+// Text built at run time — a `$` variable or substitution, or a backtick — that a
+// shell or evaluator will expand before it runs. `bash -c '$0 pr merge 1 --admin'
+// gh` names neither gh nor git in its inner text, so the gh/git filter below
+// dropped it and the Claude merge guard allowed it (independent Opus review of
+// PR #795).
+const RUNTIME_TEXT_RE = /[$`]/;
+const GATED_VERB_RE = /(?:^|[^\w-])(?:merge|push|api|alias)(?:$|[^\w-])/i;
+
+// Does any command in `text` get its PROGRAM NAME at run time? `g$1 pr merge …`,
+// `${P}h …`, `$P …`, `` `echo g`h … ``, `& $p …` never spell gh or git, so the
+// gh/git test above cannot see them and both Claude guards allowed every one
+// (found testing round 2 of the independent review of PR #795). A variable in
+// an ARGUMENT (`echo $HOME`, `ForEach-Object { $_.Name }`) is not this case.
+//
+// The program is found with programCandidates, so a wrapper's own options and
+// values come before it: stopping at the first non-wrapper word read the `30`
+// in `timeout 30 $P push origin HEAD:main --force` as the program (Codex luna,
+// PR #795, 2026-09-28 round 2, finding 4). A PowerShell assignment
+// (`$b = git branch`, `$p='gh'`) assigns; its `$` word is not a program.
+const POWERSHELL_ASSIGNED_RE = /^\$\{?[A-Za-z_][\w:]*\}?$/;
+const POWERSHELL_ASSIGN_OP_RE = /^[+\-*/%]?=$/;
+const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
+function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE) {
+  for (const segment of splitCommandSegments(text)) {
+    let words = splitShellWordsRaw(segment);
+    if (POWERSHELL_ASSIGNED_RE.test(words[0] ?? "") && POWERSHELL_ASSIGN_OP_RE.test(words[1] ?? "")) {
+      words = words.slice(2);
+    } else if (POWERSHELL_ASSIGNMENT_WORD_RE.test(words[0] ?? "")) {
+      words = words.slice(1);
+    }
+    for (const candidate of programCandidates(words)) {
+      // A word with whitespace in it is a quoted STRING (the quote-keeping reading
+      // of `pwsh -Command "… { $_.Name }"`), not a program name.
+      const program = words[candidate];
+      if (runtimeText.test(program) && !/\s/.test(shellArgvWord(program))) return true;
+    }
+  }
+  return false;
+}
+
+// Every nested command, at any depth, that could reach a merge/push/GitHub gate.
+// `tooDeep` means the nesting went past what the guard is willing to unwrap; the
+// callers refuse such a command rather than inspect part of it.
+//
+// `grouping: false` leaves out the `{ }` / `( )` reading. The push guard passes
+// it: its own composition check already refuses a push behind that syntax, and
+// the reading would pre-empt that check's more specific denials (a
+// `${env:GIT_CONFIG_COUNT} = '1'; git push` must still be refused as a
+// GIT_CONFIG redirect).
+//
+// `computed` is true when a shell or evaluator (not a mere `{ }`/`( )` block)
+// is handed text it will expand at run time, and either the command mentions
+// gh or git anywhere or the inner command's program name is itself built at
+// run time. The guard cannot read what that text becomes, so callers refuse it.
+export function expandNestedCommands(command, { grouping = true } = {}) {
+  const outer = String(command || "");
+  const found = [];
+  const seen = new Set([outer.trim()]);
+  const outerMentionsGhOrGit = mentionsGhOrGit(outer);
+  // The TOP-LEVEL command's own program can be built at run time too:
+  // `$p='gh'; & $p pr merge 123 --admin` in PowerShell, `P=gh; $P pr merge …` in
+  // POSIX. Only nested text was checked, so the Claude merge guard allowed it
+  // (Codex luna, PR #795, 2026-09-28 round 2, finding 3). Refused when the
+  // command names gh or git, or a merge, push or API call. Only `$` is looked
+  // for here: a top-level backtick (``g`h``, `` `echo g`h ``) is refused by the
+  // composition checks, whose denial names the actual cause.
+  let computed = programBuiltAtRuntime(outer, /\$/) && (outerMentionsGhOrGit || GATED_VERB_RE.test(outer));
+  let frontier = [outer];
+  for (let depth = 1; frontier.length; depth += 1) {
+    const next = [];
+    for (const text of frontier) {
+      for (const entry of nestedCommandsOneLevel(text, { grouping })) {
+        if (entry.windowExceeded) return { commands: found, tooDeep: true, computed };
+        // The inner text's own gh/git mention counts too: a decoded
+        // `-EncodedCommand` payload such as `$f='--admin'; gh pr merge 1 $f`
+        // names gh only once decoded (CodeRabbit, PR #851, 2026-09-30).
+        if (!entry.grouped && RUNTIME_TEXT_RE.test(entry.text) &&
+            (outerMentionsGhOrGit || mentionsGhOrGit(entry.text) || programBuiltAtRuntime(entry.text))) {
+          computed = true;
+        }
+        if (seen.has(entry.text)) continue;
+        seen.add(entry.text);
+        if (depth > NESTED_MAX_DEPTH || seen.size > NESTED_MAX_COMMANDS + 1) {
+          return { commands: found, tooDeep: true, computed };
+        }
+        next.push(entry.text);
+      }
+    }
+    for (const inner of next) {
+      // An inner command that feeds an interpreter is returned too, whatever it
+      // mentions: `cmd /c "type payload.txt | bash"` hides the pipe inside
+      // quotes from the outer reading, so only the inner one can refuse it.
+      // So is one that mentions a merge: a raw REST merge names no gh or git,
+      // and `pwsh -EncodedCommand <base64 of Invoke-RestMethod …/pulls/1/merge>`
+      // shows its endpoint only once decoded (Codex luna, PR #795, 2026-09-29
+      // round 3, finding 2).
+      if (mentionsGhOrGit(inner) || nestedCommandsOneLevel(inner, { grouping }).length ||
+          commandFedToInterpreter(inner) || /merge/i.test(withoutShellQuoting(inner))) {
+        found.push(inner);
+      }
+    }
+    frontier = next;
+  }
+  return { commands: found, tooDeep: false, computed };
+}
+
+// The text left once a shell consumes its quoting and escapes: bash `\`, cmd
+// `^`, PowerShell `` ` `` and quote characters. `…/pulls/1/mer\ge` inside
+// `bash -c '…'` and `…/mer^ge` inside `cmd /c "…"` reach curl as `…/merge`, but
+// their text never matched the merge-endpoint check (Codex luna, PR #795,
+// 2026-09-29 round 3, finding 2).
+function withoutShellQuoting(text) {
+  return String(text || "").replace(/[\\^`'"]/g, "");
+}
+
+// How many raw GitHub REST merge endpoints (`…/pulls/<n>/merge`) a segment
+// names, read both as written and with its shell quoting consumed.
+const MERGE_ENDPOINT_RE = /\/pulls\/[^\s/]+\/merge\b/gi;
+export function rawMergeEndpointCount(segment) {
+  const text = String(segment || "");
+  return Math.max(
+    (text.match(MERGE_ENDPOINT_RE) || []).length,
+    (withoutShellQuoting(text).match(MERGE_ENDPOINT_RE) || []).length,
+  );
+}
+
+// Does a segment name the GraphQL mergePullRequest mutation, however quoted?
+export function mentionsMergePullRequest(segment) {
+  return /\bmergePullRequest\b/i.test(`${segment} ${withoutShellQuoting(segment)}`);
+}
+
+export function nestedComputedDenial(prefix) {
+  return (
+    `${prefix}: this command runs a program whose name, or hands another shell or evaluator text that, ` +
+    "is built at run time (a `$` variable, a substitution, or a backtick) in a command that involves gh, " +
+    "git, a merge or a push. The guard cannot read what that text will become, so it is refused rather " +
+    "than guessed at. Spell the gh or git command literally and run it directly."
+  );
+}
+
+// A command FED to an interpreter on its input, rather than passed as an
+// argument: `'gh pr merge 1 --admin' | iex`, `echo '…' | bash`, `bash <<< '…'`,
+// `bash < payload.txt`, a here-document, or `… | xargs gh`. Nothing on the
+// command line is the command the interpreter runs, so no argument parser can
+// see it (independent Opus review of PR #795; the bash, here-string and xargs
+// forms were confirmed in a real shell).
+//
+// Refused whatever the command mentions. It used to be refused only when the
+// text named gh or git, so `Get-Content payload.txt | iex` — the payload in a
+// file — passed every guard (Codex luna, PR #795, 2026-09-26, finding 3). An
+// agent has its own shell and never needs to pipe commands into another one.
+//
+// Read as each shell reads it, by a small linear lexer, rather than by
+// regexes: bounded regexes missed a wrapper between the pipe and the
+// interpreter (`| env bash`) and anything past their bound (finding 4). The
+// lexer follows quotes, escapes, `$( )` and backtick substitutions (whose
+// commands are real commands), here-document bodies and comments, so an
+// apostrophe in a here-document body cannot desynchronise the quoting and hide
+// a pipe after it. Every command is read as POSIX, PowerShell and cmd read it
+// (cmd: `'` is not a quote, `#` is not a comment, only the first line runs).
+const FED_INTERPRETER_NAMES = new Set([
+  ...POSIX_SHELLS, ...CMD_SHELLS, ...POWERSHELLS, "iex", "invoke-expression",
+]);
+const POWERSHELL_HERE_STRING_RE = /@(['"])[ \t]*\r?\n/y;
+
+// The stage pipelineStages returns alone when it cannot tell where a command's
+// text ends; stageFeedsInterpreter refuses it.
+const UNREADABLE_STAGE = Object.freeze({ text: "", piped: false, redirected: false, unreadable: true });
+
+// Bash's `$'…'` escapes, decoded as bash does for a here-document delimiter.
+const ANSI_C_ESCAPES = {
+  a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v",
+  "\\": "\\", "'": "'", '"': '"', "?": "?",
+};
+function decodeAnsiCQuoted(body) {
+  return body.replace(
+    /\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c([\s\S])|([\s\S]))/g,
+    (match, octal, hex, u4, u8, control, other) => {
+      if (octal) return String.fromCharCode(parseInt(octal, 8) & 0xff);
+      if (hex) return String.fromCharCode(parseInt(hex, 16));
+      if (u4 || u8) return String.fromCodePoint(Math.min(parseInt(u4 || u8, 16), 0x10ffff));
+      if (control) return String.fromCharCode(control.charCodeAt(0) & 0x1f);
+      return ANSI_C_ESCAPES[other] ?? match;
+    },
+  );
+}
+
+// cmd's words: only `"` quotes and `^` escapes. `'` is an ordinary character,
+// so in `echo 'x | bash'` cmd's second stage runs `bash'`, not bash; reading
+// it with POSIX quoting refused that harmless echo (Codex luna, PR #795,
+// 2026-09-29 round 3, finding 5).
+function cmdWords(text) {
+  const words = [];
+  let current = "";
+  let started = false;
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (!quoted && /\s/.test(char)) {
+      if (started) { words.push(current); current = ""; started = false; }
+      continue;
+    }
+    started = true;
+    if (char === '"') { quoted = !quoted; continue; }
+    if (char === "^" && !quoted && index + 1 < text.length) { current += text[index + 1]; index += 1; continue; }
+    current += char;
+  }
+  if (started) words.push(current);
+  return words;
+}
+
+// The pipeline stages of `text` as `shell` reads it: { text, piped, redirected },
+// where `piped` is a stage reading the previous stage's output and `redirected`
+// is a stage with an input redirection (`<`, `<<`, `<<<`, `<( )`).
+function pipelineStages(text, shell) {
+  const posix = shell === "posix";
+  const powershell = shell === "powershell";
+  const stages = [];
+  const newFrame = (close) => ({ close, depth: 0, quote: "", current: "", piped: false, redirected: false, heredocs: [] });
+  const frames = [newFrame(null)];
+  const endStage = (frame, piped) => {
+    if (frame.current.trim()) stages.push({ text: frame.current, piped: frame.piped, redirected: frame.redirected });
+    frame.current = "";
+    frame.piped = piped;
+    frame.redirected = false;
+  };
+  const closeFrame = (closing) => {
+    endStage(frames.pop(), false);
+    frames[frames.length - 1].current += closing;
+  };
+  const lastChar = (frame) => frame.current[frame.current.length - 1] ?? "";
+  const escapes = (char) => (posix && char === "\\") || (powershell && char === "`") || (shell === "cmd" && char === "^");
+  for (let index = 0; index < text.length; index += 1) {
+    const frame = frames[frames.length - 1];
+    const char = text[index];
+    const next = text[index + 1] ?? "";
+    if (frame.quote) {
+      const quote = frame.quote;
+      if (quote === "'") {
+        frame.current += char;
+        if (char === "'") frame.quote = "";
+      } else if (quote === "$'") {
+        frame.current += char;
+        if (char === "\\") { frame.current += next; index += 1; } else if (char === "'") frame.quote = "";
+      } else if (quote === "@'" || quote === '@"') {
+        const close = `${quote[1]}@`;
+        if (char === "\n" && text.startsWith(close, index + 1)) {
+          frame.current += `\n${close}`;
+          index += close.length;
+          frame.quote = "";
+        } else if (quote === '@"' && char === "$" && next === "(") {
+          frame.current += "$(";
+          index += 1;
+          frames.push(newFrame(")"));
+        } else {
+          frame.current += char;
+        }
+      } else if (escapes(char) && shell !== "cmd") {
+        frame.current += char + next;
+        index += 1;
+      } else if (char === "$" && next === "(" && shell !== "cmd") {
+        frame.current += "$(";
+        index += 1;
+        frames.push(newFrame(")"));
+      } else if (posix && char === "`") {
+        frame.current += char;
+        frames.push(newFrame("`"));
+      } else {
+        frame.current += char;
+        if (char === '"') frame.quote = "";
+      }
+      continue;
+    }
+    if (escapes(char)) { frame.current += char + next; index += 1; continue; }
+    if (frame.close === "`" && char === "`") { closeFrame("`"); continue; }
+    if (posix && char === "`") { frame.current += char; frames.push(newFrame("`")); continue; }
+    if (char === "$" && next === "(" && shell !== "cmd") {
+      frame.current += "$(";
+      index += 1;
+      frames.push(newFrame(")"));
+      continue;
+    }
+    if (posix && (char === "<" || char === ">") && next === "(") {
+      if (char === "<") frame.redirected = true;
+      frame.current += char + next;
+      index += 1;
+      frames.push(newFrame(")"));
+      continue;
+    }
+    if (frame.close === ")" && char === "(") { frame.depth += 1; frame.current += char; continue; }
+    if (frame.close === ")" && char === ")") {
+      if (frame.depth === 0) { closeFrame(")"); continue; }
+      frame.depth -= 1;
+      frame.current += char;
+      continue;
+    }
+    if (powershell && char === "@") {
+      POWERSHELL_HERE_STRING_RE.lastIndex = index;
+      const match = POWERSHELL_HERE_STRING_RE.exec(text);
+      if (match) { frame.quote = `@${match[1]}`; frame.current += `@${match[1]}`; index += 1; continue; }
+    }
+    if (char === '"') { frame.quote = '"'; frame.current += char; continue; }
+    if (char === "'" && shell !== "cmd") {
+      frame.quote = posix && lastChar(frame) === "$" ? "$'" : "'";
+      frame.current += char;
+      continue;
+    }
+    if (powershell && char === "<" && next === "#") {
+      const end = text.indexOf("#>", index + 2);
+      index = end === -1 ? text.length : end + 1;
+      continue;
+    }
+    if (char === "#" && shell !== "cmd" && (!frame.current || /\s/.test(lastChar(frame)))) {
+      const end = text.indexOf("\n", index);
+      index = (end === -1 ? text.length : end) - 1;
+      continue;
+    }
+    if (char === "<") {
+      // PowerShell reserves `<`: it is a parse error, and a script that does not
+      // parse runs nothing at all. Reading on would take a bash here-document's
+      // body for PowerShell commands.
+      if (powershell) return [];
+      frame.redirected = true;
+      if (posix && next === "<" && text[index + 2] === "<") { frame.current += "<<<"; index += 2; continue; }
+      // Inside `(( … ))` or `let`, `<<` is a left shift, not a here-document;
+      // reading it as one would skip the real commands on the following lines.
+      // Only the stage's first 256 characters are looked at, so the check stays
+      // constant-time; a stage padded past that is read as a here-document,
+      // which can only over-refuse.
+      if (posix && next === "<" && /^\s*(?:for\s*)?\(\(|^\s*let\s/.test(frame.current.slice(0, 256))) {
+        frame.current += "<<";
+        index += 1;
+        continue;
+      }
+      if (posix && next === "<") {
+        // A here-document: its delimiter (quotes and escapes removed), and
+        // whether `<<-` strips leading tabs from the closing line.
+        let at = index + 2;
+        const strip = text[at] === "-";
+        if (strip) at += 1;
+        while (text[at] === " " || text[at] === "\t") at += 1;
+        let delimiter = "";
+        // Any quoting in the delimiter makes the body literal; an unquoted one
+        // lets bash run the `$( )` and backtick substitutions inside the body.
+        const delimiterStart = at;
+        while (at < text.length && !/[\s;&|<>()]/.test(text[at])) {
+          if (text[at] === "$" && text[at + 1] === "'") {
+            // `$'…'` is ANSI-C quoted: bash decodes its escapes, so `$'EOF'`
+            // and `$'E\x4fF'` both end at a line reading EOF. Reading the `$`
+            // as part of the word looked for `$EOF` and skipped the commands
+            // after the real end as body (Codex luna, PR #795, 2026-09-29
+            // round 3, finding 4).
+            let end = at + 2;
+            while (end < text.length && text[end] !== "'") end += text[end] === "\\" ? 2 : 1;
+            delimiter += decodeAnsiCQuoted(text.slice(at + 2, Math.min(end, text.length)));
+            at = end + 1;
+          } else if (text[at] === "$" && text[at + 1] === '"') {
+            // `$"…"` is a translatable string; as a delimiter it reads as `"…"`.
+            at += 1;
+          } else if (text[at] === "'" || text[at] === '"') {
+            const close = text.indexOf(text[at], at + 1);
+            const end = close === -1 ? text.length : close;
+            delimiter += text.slice(at + 1, end);
+            at = end + 1;
+          } else if (text[at] === "\\") {
+            delimiter += text[at + 1] ?? "";
+            at += 2;
+          } else {
+            delimiter += text[at];
+            at += 1;
+          }
+        }
+        frame.current += text.slice(index, at);
+        const quoted = /['"\\]/.test(text.slice(delimiterStart, at));
+        if (delimiter) frame.heredocs.push({ delimiter, strip, quoted });
+        index = at - 1;
+        continue;
+      }
+      frame.current += char;
+      continue;
+    }
+    // cmd runs one line: `cmd /c` ignores everything after the first line
+    // break, and cmd has no here-documents, so reading on would take a bash
+    // here-document's body for cmd commands.
+    if (char === "\n" && shell === "cmd") break;
+    if (char === "\n") {
+      // A here-document's body is the input of its command, not a command: skip
+      // it, up to the line that is exactly its delimiter.
+      let resume = index + 1;
+      for (const { delimiter, strip, quoted } of frame.heredocs) {
+        let ended = false;
+        while (resume < text.length) {
+          const lineEnd = text.indexOf("\n", resume);
+          const end = lineEnd === -1 ? text.length : lineEnd;
+          let line = text.slice(resume, end).replace(/\r$/, "");
+          if (strip) line = line.replace(/^\t+/, "");
+          resume = end + 1;
+          if (line === delimiter) { ended = true; break; }
+          // An unquoted delimiter's body runs its substitutions:
+          // `cat <<EOF` + `$(cat payload.txt | bash)` feeds bash, and skipping
+          // the body hid it (CodeRabbit, PR #851, 2026-09-30). Refused rather
+          // than parsed; quote the delimiter (`<<'EOF'`) for literal text.
+          if (!quoted && /\$\(|`/.test(line)) return [UNREADABLE_STAGE];
+        }
+        // No line ends it. Bash then reads to the end, but so would a delimiter
+        // this lexer misread, and skipping the rest would hide every command
+        // after the real end. Refused instead: an agent never needs one.
+        if (!ended) return [UNREADABLE_STAGE];
+      }
+      frame.heredocs = [];
+      // A line that ends with `|` carries on: bash and PowerShell continue the
+      // pipeline on the next line, so `echo "…" |` + newline + `bash` feeds
+      // bash (Codex luna, PR #795, 2026-09-29 round 3, finding 3). A comment
+      // after the `|` was skipped above, so it carries on too.
+      endStage(frame, frame.current.trim() ? false : frame.piped);
+      index = resume - 1;
+      continue;
+    }
+    if (char === ";") { endStage(frame, false); continue; }
+    if (char === "|") {
+      if (next === "|") { endStage(frame, false); index += 1; } else endStage(frame, true);
+      continue;
+    }
+    if (char === "&") {
+      // `2>&1`, `>&2`, `&>file` are redirections; `&&` separates; a `&` that
+      // starts a stage is PowerShell's call operator (`… | & bash`).
+      if (lastChar(frame) === ">" || lastChar(frame) === "<" || next === ">") { frame.current += char; continue; }
+      if (next === "&") { endStage(frame, false); index += 1; continue; }
+      if (!frame.current.trim()) { frame.current += char; continue; }
+      endStage(frame, false);
+      continue;
+    }
+    frame.current += char;
+  }
+  while (frames.length > 1) closeFrame("");
+  endStage(frames[0], false);
+  return stages;
+}
+
+// Language runtimes that run a PROGRAM read from their input when given no
+// script and no inline code: `echo "…" | node`, `python3 - < payload.py`.
+// With a script (`node scripts/x.mjs < data.json`) the input is only data.
+const STDIN_PROGRAM_RUNTIMES = new Set(["node", "deno", "bun", "python", "python3", "py", "perl", "ruby", "php"]);
+const RUNTIME_CODE_OPTION_RE = /^(?:-[ecpE]|--eval|--print|--command)(?:=|$)/;
+function runtimeReadsProgramFromInput(words, candidate) {
+  const end = Math.min(words.length, candidate + 1 + NESTED_SCAN_WINDOW);
+  for (let index = candidate + 1; index < end; index += 1) {
+    const word = words[index];
+    const redirection = redirectionWidth(word);
+    if (redirection) { index += redirection - 1; continue; }
+    if (word === "-") return true;
+    if (RUNTIME_CODE_OPTION_RE.test(word)) return false;
+    if (!word.startsWith("-")) return false;
+  }
+  // No script before the stage ended reads the program from input; a scan
+  // that ran out of window with words left is refused rather than guessed at.
+  return true;
+}
+
+// Does this stage hand an interpreter its input? True for an interpreter that
+// reads a pipe or a redirection, for a language runtime that would read its
+// program from one, and for anything run by xargs, which builds the command
+// from its input: an interpreter, gh, or a git push.
+function stageFeedsInterpreter({ text, piped, redirected, unreadable }, shell) {
+  if (unreadable) return true;
+  const rawWords = shell === "cmd" ? cmdWords(text) : splitShellWordsRaw(text);
+  const words = shell === "cmd" ? rawWords : rawWords.map(shellArgvWord);
+  const firstXargs = words.findIndex((word) => programName(stripGrouping(word)) === "xargs");
+  const namesPush = words.some((word) => word.toLowerCase() === "push");
+  const candidates = programCandidates(words);
+  // `Start-Process bash -RedirectStandardInput payload.txt` feeds a file to the
+  // program it starts, with no `<` anywhere on the line. Only when Start-Process
+  // is the program: `echo -RedirectStandardInput bash` is an echo (Codex luna,
+  // round 2, finding 6).
+  if (candidates.some((candidate) => PROCESS_STARTERS.has(candidateProgram(words[candidate]))) &&
+      words.some((word) => /^-redirectstandardi/i.test(word)) &&
+      words.some((word) => FED_INTERPRETER_NAMES.has(candidateProgram(word)))) {
+    return true;
+  }
+  for (const candidate of candidates) {
+    const names = [candidateProgram(words[candidate]), candidateProgram(rawWords[candidate])];
+    const viaXargs = firstXargs !== -1 && firstXargs < candidate;
+    if (names.some((name) => FED_INTERPRETER_NAMES.has(name)) && (piped || redirected || viaXargs)) return true;
+    if ((piped || redirected) && names.some((name) => STDIN_PROGRAM_RUNTIMES.has(name)) &&
+        runtimeReadsProgramFromInput(words, candidate)) {
+      return true;
+    }
+    if (viaXargs && (names.includes("gh") || (names.includes("git") && namesPush))) return true;
+  }
+  return false;
+}
+
+// Every command gets all three readings. cmd's was once kept for nested text,
+// but a command may be run by cmd.exe itself, where `'` is not a quote and `#`
+// is not a comment: `type payload.txt # note | bash` pipes the file into bash
+// (Codex luna, PR #795, 2026-09-28 round 2, finding 1).
+//
+// `exec < payload.txt` replaces the shell's OWN input, so every later stage
+// reads that file — a plain `bash` on the next line runs it.
+export function commandFedToInterpreter(command) {
+  const text = String(command || "");
+  return ["posix", "powershell", "cmd"].some((shell) => {
+    let inputReplaced = false;
+    for (const stage of pipelineStages(text, shell)) {
+      if (stageFeedsInterpreter(inputReplaced ? { ...stage, redirected: true } : stage, shell)) return true;
+      if (stage.redirected && /^\s*exec(?:\s|$)/.test(stage.text.slice(0, 64))) inputReplaced = true;
+    }
+    return false;
+  });
+}
+
+export function commandFedToInterpreterDenial(prefix) {
+  return (
+    `${prefix}: this command feeds text to a shell or evaluator on its input (a pipe or redirection into ` +
+    "bash/sh/cmd/pwsh/iex, node or python reading its program from input, a here-string or here-document, " +
+    "or xargs running gh, git push or a shell), or it has a here-document whose closing line the guard " +
+    "cannot find. What " +
+    "the interpreter runs is not on the command line, so the guard cannot check it. Run the command directly."
+  );
+}
+
+// ── gh commands the guards can read ────────────────────────────────────────
+//
+// A gh ALIAS or EXTENSION is a command name gh expands into something else —
+// `gh alias set mm 'pr merge --admin'` makes `gh mm 123` an administrator merge
+// that no parser here reads as a merge (measured on PR #630's head, 2026-09-24:
+// both guards allowed both commands). Expanding aliases would mean reading gh's
+// config at hook time, which an agent can also rewrite; so the guards instead
+// refuse to CREATE aliases, and refuse any top-level gh command they do not know.
+//
+// gh's built-in top-level commands and their built-in (non-config) aliases,
+// from gh's manual. `co` is deliberately absent: it is a CONFIG alias
+// (`pr checkout`) that can be redefined, so `gh pr checkout` is the spelling to
+// use. A genuine new gh command, or an extension installed on purpose, is added
+// here after checking what it does. `discussion` (gh 2.96), `skill` and
+// `telemetry` (listed by gh 2.92's own `gh help`) were missing, so harmless
+// commands such as `gh discussion list` were refused (Codex GitHub review of
+// PR #795, 2026-09-30). None of the three can merge or push.
+export const GH_BUILTIN_COMMANDS = new Set([
+  "accessibility", "a11y", "actions", "agent-task", "alias", "api", "attestation", "auth", "browse",
+  "cache", "codespace", "cs", "completion", "config", "copilot", "discussion", "environment",
+  "exit-codes", "extension", "extensions", "ext", "formatting", "gist", "gpg-key", "help", "issue",
+  "label", "licenses", "mintty", "org", "pr", "preview", "project", "reference", "release", "repo",
+  "ruleset", "rs", "run", "search", "secret", "skill", "ssh-key", "status", "telemetry", "variable",
+  "version", "workflow",
+]);
+// Words that run the program after them (possibly after their own options and
+// values). `timeout`, `nice`, `sudo -u root` and `env -u X` each hid an alias
+// from the check below when they were missing or their values were misread
+// (independent Opus review of PR #795).
+const COMMAND_WRAPPERS = new Set([
+  "env", "command", "exec", "time", "nohup", "sudo", "doas", "call", "xargs", "wsl", "&", ".",
+  "timeout", "gtimeout", "nice", "ionice", "stdbuf", "setsid", "chrt", "taskset", "unbuffer", "caffeinate",
+]);
+// Every word that could be the program a segment runs. Environment assignments,
+// grouping and wrapper words come first; after a wrapper, its own options,
+// option values and numeric arguments (`sudo -u root -H`, `timeout 30`,
+// `nice -n 5`) come before the program.
+//
+// Rather than model each wrapper's grammar, an option after a wrapper is read
+// BOTH ways — as a switch, and as taking the next word as its value — and every
+// word either reading lands on is a candidate. The walk only moves forward, so
+// it stays linear. It replaced "the first gh within six words of a wrapper",
+// which missed `sudo -u root -g staff -H -n -E gh mm` (the program was the
+// seventh word) and read the ARGUMENT in `timeout 30 echo gh mm` as the program
+// (Codex luna, PR #795, 2026-09-26, findings 8 and 9).
+const WRAPPER_NUMBER_RE = /^[+-]?\d[\w.:]*$/;
+// Shell keywords that come before the command they run: `then gh mm 1`,
+// `! bash < payload.txt`, `do bash < "$f"`.
+const SHELL_KEYWORDS = new Set(["!", "if", "then", "else", "elif", "while", "until", "do", "coproc"]);
+// A redirection may sit anywhere in a command, even before the program
+// (`< payload.txt bash`). A bare operator takes the next word as its target;
+// an attached one (`<payload.txt`, `2>&1`) is one word.
+const BARE_REDIRECTION_RE = /^(?:\d*|&)(?:<<<|<<-?|<>|<&|>&|>>|>\||<|>)$/;
+const ATTACHED_REDIRECTION_RE = /^(?:\d*|&)[<>]/;
+function redirectionWidth(word) {
+  if (BARE_REDIRECTION_RE.test(word)) return 2;
+  return ATTACHED_REDIRECTION_RE.test(word) ? 1 : 0;
+}
+function stripGrouping(word) {
+  return String(word).replace(/^[({]+/, "").replace(/[)}]+$/, "");
+}
+function programCandidates(words) {
+  const START = 1;
+  const WRAPPED = 2;
+  const reach = new Uint8Array(words.length + 2);
+  reach[0] = START;
+  const candidates = [];
+  for (let index = 0; index < words.length; index += 1) {
+    const state = reach[index];
+    if (!state) continue;
+    const word = stripGrouping(words[index]);
+    const next = (to, value) => { if (to <= words.length) reach[to] |= value; };
+    if (!word || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) || SHELL_KEYWORDS.has(word)) { next(index + 1, state); continue; }
+    const redirection = redirectionWidth(word);
+    if (redirection) { next(index + redirection, state); continue; }
+    if (COMMAND_WRAPPERS.has(word.toLowerCase())) { next(index + 1, WRAPPED); continue; }
+    if (state & WRAPPED) {
+      // `--` ends the wrapper's options, so the next word is the program
+      // (`sudo -- echo gh mm` runs echo). `--name=value` carries its value; any
+      // other option may take the next word.
+      if (word === "--" || /^--[^=]+=/.test(word)) { next(index + 1, WRAPPED); continue; }
+      if (/^-./.test(word)) { next(index + 1, WRAPPED); next(index + 2, WRAPPED); continue; }
+      if (WRAPPER_NUMBER_RE.test(word)) { next(index + 1, WRAPPED); continue; }
+    }
+    candidates.push(index);
+  }
+  return candidates;
+}
+// The program a candidate word names. A word holding whitespace is a command
+// string handed over whole (`env -S 'gh mm 1'`), so its first token is read,
+// and a redirection glued to it (`bash<payload.txt`) is cut off.
+function candidateProgram(word) {
+  return programName(stripGrouping(String(word).trim().split(/\s+/)[0].split(/[<>]/)[0] || ""));
+}
+
+// The gh command a segment runs, when it is one the guards cannot read: an
+// unknown top-level command (an alias or extension), or `gh alias set|import`.
+// Returns null when the segment does not run gh at its command position.
+export function ghCommandUnreadable(segment) {
+  const rawWords = splitShellWordsRaw(String(segment || ""));
+  const words = rawWords.map(shellArgvWord);
+  for (const candidate of programCandidates(words)) {
+    if (candidateProgram(words[candidate]) !== "gh" && candidateProgram(rawWords[candidate]) !== "gh") continue;
+    // `env -S 'gh mm 1'`: the command string is read as its own segment.
+    if (/\s/.test(words[candidate].trim())) {
+      const inner = ghCommandUnreadable(words[candidate]);
+      if (inner) return inner;
+      continue;
+    }
+    const found = ghSubcommandUnreadable(words, candidate + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function ghSubcommandUnreadable(words, start) {
+  let index = start;
+  while (index < words.length && words[index].startsWith("-")) {
+    index += ["-r", "--repo"].includes(words[index].toLowerCase()) ? 2 : 1;
+  }
+  const command = (words[index] || "").toLowerCase();
+  if (!command) return null;
+  if (!GH_BUILTIN_COMMANDS.has(command)) return command;
+  if (command === "alias") {
+    let sub = index + 1;
+    while (sub < words.length && words[sub].startsWith("-")) sub += 1;
+    const subcommand = (words[sub] || "").toLowerCase();
+    if (subcommand === "set" || subcommand === "import") return `alias ${subcommand}`;
+  }
+  return null;
+}
+
+// ghCommandUnreadable over every segment of a whole command. The naive reading
+// that splitCommandSegments includes cuts INSIDE quotes, so prose such as
+// `git commit -m 'docs: …; gh mm now denied'` produced a segment starting
+// `gh mm` and refused a harmless commit (independent Opus review of PR #795). A
+// segment only the naive reading produced, whose quotes do not balance, is a
+// fragment of a quoted string and is skipped. The quote-honouring readings — as
+// written, PowerShell's (backslash literal), and one that honours quotes but no
+// escape characters (cmd's `^` and PowerShell's backtick are escapes in one
+// shell and not the other) — are always checked.
+function quotesUnbalanced(segment) {
+  return (segment.split("'").length - 1) % 2 === 1 || (segment.split('"').length - 1) % 2 === 1;
+}
+
+export function ghCommandUnreadableIn(command) {
+  const text = String(command || "");
+  const quoteAware = new Set([
+    ...segmentOneReading(text, { honorQuotes: true, honorEscapes: true }),
+    ...segmentOneReading(text.replace(/\\/g, "\\\\"), { honorQuotes: true, honorEscapes: true }),
+    ...segmentOneReading(text, { honorQuotes: true, honorEscapes: false }),
+  ]);
+  for (const segment of new Set([...quoteAware, ...splitCommandSegments(text)])) {
+    if (!quoteAware.has(segment) && quotesUnbalanced(segment)) continue;
+    const found = ghCommandUnreadable(segment);
+    if (found) return found;
+  }
+  return null;
+}
+
+export function ghCommandUnreadableDenial(prefix, command) {
+  return (
+    `${prefix}: \`gh ${command}\` is not a gh command this guard can read. A gh alias or extension can ` +
+    "expand into a merge or an API write (`gh alias set mm 'pr merge --admin'` makes `gh mm 1` an " +
+    "administrator merge), so aliases may not be created and unknown gh commands are refused. Use the " +
+    "built-in command it stands for (for example `gh pr checkout` instead of `gh co`). If this is a genuine " +
+    "new gh command or a deliberately installed extension, add it to GH_BUILTIN_COMMANDS in " +
+    ".claude/hooks/codex-push-lib.mjs after checking what it does."
+  );
+}
+
+export function nestedTooDeepDenial(prefix) {
+  return (
+    `${prefix}: this command nests shells or evaluators more deeply than the guard will unwrap ` +
+    `(more than ${NESTED_MAX_DEPTH} levels or ${NESTED_MAX_COMMANDS} inner commands), or gives a shell, ` +
+    `PowerShell or Start-Process more than ${NESTED_SCAN_WINDOW} option words before the command it runs, so it ` +
+    "is refused rather than partly inspected. Run the inner command directly."
+  );
+}
+
 // A shared time budget for a hook's NETWORK-BOUND hard gates.
 //
 // Why this exists: a PreToolUse hook killed at its timeout emits nothing, and a
@@ -2940,7 +4159,14 @@ export function hookDeadlineMs(hookTimeoutMs, reserveMs) {
 
 // One wording for both guards, so a merge refused for time reads the same from
 // Claude and from Codex.
-export function hardGateBudgetDenial(prefix) {
+export function hardGateBudgetDenial(prefix, action = "merge") {
+  if (action === "push") {
+    return (
+      `${prefix}: the push checks could not finish inside this hook's time limit, so the push is denied ` +
+      "(fail closed). A hook cut off mid-check says nothing, and saying nothing would ALLOW the push. Run " +
+      "one `git push` per command and retry."
+    );
+  }
   return (
     `${prefix}: the merge checks could not finish inside this hook's time limit, so the merge is denied ` +
     "(fail closed). A hook cut off mid-check says nothing, and saying nothing would ALLOW the merge. This " +

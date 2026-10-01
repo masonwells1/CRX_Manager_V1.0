@@ -1,12 +1,26 @@
 # Decision Log
 
-Last verified: 2026-09-26 (autonomous landing entry added)
+Last verified: 2026-09-30 (nested-command entries condensed; full gap list in agent-guardrails.md)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
+
+**Source:** Mason, "accept and land" (2026-09-29 and 2026-09-30); detail in `docs/changelog.d/2026-09-29-pr795-stopped-after-luna-round4.md`.
+**Decision.** Parser fixes stop; remaining findings are recorded known gaps (`docs/reference/agent-guardrails.md`,
+"Accepted residuals") and the work lands. One that beats GitHub's `main` protection, or a serious Sol finding, goes to Mason.
+**Why.** Each round found new holes, and the protect-main ruleset (no bypass actors) still requires review and green checks.
+
+## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
+
+**Source:** Mason, "fix and accept" (2026-09-28); detail in `docs/changelog.d/2026-09-28-nested-guard-luna-round1-fixes.md`.
+**Decision.** Guard logic bugs are fixed; script files, run-time program names outside `$`/backtick syntax, and the
+Codex guard not re-checking decoded payloads are accepted residuals. The push-parser timeout is tracked separately.
+**Why.** Parsing cannot see a script's contents or a name assembled at run time.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 
@@ -194,6 +208,13 @@ points agree, the Codex mirror imports the shared validator rather than duplicat
 load-bearing — and caught the merge chicken-and-egg above, an over-authorized unattended merge job
 (since made review-only), and several overclaims now corrected in the changelog.
 
+## 2026-09-22 — the field-app row trigger keeps its group-wide date check; CodeRabbit's per-invoice relaxation is refuted
+
+**Source:** Mason, 2026-09-22, after two adversarial Claude reviews of PR #762 and a measured PostgreSQL 17 reproduction.
+**Decision:** `guard_field_app_invoice_season_date()` keeps its group-wide assertion in `20260914101000` and `20260914101100`; the per-invoice relaxation (CodeRabbit Major, PR #758) is reverted and refuted.
+**Operative rule:** do not narrow it to the written row. It refuses some edits the per-invoice rule would allow (fail-closed, never wrong money) so a mixed-season group stays recoverable; the relaxation made a void-and-reissue-only stranded state reachable in one edit. The 2026-09-04 and 2026-09-08/13 decisions and the one-window APPLY-WINDOW RULE are unchanged.
+**Evidence:** `docs/reference/migration-history.md`, "Group-wide date check: the 2026-09-22 measurement"; `prove-preview-field-app-season.mjs` PHASE 8h-mixed / 8i-mixed asserts both directions.
+
 ## 2026-09-20 — everyday code review moves to Luna at xhigh; Sol becomes a once-at-the-end gate
 
 [Update 2026-09-26: the two-tier shape below still stands, but its model names are **superseded by
@@ -226,6 +247,13 @@ starts, so doing so destroys a valid Sol proof and mints one the guards reject. 
 review with `-C <repo>` on an advisory path: repo agent-instruction files tell the reviewer to run a
 review and it self-recurses (observed 2026-08-23); Step 3A runs from a neutral directory against a
 frozen diff file with the CRX failure classes inlined. Do not "fix" the guards to accept Luna.
+
+## 2026-09-08 — field-application date edits stay inside the invoice's filed season
+
+**Source:** Mason's "continue 599" (September 8 Chicago), approving Codex's preceding recommendation to keep season immutability and refuse edits that cross October 1; exchange rechecked September 13.
+**Decision:** an existing field-application invoice keeps its filed season; its date may move within that season but not across October 1, and every writer refuses a change to the filed season. New generic invoices take their season from their date (dedicated job/blend creators are the documented exception); preview and save follow the same rule. An unchanged stored date is not a date edit (September 13).
+**Scope:** supersedes only the September 4 accepted consequence of editing across October 1; no re-seasoning, group price unification, or revival of #591.
+**Full source and clarification:** `docs/reference/migration-history.md`, "Filed-season rule: the 2026-09-08 source and 2026-09-13 clarification".
 
 ## 2026-09-05 — the 2026-08-12 live-SQL-guard maintenance producer is retired without being applied
 
