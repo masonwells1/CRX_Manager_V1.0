@@ -230,16 +230,19 @@ function collectMergeRequests(scanned) {
 // protection so he can hand-merge a PR whose review is stuck (CodeRabbit down,
 // rate-limited, or wedged). That bypass is granted by admin rights, not by a
 // separate credential — so every agent session, running on his token, inherits
-// it. Denied here, before the PR is even resolved: there is no base branch and
-// no diff for which an agent asking GitHub to skip review is the right move.
+// it. Since 2026-09-27 the protect-main ruleset requires an approval of the
+// latest push and has no bypass actors, so that classic setting no longer lets
+// an admin skip the review; the denial stands either way. Denied here, before
+// the PR is even resolved: there is no base branch and no diff for which an
+// agent asking GitHub to skip review is the right move.
 if (requests.some((request) => request?.admin)) {
   deny(
-    "PR MERGE GATE: `--admin` merges with administrator privileges, overriding branch protection. " +
-    "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
-    "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
-    "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
-    "without `--admin`. If a review did ask for changes, resolve it first — fix what it found and push; " +
-    "CodeRabbit re-reviews every push automatically (if it skipped the latest head, post " +
+    "PR MERGE GATE: `--admin` asks GitHub to override branch protection. An agent may never use it, " +
+    "whatever the diff or the deadline. Merge the ordinary way: the `protect-main` ruleset requires one " +
+    "approving review of the latest push (stale approvals are dismissed, no bypass actors), and CodeRabbit " +
+    "is the reviewer that gives it, so a green, up-to-date candidate whose latest push CodeRabbit APPROVED " +
+    "merges without `--admin`. If a review asked for changes, resolve it first — fix what it found and " +
+    "push; CodeRabbit re-reviews every push automatically (if it skipped the latest head, post " +
     "`@coderabbitai review` once). If the merge is still blocked, hand the PR to Mason and say why."
   );
 }

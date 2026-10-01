@@ -253,6 +253,94 @@ missing from `SQL_BUILTIN_FNS` while its siblings (`pg_get_functiondef`, `pg_get
 that is cross-tool permission laundering. Ask Mason for the scoped `REAL-DATA-OK` the guard's own
 message names, or fix the guard deliberately.
 
+### Fewer prompts, automatic CodeRabbit, fail-closed merge guard (2026-09-26 decision, PR #841)
+
+Detail behind the `docs/manual/DECISION_LOG.md` entry of 2026-09-26 ("Fewer permission prompts; CodeRabbit
+reviews every PR automatically; GitHub requires its approval again"), moved here so that entry stays short.
+
+**Source.** Mason, in-chat 2026-09-26: "give permissions more freely to both codex and claude … i do want to make
+sure we get an adversarial review, and we have alot of coderabbit usage now, so i want it used alot more often." He
+approved the plan ("yes"), confirmed the instruction edits explicitly, chose **"A"** twice (GitHub-enforced
+CodeRabbit approval; keep a prompt on production-gate files), and on 2026-09-27 had the ruleset change made in his
+browser. Built first as PR #822, then rebuilt on top of the autonomous-landing change (#804), which had landed the
+same morning with overlapping merge-gate work.
+
+**Evidence (2026-09-12 to 09-26, desktop app logs joined to transcripts).** Mason saw 209 Claude permission prompts
+and approved every one; 186 (89%) were the `ask` tier on guard/tooling files; 6 were real production moments. `ask`
+rules prompt in every mode, including `bypassPermissions`; the desktop app ignores the project
+`defaultMode: "dontAsk"`. Codex runs `approval_policy = "never"` and showed Mason no permission prompts.
+
+1. **Claude `ask` tier = what Mason can judge, plus production gates.** Kept: edge-function and Vercel production
+   deploys, deployment protection, GitHub-MCP and Desktop Commander / filesystem MCP writers, the two Claude settings
+   files, and — Mason's "A", after exact-SHA `gpt-6-sol` reviews and the Codex GitHub App kept finding gaps — **every
+   file whose uncommitted local edit could change what reaches production before any PR review sees it**: every hook
+   that gates a tool EXECUTION in either manifest (Bash / PowerShell / MCP / `*` matchers), every repository module
+   they load, Codex's `codex-hook-adapter.mjs` and `hooks.json`, the proof writers (`write-codex-push-proof.mjs`,
+   `write-apply-proofs.mjs`, `run-claude-review.mjs`), the private-artifact containment check the git hooks run (a
+   leak to the public repo cannot be recalled), `.husky/**` and `.github/workflows/**` (a branch-pushed workflow runs
+   with a write `GITHUB_TOKEN` before review), and `package.json` (`npm run <script>` needs no prompt, so an
+   uncommitted script edit could hide a `gh pr merge` from the command-text merge guard; Codex GitHub App P1 on PR
+   #841). `scripts/check-agent-guidance.mjs` DERIVES the hook set from the manifests and the import graph and fails
+   CI if any file lacks its prompt (28 files at introduction). Removed: write-time content guards, tests, routers,
+   `.coderabbit.yaml`, `.codex/config.toml` and the other check scripts — they act only once committed, inside PR
+   review. A prompt naming a gate file is something Mason CAN judge ("did I ask for safety-gate work?"). `gh pr merge`
+   moves to `allow`; the merge gates are its hard stop, and item 7 keeps them closed when the local guard breaks.
+   `scripts/agent-manifest-parity.mjs` reads only each manifest's `hooks` block, so these `ask` rules are not mistaken
+   for hook wiring.
+2. **CodeRabbit reviews every non-draft PR automatically**, on open and on every push, never pausing
+   (`auto_review.enabled: true`, no label restriction, `auto_pause_after_reviewed_commits: 0`). Proven on PR #822:
+   CodeRabbit reviewed it with no label or command. With no label filter the `ready-for-coderabbit` provider label no
+   longer triggers a review (the workflow stays installed), so **for a head CodeRabbit skipped or was rate limited on,
+   an agent posts `@coderabbitai review` on the PR once** — Mason's answer "Post" on 2026-09-27, which reverses the
+   standing "never post `@coderabbitai` commands by hand" rule (2026-09-07, autonomous landing). Posting can only add
+   a review; nothing merges until CodeRabbit approves the latest push. A fix on the same PR is re-reviewed
+   automatically; relabelling no longer earns a follow-up review.
+3. **GitHub requires CodeRabbit's approval again.** The `protect-main` ruleset's pull-request rule moved to
+   `required_approving_review_count: 1` and `dismiss_stale_reviews_on_push: true` (no bypass actors), verified via
+   `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27 and again on 2026-10-01. Only CodeRabbit
+   can supply the approval today: `masonwells1` is the only collaborator and authors every PR (no self-approval),
+   GitHub Actions cannot approve, and every approval on the last 40 closed PRs came from `coderabbitai[bot]`.
+   CodeRabbit APPROVED #841 at `18cf44114` on 2026-09-30 00:37Z and GitHub then reported `reviewDecision: APPROVED`.
+   With the autonomous-landing merge gates (CodeRabbit's latest verdict APPROVED on the exact head, `--auto` refused),
+   an unreviewed PR cannot land even if a local gate were weakened. The classic branch protection still shows
+   `enforce_admins` off, but the ruleset has no bypass actors, so its required review binds admins too. Cost Mason
+   accepted: if CodeRabbit is down, nothing merges until it recovers. The ruleset is his alone to change; agents never
+   change or work around it, and no document carries a step-by-step way to switch it off (a Sol review flagged such
+   steps as a written bypass path, 2026-09-27).
+4. **Adversarial review:** unchanged from the autonomous-landing entry — Luna rounds and an exact-SHA Sol proof on
+   every change — plus CodeRabbit and the Codex GitHub App on every PR automatically.
+5. **Codex hooks re-trusted (Mason's machine).** Codex silently skips a repository hook whose definition changed since
+   it was trusted; on 2026-09-26, 17 of 24 CRX Codex hooks were skipped — every Write/Edit content guard, the three MCP
+   guards, `production-action-guard`, `review-proof-guard`, `hold-latch-guard` and both routers — while Codex ran with
+   no approvals. Re-trusted via the app-server (`hooks/list` + `config/batchWrite`, the `/hooks` action); a probe then
+   showed the production gate denying force-pushes and `--admin` merges. **After any `.codex/hooks.json` change,
+   re-check trust** (`codex app-server` → `hooks/list`).
+6. The tracked `.codex/config.toml` Supabase MCP entry, dead since 2026-08-10, is `enabled = false` (the 2026-08-14
+   write-scope decision is unchanged; Codex uses `codex_apps/supabase`).
+7. **The merge guard denies when it breaks** (Mason's "No prompt", 2026-09-28). A Sol review of this change found that
+   with `gh pr merge` in `allow`, the local merge guard is the only check enforcing the exact-SHA Sol proof, and a
+   guard that crashes or is killed at its timeout prints nothing, which allows the merge. Offered keeping the merge
+   prompt for now, Mason chose no prompt with this fix first. See the `merge-guard-launcher.mjs` row above for the
+   launcher's behaviour and proof.
+
+**Residuals, stated.** Agents run `gh` with Mason's admin login, so a hand-assembled `gh api` call could in principle
+change the ruleset; only the auto-mode classifier stands in the way on the Claude side (Codex's production gate denies
+unrecognized mutating `gh api` calls). A non-admin token for agents is the real fix and is Mason's to authorize. Shell
+writes to the migration proof writer and its helpers are not blocked by `review-proof-guard`; only native edits
+prompt. Codex's `production-action-guard.mjs` already denies on a runtime crash and budgets its checks inside its
+15-second limit, but it has no watchdog for being killed at that limit or for a module that fails to load, and Codex
+merges without prompts. That gap predates this change. A launcher there changes `.codex/hooks.json`, which Codex
+silently skips until re-trusted (item 5), so it is a separate follow-up. A merge the command text does not show
+(decoded, assembled at run time, or run from a new script file) passes the working guard too; the launcher's "could
+merge" test matches every form the guard denies. `package.json` keeps its native-edit prompt because `npm run` is
+auto-allowed, but a shell write to it (Codex GitHub App, PR #841) or any new script file can still hide a merge. That
+route was just as unprompted before `gh pr merge` moved to `allow`, because only the literal command was ever prompted;
+closing it needs the non-admin agent credential above, not another text check. The working guard also misses a Bash
+line continuation inside a word (a backslash before a newline, so `g\`, newline, `h pr merge 1` runs as
+`gh pr merge 1`); it predates this change, the old `ask` rule did not match that spelling either, and it is a recorded
+follow-up. The launcher's fallback test does catch it (Luna, PR #841). GitHub's required CodeRabbit approval and
+checks still hold for every route.
+
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 
 **Refresh schema registry after schema changes:** run the `regen-schema-registry` workflow, which collects all six live Supabase introspection results and invokes `node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json>`. Never substitute the no-argument timestamp-only mode.

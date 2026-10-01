@@ -152,8 +152,10 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
    merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
    newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound
-   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused;
-   `enforce_admins` is off and no agent may act on that exemption. **The merge is the deploy.**
+   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
+   The classic protection's `enforce_admins` is off, but the `protect-main` ruleset has no bypass
+   actors, so its required review binds admins too; no agent uses `--admin` either way. **The merge
+   is the deploy.**
 
 Landing under Mason's autonomous-landing rule (2026-09-26) needs no in-chat ask once those gates
 pass; report the merge explicitly rather than silently. A direct `vercel --prod` deploy outside the
