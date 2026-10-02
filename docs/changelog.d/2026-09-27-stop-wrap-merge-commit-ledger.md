@@ -70,6 +70,12 @@ rare cases are accepted rather than chased further:
   reminder can be skipped. That work has already passed the PR's own gates, so tying
   squash results back to their source commits is not worth the added complexity (Codex
   P2, PR #827 round 17).
+- A session that uses `git commit --amend` to fold new work into a commit made before the
+  session started is judged on the whole amended commit against its parent. If that
+  earlier commit already added a changelog.d entry, the entry counts and the reminder can
+  be skipped. The hook on `main` before this change had the same gap (its `git log
+  --since` scan also diffed the amended commit against its parent), so this is not a
+  regression (Codex P2, PR #827 round 18).
 - Two reflog entries that are byte-identical (same commit, same second, same action)
   make the session anchor ambiguous. The newest match wins, which can undercount
   session entries.
