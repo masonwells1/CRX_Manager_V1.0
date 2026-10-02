@@ -63,16 +63,16 @@ const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 // merge form the guard denies.
 export function mayMerge(input) {
   let name = "";
-  let text = String(input || "");
+  let parts = [String(input || "")];
   try {
-    const payload = JSON.parse(text);
+    const payload = JSON.parse(parts[0]);
     // Only a well-formed call is narrowed to its name and input; anything else is
     // judged on its whole text (Luna, 2026-09-28). The input's keys and string
     // values are read as they are, not JSON-encoded, so a newline in a command
     // stays a newline instead of becoming the two characters `\n`.
     if (payload?.tool_input && typeof payload.tool_input === "object") {
       name = String(payload.tool_name || "");
-      text = wordsIn(payload.tool_input).join(" ");
+      parts = wordsIn(payload.tool_input);
     }
   } catch { /* unparseable: judge the raw text */ }
   // A shell can rebuild `gh pr merge 1` from pieces this test would otherwise miss
@@ -82,14 +82,30 @@ export function mayMerge(input) {
   // `gh pr me^rge 1`). The working guard denies these spellings, so continuations
   // are joined first, then quotes and escapes removed. Both steps can only widen
   // what counts as a possible merge.
-  text = text.replace(/[`\\^]\r?\n/g, "").replace(/['"`\\^]/g, "");
+  parts = parts.map((part) => part.replace(/[`\\^]\r?\n/g, "").replace(/['"`\\^]/g, ""));
+  const text = parts.join(" ");
   if (/merge|graphql|api\.github|\bgh(?:\.(?:exe|cmd|bat|ps1))?\b/i.test(`${name} ${text}`)) return true;
-  // A shell or evaluator run from the command — `bash -c "$CMD"`, `eval "$X"`,
-  // `pwsh -Command $cmd`, `xargs … sh -c {}` — runs text decided at run time, which
-  // the working guard therefore denies (Codex App P1, PR #841); it is a possible
-  // merge here too. Only the call's input is read, never its tool name, so an
-  // ordinary Bash or PowerShell call (npm, git status, ls, node scripts) still runs.
-  return /\b(?:bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|xargs|iex|invoke-expression)\b/i.test(text);
+  // A program the command hands text it cannot see runs whatever that text says at
+  // run time, so the working guard denies it and it is a possible merge here too
+  // (Codex App P1 and Luna, PR #841). The names mirror the guard's own lists in
+  // codex-push-lib.mjs (POSIX_SHELLS, CMD_SHELLS, POWERSHELLS,
+  // EXPRESSION_EVALUATORS, PROCESS_STARTERS, fed interpreters):
+  //  - a shell, evaluator or process starter anywhere in the input, since wrappers
+  //    such as `env`, `nohup` or `xargs` put it mid-command (`bash -c "$CMD"`,
+  //    `eval "$X"`, `pwsh -Command $cmd`, `Start-Process $exe`, `saps $exe`);
+  //  - `start` only where a command begins in one input value, so `npm start`
+  //    still runs;
+  //  - node, python, deno, bun, perl or ruby reading its program from a pipe, a
+  //    `-` argument or a redirect (`cat x | node`, `python3 - < x.py`).
+  // Only the call's input is read, never its tool name, so an ordinary Bash or
+  // PowerShell call (npm, git status, ls, node scripts) still runs. Matching a word
+  // anywhere over-denies harmless text such as `git grep eval` while the guard is
+  // broken; that is accepted, because this test only decides what happens then.
+  return /\b(?:bash|sh|zsh|dash|ksh|mksh|ash|fish|pwsh|powershell|cmd|eval|xargs|iex|invoke-expression|start-process|saps)\b/i.test(text)
+    || parts.some((part) => /(?:^|[;&|\n({])\s*start\b/i.test(part))
+    || /\|[^|;&\n]*\b(?:node|python\d*|deno|bun|perl|ruby)\b/i.test(text)
+    || /\b(?:node|python\d*|deno|bun|perl|ruby)(?:\.exe)?\s+-(?:\s|$)/i.test(text)
+    || /\b(?:node|python\d*|deno|bun|perl|ruby)(?:\.exe)?\b[^|;&\n]*<(?!<)/i.test(text);
 }
 
 // Every key and string value in a tool call's input, in order.

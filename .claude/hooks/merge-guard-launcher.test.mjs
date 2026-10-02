@@ -84,7 +84,7 @@ for (const [label, input] of [
 }
 for (const command of [
   "npm run build", "git status --short", "ls -la", "node scripts/check-agent-guidance.mjs",
-  "echo $HOME", 'for f in *.md; do echo "$f"; done',
+  "echo $HOME", 'for f in *.md; do echo "$f"; done', "npm start", "npm run start",
 ]) {
   ok(!mayMerge(payload(command)), `ordinary work keeps running while the guard is broken: ${command}`);
 }
@@ -121,6 +121,16 @@ const guardForms = [
   "pwsh -Command $cmd",
   "powershell -c $env:CMD",
   "xargs -I{} sh -c {} < /tmp/cmd",
+  // The rest of the guard's own lists (Luna round 4, PR #841).
+  'mksh -c "$X"',
+  'ash -c "$X"',
+  "Start-Process -FilePath $env:EXE -ArgumentList $env:ARGS",
+  "saps $exe",
+  "start $env:X",
+  "cat prog.js | node",
+  "cat prog.py | python -",
+  "node - < prog.js",
+  "python3 - < prog.py",
 ];
 let deniedForms = 0;
 for (const command of guardForms) {
@@ -128,7 +138,7 @@ for (const command of guardForms) {
   deniedForms += 1;
   ok(mayMerge(payload(command)), `a form the working guard denies is a possible merge here too: ${command}`);
 }
-ok(deniedForms >= 15, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+ok(deniedForms >= 24, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
 
 ok(isVerdict("") && isVerdict(DENY_JSON_FOR_VERDICT), "silence and a PreToolUse denial are verdicts");
 ok(!isVerdict('{"error":"check failed"}'), "JSON without a decision is not a verdict (the harness would allow it)");
