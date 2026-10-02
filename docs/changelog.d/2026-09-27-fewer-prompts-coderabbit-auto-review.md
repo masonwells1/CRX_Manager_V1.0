@@ -21,7 +21,8 @@ same files; replaces PR #822.
   failure (Luna). A tool call that cannot be read is not signed as finished and is denied whatever
   it says (Codex App P1, Luna), and the "could merge" test joins line continuations and ignores
   shell quotes and escapes, so `g''h pr me''rge` or a word split across lines still counts as a
-  merge (Luna). Codex's production
+  merge (Luna), and it counts a shell or evaluator run from the command (`bash -c "$CMD"`,
+  `eval`, `pwsh -Command`) as one (Codex App P1). Codex's production
   guard already denies on a crash; a watchdog for a kill at its timeout is a recorded follow-up.
 - `scripts/check-agent-guidance.mjs`: derives that production-gate set from the hook manifests and
   the import graph and fails if any file lacks its prompt.

@@ -82,9 +82,16 @@ for (const [label, input] of [
 ]) {
   ok(!readableCall(input), `not a readable tool call: ${label}`);
 }
-for (const command of ["npm run build", "git status --short", "ls -la", "node scripts/check-agent-guidance.mjs"]) {
+for (const command of [
+  "npm run build", "git status --short", "ls -la", "node scripts/check-agent-guidance.mjs",
+  "echo $HOME", 'for f in *.md; do echo "$f"; done',
+]) {
   ok(!mayMerge(payload(command)), `ordinary work keeps running while the guard is broken: ${command}`);
 }
+// The tool's own name is not read: a Bash or PowerShell call is not a possible
+// merge just because the tool is a shell (Codex App P1 fix, PR #841).
+ok(!mayMerge(JSON.stringify({ tool_name: "PowerShell", tool_input: { command: "Get-ChildItem" } })),
+  "an ordinary PowerShell call keeps running while the guard is broken");
 ok(!mayMerge(JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" }, cwd: "C:\\merge-fix\\gh" })),
   "only the tool call is judged, not the working directory around it");
 
@@ -106,6 +113,14 @@ const guardForms = [
   "gh.cmd pr merge 625 --admin",
   "node -e \"require('child_process').execSync(Buffer.from('Z2ggcHIgbWVyZ2UgODEy','base64').toString())\"",
   "g''h pr me''rge 812",
+  // A shell or evaluator handed run-time text (Codex App P1, PR #841).
+  'bash -c "$CMD"',
+  'bash -c "$(cat /tmp/cmd)"',
+  'sh -c "$X"',
+  'eval "$CMD"',
+  "pwsh -Command $cmd",
+  "powershell -c $env:CMD",
+  "xargs -I{} sh -c {} < /tmp/cmd",
 ];
 let deniedForms = 0;
 for (const command of guardForms) {
@@ -113,7 +128,7 @@ for (const command of guardForms) {
   deniedForms += 1;
   ok(mayMerge(payload(command)), `a form the working guard denies is a possible merge here too: ${command}`);
 }
-ok(deniedForms >= 8, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+ok(deniedForms >= 15, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
 
 ok(isVerdict("") && isVerdict(DENY_JSON_FOR_VERDICT), "silence and a PreToolUse denial are verdicts");
 ok(!isVerdict('{"error":"check failed"}'), "JSON without a decision is not a verdict (the harness would allow it)");

@@ -62,6 +62,7 @@ const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 // docs/reference/agent-guardrails.md. The test checks this list against every
 // merge form the guard denies.
 export function mayMerge(input) {
+  let name = "";
   let text = String(input || "");
   try {
     const payload = JSON.parse(text);
@@ -70,7 +71,8 @@ export function mayMerge(input) {
     // values are read as they are, not JSON-encoded, so a newline in a command
     // stays a newline instead of becoming the two characters `\n`.
     if (payload?.tool_input && typeof payload.tool_input === "object") {
-      text = [payload.tool_name || "", ...wordsIn(payload.tool_input)].join(" ");
+      name = String(payload.tool_name || "");
+      text = wordsIn(payload.tool_input).join(" ");
     }
   } catch { /* unparseable: judge the raw text */ }
   // A shell can rebuild `gh pr merge 1` from pieces this test would otherwise miss
@@ -81,7 +83,13 @@ export function mayMerge(input) {
   // are joined first, then quotes and escapes removed. Both steps can only widen
   // what counts as a possible merge.
   text = text.replace(/[`\\^]\r?\n/g, "").replace(/['"`\\^]/g, "");
-  return /merge|graphql|api\.github|\bgh(?:\.(?:exe|cmd|bat|ps1))?\b/i.test(text);
+  if (/merge|graphql|api\.github|\bgh(?:\.(?:exe|cmd|bat|ps1))?\b/i.test(`${name} ${text}`)) return true;
+  // A shell or evaluator run from the command — `bash -c "$CMD"`, `eval "$X"`,
+  // `pwsh -Command $cmd`, `xargs … sh -c {}` — runs text decided at run time, which
+  // the working guard therefore denies (Codex App P1, PR #841); it is a possible
+  // merge here too. Only the call's input is read, never its tool name, so an
+  // ordinary Bash or PowerShell call (npm, git status, ls, node scripts) still runs.
+  return /\b(?:bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|xargs|iex|invoke-expression)\b/i.test(text);
 }
 
 // Every key and string value in a tool call's input, in order.
