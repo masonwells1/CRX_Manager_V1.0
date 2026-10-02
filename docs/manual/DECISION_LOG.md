@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-09-30 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; CodeRabbit follow-up clearance entry; handoff item 5 settled by #826)
+Last verified: 2026-10-02 (merge of main's owner Windows Hello approval entry re-checked against #836's CodeRabbit follow-up clearance wording; nested-command entries condensed, full gap list in agent-guardrails.md; handoff item 5 settled by #826)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
