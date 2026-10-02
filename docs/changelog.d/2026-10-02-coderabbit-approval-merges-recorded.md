@@ -9,9 +9,10 @@
     (CodeRabbit, PR #872).
   - The reference doc describes current behavior, so its item 3 is corrected in place.
 - **Evidence (2026-10-02).** The ruleset's `updated_at` is 2026-09-27 13:05:59Z
-  (`gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218`). Every PR merged into `main` after that
-  (`gh pr list --state merged --base main`) has `coderabbitai[bot]`'s APPROVED review on its exact merged head
-  (`gh api .../pulls/<n>/reviews`, matching `commit_id` to the head):
+  (`gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218`). Every PR merged into `main` from then until
+  #841 merged (2026-10-02 17:39Z) (`gh pr list --state merged --base main`) has `coderabbitai[bot]`'s APPROVED
+  review on its exact merged head (`gh api .../pulls/<n>/reviews`, matching `commit_id` to the head). PRs merged
+  after #841 are outside this snapshot.
 
   | PR | Merged (UTC) | Head |
   |---|---|---|

@@ -11,7 +11,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 ## 2026-10-02 — CORRECTION: PRs do merge on CodeRabbit's approval under `protect-main`
 
 **This amends the 2026-09-26 "Fewer permission prompts" entry below**, which said "no PR has yet merged on such an approval." PRs had in fact been merging on that approval since 2026-09-28.
-**What is true.** All 13 PRs merged since the ruleset's last update (2026-09-27 13:05Z; by merge date the first was #830 and the last #841) merged with CodeRabbit's APPROVED review on their exact merged heads, checked 2026-10-02 from each PR's reviews. The full list is in `docs/changelog.d/2026-10-02-coderabbit-approval-merges-recorded.md`. A push after an approval still dismisses it, as that entry says.
+**What is true.** All 13 PRs merged between the ruleset's last update (2026-09-27 13:05Z) and #841's merge (2026-10-02 17:39Z), #830 first and #841 last, merged with CodeRabbit's APPROVED review on their exact merged heads, checked 2026-10-02 from each PR's reviews. The full list is in `docs/changelog.d/2026-10-02-coderabbit-approval-merges-recorded.md`. A push after an approval still dismisses it, as that entry says.
 **What this forbids/implies:** no rule changes. Read that entry's approval observation through this correction.
 
 ## 2026-10-01 — Mason accepts the owner-approval "self-verifier" residual and hand-merges PR #857
