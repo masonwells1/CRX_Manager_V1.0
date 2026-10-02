@@ -467,7 +467,10 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
 - **Errors that show as empty screens**: `DataTable` has no error state, so a failed load shows "No …
   found"; `WorkloadView` ignores the `get_team_workload` error; four of Blend Ticket Detail's ten loads
   fail silently; `runCriticalAction`/`sanitizeError` are used on only about a third of pages, so others can
-  show raw database errors.
+  show raw database errors. Queries that read only `data` and drop the `error` (checked 2026-10-02 in the
+  pages the Q1 risk audit §2.1–2.4 named) remain in Reports (for example, the Chemical History product
+  filter just shows empty), QuoteBuilder, Blend Ticket Detail, Deliveries, AR Aging, Cycle Counts and
+  Inventory, and likely elsewhere. A lint rule (see engineering hygiene below) is the durable fix.
 - **Activity feed gaps**: posting, voiding and recording a payment on an invoice write no activity entry,
   and neither do the key actions in `PaymentAllocation`, `VendorBillDetail`, the prepay workspace and
   quick receive. Field-app invoice events are logged as plain `invoice`. `logActivity` takes an untyped
