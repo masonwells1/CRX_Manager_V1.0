@@ -440,6 +440,52 @@ try {
     "a parent-equal edit amended into an octopus merge must still warn without a ledger");
   pass++;
 
+  // ── Sessions 1q/1r (Codex P2, PR #827 round 16): an octopus made in ANOTHER
+  //    worktree never enters this HEAD's reflog. Amending it here is judged
+  //    against git's rebuilt automatic octopus: rewording alone authors
+  //    nothing (1q); a parent-equal edit still warns (1r) ──
+  writeFileSync(path.join(tmp, "src", "q.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "q base"], tmp, { past: true });
+  const otherWt = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  rmSync(otherWt, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "q-octo", otherWt, "HEAD"], tmp);
+  git(["checkout", "-qb", "q-one"], otherWt);
+  writeFileSync(path.join(otherWt, "src", "q.txt"), "A q-one\nb\nc\nd\ne\nf\ng\n");
+  git(["commit", "-qam", "q-one edits top"], otherWt, { past: true });
+  git(["checkout", "-q", "q-octo"], otherWt);
+  git(["checkout", "-qb", "q-two"], otherWt);
+  writeFileSync(path.join(otherWt, "src", "q.txt"), "a\nb\nc\nd\ne\nf\nG q-two\n");
+  git(["commit", "-qam", "q-two edits bottom"], otherWt, { past: true });
+  git(["checkout", "-q", "q-octo"], otherWt);
+  git(["merge", "--no-ff", "--no-edit", "-q", "q-one", "q-two"], otherWt, { past: true });
+  const foreignOctopus = git(["rev-parse", "HEAD"], otherWt).trim();
+  git(["worktree", "remove", "--force", otherWt], tmp);
+  // Brought here by a reset, which authors nothing and logs no merge.
+  git(["reset", "-q", "--hard", foreignOctopus], tmp);
+  assert.ok(!git(["reflog", "show", "--format=%H %gs", "HEAD"], tmp).split("\n")
+    .some((line) => line.startsWith(`${foreignOctopus} merge`)),
+  "setup: this worktree's reflog must not record the foreign octopus as a merge");
+
+  const s1q = "ledger-test-foreign-octopus-reword";
+  snapshots.push(startSession(s1q));
+  git(["commit", "-q", "--amend", "-m", "octopus of q-one and q-two, reworded"], tmp);
+  const reworded = runStopWrap(s1q, tmp);
+  assert.ok(!LEDGER_WARNING.test(reworded.stdout),
+    `rewording a clean foreign octopus authors no file and must not warn; got: ${reworded.stdout}`);
+  pass++;
+
+  const s1r = "ledger-test-foreign-octopus-parent-equal";
+  snapshots.push(startSession(s1r));
+  git(["checkout", "q-one", "--", "src/q.txt"], tmp);
+  git(["commit", "-q", "--amend", "--no-edit"], tmp);
+  assert.equal(git(["diff-tree", "--cc", "--no-commit-id", "--name-only", "-r", "HEAD"], tmp).trim(), "",
+    "setup: the parent-equal edit must be invisible to the combined diff");
+  const foreignParentEqual = runStopWrap(s1r, tmp);
+  assert.match(foreignParentEqual.stdout, LEDGER_WARNING,
+    "a parent-equal edit amended into a foreign octopus must still warn without a ledger");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));
