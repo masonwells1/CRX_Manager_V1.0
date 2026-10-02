@@ -14652,7 +14652,11 @@ export type Database = {
         Returns: undefined
       }
       soft_delete_customer_document: {
-        Args: { p_document_id: string; p_customer_id: string; p_idempotency_key?: string }
+        Args: {
+          p_customer_id: string
+          p_document_id: string
+          p_idempotency_key?: string
+        }
         Returns: Json
       }
       stage_offline_action: {
