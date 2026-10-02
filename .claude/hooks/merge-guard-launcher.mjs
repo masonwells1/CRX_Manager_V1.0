@@ -95,17 +95,20 @@ export function mayMerge(input) {
   //    `eval "$X"`, `pwsh -Command $cmd`, `Start-Process $exe`, `saps $exe`);
   //  - `start` only where a command begins in one input value, so `npm start`
   //    still runs;
-  //  - node, python, deno, bun, perl or ruby reading its program from a pipe, a
-  //    `-` argument or a redirect (`cat x | node`, `python3 - < x.py`).
+  //  - a runtime from STDIN_PROGRAM_RUNTIMES (node, deno, bun, python, py, perl,
+  //    ruby, php) reading its program from a pipe, a `-` argument or a redirect
+  //    (`cat x | node`, `python3 - < x.py`).
+  // merge-guard-launcher.test.mjs reads those lists from codex-push-lib.mjs and
+  // fails if any name on them is not a possible merge here.
   // Only the call's input is read, never its tool name, so an ordinary Bash or
   // PowerShell call (npm, git status, ls, node scripts) still runs. Matching a word
   // anywhere over-denies harmless text such as `git grep eval` while the guard is
   // broken; that is accepted, because this test only decides what happens then.
   return /\b(?:bash|sh|zsh|dash|ksh|mksh|ash|fish|pwsh|powershell|cmd|eval|xargs|iex|invoke-expression|start-process|saps)\b/i.test(text)
     || parts.some((part) => /(?:^|[;&|\n({])\s*start\b/i.test(part))
-    || /\|[^|;&\n]*\b(?:node|python\d*|deno|bun|perl|ruby)\b/i.test(text)
-    || /\b(?:node|python\d*|deno|bun|perl|ruby)(?:\.exe)?\s+-(?:\s|$)/i.test(text)
-    || /\b(?:node|python\d*|deno|bun|perl|ruby)(?:\.exe)?\b[^|;&\n]*<(?!<)/i.test(text);
+    || /\|[^|;&\n]*\b(?:node|python\d*|py|deno|bun|perl|ruby|php)\b/i.test(text)
+    || /\b(?:node|python\d*|py|deno|bun|perl|ruby|php)(?:\.exe)?\s+-(?:\s|$)/i.test(text)
+    || /\b(?:node|python\d*|py|deno|bun|perl|ruby|php)(?:\.exe)?\b[^|;&\n]*<(?!<)/i.test(text);
 }
 
 // Every key and string value in a tool call's input, in order.

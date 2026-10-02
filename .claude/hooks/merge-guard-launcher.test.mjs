@@ -131,6 +131,8 @@ const guardForms = [
   "cat prog.py | python -",
   "node - < prog.js",
   "python3 - < prog.py",
+  "cat payload.py | py",
+  "cat payload.php | php",
 ];
 let deniedForms = 0;
 for (const command of guardForms) {
@@ -138,7 +140,28 @@ for (const command of guardForms) {
   deniedForms += 1;
   ok(mayMerge(payload(command)), `a form the working guard denies is a possible merge here too: ${command}`);
 }
-ok(deniedForms >= 24, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+ok(deniedForms >= 26, `the parity sample reached the real guard's denials (${deniedForms} denied)`);
+
+// Drift check (Codex App P1, PR #841): every name on the guard's own lists of
+// programs that run text it cannot see is a possible merge here. The lists are
+// read from codex-push-lib.mjs by name, so a name added there without a matching
+// change to mayMerge fails this test, and so does a renamed or emptied list.
+const pushLibSource = readFileSync(path.join(__dirname, "codex-push-lib.mjs"), "utf8");
+const guardList = (name) => {
+  const match = new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`).exec(pushLibSource);
+  ok(match, `codex-push-lib.mjs still defines ${name} as a literal Set`);
+  const names = [...match[1].matchAll(/"([^"]+)"/g)].map((found) => found[1]);
+  ok(names.length > 0, `${name} lists at least one program`);
+  return names;
+};
+for (const list of ["POSIX_SHELLS", "CMD_SHELLS", "POWERSHELLS", "EXPRESSION_EVALUATORS", "PROCESS_STARTERS"]) {
+  for (const program of guardList(list)) {
+    ok(mayMerge(payload(`${program} $X`)), `${list}: \`${program} $X\` is a possible merge`);
+  }
+}
+for (const runtime of guardList("STDIN_PROGRAM_RUNTIMES")) {
+  ok(mayMerge(payload(`cat payload | ${runtime}`)), `STDIN_PROGRAM_RUNTIMES: \`cat payload | ${runtime}\` is a possible merge`);
+}
 
 ok(isVerdict("") && isVerdict(DENY_JSON_FOR_VERDICT), "silence and a PreToolUse denial are verdicts");
 ok(!isVerdict('{"error":"check failed"}'), "JSON without a decision is not a verdict (the harness would allow it)");
