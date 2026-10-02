@@ -127,6 +127,14 @@ Each item was re-checked against `main` on 2026-09-26. Each source doc named bel
 docs cleanup; recover it from git history with `git show e81853970:<path>`. Owner decisions from the
 same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
 
+- **Financial audit log points at deleted records (HIGH, data integrity; open since 2026-05-25).**
+  `financial_audit_log` rows still reference invoices and payments that were later hard-deleted, and those
+  rows carry no `old_values`/`new_values` snapshot. The audit trail therefore cannot say what the deleted
+  record was. A read-only live count on 2026-10-02 found the orphaned references essentially unchanged
+  since the May review. Fix: snapshot the record at audit-write time, or block hard-delete of invoices,
+  payments and orders with a trigger (a migration; Mason's call). (Source:
+  `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` D14-01, removed in the 2026-09-26
+  docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`.)
 - **Field Mode driver receipt gap (latent; RLS fix declined 2026-06-14).** The `customers_select` driver
   branch (`20260510070000`) shows a customer only when the delivery's `scheduled_date >= today - 1`. A driver
   completing an assigned stop with a NULL or older `scheduled_date` sees "Unknown customer" in `/my-route`,

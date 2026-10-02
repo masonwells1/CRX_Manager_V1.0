@@ -69,6 +69,18 @@ block:
 One agent claim was checked and rejected: the vendor-bill name check it cited exists only in an older
 version of that function.
 
+Review of part 3a then found open findings written as audit headings (for example "4.3 N+1 query in
+batch invoice print"), a format that both sweeps above missed. Four more read-only agents went through
+every finding in the roughly 100 audit and review reports still to be removed.
+
+- **Result:** most findings were already fixed. About 90 open, untracked items were added to `TODO.md`
+  §5 under "Found by a sweep of every removed audit's findings", and the financial audit log's
+  references to deleted records went to `docs/manual/KNOWN_ISSUES.md` as a HIGH item.
+- **Rejected:** two agent claims did not hold. `allocate_payment` was already revoked from anon, and the
+  preset-date drift was already tracked.
+- **Not fully re-checked:** four of the largest audits were not re-checked row by row. TODO.md names
+  them so they are re-read from git history before anyone acts in those areas.
+
 **Pointers:** the archive READMEs (`2026-summer`, `2026-summer-closeout`, `2026-spring`,
 `2026-Q1-brainstorms`) now list only what remains. Mentions inside other historical records, the
 changelog and applied-migration comments were left alone as history. Four code comments point at
