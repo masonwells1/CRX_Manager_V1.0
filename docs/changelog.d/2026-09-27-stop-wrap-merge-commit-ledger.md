@@ -77,7 +77,7 @@ rare cases are accepted rather than chased further:
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real SessionStart and Stop hooks in a temp git repo with nineteen cases:
+  It runs the real SessionStart and Stop hooks in a temp git repo with twenty cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -98,6 +98,10 @@ rare cases are accepted rather than chased further:
   - an amend that makes a file equal to one octopus parent still warns;
   - for an octopus made in another worktree, rewording it does not warn, and a
     parent-equal amend still warns;
+  - a session commit still warns when HEAD's reflog is larger than 1 MiB. The full
+    reflog read had used `execFileSync`'s 1 MiB default buffer, so a long-lived
+    checkout overflowed it, the read returned nothing and the check passed silently
+    (CodeRabbit, PR #827). The read now allows 64 MiB;
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -119,5 +123,15 @@ rare cases are accepted rather than chased further:
   - With only the combined diff for an amended octopus, the parent-equal case fails.
     Codex reproduced the foreign-worktree variant against the reflog lookup; the
     rebuild covers both.
-- With the final version, all nineteen cases pass. `npm run test:correction-guards`,
+  - With the default 1 MiB buffer on the reflog read, the large-reflog case fails.
+- With the final version, all twenty cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.
+
+### Not verified
+
+- The tests run in temporary repositories on Linux (locally) and on the CI's Linux and
+  Windows runners. No real multi-day Claude session was replayed against the hook.
+- Git versions older than 2.38, which lack `merge-tree --write-tree`, were not run.
+  The combined-diff fallback for them is covered only by reading the code.
+- A reflog larger than 64 MiB was not tried. A read that overflows it still returns
+  nothing and skips the reminder.

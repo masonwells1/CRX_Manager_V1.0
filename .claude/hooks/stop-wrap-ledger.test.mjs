@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -484,6 +484,26 @@ try {
   const foreignParentEqual = runStopWrap(s1r, tmp);
   assert.match(foreignParentEqual.stdout, LEDGER_WARNING,
     "a parent-equal edit amended into a foreign octopus must still warn without a ledger");
+  pass++;
+
+  // ── Session 1s (CodeRabbit, PR #827): a reflog larger than execFileSync's
+  //    1 MiB default buffer must not empty the read and silence the check ──
+  const headSha = git(["rev-parse", "HEAD"], tmp).trim();
+  const filler = `${headSha} ${headSha} test <test@test> 1577836800 +0000\tcheckout: ${"x".repeat(1000)}\n`;
+  const headLog = path.join(tmp, ".git", "logs", "HEAD");
+  writeFileSync(headLog, filler.repeat(1500) + readFileSync(headLog, "utf8"));
+  const bigRead = spawnSync("git", ["-C", tmp, "reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"],
+    { encoding: "utf8", env: cleanEnv, maxBuffer: 64 * 1024 * 1024 });
+  assert.ok(bigRead.status === 0 && bigRead.stdout.length > 1024 * 1024,
+    "setup: the reflog output must exceed 1 MiB");
+  const s1s = "ledger-test-large-reflog";
+  snapshots.push(startSession(s1s));
+  writeFileSync(path.join(tmp, "large-reflog.txt"), "unrecorded work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded work with a large reflog"], tmp);
+  const largeReflog = runStopWrap(s1s, tmp);
+  assert.match(largeReflog.stdout, LEDGER_WARNING,
+    "a session commit must still warn when the reflog is larger than 1 MiB");
   pass++;
 
   // ── Session 2: a real commit without any ledger → still warns ──

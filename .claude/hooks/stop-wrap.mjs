@@ -52,11 +52,11 @@ function gitToplevelOr(candidate) {
 }
 const projectDir = gitToplevelOr(candidateDir);
 
-function runGit(args) {
+function runGit(args, opts = {}) {
   try {
     return execFileSync("git", args, {
       encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
-      cwd: projectDir,
+      cwd: projectDir, ...opts,
     });
   } catch {
     return "";
@@ -638,7 +638,11 @@ try {
     // so neither marks the boundary. Timestamps are only the fallback when no
     // anchor was recorded or the anchor entry itself has since expired.
     const sessionStartSec = Math.floor(sessionStartMs / 1000);
-    const reflogEntries = runGit(["reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"])
+    // The whole reflog can outgrow execFileSync's 1 MiB default in a
+    // long-lived checkout; overflowing it returns "" and silently disables
+    // this check (CodeRabbit, PR #827).
+    const reflogEntries = runGit(["reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"],
+      { maxBuffer: 64 * 1024 * 1024 })
       .split("\n").filter(Boolean);
     let anchor = null;
     try {

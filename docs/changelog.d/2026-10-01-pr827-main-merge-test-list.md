@@ -11,6 +11,12 @@ merge (2026-10-02) hit the same line again after `main` added
 
 ### Proof observed
 
-- `npm run test:correction-guards` passes, including `stop-wrap-ledger: 16 assertions passed`
-  and the new `allowlist-match` test.
+- `npm run test:correction-guards` passes, including the `stop-wrap-ledger` test and the
+  new `allowlist-match` test.
 - `npm run check-doc-drift` and `npm run test:agent-workflows` pass.
+
+### Not verified
+
+- Only the `test:correction-guards` script line was merged by hand. The other files
+  `main` changed merged automatically and were checked only by the same test runs and
+  CI, not reviewed line by line.
