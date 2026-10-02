@@ -300,9 +300,12 @@ then read it with `git show e81853970:<path>`. Re-verify against the live app be
   never real customer data; an agent does this only with Mason's explicit approval in the current conversation: Quotes list
   "Convert to Order", Deliveries list "Complete" (signed-by popup), and Receiving Hub "Receive" on a PO
   line. Each should match its detail-page flow.
-- Import one real John Deere / FieldView / .zip boundary export (a test customer is fine). Confirm it bills
-  on the file's acres, the ±10% difference flag appears, and redrawing the map does not change the billed
-  acres. This was the one check left open at the June field-acre billing go-live.
+- Import one real John Deere / FieldView / .zip boundary export into a fresh, disposable `[E2E]` test
+  customer, never a real one; an agent does this only with Mason's explicit approval in the current
+  conversation. Confirm it bills on the file's acres, the ±10% difference flag appears, and redrawing the
+  map does not change the billed acres. Then remove the test fields, since a re-import or a failed save can
+  leave duplicates or partial field data (see the field boundary import item below). This was the one check
+  left open at the June field-acre billing go-live.
 
 **Features approved or requested but never built**
 - **Record Payment prefill** (approved 2026-05-04): Record Payment from an order, invoice or customer opens
