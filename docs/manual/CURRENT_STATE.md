@@ -50,9 +50,11 @@ ships or quarterly, whichever comes first.
   Its preflight refuses to run if the bucket holds any object, so no stored document could be served
   by a link minted under the old policies. It does not rule out a signed upload token minted just
   before the apply, which would stay valid until it expired. Still open: sales reps cannot remove a document; PR #800 carries a parked
-  fix migration that needs Mason's apply approval (details in the PR description).
+  fix migration, `20260921180000_soft_delete_customer_document_rpc`, which waits on an ordering
+  hold until `20260914101300` was live (it went live 2026-10-02, so the hold has lifted), then lands under the autonomous-landing rule
+  with no separate ask (Mason, 2026-09-27). Details in `KNOWN_ISSUES.md` and the PR description.
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
-  hours. #800 (above) waits on Mason's apply approval.
+  hours. #800 (above) is no longer held: the four field-season migrations from #850 went live 2026-10-02.
 
 ## Migration and rollout record (condensed, point-in-time)
 
