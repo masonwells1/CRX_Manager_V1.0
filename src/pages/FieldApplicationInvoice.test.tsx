@@ -16,7 +16,7 @@
  *     other than draft/unposted (the migration's group-aware lock surface).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import FieldApplicationInvoice from './FieldApplicationInvoice';
 import FieldApplicationInvoiceRoute from '../components/FieldApplicationInvoiceRoute';
@@ -136,15 +136,6 @@ vi.mock('../components/field-app/SelectLocationsModal', () => ({
 }));
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * A transaction date on the other side of the Oct 1 season boundary that is guaranteed to
- * differ from the field's current value. The field defaults to today, so a hard-coded
- * '2026-10-01' stopped being a change once the calendar reached that day.
- */
-function crossSeasonDate(dateInput: HTMLInputElement): string {
-  return dateInput.value === '2026-10-01' ? '2026-09-30' : '2026-10-01';
-}
 
 /**
  * Build a chainable `from('table')` mock where every terminal call resolves
@@ -353,6 +344,18 @@ describe('FieldApplicationInvoice — new invoice (no id)', () => {
 // This test drives the natural create → pick field → Preview → type discount → Save
 // flow and asserts the typed discount reaches the billing RPC as non-zero cents.
 describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the billing RPC', () => {
+  // The date-change tests below move the transaction date to 2026-10-01. The page defaults it
+  // to today in Chicago, so on 2026-10-01 itself the "change" was a no-op and the tests failed
+  // (they were written on 2026-09-30). Pin only Date -- timers stay real so waitFor still
+  // polls -- to noon Chicago on 2026-09-30, the last day of season 2026.
+  function pinClockToSeasonEve() {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-30T17:00:00Z'));
+  }
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     mockUseParams.mockReturnValue({ id: undefined });
     // After save, the page re-fetches the created invoice to map id -> customer_id.
@@ -474,6 +477,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
   });
 
   it('discards a rendered preview when the transaction date changes', async () => {
+    pinClockToSeasonEve();
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
@@ -489,7 +493,8 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
 
     const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
-    fireEvent.change(dateInput as HTMLInputElement, { target: { value: crossSeasonDate(dateInput as HTMLInputElement) } });
+    expect(dateInput).toHaveValue('2026-09-30');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
 
     await waitFor(() => {
       expect(screen.queryByTitle(/Early-pay discount earned/i)).not.toBeInTheDocument();
@@ -501,6 +506,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
     // nothing about a Preview RPC that is ALREADY in flight. Without a version guard that
     // request resolves later and unconditionally repaints a breakdown priced for the OLD date
     // — across the Oct 1 season boundary, a different per-acre rate than save will use.
+    pinClockToSeasonEve();
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
@@ -528,7 +534,8 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
     // Operator moves the date across the season boundary while the request is still open.
     const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
-    fireEvent.change(dateInput as HTMLInputElement, { target: { value: crossSeasonDate(dateInput as HTMLInputElement) } });
+    expect(dateInput).toHaveValue('2026-09-30');
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
 
     // The old-date answer lands now. It must be discarded, not rendered.
     await act(async () => {

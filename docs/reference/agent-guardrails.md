@@ -23,9 +23,15 @@
 > head that moved in between; REST and connector merges cannot carry it and are refused. `--auto` into `main` is
 > refused outright; `--admin` and `CHANGES_REQUESTED` still are. A repeated StatusContext counts its WORSE state. (2) `migration-apply-lib.mjs` applies its former
 > hands-free-only proof set (content binding, both reviewer names, fresh content-bound Sol proof) in EVERY session,
-> and refuses DESTRUCTIVE SQL for agents in every session with no override (an agent-passed approval flag cannot
-> prove Mason approved that exact migration; `apply-migration-file.mjs` rejects `--mason-approved-destructive` as
-> unknown) — Mason applies destructive migrations himself. Autonomous applies are Claude-only: Codex's
+> and refuses DESTRUCTIVE, data-overwriting and access-changing SQL for agents in every session with no agent
+> override (an agent-passed approval flag cannot prove Mason approved that exact migration; `apply-migration-file.mjs`
+> rejects `--mason-approved-destructive` as unknown). Since 2026-09-29 the one way through is Mason's Windows Hello
+> signature (`owner-approval-lib.mjs`, `owner-approval-hello.ps1`; commands `scripts/owner-approval-setup.mjs` and
+> `scripts/owner-approve-migration.mjs`). It binds the migration's sha256, the PR number and exact head, the flagged
+> categories, a 30-minute window and a nonce. It is checked LAST, after the landing gate, against the PR and head that
+> gate confirmed. Only `apply-migration-file.mjs` (the `ownerApprovalDoor` caller) honours it, and it uses the approval
+> up before transmitting. The pinned public key (`owner-approval-key.json`) must equal the key Windows Hello holds on
+> the PC. Autonomous applies are Claude-only: Codex's
 > `production-action-guard` blocks every live apply. The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
 > row below no longer exists. As its LAST check it runs `migration-landing-gate-lib.mjs`: the apply must come from a
 > clean checkout of the PR's branch (migration committed at HEAD, HEAD = the open PR's head into `main`) whose head

@@ -4,8 +4,10 @@ Merging `main` into PR #827 conflicted on the `test:correction-guards` script in
 `package.json`. `main` (#855/#856) had added
 `scripts/db-invariant-sweeps/allowlist-match.test.mjs`, and #827 adds
 `.claude/hooks/stop-wrap-ledger.test.mjs`. The resolution keeps `main`'s line and adds
-the stop-wrap test after `applied-source-containment.test.mjs`, so both run. Against
-`main`, the script now differs only by that one added test.
+the stop-wrap test after `applied-source-containment.test.mjs`, so both run. The next
+merge (2026-10-02) hit the same line again after `main` added
+`.claude/hooks/owner-approval-lib.test.mjs` (#857), and was resolved the same way. Against
+`main`, the script still differs only by the one added stop-wrap test.
 
 ### Proof observed
 

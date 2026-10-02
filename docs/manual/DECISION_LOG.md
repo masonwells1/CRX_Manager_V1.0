@@ -1,12 +1,79 @@
 # Decision Log
 
-Last verified: 2026-09-30 (nested-command entries condensed; full gap list in agent-guardrails.md)
+Last verified: 2026-09-30 (nested-command entries condensed; owner Windows Hello approval entry added)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
+
+**Source:** Mason, in the field-season delivery session on 2026-09-29. He was shown a plain-English
+design, then chose between covering only access-changing migrations and covering all three parked
+kinds. He replied **"approved all three"**.
+
+**Problem.** The apply gate parks three kinds of migration for Mason: one that deletes data, one
+that overwrites existing rows, and one that changes who can access what. Nothing could apply them.
+Agents have no override (Sol HIGH, 2026-09-26: a flag an agent passes itself proves nothing). The
+only route left to Mason was pasting SQL into the Supabase Dashboard, which
+`DATABASE_CHANGE_CHECKLIST.md` forbids. That blocked the field-season install `20260914101000`.
+A GitHub approval, label or comment cannot fill the gap, because agents act through Mason's own
+GitHub token.
+
+**Decision.**
+1. A parked migration applies only with Mason's **Windows Hello signature** of that exact migration.
+   The key lives in his PC's security chip, and Windows releases each signature only after his
+   PIN or fingerprint.
+2. What he signs is built by `.claude/hooks/owner-approval-lib.mjs` from the file itself:
+   - the migration name and the sha256 of its SQL;
+   - the pull request number and its exact head;
+   - what the safety check flagged;
+   - a 30-minute window and a one-time nonce;
+   - the plain-English summary he is shown.
+   The verifier recomputes that summary and the safety check's findings from the signed fields and
+   the file, so the genuine approval window cannot understate what the approval covers.
+3. The signature is checked **last**, after the reviewer proofs, the Sol proof and the pull-request
+   landing gate, against the PR and head that gate confirmed. An approval never skips another check.
+4. The approval is honoured only by `scripts/apply-migration-file.mjs`, never by the MCP
+   `apply_migration` tool, and it is used up before transmitting. It is refused once the migration
+   is in the live ledger.
+5. The public key pinned in `.claude/hooks/owner-approval-key.json` must equal the key Windows
+   Hello holds on the PC at that moment. So a software key an agent generated and committed does
+   not work.
+6. Commands:
+   - `node scripts/owner-approval-setup.mjs`: one time, Mason at the PC, with a self-test signature.
+   - `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql`: per migration,
+     only once every other proof is fresh.
+
+**Supersedes:**
+- the 2026-09-26 autonomous-landing wording "parked and Mason applies it himself";
+- the 2026-08-01 Factory rule "Do not add Windows Hello, a PIN…", which governed the Software
+  Factory's owner touchpoints; the Factory was removed on 2026-08-07.
+
+**Residuals (honest):**
+- This is as strong as the rule that agents cannot edit the guard files, the same boundary every
+  other gate relies on. It adds no new way around that boundary, and it does not remove the existing
+  one.
+- Windows Hello's own prompt does not show what is being signed (Luna BLOCKER, round 2). Any
+  program running as Mason could draw a look-alike approval window, then trigger the real prompt
+  for a different parked migration.
+  - So the signature proves that Mason was physically present and consented. It does not prove
+    that he read the true summary.
+  - What bounds it: an approval unlocks only a migration committed in an open PR whose exact head
+    CodeRabbit APPROVED and Sol cleared, with both reviewer proofs fresh. A deceived approval can
+    therefore unlock only a change two independent reviewers already passed.
+  - Mason's practice: approve only right after an agent asked for it in chat, and only when the
+    migration name in the window matches that request.
+
+**Operative rule:** a parked migration needs BOTH:
+- Mason's explicit yes in the current conversation, per AGENTS.md (Codex P1, PR #845): agents still
+  ask first;
+- his valid Windows Hello signature, which is the part the gate can verify.
+
+A GitHub approve, label or comment, and any file an agent writes, are neither. Never
+paste migration SQL into the Supabase Dashboard.
 
 ## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
 
