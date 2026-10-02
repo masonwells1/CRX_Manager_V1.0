@@ -3,7 +3,11 @@
 - **What changed (docs only).** `docs/manual/DECISION_LOG.md` (the 2026-09-26 "Fewer permission prompts" entry)
   and `docs/reference/agent-guardrails.md` (item 3 of "Fewer prompts, automatic CodeRabbit, fail-closed merge
   guard") said no PR had yet merged on a CodeRabbit approval under the `protect-main` ruleset. That was already
-  false when it was written. Both now record the merges.
+  false when it was written.
+  - The decision log's rule is never to rewrite a past entry, so the 2026-09-26 entry stays as written. A new
+    "2026-10-02 — CORRECTION" entry at the top amends it, following the 2026-08-26 CORRECTION precedent
+    (CodeRabbit, PR #872).
+  - The reference doc describes current behavior, so its item 3 is corrected in place.
 - **Evidence (2026-10-02).** The ruleset's `updated_at` is 2026-09-27 13:05:59Z
   (`gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218`). Every PR merged into `main` after that
   (`gh pr list --state merged --base main`) has `coderabbitai[bot]`'s APPROVED review on its exact merged head
