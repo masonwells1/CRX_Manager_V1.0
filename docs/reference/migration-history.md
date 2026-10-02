@@ -4,75 +4,34 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-10-01 (America/Chicago). THIS IS THE CURRENT BOUNDARY.** Read-only
-ledger reads on project `rhyzpcqhnizqbxphqdkr` at 2026-10-01 11:07 UTC (06:07 Chicago) and again
-at 22:23 UTC (17:23 Chicago), right after PR #857 merged, both taken as the pre-apply preflight for
-the field-season install, record identical results: **1013 ledger rows** (1006
-distinct names), live `max(version)` **`20260928025520`**, and effective ordering high-water
-**`20260914100900_repair_commission_history_label_snapshots`**, computed row by row (the stamp in
-each row's `name`, falling back to its `version` only when the name has none). Nothing has applied
-since the 2026-09-27 capture below. The four field-season files `20260914101000`,
-`20260914101100`, `20260914101200` and `20260914101300` all sort above that high-water and none is
-in the ledger; apply them in that ascending order. Re-read the high-water read-only immediately
-before each apply, because another lane can move it.
+**Live capture — 2026-10-02 12:43 UTC (07:43 Chicago). THIS IS THE CURRENT BOUNDARY AND THE ONLY
+CAPTURE IN THIS SECTION.** Read-only reads on project `rhyzpcqhnizqbxphqdkr`, taken as the pre-apply
+preflight for the field-season install:
 
-**Live-ledger capture — 2026-09-27 evening (America/Chicago).** Superseded by the 2026-10-01 read
-above. A read-only ledger read on project `rhyzpcqhnizqbxphqdkr`, taken right after the apply, records
-**1013 ledger rows**, live `max(version)` **`20260928025520`** (UTC, 2026-09-28 02:55:20), and
-effective ordering high-water **`20260914100900_repair_commission_history_label_snapshots`**
-(row 915), applied live 2026-09-27 under `20260928025520` from PR #832's branch checkout (PR #832
-has since been replaced by the open field-season delivery PR). Any new candidate must sort above `20260914100900`. The
-whole commission cohort `20260914100100`..`20260914100900` is now live; nothing from it waits on
-`main`. Re-read the high-water read-only immediately before any apply, because another lane can
-move it. (History: the earlier 2026-09-27 read, before this apply, recorded 1012 rows / 1005
-distinct names, `max(version)` `20260927060531`, and high-water
-`20260914100800_bind_transfer_invoice_intent` (row 928), with only `20260914100900` still waiting.)
+- **Ledger:** `select version, name from supabase_migrations.schema_migrations` returns **1013 rows**
+  (1006 distinct names), live `max(version)` **`20260928025520`**, and effective ordering high-water
+  **`20260914100900_repair_commission_history_label_snapshots`**, computed row by row (the 14-digit
+  stamp in each row's `name`, falling back to its `version` only when the name has none). Identical
+  reads at 2026-10-01 11:07 and 22:23 UTC: nothing has applied since `20260914100900` on 2026-09-27.
+- **Waiting, on `main` since PR #850 (2026-09-30), none in the ledger:** `20260914101000`,
+  `20260914101100`, `20260914101200`, `20260914101300`. All four sort above the high-water; apply
+  them in that ascending order.
+- **Function identity for `20260914101000`:** `public.preview_field_app_invoice_split` has exactly
+  ONE live overload, `(jsonb,jsonb,uuid,uuid,date)`, body md5 `83f6600412ced085d0876a3c7339ff12`.
+  That md5 is the pin `20260914101000` checks (PREFLIGHT_PREVIEW_BODY_DRIFT). No 3- or 4-argument
+  overload survives: `20260906120000` (ledger `20260908045843`) dropped them, and `20260914101000`'s
+  PREFLIGHT_PREVIEW_OVERLOAD check aborts the whole apply if more than one overload ever exists.
+- **Commission cohort, all live** (authored stamp → ledger version): `20260914100100` →
+  `20260921141423`, `100200` → `20260921141451`, `100300` → `20260921141740`, `100400` →
+  `20260921141901`, `100500` → `20260922015509`, `100600` → `20260922020038`, `100700` →
+  `20260926163005`, `100800` → `20260927060531`, `100900` → `20260928025520`.
 
-Since the 2026-09-20 read, nine files applied live, each under a ledger name that keeps its
-authored stamp (authored stamp → ledger version): `20260914100100` → `20260921141423` (row 917),
-`20260914100200` → `20260921141451` (row 914), `20260914100300` → `20260921141740` (row 918),
-`20260914100400` → `20260921141901` (row 919), `20260914100500` → `20260922015509` (row 920),
-`20260914100600` → `20260922020038` (row 922), `20260914100700` → `20260926163005` (row 935),
-`20260914100800` → `20260927060531` (row 928), `20260914100900` → `20260928025520` (row 915).
-
-**Nothing from the commission cohort is parked on `main` any more.**
-`20260914100900_repair_commission_history_label_snapshots` (row 915, the refusing repair,
-deliberately last) applied live on the evening of 2026-09-27; row 915 records the post-apply
-checks. Rows 931–934 and the stamps `20260914101000`..`20260914101300` belong to the
-field-season work first opened as PR #754 (closed unmerged 2026-09-21). The open field-season delivery PR (branch
-`claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line) carries that work now, so those rows are still
-claimed; they are not on `main` yet. `.claude/schema-registry.json` on `main` was regenerated
-2026-09-26 by PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100`
-through `100700` but not `20260914100800` or `20260914100900`. Refresh it, and the applied-migration snapshot the
-ordering preflight reads (`node scripts/refresh-applied-migrations.mjs`, see its header), before
-relying on either for ordering.
-
-**Superseded 2026-09-26 boundary.** A read-only ledger read on
-project `rhyzpcqhnizqbxphqdkr` (about 16:45 UTC) records **1011 ledger rows / 1004 distinct names**, live
-`max(version)` **`20260926163005`**, and effective ordering high-water
-**`20260914100700_customer_document_bytes_server_only`** (row 935), applied live 2026-09-26 under
-`20260926163005`. A post-apply read confirmed its effect: no Storage policy on `storage.objects` names
-the `customer-documents` bucket, `customer_documents_storage_path_shape_check` exists, and the bucket
-and `customer_documents` both hold 0 rows. Still unapplied on `main`: `20260914100800` and
-`20260914100900`; any candidate must sort above `20260914100700`. `.claude/schema-registry.json` was
-regenerated from live introspection the same day and records all seven `20260914100100`..`100700`
-applies.
-
-**Superseded 2026-09-21 boundary (with its 2026-09-22 addendum).** A read-only ledger read on
-project `rhyzpcqhnizqbxphqdkr` records **1008 ledger rows / 1001 distinct names**, live
-`max(version)` **`20260921141901`**, and effective ordering high-water
-**`20260914100400_enforce_commission_payment_business_date`**. Four commission-cohort files applied
-live that day, each under a name keeping its authored stamp: `20260914100100` (`20260921141423`),
-`20260914100200` (`20260921141451`), `20260914100300` (`20260921141740`), `20260914100400`
-(`20260921141901`). Still unapplied on `main`: `20260914100500`, `100600`, `100800`, `100900`. Any
-candidate must sort above `20260914100400`. **Addendum (read-only ledger read, 2026-09-22 UTC):**
-`20260914100500` (`20260922015509`) and `20260914100600` (`20260922020038`) have since applied, so the
-effective high-water is now `20260914100600` and only `100800` and `100900` still wait; the parked
-customer-document file was restamped `20260914100700` (row 935) to sit between them on purpose. PR #754's field-app season
-files are restamped to `20260914101000`..`20260914101300`, so once row 935 is on `main` they are held
-behind it and the waiting cohort. `.claude/schema-registry.json` and the applied-migration snapshot
-do not yet record these four applies; refresh them before the next apply, or the pending-migration
-guard will read `100100`..`100400` as still waiting.
+Re-read the high-water read-only immediately before each apply, because another lane can move it,
+and refresh the applied-migration snapshot the ordering guard reads
+(`node scripts/refresh-applied-migrations.mjs`). `.claude/schema-registry.json` was last regenerated
+on 2026-09-26 (through `20260914100700`); refresh it after the field-season applies. Older boundary
+captures (2026-09-21, 09-26 and 09-27) were removed from this section on 2026-10-02 because they
+read as competing "latest" evidence; they remain in git history and in the table rows below.
 
 **Rollback notes inside rows are the authors' original pre-apply design notes, not current instructions.**
 For a migration that is live, a rollback that drops a table or column destroys business data; any rollback
@@ -85,12 +44,12 @@ carry an exact 14-digit stamp, one matching backticked filename, and a SQL sha25
 header; otherwise the hook reports the state as unknown). When a migration
 applies, change that row's leading status in the same change.
 
-**Field-season candidates (rows 931–934), carried by the open delivery PR, not yet on `main`.**
+**Field-season migrations (rows 931–934), on `main` since PR #850 (2026-09-30), NOT yet applied live.**
 **COMMISSION-FIRST RULE (reverse hazard): none of these four may be applied live until all eight
 `20260914100*` commission migrations are — that is, only after `20260914100900` is applied live.**
 **SATISFIED 2026-09-27:** `20260914100900` applied live that evening (ledger version
-`20260928025520`), so the whole cohort is live and this precondition is met. Rows 931–934 are still
-unapplied local candidates carried by the open field-season delivery PR, and every other gate below still applies. The
+`20260928025520`), so the whole cohort is live and this precondition is met. Rows 931–934 are on
+`main` (PR #850) and still unapplied, and every other gate below still applies. The
 rest of this paragraph is kept as history. The cohort is planned in two batches (`100100`–`100600`, then `100800` and `100900`); applying
 these four after the first batch alone would strand `100800` and `100900`. Applying one early would strand the whole cohort below
 it. The pending-set guard reads only `origin/main`, so it cannot catch this while the field-invoice
