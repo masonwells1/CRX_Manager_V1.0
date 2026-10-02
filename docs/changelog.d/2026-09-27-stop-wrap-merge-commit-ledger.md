@@ -64,6 +64,12 @@ rare cases are accepted rather than chased further:
   reachable, such as a backup branch, tag or stale remote-tracking ref. If that
   superseded commit carried a ledger edit the replacement dropped, the reminder can be
   skipped (Codex P2, PR #827 round 13).
+- A session commit that is squash-landed within the same session, and whose branch is
+  then deleted (`gh pr merge --squash --delete-branch`), leaves no ref containing it. The
+  squash commit arrives by fetch, so the reachability filter drops the original and the
+  reminder can be skipped. That work has already passed the PR's own gates, so tying
+  squash results back to their source commits is not worth the added complexity (Codex
+  P2, PR #827 round 17).
 - Two reflog entries that are byte-identical (same commit, same second, same action)
   make the session anchor ambiguous. The newest match wins, which can undercount
   session entries.
