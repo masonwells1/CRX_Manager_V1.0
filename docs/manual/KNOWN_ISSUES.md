@@ -169,15 +169,22 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
 - **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load a fixed
   number of rows and filter in the browser.
-  - Caps (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`): Invoices 2000 and
-    Customers 1000; 500 for Orders, Deliveries, Application Records (the compliance history), Blend
-    Tickets, Jobs, Quotes, Purchase Orders, Crop Programs, Field Setup, Dispatch Board, Delivery
-    Remainders, Customer Transaction Review, To Ship and the Commission Payments list; 200 for Payment
-    History and Notifications.
+  - Main list query caps (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`):
+    - 2000: Invoices.
+    - 1000: Customers.
+    - 500: Orders, Deliveries, Application Records (the compliance history), Blend Tickets, Jobs, Quotes,
+      Purchase Orders, Field Setup, Delivery Remainders and Customer Transaction Review.
+    - 200: Payment History and Notifications.
+  - Pages that cap one of several queries:
+    - Crop Programs: its product list, 500.
+    - Commission Payments: payment history 200 and unpaid commissions 500.
+    - To Ship: deliveries and purchase orders 500, open orders 2,000, order lines 5,000.
+    - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
+      `.range()` and are not capped.
   - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
     Application Records stop silently, and the other pages were not checked for a warning.
-  - Any record past the cap is invisible to the page and its filters. Revisit before volumes near the
-    caps.
+  - On a capped query, records past the cap are missing from that page and its browser-side filters.
+    Revisit before volumes near the caps.
   `SelectLocationsModal` still splits map and list 50/50 on tablets.
   (Source: `docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md`).)
 - **Customer-facing PDF polish (LOW).** `src/lib/quotePdf.ts` advances section-header notes only 4pt per line
