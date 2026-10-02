@@ -1,12 +1,18 @@
 # Decision Log
 
-Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH)
+Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-02 — CORRECTION: PRs do merge on CodeRabbit's approval under `protect-main`
+
+**This amends the 2026-09-26 "Fewer permission prompts" entry below**, which said "no PR has yet merged on such an approval." PRs had in fact been merging on that approval since 2026-09-28.
+**What is true.** All 13 PRs merged between the ruleset's last update (2026-09-27 13:05Z) and #841's merge (2026-10-02 17:39Z), #830 first and #841 last, merged with CodeRabbit's APPROVED review on their exact merged heads, checked 2026-10-02 from each PR's reviews. The full list is in `docs/changelog.d/2026-10-02-coderabbit-approval-merges-recorded.md`. A push after an approval still dismisses it, as that entry says.
+**What this forbids/implies:** no rule changes. Read that entry's approval observation through this correction.
 
 ## 2026-10-01 — Mason accepts the owner-approval "self-verifier" residual and hand-merges PR #857
 

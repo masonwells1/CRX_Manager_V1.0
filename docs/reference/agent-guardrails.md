@@ -308,10 +308,13 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    `gh api repos/masonwells1/CRX_Manager_V1.0/rulesets/18904218` on 2026-09-27 and again on 2026-10-01. Only CodeRabbit
    can supply the approval today: `masonwells1` is the only collaborator and authors every PR (no self-approval),
    GitHub Actions cannot approve, and every approval on the last 40 closed PRs came from `coderabbitai[bot]`.
-   The ruleset's configuration shows the requirement; it is not evidence that any given PR met it. Observed once:
-   CodeRabbit APPROVED #841's head `18cf44114` on 2026-09-30 00:37Z and GitHub briefly reported
-   `reviewDecision: APPROVED`; the next push dismissed that approval (the review now reads `DISMISSED`), as
-   `dismiss_stale_reviews_on_push` requires, so no PR has yet merged on such an approval. GitHub's ruleset requires the
+   The ruleset's configuration shows the requirement; it is not evidence that any given PR met it. The PRs' own reviews
+   are that evidence: all 13 PRs merged between the ruleset's last update (`updated_at` 2026-09-27 13:05:59Z) and
+   #841's merge (2026-10-02 17:39Z), #830 first and #841 last, merged with `coderabbitai[bot]`'s APPROVED review on
+   their exact merged heads (checked 2026-10-02; the list is in
+   `docs/changelog.d/2026-10-02-coderabbit-approval-merges-recorded.md`). A push after an approval dismisses it:
+   CodeRabbit APPROVED #841's head `18cf44114` on 2026-09-30 00:37Z, and the next push turned that review
+   `DISMISSED`, as `dismiss_stale_reviews_on_push` requires. GitHub's ruleset requires the
    approval server-side, and the local merge guard (the autonomous-landing gates) also requires CodeRabbit's latest
    verdict APPROVED on the exact head and refuses `--auto`. Weakening the local guard alone does not bypass GitHub's
    required approval. The reverse does not hold: a merge the local guard cannot see (assembled at run time, run from a
