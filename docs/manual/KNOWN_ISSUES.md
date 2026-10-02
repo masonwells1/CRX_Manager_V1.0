@@ -325,12 +325,20 @@ without `RETURNING`. Reproduced on a local copy of the live policies; admins are
 document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
 `SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
 
-**Fix written, NOT applied (checked 2026-09-26).** Open PR #800 (it replaced the closed PR #785) carries
+**Fix written, NOT applied (checked 2026-09-28).** Open PR #800 (it replaced the closed PR #785) carries
 the parked migration `20260921180000_soft_delete_customer_document_rpc` (on the PR branch, not on
 `main`) — a `SECURITY DEFINER` soft-delete RPC with an idempotency key, no policy change — plus its
-provers. The Documents-tab change that calls the RPC is not written yet and ships separately after the
-apply (`CustomerDocuments.tsx` still updates the row directly). The migration needs Mason's explicit
-apply approval. Until then a rep's Remove on the live Documents tab (shipped in PR #764) is refused.
+provers. The Documents-tab change that calls the RPC is on the separate unmerged branch
+`claude/customer-document-rep-remove-page-v3` and ships only after the apply (`CustomerDocuments.tsx`
+on `main` still updates the row directly). **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge PR #800
+or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed in the
+live ledger.** `20260914101000`..`101300` are on `main` since #850 and LIVE since 2026-10-02 (ledger versions `20261002201451`..`20261002201609`, read read-only that day), so the hold has LIFTED;
+landing this higher stamp first would strand them. Full
+order: `20260914100700`, `100800`, `100900` (all three live as of 2026-09-28), `101000`..`101300`,
+then this file. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the hold lifts it applies
+under the autonomous-landing rule (#804): CodeRabbit APPROVED on the final head, a fresh exact-SHA
+`gpt-6-sol` review clean, every required check green, and the migration-apply-guard proofs. Until then a rep's Remove on
+the live Documents tab (shipped in PR #764) is refused.
 
 ## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
 
