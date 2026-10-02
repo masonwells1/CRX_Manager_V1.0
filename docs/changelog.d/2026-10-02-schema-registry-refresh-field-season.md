@@ -1,0 +1,31 @@
+## 2026-10-02 — refresh the schema registry after the field-season applies
+
+The session-staleness check reported `.claude/schema-registry.json` behind the migrations on disk.
+Six `20260914…` migrations had been applied live since the 2026-09-26 refresh: `20260914100800` and
+`20260914100900` (2026-09-27/28), and the four field-season files `20260914101000`..`20260914101300`
+(2026-10-02 20:14–20:16 UTC, ledger versions `20261002201451`..`20261002201609`).
+
+Rebuilt with the real `--from-introspection` mode from the six read-only queries (Q1–Q6) in
+`scripts/regenerate-schema-registry.mjs`, run through the Supabase MCP on project
+`rhyzpcqhnizqbxphqdkr` (refresh started 2026-10-02 20:20:52 UTC, after the last apply):
+
+- `migrations_high_water` 20260926163005 → 20261002201609; the six applied names were added to
+  `applied_migration_names` (1004 → 1010). None were dropped.
+- No change to generated columns (11), status enums (38), parsed CHECK IN-lists (119), skipped
+  constraints, NOT NULL columns, column lists (160 tables), tables without `updated_at` (94), or
+  sequences (7).
+
+Moving the authored boundary to `20260914101300` made `src/lib/rpcContracts.test.ts` fail (3 tests):
+the four field-season files no longer sort above the boundary, and `src/types/supabase.ts` has not
+been regenerated since they applied, so their RPCs would have dropped out of the mutator inventory.
+They are now registered in `MIGRATIONS_AWAITING_TYPE_REGENERATION`, the same bookkeeping #721/#722
+used; clear them when the generated types are regenerated from production. The file passes (97/97)
+both with `main`'s migration-history rows (LOCAL CANDIDATE — NOT APPLIED) and with PR #871's
+(APPLIED LIVE).
+
+Proof: a section-by-section comparison against the previous registry showed only the two `_meta`
+changes above, and re-running `.claude/hooks/session-staleness.mjs` no longer reports the registry
+as behind. No `REGISTRY-STALE.flag` existed in any worktree.
+
+Not done here: `docs/reference/migration-history.md` still describes `20260914101000`..`101300` as
+unapplied. Recording those applies belongs to the field-season install lane that applied them.
