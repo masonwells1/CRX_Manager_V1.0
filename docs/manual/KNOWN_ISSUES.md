@@ -167,10 +167,17 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   server, so a typo like 2206 is accepted. (3) Three filters cut the day at UTC midnight rather than Chicago:
   `Invoices.tsx` season filter, `TeamBoard.tsx` date filter, and the `CustomerDetail.tsx` 90-day window.
   (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
-- **List-page row caps (scale limit).** Orders stops at 500 and Invoices at 2000 with a warning toast;
-  Deliveries stops at 500 silently, and so does Application Records (`ApplicationRecords.tsx` loads only the
-  newest 500 matching compliance records, with no warning or load-more); `DataTable` has no pagination.
-  Revisit before volumes near the caps.
+- **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load a fixed
+  number of rows and filter in the browser.
+  - Caps (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`): Invoices 2000 and
+    Customers 1000; 500 for Orders, Deliveries, Application Records (the compliance history), Blend
+    Tickets, Jobs, Quotes, Purchase Orders, Crop Programs, Field Setup, Dispatch Board, Delivery
+    Remainders, Customer Transaction Review, To Ship and the Commission Payments list; 200 for Payment
+    History and Notifications.
+  - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
+    Application Records stop silently, and the other pages were not checked for a warning.
+  - Any record past the cap is invisible to the page and its filters. Revisit before volumes near the
+    caps.
   `SelectLocationsModal` still splits map and list 50/50 on tablets.
   (Source: `docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md`).)
 - **Customer-facing PDF polish (LOW).** `src/lib/quotePdf.ts` advances section-header notes only 4pt per line
