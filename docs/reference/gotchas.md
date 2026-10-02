@@ -311,11 +311,14 @@ gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
 Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
-CodeRabbit review was submitted. Say so rather than treating green as clean. GitHub no longer
-requires an approving review on `main` (removed 2026-09-02), so since 2026-09-26 the agent merge
-gates themselves require CodeRabbit's APPROVED verdict on the exact head — a green CodeRabbit
-status row never satisfies them. Since 2026-08-30 the normal trigger
-is the `ready-for-coderabbit` label, and `coderabbit-review-requested` deliberately prevents an
+CodeRabbit review was submitted. Say so rather than treating green as clean. Since 2026-09-26
+the agent merge gates require CodeRabbit's APPROVED verdict on the exact head, and since
+2026-09-27 GitHub's `protect-main` ruleset again requires one approving review of the latest push
+(stale approvals dismissed) — a green CodeRabbit status row never satisfies either. CodeRabbit
+reviews every non-draft push automatically since 2026-09-26; for a head it skipped or was rate
+limited on, post `@coderabbitai review` on the PR once (Mason, 2026-09-27). With automatic review
+on and no label filter, the `ready-for-coderabbit` label no longer triggers a review — the rest of
+this paragraph describes that legacy route. On it, `coderabbit-review-requested` deliberately prevents an
 accidental duplicate. Native attempts retain a trusted head/base receipt even after a reset.
 For pending or uncertain delivery, preserve requested/dispatch state and check the actual formal
 review. After late delivery, reapply `ready-for-coderabbit` to reconcile the existing request;

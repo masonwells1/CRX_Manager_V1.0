@@ -17,6 +17,12 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   // guards.
   "codex-push-guard.mjs",
   "pr-merge-guard.mjs",
+  // Runs pr-merge-guard.mjs as a child and denies a possible merge when the guard
+  // crashes or runs out of time (Sol, 2026-09-27). It launches only that
+  // Claude-only guard. The Codex production guard denies on a runtime crash itself;
+  // a watchdog for a kill at its timeout is a recorded follow-up
+  // (docs/manual/DECISION_LOG.md, 2026-09-26 entry).
+  "merge-guard-launcher.mjs",
   // Autopilot enforcement (the armed hands-free-run concept) is a Claude-session
   // mechanism; prompt-router.mjs keeps its intent reminder Claude-only internally.
   "unattended-autopilot.mjs",
@@ -43,12 +49,23 @@ export const CLAUDE_ONLY_HOOKS = new Set([
 // Currently none — every hook Codex wires is also wired for Claude.
 export const CODEX_ONLY_HOOKS = new Set([]);
 
-// Extract the set of .claude/hooks/<name>.mjs referenced anywhere in a manifest's
-// raw text (settings.json or .codex/hooks.json). Text-based on purpose: it catches
+// Extract the set of .claude/hooks/<name>.mjs referenced in a manifest's hook
+// wiring (settings.json or .codex/hooks.json). Text-based on purpose: it catches
 // the hook wherever it appears (command string, commandWindows, etc.) without
-// depending on the manifest's exact JSON shape.
+// depending on the exact shape of each hook entry.
+//
+// Scoped to the manifest's `hooks` block when the text parses as JSON with one
+// (2026-09-26): settings.json's `permissions.ask` names hook files and LIBRARIES
+// such as codex-push-lib.mjs so Mason is asked before a production gate is
+// edited, and a permission rule is not hook wiring. Anything that does not
+// parse, or has no `hooks` key, is scanned whole, exactly as before.
 export function extractClaudeHookRefs(manifestText) {
-  const refs = [...String(manifestText || "").matchAll(/\.claude[\\/]hooks[\\/]([\w.-]+\.mjs)/g)].map((m) => m[1]);
+  let text = String(manifestText || "");
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && parsed.hooks) text = JSON.stringify(parsed.hooks);
+  } catch { /* not JSON: scan the raw text */ }
+  const refs = [...text.matchAll(/\.claude[\\/]hooks[\\/]([\w.-]+\.mjs)/g)].map((m) => m[1]);
   return new Set(refs);
 }
 
