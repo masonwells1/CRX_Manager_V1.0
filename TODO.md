@@ -429,6 +429,30 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     original result; `update_order_items` checks an order status (`pending`) that never existed;
     `create_planned_holds` uses its own idempotency check instead of the shared helpers; some idempotency
     keys use an empty user segment before the profile loads.
+- **Database safeguards** (`docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`, re-checked against code and the live database on
+  2026-10-02):
+  - **Accounting periods and dates:** `allocate_payment` defaults its payment date to the server's
+    `CURRENT_DATE`, which is UTC, and the payment screen never sends a date. A payment recorded in the
+    last hours of the Central business day can therefore be checked against the wrong accounting period.
+    Pass a Chicago date, or set the database timezone (high).
+  - **Edits after completion:** admins can still edit `delivery_items` directly after a delivery is in
+    progress or completed, which can desync the inventory ledger (high).
+  - **Invoice source rule:** no database constraint enforces that an invoice comes from an order or a
+    blend ticket (or a documented exception such as a misc charge or a field-app invoice). Only app code
+    and RPCs enforce it (high).
+  - **Concurrency:** `generate_ticket_number`, the `allocate_payment` allocation-set version and
+    `check_period_open` take no lock. Orders have no `row_version` stale-write guard, unlike quotes and
+    customers.
+  - **Orphans and cascades:** some live deliveries and commissions point at soft-deleted orders, and
+    `inventory_holds.product_id` still cascades on product delete.
+  - **Timing:** the overnight cron jobs run at fixed UTC times. Finance-charge `period_start` ignores
+    each customer's grace days. Season boundaries can differ between the browser and the server near
+    Sep 30/Oct 1.
+  - **Customer emails:** delivery emails insert values such as the signer's name and product names into
+    HTML without escaping.
+  - **Field app:** job completion has no offline queue (Delivery, FieldStop and FieldView do).
+  - **Smaller items:** the Action Queue shows only 10 items per category with no "view all", and list
+    search isn't debounced.
 - **Access (decide, or record as accepted)**: every sales rep can read all orders and order lines; any
   sales rep can insert inventory-ledger rows directly; `FORCE ROW LEVEL SECURITY` is on only 2 tables.
   Order Detail offers editing to sales reps although the `orders` update policy is admin-only (confirm
@@ -498,8 +522,6 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     open.
   - E2E comments in `workflow-financial-operations.spec.ts` still describe `window.confirm()`.
 - **Not fully re-checked**: lower-tier rows in these removed audits were not re-verified one by one:
-  - `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (its about 20 timezone,
-    concurrency and app-security sub-findings);
   - `docs/archive/2026-summer-closeout/roadmap/app-wide-structure-audit-2026-07-01.md` (tiers 1–3);
   - `docs/archive/2026-spring/2026-05-11-phase0-verification.md`;
   - `docs/archive/2026-spring/2026-05-09-full-scope-review-campaign.html`.
