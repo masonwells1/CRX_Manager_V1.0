@@ -15,8 +15,8 @@ was not all re-measured.
   (the evening of 2026-09-27 Chicago time, ledger `20260928025520`). The whole commission cohort
   `20260914100100`..`20260914100900` is now live — see the RESOLVED entry below.
 - **Nothing from the commission cohort is still parked.** Other parked files (for example PR #800's
-  customer-document fix, and the four field-season candidates `20260914101000`..`20260914101300`
-  carried by the open field-season delivery PR) are named in their own entries.
+  customer-document fix) are named in their own entries. The four field-season migrations
+  `20260914101000`..`20260914101300` applied live on 2026-10-02.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -34,7 +34,9 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-09-12 — filed-season date-edit guard is not deployed (field-season delivery PR)
+## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
+
+**Resolved 2026-10-02:** all four applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Post-apply read-only checks passed (see the top capture in `docs/reference/migration-history.md`), and the daily cross-season invoice check returned zero rows. The text below is kept as history.
 
 **Status 2026-09-28:** Owner rollout decision (Mason, 2026-09-28): these four land after 2026-10-01. `20260914101000` is classified access-change, which the apply tool refuses for every session until Mason approves that exact file with Windows Hello (owner-approval route, PR #845). **Order changed by Mason on 2026-09-30:** the delivery PR merges FIRST (its app changes are backward-compatible: a client-side filed-season date guard and plain-English error mapping, using only existing columns). The four migrations then apply from the owner-approval PR's checkout once main is merged into it. The landing gate needs the migration committed at the HEAD of an open, CodeRabbit-approved, Sol-cleared PR, not the PR that introduced it; `20260914100900` was applied the same way. After this PR merges, no PR adding a new migration may merge or apply before `20260914101300` is live. Until then a read-only daily check flags any invoice dated outside its filed season (baseline 2026-09-28: 13 invoices, none outside).
 

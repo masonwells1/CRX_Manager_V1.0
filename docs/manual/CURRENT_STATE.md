@@ -30,8 +30,8 @@ ships or quarterly, whichever comes first.
   #832's branch checkout; #832 has since been replaced by the open field-season delivery PR).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
-  one file written but not applied.) The four field-season candidates `20260914101000`..`20260914101300`
-  are still unapplied and are not on `main`; see "Field-season delivery" below.
+  one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
+  applied live on 2026-10-02; see "Field-season delivery" below.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
@@ -191,7 +191,7 @@ issue #747). #605, #612 and #631 are still open. Its follow-up about locked
 pending-request dialogs lives in `docs/manual/KNOWN_ISSUES.md`, and the staff recovery steps are in
 `docs/workflows/INVENTORY_RULES.md`. For the live list, run `gh pr list --state open`.
 
-**Field-season delivery (open).** The Oct-1 filed-season guard ships as four migrations,
+**Field-season delivery (applied live 2026-10-02).** All four applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Post-apply read-only checks are in `docs/reference/migration-history.md` (top capture). The rest of this paragraph is kept as history. The Oct-1 filed-season guard ships as four migrations,
 `20260914101000`..`20260914101300` (rows 931–934 in `docs/reference/migration-history.md`), all
 LOCAL CANDIDATES, not applied, carried by the open field-season delivery PR (branch `claude/field-season-delivery-lap<N>-<date>`, the latest in the #793 → #828 → #829 → #832 → #837 → … line; a fresh PR replaces it whenever `main` moves, because the CodeRabbit lifecycle gate pins head and base). They apply only after
 `20260914100900` (that precondition is now met: it applied live 2026-09-27 evening, ledger
