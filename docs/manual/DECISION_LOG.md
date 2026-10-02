@@ -1,12 +1,19 @@
 # Decision Log
 
-Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected)
+Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-01 — Mason accepts the owner-approval "self-verifier" residual and hand-merges PR #857
+
+**Source:** Mason, "I'll merge 857" (2026-10-01); he merged #857 himself (`653addd6b`). Detail in `docs/changelog.d/2026-10-01-owner-approval-hand-merge-and-install-preflight.md`.
+**Decision.** Sol's second #857 finding (the approval verifier is code in the same checkout, so a local edit could disable it) is the 2026-09-29 residual. Mason accepted it for the #857 merge only; it remains a known, open weakness of the route, and reviewers stay free to raise it and anything else.
+**Why.** On one PC any process running as Mason can edit any local check and read the Supabase token directly, so this cannot be closed locally. What stands in the way is policy: agents must not edit guard files or call the database API outside the gated doors. Hooks and permission prompts only narrow the supported agent tool paths (native edits to guard files ask Mason; they are not denied), and a same-user process outside those paths is not stopped.
+**Closing it** needs parked-migration applies in a GitHub Actions workflow on protected `main` (token as a repository secret): a separate project that needs Mason's go.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
 
