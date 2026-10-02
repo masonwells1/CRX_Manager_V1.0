@@ -8,7 +8,8 @@ same files; replaces PR #822.
 - `.claude/settings.json`: the `ask` tier drops routine guard/tooling edits (186 of Mason's 209
   prompts in two weeks, all approved) and keeps deploys, GitHub/filesystem MCP writers, the two
   settings files, and every file whose uncommitted local edit could change what reaches production
-  before PR review (30 files: execution-time hooks in both manifests and every module they load,
+  before PR review (31 files, including #857's `owner-approval-lib.mjs` once merged in:
+  execution-time hooks in both manifests and every module they load,
   the Codex adapter and `hooks.json`, the proof writers, the private-artifact containment check,
   `.husky/**`, `.github/workflows/**`, and `package.json`, whose npm scripts could hide a merge
   from the command-text guard). `gh pr merge` moves to `allow` (Mason's "No prompt", 2026-09-28).

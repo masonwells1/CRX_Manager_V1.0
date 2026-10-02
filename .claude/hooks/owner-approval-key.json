@@ -1,0 +1,8 @@
+{
+  "keyName": "CRX-Owner-Migration-Approval",
+  "algorithm": "RSASSA-PKCS1-v1_5 SHA-256 (Windows Hello KeyCredential)",
+  "spki": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvsmW9tn2xDmr/d1gX/t4S5E5BTxx40INHsvh9HVnoGyeyRL3Ymu0CHc3ejNct7dx9zywviAQASJuRXXOrBDkgs1+zqvi4EF64jBknmNApejLbufyZMxQJnNgm6ap7zOe1ILXispBjygKZmIdYBle6lYMcy+WI0u5Fyq1ydTDQd8BFAAlD5nVjiHZKBZGwqqW8CHUfS898kFIUCIRuHrs8vNCz+RzgWZOxRdIx5DT+62yawZIuNRl91WAM8pHlD6C5ioiq6/3ESg3nY3FOGF0eEgln9sQzb1J0JQT284/RvSTwkIG4N4rFhAWrzXSqC0MAQip7dg8K/DFeO7S6H+2HQIDAQAB",
+  "fingerprint": "bf9e2957113eb503708b8d5b4a6f15ec49645997ae0179b0d5ddcc45b5da0297",
+  "createdAt": "2026-09-30T12:55:07.690Z",
+  "note": "Public half of Mason's Windows Hello approval key. The private half never leaves his PC's security chip. Changing this file changes who can approve parked migrations: review it like a guard."
+}

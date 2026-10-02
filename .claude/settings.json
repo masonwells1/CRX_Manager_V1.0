@@ -194,6 +194,8 @@
       "Write(.claude/hooks/migration-apply-lib.mjs)",
       "Edit(.claude/hooks/migration-landing-gate-lib.mjs)",
       "Write(.claude/hooks/migration-landing-gate-lib.mjs)",
+      "Edit(.claude/hooks/owner-approval-lib.mjs)",
+      "Write(.claude/hooks/owner-approval-lib.mjs)",
       "Edit(.claude/hooks/migration-ordering-lib.mjs)",
       "Write(.claude/hooks/migration-ordering-lib.mjs)",
       "Edit(.claude/hooks/migration-pending-lib.mjs)",
