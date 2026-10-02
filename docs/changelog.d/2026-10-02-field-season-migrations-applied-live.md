@@ -30,7 +30,8 @@ Post-apply read-only checks:
 
 Docs updated to match: the top live capture in `docs/reference/migration-history.md` and rows
 931–934, the field-season paragraph in `docs/manual/CURRENT_STATE.md` (Codex review on #871), and
-the field-season entry in `docs/manual/KNOWN_ISSUES.md`, now RESOLVED.
+the field-season entry in `docs/manual/KNOWN_ISSUES.md`, now RESOLVED. The two field-season sections of
+`docs/reference/rpc-functions.md` now say LIVE with their ledger versions (Codex review on #871).
 
 Not verified: the on-screen error wording and the Documents tab need Mason's login, and the
 schema registry is not yet regenerated.

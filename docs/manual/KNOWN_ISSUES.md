@@ -2686,7 +2686,9 @@ still parked. The field-app season files, restamped `20260914101000`–`101300`,
 PR #793 (it replaced PR #754, closed unmerged 2026-09-21); they are not on `main`.
 **Update 2026-09-27 evening:** `20260914100900` applied live too (ledger `20260928025520`), so the
 whole `20260914100100`..`20260914100900` cohort is live and nothing from it is parked. The
-field-season files are now carried by the open field-season delivery PR and remain unapplied.
+field-season files were then carried by the open field-season delivery PR and still unapplied.
+**Update 2026-10-02:** all four field-season files `20260914101000`..`20260914101300` applied live
+(ledgers `20261002201451`, `20261002201523`, `20261002201542`, `20261002201609`); nothing is parked.
 
 Only `next_delivery_number` (`DEL-nnnnn`) genuinely embeds no year. Each of the six uses `v_year` in
 its `MAX()` scan **and** its returned number (its advisory-lock key is a constant: a name hash or,

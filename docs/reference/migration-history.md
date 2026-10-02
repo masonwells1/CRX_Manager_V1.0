@@ -1972,7 +1972,7 @@ boundary block.**
 The additive correction `20260914101100_preserve_unchanged_source_invoice_dates.sql`
 (restamped from `20260913152700` on 2026-09-20 so its stamp matches this requirement, and again
 on 2026-09-21 with the other three to sort above the commission cohort)
-must follow `20260914101000`; it remains LOCAL and UNAPPLIED. It preserves each
+followed `20260914101000` and applied live 2026-10-02 (ledger `20261002201523`). It preserves each
 existing stored date and unchanged-date restoration while retaining immutable
 filed season and NEW out-of-season date/type-change refusal. No type, table,
 public grant, pricing, or business-row rewrite is introduced. Its predecessor
