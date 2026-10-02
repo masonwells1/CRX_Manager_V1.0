@@ -93,7 +93,7 @@ The executable pending-set guard, not the stamp, decides what may apply, and it 
 immediately before any owner-authorized apply. The 2026-09-20 registry refresh (PR #745) brought the
 committed snapshot level with live at the high-water of that day, `20260911120000`, so the guard
 stopped naming already-applied migrations as blockers. Live has moved on since — the boundary
-block above records `20260914100900` as the effective high-water after the 2026-09-27 evening apply — so
+block above records `20260914101300` as the effective high-water after the 2026-10-02 field-season applies — so
 that sentence describes the refresh, NOT the current match. Re-read the live ledger before applying.
 
 **APPLY-WINDOW RULE: `20260914101000` and `20260914101100` must go in ONE approved window, and

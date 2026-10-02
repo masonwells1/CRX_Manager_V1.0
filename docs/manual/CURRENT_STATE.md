@@ -1,18 +1,18 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-09-27 evening (America/Chicago) for the migration ledger only (read-only
-ledger query against project `rhyzpcqhnizqbxphqdkr` right after the `20260914100900` apply: 1013
-rows, `max(version)` `20260928025520`; the earlier 2026-09-27 read had 1012 rows / 1005 distinct
-names, `max(version)` `20260927060531`). Every
+**Last verified:** 2026-10-02 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr` after the four field-season applies: 1017 rows / 1010
+distinct names, `max(version)` `20261002201609`; the 2026-09-27 evening read had 1013 rows,
+`max(version)` `20260928025520`). Every
 other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-09-27)
+## Current state at a glance (2026-10-02)
 
-- **Effective ordering high-water: `20260914100900_repair_commission_history_label_snapshots`**
-  (ledger version `20260928025520`, UTC; applied live the evening of 2026-09-27 Chicago time). It
-  replaced `20260914100800_bind_transfer_invoice_intent` (ledger `20260927060531`). The effective ordering high-water is the
+- **Effective ordering high-water: `20260914101300_finish_generic_field_invoice_cutover`**
+  (ledger version `20261002201609`, UTC; applied live 2026-10-02). It replaced
+  `20260914100900_repair_commission_history_label_snapshots` (ledger `20260928025520`). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -25,9 +25,14 @@ ships or quarterly, whichever comes first.
   `20260914100500_commission_dates_follow_chicago_business_day` (`20260922015509`),
   `20260914100600_latest_commission_recipient_label` (`20260922020038`),
   `20260914100700_customer_document_bytes_server_only` (`20260926163005`),
-  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`), and
+  `20260914100800_bind_transfer_invoice_intent` (`20260927060531`),
   `20260914100900_repair_commission_history_label_snapshots` (`20260928025520`, applied from PR
-  #832's branch checkout; #832 has since been replaced by the open field-season delivery PR).
+  #832's branch checkout; #832 was later replaced by the field-season delivery PR),
+  `20260914101000_field_app_invoice_cross_season_edit_guard` (`20261002201451`),
+  `20260914101100_preserve_unchanged_source_invoice_dates` (`20261002201523`),
+  `20260914101200_refuse_generic_field_invoice_creation` (`20261002201542`), and
+  `20260914101300_finish_generic_field_invoice_cutover` (`20261002201609`); the last four applied
+  from PR #871's checkout.
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -37,7 +42,7 @@ ships or quarterly, whichever comes first.
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
 - **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-09-26 by
   merged PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100` through
-  `100700` but **not** `20260914100800` or `20260914100900`. Refresh it before relying on it for ordering.
+  `100700` but **not** `20260914100800` through `20260914101300`. Refresh it before relying on it for ordering.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration
