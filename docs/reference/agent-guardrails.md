@@ -352,7 +352,11 @@ route was just as unprompted before `gh pr merge` moved to `allow`, because only
 closing it needs the non-admin agent credential above, not another text check. The working guard also misses a Bash
 line continuation inside a word (a backslash before a newline, so `g\`, newline, `h pr merge 1` runs as
 `gh pr merge 1`); it predates this change, the old `ask` rule did not match that spelling either, and it is a recorded
-follow-up. The launcher's fallback test does catch it (Luna, PR #841). GitHub's required CodeRabbit approval and
+follow-up. The same follow-up covers a merge spelled out inside a `node -e` or `python -c` program
+(`node -e "require('child_process').execSync('gh pr merge 812')"`), which the working guard also allows (measured
+2026-10-02). The launcher's fallback test does catch both (Luna, PR #841). A program fed run-time text the working
+guard also allows (`node -e "$X"`, `python -c "$X"`, `Invoke-Command -ScriptBlock { & $X }`) is the shared command-text
+limit, not a gap between the two. GitHub's required CodeRabbit approval and
 checks still hold for every route.
 
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
