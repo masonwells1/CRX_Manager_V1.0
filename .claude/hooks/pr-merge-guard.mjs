@@ -23,7 +23,7 @@
 // This is an honest-mistake net, not a security boundary: GitHub branch
 // protection (required Vercel check) remains the external hard wall.
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, writeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
@@ -62,17 +62,33 @@ import {
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
-function passthrough() { process.exit(0); }
+// Under merge-guard-launcher.mjs, silence counts as an allow only when this
+// guard also reports the launcher's per-run token: an emptied or truncated guard
+// file exits 0 silently too, and must not read as an allow (Luna, 2026-09-28).
+// writeSync, because process.exit() would not wait for a stream write.
+function passthrough() {
+  if (process.env.CRX_MERGE_GUARD_TOKEN) writeSync(2, `merge-guard finished ${process.env.CRX_MERGE_GUARD_TOKEN}\n`);
+  process.exit(0);
+}
 function deny(reason) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
   process.exit(0);
 }
 
-let payload;
-try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
+// A tool call this guard cannot read was not checked, so it must not report the
+// launcher's token: exiting without it sends merge-guard-launcher.mjs down its
+// fail-closed path, which denies anything that could merge and lets other work
+// run. passthrough() here once signed a truncated `gh pr merge` payload as a
+// checked allow (Codex App P1, PR #841).
+function unreadable() { process.exit(0); }
+const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-const toolName = String(payload?.tool_name || "");
-const toolInput = payload?.tool_input || {};
+let payload;
+try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { unreadable(); }
+if (!isPlainObject(payload) || (payload.tool_input !== undefined && !isPlainObject(payload.tool_input))) unreadable();
+
+const toolName = String(payload.tool_name || "");
+const toolInput = payload.tool_input || {};
 
 // ── detect merge intent — EVERY segment, EVERY request ───────────────────────
 // The parse loop must not stop at the first hit: `gh pr merge <feature-PR>;
@@ -214,18 +230,20 @@ function collectMergeRequests(scanned) {
 // protection so he can hand-merge a PR whose review is stuck (CodeRabbit down,
 // rate-limited, or wedged). That bypass is granted by admin rights, not by a
 // separate credential — so every agent session, running on his token, inherits
-// it. Denied here, before the PR is even resolved: there is no base branch and
-// no diff for which an agent asking GitHub to skip review is the right move.
+// it. Since 2026-09-27 the protect-main ruleset requires an approval of the
+// latest push and has no bypass actors, so that classic setting no longer lets
+// an admin skip the review; the denial stands either way. Denied here, before
+// the PR is even resolved: there is no base branch and no diff for which an
+// agent asking GitHub to skip review is the right move.
 if (requests.some((request) => request?.admin)) {
   deny(
-    "PR MERGE GATE: `--admin` merges with administrator privileges, overriding branch protection. " +
-    "That override exists for Mason to use by hand on the PR page — an agent may never use it, whatever " +
-    "the diff or the deadline. Use the ordinary merge instead: an approving review is NOT required " +
-    "(removed 2026-09-02), so a green, up-to-date candidate with no `CHANGES_REQUESTED` verdict merges " +
-    "without `--admin`. If a review did ask for changes, resolve it first — apply the " +
-    "`ready-for-coderabbit` label and let the default-branch workflow dispatch the native review once, " +
-    "then fix what it finds. Do not post `@coderabbitai review` by hand — that routes around the label " +
-    "gate. If the merge is still blocked, hand the PR to Mason and say why."
+    "PR MERGE GATE: `--admin` asks GitHub to override branch protection. An agent may never use it, " +
+    "whatever the diff or the deadline. Merge the ordinary way: the `protect-main` ruleset requires one " +
+    "approving review of the latest push (stale approvals are dismissed, no bypass actors), and CodeRabbit " +
+    "is the reviewer that gives it, so a green, up-to-date candidate whose latest push CodeRabbit APPROVED " +
+    "merges without `--admin`. If a review asked for changes, resolve it first — fix what it found and " +
+    "push; CodeRabbit re-reviews every push automatically (if it skipped the latest head, post " +
+    "`@coderabbitai review` once). If the merge is still blocked, hand the PR to Mason and say why."
   );
 }
 
@@ -234,9 +252,11 @@ const projectDir = path.resolve(
   payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
 );
 
-// The hard gates spend ONE budget between them (see createHardGateBudget). The
-// timeout mirrors this hook's entry in .claude/settings.json; the reserve covers
-// what process.uptime() cannot see plus writing the verdict. The advisory lookup
+// The hard gates spend ONE budget between them (see createHardGateBudget). This
+// guard runs under merge-guard-launcher.mjs, which denies a possible merge if the
+// guard is still running at 36s; the hook entry in .claude/settings.json allows
+// 45s so the launcher can still answer. The reserve covers what process.uptime()
+// cannot see plus writing the verdict. The advisory lookup
 // is NOT on this budget: it keeps its own deadline and fails open by design, so a
 // slow GitHub there must not turn into a denial.
 const HOOK_TIMEOUT_MS = 30_000;
@@ -473,10 +493,10 @@ function gateRequest(request) {
   if (!coderabbitApprovedHead(pr)) {
     deny(
       `PR MERGE GATE: CodeRabbit has not APPROVED this exact head (${String(pr.headRefOid || "<head>").slice(0, 12)}). ` +
-      "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required " +
-      "check is green, apply the `ready-for-coderabbit` label — the default-branch workflow revalidates this " +
-      "head and dispatches one review. Fix every real finding (a fix on this same PR earns one fresh review " +
-      "through the label), then retry. Do not post `@coderabbitai` commands by hand."
+      "Agents merge only after CodeRabbit's final review of the frozen head is clean. CodeRabbit reviews " +
+      "every non-draft push automatically (since 2026-09-26): wait for its review of this head, fix every " +
+      "real finding (each fix on this same PR is re-reviewed), then retry. If CodeRabbit skipped or was " +
+      "rate limited on this exact head, post `@coderabbitai review` on the PR once (Mason, 2026-09-27)."
     );
   }
 

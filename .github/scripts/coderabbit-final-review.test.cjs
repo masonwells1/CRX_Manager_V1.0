@@ -403,24 +403,177 @@ test('the workflow binds the CodeRabbit exclusion to the trusted status creator'
   assert.doesNotMatch(workflow, /ignoredChecks:\s*\[\s*['"]CodeRabbit['"]\s*\]/);
 });
 
-test('CodeRabbit native review is disabled until the distinct dispatch label is attached', () => {
-  const config = fs.readFileSync(path.join(__dirname, '..', '..', '.coderabbit.yaml'), 'utf8');
+// Reads the YAML subset .coderabbit.yaml uses - block mappings, block lists,
+// plain and double-quoted values, `>`/`|` block text, comments - and throws on
+// anything else. Built-ins only: ci.yml runs this file BEFORE `npm ci`, and a
+// docs-only run never installs packages, so `require('yaml')` failed there
+// (PR #841). It fails closed: a quoted key, a `{...}`/`[...]` flow collection,
+// an anchor, alias, tag or merge key, a document marker, a tab, a duplicate
+// key, uneven indentation, or any unrecognised line throws instead of being
+// skipped, so a setting can never be changed in a form this reader misses. It
+// also refuses what would make the file invalid YAML, because CodeRabbit may
+// then ignore the file and use its web settings (assumed, not tested).
+// Returns a Map from dotted key path (list items as `[n]`) to the raw value
+// text, or null for a key that opens a nested block.
+function readStrictYamlSubset(text) {
+  const values = new Map();
+  const itemCounts = new Map();
+  const stack = [{ indent: -1, path: '', hasValue: false, childIndent: 0 }];
+  let blockTextIndent = null;
+  let blockContentIndent = null;
+  const nestUnder = (parent, indent, kind, where) => {
+    assert.ok(!parent.hasValue, `${where}: indented under a key that already has a value`);
+    parent.childIndent ??= indent;
+    parent.childKind ??= kind;
+    assert.equal(indent, parent.childIndent, `${where}: indentation differs from its siblings`);
+    assert.equal(kind, parent.childKind, `${where}: list items and keys mixed in one block`);
+  };
+  const scalar = (value) => {
+    const match = /^("[^"\\]*"|[^\s\-?:,[\]{}#&*!|>'"%@`][^#]*?)(?:\s+#.*)?$/.exec(value);
+    if (!match || (!match[1].startsWith('"') && /:(\s|$)/.test(match[1]))) return null;
+    return match[1];
+  };
+  // A lone CR is a YAML line break too, so split where YAML does. Only
+  // printable characters and plain spaces are allowed: a tab, NEL, U+2028/2029,
+  // BOM, NBSP or control character could be a break or an indent to some
+  // reader, and U+FFFD marks bytes that were not valid UTF-8. No trailing
+  // spaces either, so no blank line can carry the extra indentation YAML
+  // rejects at the start of block text.
+  text.split(/\r\n|\r|\n/).forEach((line, index) => {
+    const where = `.coderabbit.yaml line ${index + 1}`;
+    assert.match(
+      line,
+      /^(?:(?![^\S ])[\x20-\x7e¡-퟿-￼\u{10000}-\u{10ffff}])*$/u,
+      `${where}: a tab or special character`,
+    );
+    assert.doesNotMatch(line, / $/, `${where}: trailing space`);
+    const indent = line.search(/\S/);
+    if (blockTextIndent !== null) {
+      if (indent === -1) return;
+      if (indent > blockTextIndent) {
+        blockContentIndent ??= indent;
+        assert.ok(indent >= blockContentIndent, `${where}: block text indented less than its first line`);
+        return;
+      }
+      blockTextIndent = null;
+      blockContentIndent = null;
+    }
+    if (indent === -1 || line[indent] === '#') return;
+    while (stack.at(-1).indent >= indent) stack.pop();
+    let parent = stack.at(-1);
+    let body = line.slice(indent);
+    let keyIndent = indent;
+    const dash = /^- +/.exec(body);
+    if (dash) {
+      nestUnder(parent, indent, 'list', where);
+      const count = itemCounts.get(parent.path) ?? 0;
+      itemCounts.set(parent.path, count + 1);
+      const item = { indent, path: `${parent.path}[${count}]`, hasValue: false };
+      stack.push(item);
+      body = body.slice(dash[0].length);
+      const itemValue = scalar(body);
+      if (itemValue !== null) {
+        item.hasValue = true;
+        values.set(item.path, itemValue);
+        return;
+      }
+      parent = item;
+      keyIndent = indent + dash[0].length;
+    }
+    const key = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(body);
+    assert.ok(key, `${where}: not a form this strict reader accepts: ${body}`);
+    nestUnder(parent, keyIndent, 'map', where);
+    const keyPath = parent.path ? `${parent.path}.${key[1]}` : key[1];
+    assert.ok(!values.has(keyPath), `${where}: duplicate key ${keyPath}`);
+    const rawValue = key[2] ?? '';
+    let value = null;
+    if (/^[|>]-?(?:\s+#.*)?$/.test(rawValue)) {
+      value = rawValue[0];
+      blockTextIndent = keyIndent;
+    } else if (rawValue !== '' && !rawValue.startsWith('#')) {
+      value = scalar(rawValue);
+      assert.ok(value !== null, `${where}: not a value this strict reader accepts: ${rawValue}`);
+    }
+    values.set(keyPath, value);
+    stack.push({ indent: keyIndent, path: keyPath, hasValue: value !== null });
+  });
+  return values;
+}
+
+// Mason, 2026-09-26 (DECISION_LOG, fewer prompts / more CodeRabbit): CodeRabbit
+// reviews every non-draft PR on open and on every push. The EFFECTIVE settings
+// are pinned, not the first matching text (CodeRabbit and Luna, PR #841): the
+// auto_review block must hold exactly these keys and values, so switching it
+// off, pausing it, narrowing it (a `labels:` list, `ignore_usernames`, ...) or
+// overriding a value in a form a regex would miss all fail this test.
+function assertAutomaticReviewPinned(config) {
+  const settings = readStrictYamlSubset(config);
+  const autoReview = Object.fromEntries(
+    [...settings].filter(([key]) => key.startsWith('reviews.auto_review.')),
+  );
+  assert.deepEqual(autoReview, {
+    'reviews.auto_review.enabled': 'true',
+    'reviews.auto_review.auto_incremental_review': 'true',
+    'reviews.auto_review.auto_pause_after_reviewed_commits': '0',
+    'reviews.auto_review.drafts': 'false',
+    'reviews.auto_review.description_keyword': '""',
+  });
+  assert.equal(settings.get('reviews.high_level_summary_in_walkthrough'), 'true');
+}
+
+const CODERABBIT_CONFIG = path.join(__dirname, '..', '..', '.coderabbit.yaml');
+
+test('CodeRabbit reviews every non-draft PR automatically, on open and on every push', () => {
+  assertAutomaticReviewPinned(fs.readFileSync(CODERABBIT_CONFIG, 'utf8'));
   const workflow = fs.readFileSync(
     path.join(__dirname, '..', 'workflows', 'coderabbit-final-review.yml'),
     'utf8',
   );
-
-  const autoReviewStart = config.indexOf('  auto_review:');
-  const autoReview = config.slice(autoReviewStart, config.indexOf('  path_instructions:', autoReviewStart));
-  assert.notEqual(autoReviewStart, -1);
-  assert.match(autoReview, /^\s*enabled:\s*false\b/m);
-  // TRUE since 2026-09-26 so a fix on the SAME PR can earn one follow-up review.
-  // Work-in-progress pushes stay unreviewed because the positive label below is
-  // attached only while a validated dispatch is in flight (releaseDeliveredDispatch).
-  assert.match(autoReview, /^\s*auto_incremental_review:\s*true\b/m);
-  assert.match(autoReview, /^\s*labels:\s*\r?\n\s*- coderabbit-review-dispatch\b/m);
-  assert.doesNotMatch(autoReview, /- ready-for-coderabbit\b/);
   assert.match(workflow, /nativeDispatch:\s*true\b/);
+});
+
+// Negative controls that run on every CI pass: each edit below changes what
+// CodeRabbit reads, can be read differently by some YAML parser, makes the file
+// invalid YAML (which CodeRabbit may ignore), or uses a construct the reader does
+// not model (an anchor, whose alias could copy values elsewhere); each must
+// fail the pin.
+test('the automatic-review pin fails on every form that could change a setting unseen', () => {
+  const config = fs.readFileSync(CODERABBIT_CONFIG, 'utf8');
+  const afterEnabled = /^( {4}enabled: true)$/m;
+  const afterKeyword = /^( {4}description_keyword: "")$/m;
+  const firstBlockText = /^( {6}instructions: >-)$/m;
+  const mutations = {
+    'a quoted duplicate "enabled": false': [afterEnabled, '$1\n    "enabled": false'],
+    'a single-quoted duplicate enabled': [afterEnabled, "$1\n    'enabled': false"],
+    'a plain duplicate enabled: false': [afterEnabled, '$1\n    enabled: false'],
+    'a second quoted "auto_review" block': [afterKeyword, '$1\n  "auto_review":\n    enabled: false'],
+    'a second plain auto_review block': [afterKeyword, '$1\n  auto_review:\n    enabled: false'],
+    'a merge key': [afterEnabled, '$1\n    <<: {enabled: false}'],
+    'a flow mapping': [/^( {2}auto_review:)$/m, '$1 {enabled: false}'],
+    'a tagged value': [afterEnabled, '    enabled: !!str true'],
+    'an anchored value': [afterEnabled, '    enabled: &on true'],
+    'a quoted true': [afterEnabled, '    enabled: "true"'],
+    'a deeper-indented override': [afterEnabled, '$1\n      enabled: false'],
+    'a tab-indented override': [afterEnabled, '$1\n\tenabled: false'],
+    'an override behind a lone CR in a comment': [afterEnabled, '$1\n    # note\r    enabled: false'],
+    // Inside a comment, so only the character rule can catch them: YAML 1.1
+    // parsers treat U+2028 and NEL as line breaks and would read the override.
+    'an override behind a line separator in a comment': [afterEnabled, '$1\n    # note     enabled: false'],
+    'an override behind a NEL in a comment': [afterEnabled, '$1\n    # note\x85    enabled: false'],
+    'a byte that was not valid UTF-8': [afterEnabled, '$1\n    # �'],
+    'a C1 control character': [afterEnabled, '$1\n    # \x9b'],
+    'an over-indented blank line opening block text': [firstBlockText, `$1\n${' '.repeat(12)}`],
+    'block text indented less than its first line': [firstBlockText, '$1\n          deeper first line'],
+    'a labels allowlist': [afterKeyword, '$1\n    labels:\n      - ready'],
+    'an ignored author': [afterKeyword, '$1\n    ignore_usernames:\n      - masonwells1'],
+    'a second document': [/^(chat:)$/m, '---\nreviews:\n  auto_review:\n    enabled: false\n$1'],
+    'a complex key': [afterEnabled, '$1\n    ? enabled\n    : false'],
+  };
+  for (const [label, [pattern, replacement]] of Object.entries(mutations)) {
+    const mutated = config.replace(pattern, replacement);
+    assert.notEqual(mutated, config, `${label}: the mutation applied`);
+    assert.throws(() => assertAutomaticReviewPinned(mutated), assert.AssertionError, label);
+  }
 });
 
 function completedCheck(name, conclusion = 'success') {
