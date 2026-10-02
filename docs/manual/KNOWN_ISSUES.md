@@ -168,7 +168,9 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   `Invoices.tsx` season filter, `TeamBoard.tsx` date filter, and the `CustomerDetail.tsx` 90-day window.
   (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
 - **List-page row caps (scale limit).** Orders stops at 500 and Invoices at 2000 with a warning toast;
-  Deliveries stops at 500 silently; `DataTable` has no pagination. Revisit before volumes near the caps.
+  Deliveries stops at 500 silently, and so does Application Records (`ApplicationRecords.tsx` loads only the
+  newest 500 matching compliance records, with no warning or load-more); `DataTable` has no pagination.
+  Revisit before volumes near the caps.
   `SelectLocationsModal` still splits map and list 50/50 on tablets.
   (Source: `docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md`).)
 - **Customer-facing PDF polish (LOW).** `src/lib/quotePdf.ts` advances section-header notes only 4pt per line
