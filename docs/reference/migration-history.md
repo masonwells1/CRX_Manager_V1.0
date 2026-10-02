@@ -21,7 +21,8 @@ preflight for the field-season install:
   That md5 is the pin `20260914101000` checks (PREFLIGHT_PREVIEW_BODY_DRIFT). No 3- or 4-argument
   overload survives: `20260906120000` (ledger `20260908045843`) dropped them, and `20260914101000`'s
   PREFLIGHT_PREVIEW_OVERLOAD check aborts the whole apply if more than one overload ever exists.
-- **Commission cohort, all live** (authored stamp → ledger version): `20260914100100` →
+- **The `20260914100100`..`100900` cohort, all live** (eight commission migrations plus `100700`,
+  customer documents; authored stamp → ledger version): `20260914100100` →
   `20260921141423`, `100200` → `20260921141451`, `100300` → `20260921141740`, `100400` →
   `20260921141901`, `100500` → `20260922015509`, `100600` → `20260922020038`, `100700` →
   `20260926163005`, `100800` → `20260927060531`, `100900` → `20260928025520`.
@@ -45,8 +46,9 @@ header; otherwise the hook reports the state as unknown). When a migration
 applies, change that row's leading status in the same change.
 
 **Field-season migrations (rows 931–934), on `main` since PR #850 (2026-09-30), NOT yet applied live.**
-**COMMISSION-FIRST RULE (reverse hazard): none of these four may be applied live until all eight
-`20260914100*` commission migrations are — that is, only after `20260914100900` is applied live.**
+**COMMISSION-FIRST RULE (reverse hazard): none of these four may be applied live until all nine
+`20260914100100`..`20260914100900` migrations are (eight commission migrations plus `100700`, the
+customer-document file restamped between them) — that is, only after `20260914100900` is applied live.**
 **SATISFIED 2026-09-27:** `20260914100900` applied live that evening (ledger version
 `20260928025520`), so the whole cohort is live and this precondition is met. Rows 931–934 are on
 `main` (PR #850) and still unapplied, and every other gate below still applies. The
