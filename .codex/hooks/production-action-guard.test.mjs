@@ -2245,6 +2245,188 @@ try {
   assert.equal(fast.verdict.blocked, false, "CONTROL: three clean merges on a fast GitHub are allowed");
   assert.deepEqual([...new Set(fast.resolved)].sort(), ["123", "456", "789"], "CONTROL: every merge in the chain is resolved and gated");
 
+  // ── push segments share the same budget (CodeRabbit on PR #630, 2026-09-21) ──
+  // The push loop called the RAW runGit for its branch lookup and for every git
+  // call in gateMainChange, so a chain of main-bound pushes could outrun the hook
+  // exactly as a chain of merges could. Three DISTINCT spellings, because the
+  // segmenter de-duplicates identical segments.
+  const threePushes = "git push origin HEAD:main && git push origin HEAD:refs/heads/main && git -C . push origin HEAD:main";
+  const pushBudgetRun = (msPerGitCall) => {
+    let virtualNow = 1_000_000;
+    let gitCalls = 0;
+    const slowGit = (args, cwd) => {
+      gitCalls += 1;
+      virtualNow += msPerGitCall; // a SUCCESSFUL call that took this long
+      return git(cwd, args);
+    };
+    const verdict = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: threePushes },
+      repoDir: risky.repo,
+      nowMs: now,
+      runGit: slowGit,
+      runGh: () => mainPrJson,
+      clock: () => virtualNow,
+      hardGateDeadlineMs: virtualNow + 12_500,
+    });
+    return { verdict, gitCalls };
+  };
+  const slowPushes = pushBudgetRun(4_000);
+  assert.equal(slowPushes.verdict.blocked, true, "pushes whose git calls would outrun the hook are DENIED");
+  assert.match(String(slowPushes.verdict.reason), /push checks could not finish/, "the denial is the budget's, and it names the push");
+  assert.ok(slowPushes.gitCalls <= 3, `the budget refuses before a call that could not finish (made ${slowPushes.gitCalls})`);
+  const fastPushes = pushBudgetRun(10);
+  assert.equal(fastPushes.verdict.blocked, false, `CONTROL: the same pushes on a responsive git are allowed: ${fastPushes.verdict.reason}`);
+
+  // ── commands carried inside another program's argument (2026-09-24) ─────────
+  // Every one of these was ALLOWED on PR #630's head against this merge-ready
+  // fixture: the inner command was one argv word to every parser.
+  const readyGh = (args) => {
+    if (Array.isArray(args) && args.includes("graphql")) throw new Error("advisory unavailable");
+    if (isAdvisoryMetaCall(args)) return advisoryMetaJson;
+    return mainPrJson;
+  };
+  const evaluateReady = (command) => evaluateProductionAction({
+    toolName: "PowerShell",
+    toolInput: { command },
+    repoDir: risky.repo,
+    nowMs: now,
+    runGh: readyGh,
+  });
+  const nestedAdmin = "gh pr merge 123 --admin --squash";
+  for (const command of [
+    `bash -c "${nestedAdmin}"`,
+    `sh -c '${nestedAdmin}'`,
+    `cmd /c "${nestedAdmin}"`,
+    `pwsh -NoProfile -Command "${nestedAdmin}"`,
+    `powershell.exe "${nestedAdmin}"`,
+    `pwsh -EncodedCommand ${Buffer.from(nestedAdmin, "utf16le").toString("base64")}`,
+    `eval "${nestedAdmin}"`,
+    `Invoke-Expression "${nestedAdmin}"`,
+    "Start-Process gh -ArgumentList 'pr','merge','123','--admin','--squash'",
+    `&{${nestedAdmin}}`,
+  ]) {
+    const verdict = evaluateReady(command);
+    assert.equal(verdict.blocked, true, `a nested administrator merge is refused: ${command}`);
+    assert.match(String(verdict.reason), /--admin/, `…by the --admin refusal: ${command}`);
+    assert.match(String(verdict.reason), /nested shell/, `…and the denial says where it was found: ${command}`);
+  }
+  const nestedDelete = evaluateReady('bash -c "gh api -X DELETE repos/o/r/git/refs/heads/main"');
+  assert.equal(nestedDelete.blocked, true, "a nested mutating gh api call is refused");
+  assert.match(String(nestedDelete.reason), /mutating `gh api`/, "…as a mutating API call");
+  // CONTROL: a nested PLAIN merge reaches the normal gate and is allowed, so the
+  // refusals above are the --admin, not the nesting.
+  // Carries the head pin every agent merge needs since #804.
+  assert.equal(evaluateReady(`bash -c "gh pr merge 123 --squash${PIN}"`).blocked, false, "CONTROL: a nested ordinary merge is gated, not refused");
+  assert.equal(evaluateReady('pwsh -NoProfile -Command "Get-ChildItem"').blocked, false, "CONTROL: an unrelated nested command passes");
+
+  // ── gh aliases and unknown gh commands (2026-09-24) ─────────────────────────
+  for (const command of ["gh alias set mm 'pr merge --admin'", "gh alias import aliases.yml", "gh mm 123 --squash", "gh co 123"]) {
+    const verdict = evaluateReady(command);
+    assert.equal(verdict.blocked, true, `an alias or unknown gh command is refused: ${command}`);
+    assert.match(String(verdict.reason), /is not a gh command this guard can read/, `…for that reason: ${command}`);
+  }
+  assert.equal(evaluateReady("bash -c \"gh mm 123\"").blocked, true, "…including inside a nested shell");
+  for (const command of ["gh alias list", "gh pr checkout 123", "gh pr view 123", "gh --version", "echo gh mm"]) {
+    assert.equal(evaluateReady(command).blocked, false, `CONTROL: a readable gh command passes: ${command}`);
+  }
+
+  // ── independent Opus review of PR #795 (2026-09-25), against this fixture ──
+  for (const command of [
+    "Start-Process gh -ArgumentList 'pr', 'merge', '123', '--admin', '--squash'",
+    "Start-Process gh -ArgumentList:'pr merge 123 --admin --squash'",
+    `bash --rcfile /dev/null -c '${nestedAdmin}'`,
+    `pwsh –EncodedCommand ${Buffer.from(nestedAdmin, "utf16le").toString("base64")}`,
+  ]) {
+    const verdict = evaluateReady(command);
+    assert.equal(verdict.blocked, true, `a spelling the first version missed is refused: ${command}`);
+    assert.match(String(verdict.reason), /--admin/, `…by the --admin refusal: ${command}`);
+  }
+  for (const command of ["timeout 30 gh mm 123", "sudo -u root gh mm 123", "env -u FOO gh mm 123"]) {
+    assert.match(String(evaluateReady(command).reason), /is not a gh command this guard can read/, `a wrapper does not hide an alias: ${command}`);
+  }
+  for (const command of [`'${nestedAdmin}' | iex`, `echo '${nestedAdmin}' | bash`, `bash <<< '${nestedAdmin}'`, "echo pr merge 123 --admin | xargs gh"]) {
+    assert.match(String(evaluateReady(command).reason), /on its input/, `a command fed on stdin is refused: ${command}`);
+  }
+  assert.match(String(evaluateReady("bash -c '$0 pr merge 123 --admin' gh").reason), /built at run time/,
+    "a nested shell handed run-time text is refused");
+  // Codex luna round 2: a top-level program held in a variable, and cmd's reading.
+  assert.match(String(evaluateReady("$p='gh'; & $p pr merge 123 --admin").reason), /built at run time/,
+    "a top-level run-time program name is refused");
+  assert.match(String(evaluateReady("type C:\\Temp\\payload.txt # note | bash").reason), /on its input/,
+    "cmd's reading of `#` exposes the pipe");
+  // This guard refuses the next command anyway (its computed-argument rule), so the
+  // control is that the run-time PROGRAM rule is not what refused it.
+  assert.doesNotMatch(String(evaluateReady("$b = git branch --show-current; gh pr view $b").reason), /built at run time/,
+    "CONTROL: a PowerShell assignment is not a run-time program");
+  // Codex luna, PR #795, 2026-09-26: a payload in a file (finding 3), a wrapper
+  // before the interpreter (finding 4), and a feed hidden inside cmd's quotes.
+  for (const command of [
+    "Get-Content C:\\Temp\\payload.txt | iex",
+    `echo '${nestedAdmin}' | env bash`,
+    'cmd /c "type payload.txt | bash"',
+    "xargs -a payload.txt gh",
+  ]) {
+    assert.match(String(evaluateReady(command).reason), /on its input/, `a fed interpreter is refused: ${command}`);
+  }
+  // Finding 10: one nested-push policy with Claude's push guard — refused, not evaluated.
+  for (const command of [
+    'bash -c "git push origin HEAD:feature/x"',
+    `pwsh -EncodedCommand ${Buffer.from("git push origin HEAD:feature/x", "utf16le").toString("base64")}`,
+  ]) {
+    const verdict = evaluateReady(command);
+    assert.equal(verdict.blocked, true, `a nested push is refused: ${command}`);
+    assert.match(String(verdict.reason), /runs a git push inside another shell/, `…as a nested push: ${command}`);
+  }
+  // Findings 8 and 9: the wrapper's real program is read, however far out.
+  assert.match(String(evaluateReady("sudo -u root -g staff -H -n -E gh mm 123").reason),
+    /is not a gh command this guard can read/, "an alias past six wrapper words is refused");
+  assert.equal(evaluateReady("timeout 30 echo gh mm 123").blocked, false, "CONTROL: gh as an argument of the wrapped program passes");
+  // Over-blocks the review found must now pass.
+  for (const command of [
+    "which -a pwsh gh git node",
+    "git commit -m 'docs: note; gh mm now denied'",
+    "gh pr comment 5 --body 'cd repo && gh co 5'",
+    "git diff --name-only | xargs npx eslint",
+  ]) {
+    assert.equal(evaluateReady(command).blocked, false, `CONTROL: a harmless command passes: ${command}`);
+  }
+  // Codex luna round 3: a raw REST merge escaped or encoded inside another
+  // shell (finding 2), a pipeline carried on to the next line (finding 3) and
+  // an ANSI-C quoted here-document delimiter (finding 4).
+  for (const command of [
+    `pwsh -EncodedCommand ${Buffer.from("Invoke-RestMethod -Method Put https://api.github.com/repos/o/r/pulls/123/merge", "utf16le").toString("base64")}`,
+    "cmd /c \"curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer^ge\"",
+    "bash -c 'curl -X PUT https://api.github.com/repos/o/r/pulls/123/mer\\ge'",
+  ]) {
+    assert.match(String(evaluateReady(command).reason), /raw GitHub REST merge/, `a nested raw merge is refused: ${command.slice(0, 70)}`);
+  }
+  for (const command of [`echo '${nestedAdmin}' |\nbash`, `cat <<$'EOF'\nignored\nEOF\necho '${nestedAdmin}' | bash`]) {
+    assert.match(String(evaluateReady(command).reason), /on its input/, `a command fed on stdin is refused: ${JSON.stringify(command)}`);
+  }
+  assert.equal(evaluateReady("echo 'x | bash'").blocked, false, "CONTROL: a single-quoted pipe in prose passes");
+  // CodeRabbit, PR #795, 2026-09-30: the `{ }` / `( )` regrouping re-emitted the
+  // outer command, so a plain feature push next to a grouped command was refused
+  // as a NESTED push. (Other rules may still refuse these; this one must not.)
+  for (const command of [
+    "git push origin HEAD:feature/x && (npm test)",
+    "git push origin HEAD:feature/x; if ($LASTEXITCODE) { exit 1 }",
+  ]) {
+    assert.doesNotMatch(String(evaluateReady(command).reason), /runs a git push inside another shell/,
+      `CONTROL: a grouped command beside a push is not a nested push: ${command}`);
+  }
+  for (const command of ["{ git push origin HEAD:main --force; }", "(git push --force origin HEAD:main)"]) {
+    assert.equal(evaluateReady(command).blocked, true, `a grouped force-push to main is still refused: ${command}`);
+  }
+  // The unwrap stays linear, so the guard answers before its own time limit.
+  {
+    const huge = `echo (x) a\\b ${"start -x ".repeat(12000)}; ${nestedAdmin}`;
+    const started = Date.now();
+    const verdict = evaluateReady(huge);
+    assert.equal(verdict.blocked, true, "a ~100 KB command is still refused");
+    assert.ok(Date.now() - started < 5000, `…and answered well inside the 15 s hook limit (took ${Date.now() - started} ms)`);
+  }
+
   // The budget admits a call on the assumption it lasts at most ONE 5-second
   // timeout. defaultRunGh tries `gh` then the absolute gh.exe on Windows; if a
   // timed-out `gh` fell through to the second candidate, one admitted call could

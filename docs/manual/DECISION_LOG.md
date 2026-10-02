@@ -1,12 +1,99 @@
 # Decision Log
 
-Last verified: 2026-09-26 (autonomous landing entry added)
+Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
+
+**Source:** Mason, in the field-season delivery session on 2026-09-29. He was shown a plain-English
+design, then chose between covering only access-changing migrations and covering all three parked
+kinds. He replied **"approved all three"**.
+
+**Problem.** The apply gate parks three kinds of migration for Mason: one that deletes data, one
+that overwrites existing rows, and one that changes who can access what. Nothing could apply them.
+Agents have no override (Sol HIGH, 2026-09-26: a flag an agent passes itself proves nothing). The
+only route left to Mason was pasting SQL into the Supabase Dashboard, which
+`DATABASE_CHANGE_CHECKLIST.md` forbids. That blocked the field-season install `20260914101000`.
+A GitHub approval, label or comment cannot fill the gap, because agents act through Mason's own
+GitHub token.
+
+**Decision.**
+1. A parked migration applies only with Mason's **Windows Hello signature** of that exact migration.
+   The key lives in his PC's security chip, and Windows releases each signature only after his
+   PIN or fingerprint.
+2. What he signs is built by `.claude/hooks/owner-approval-lib.mjs` from the file itself:
+   - the migration name and the sha256 of its SQL;
+   - the pull request number and its exact head;
+   - what the safety check flagged;
+   - a 30-minute window and a one-time nonce;
+   - the plain-English summary he is shown.
+   The verifier recomputes that summary and the safety check's findings from the signed fields and
+   the file, so the genuine approval window cannot understate what the approval covers.
+3. The signature is checked **last**, after the reviewer proofs, the Sol proof and the pull-request
+   landing gate, against the PR and head that gate confirmed. An approval never skips another check.
+4. The approval is honoured only by `scripts/apply-migration-file.mjs`, never by the MCP
+   `apply_migration` tool, and it is used up before transmitting. It is refused once the migration
+   is in the live ledger.
+5. The public key pinned in `.claude/hooks/owner-approval-key.json` must equal the key Windows
+   Hello holds on the PC at that moment. So a software key an agent generated and committed does
+   not work.
+6. Commands:
+   - `node scripts/owner-approval-setup.mjs`: one time, Mason at the PC, with a self-test signature.
+   - `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql`: per migration,
+     only once every other proof is fresh.
+
+**Supersedes:**
+- the 2026-09-26 autonomous-landing wording "parked and Mason applies it himself";
+- the 2026-08-01 Factory rule "Do not add Windows Hello, a PIN…", which governed the Software
+  Factory's owner touchpoints; the Factory was removed on 2026-08-07.
+
+**Residuals (honest):**
+- This is as strong as the rule that agents cannot edit the guard files, the same boundary every
+  other gate relies on. It adds no new way around that boundary, and it does not remove the existing
+  one.
+- Windows Hello's own prompt does not show what is being signed (Luna BLOCKER, round 2). Any
+  program running as Mason could draw a look-alike approval window, then trigger the real prompt
+  for a different parked migration.
+  - So the signature proves that Mason was physically present and consented. It does not prove
+    that he read the true summary.
+  - What bounds it: an approval unlocks only a migration committed in an open PR whose exact head
+    CodeRabbit APPROVED and Sol cleared, with both reviewer proofs fresh. A deceived approval can
+    therefore unlock only a change two independent reviewers already passed.
+  - Mason's practice: approve only right after an agent asked for it in chat, and only when the
+    migration name in the window matches that request.
+
+**Operative rule:** a parked migration needs BOTH:
+- Mason's explicit yes in the current conversation, per AGENTS.md (Codex P1, PR #845): agents still
+  ask first;
+- his valid Windows Hello signature, which is the part the gate can verify.
+
+A GitHub approve, label or comment, and any file an agent writes, are neither. Never
+paste migration SQL into the Supabase Dashboard.
+
+## 2026-09-29 — nested-command guards: stop parser fixes after four review rounds and land PR #795
+
+**Source:** Mason, "accept and land" (2026-09-29 and 2026-09-30); detail in `docs/changelog.d/2026-09-29-pr795-stopped-after-luna-round4.md`.
+**Decision.** Parser fixes stop; remaining findings are recorded known gaps (`docs/reference/agent-guardrails.md`,
+"Accepted residuals") and the work lands. One that beats GitHub's `main` protection, or a serious Sol finding, goes to Mason.
+**Why.** Each round found new holes, and the protect-main ruleset (no bypass actors) still requires review and green checks.
+
+## 2026-09-28 — nested-command guards: fix the bugs, accept what no command reader can close
+
+**Source:** Mason, "fix and accept" (2026-09-28); detail in `docs/changelog.d/2026-09-28-nested-guard-luna-round1-fixes.md`.
+**Decision.** Guard logic bugs are fixed; script files, run-time program names outside `$`/backtick syntax, and the
+Codex guard not re-checking decoded payloads are accepted residuals. The push-parser timeout is tracked separately.
+**Why.** Parsing cannot see a script's contents or a name assembled at run time.
+
+## 2026-09-26 — Fewer permission prompts; CodeRabbit reviews every PR automatically; GitHub requires its approval again
+
+**Source:** Mason, 2026-09-26 ("give permissions more freely to both codex and claude … i want [CodeRabbit] used alot more often"; plan "yes", "A" twice), "Post" (2026-09-27) and "No prompt" (2026-09-28); PR #841, replacing #822. Evidence, item-by-item detail and residuals: `docs/reference/agent-guardrails.md`, "Fewer prompts, automatic CodeRabbit, fail-closed merge guard".
+**Decision.** (1) Claude's `ask` tier keeps only what Mason can judge plus every production-gate file (`scripts/check-agent-guidance.mjs` derives that set and fails CI on a gap); `gh pr merge` moves to `allow`. (2) CodeRabbit reviews every non-draft PR on every push; for a skipped head an agent posts `@coderabbitai review` once (reverses the 2026-09-07 "never post" rule; supersedes "automatic reviews disabled" in the 2026-08-28, 2026-08-30 and autonomous-landing entries). (3) `protect-main` requires one approval of the latest push, stale approvals dismissed, no bypass actors, so admins are bound too (supersedes the 2026-09-02 removal); only CodeRabbit can give it and only Mason changes the ruleset. Observed once: CodeRabbit APPROVED #841's head `18cf44114` (2026-09-30) and GitHub briefly read `APPROVED`; the next push dismissed it, as the rule requires, so no PR has yet merged on such an approval. The local merge guard separately requires that approval on the exact head. (4) Codex hooks were re-trusted; re-check trust after any `.codex/hooks.json` change. (5) The merge guard runs under a fail-closed launcher: a crash, timeout, non-verdict output or unreadable call denies anything that could merge.
+**Why.** 186 of Mason's 209 prompts in two weeks were routine guard edits, all approved; CodeRabbit capacity grew; a GitHub-enforced approval keeps an unreviewed PR out even if a local gate weakens. Cost accepted: if CodeRabbit is down, nothing merges.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 

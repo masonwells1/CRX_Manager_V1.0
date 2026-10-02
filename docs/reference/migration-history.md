@@ -4,8 +4,19 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live-ledger capture — 2026-09-27 evening (America/Chicago). THIS IS THE CURRENT BOUNDARY.** A
-read-only ledger read on project `rhyzpcqhnizqbxphqdkr`, taken right after the apply, records
+**Live-ledger capture — 2026-10-01 morning (America/Chicago). THIS IS THE CURRENT BOUNDARY.** A
+read-only ledger read on project `rhyzpcqhnizqbxphqdkr` at 2026-10-01 11:07 UTC (06:07 Chicago),
+taken as the pre-apply preflight for the field-season install, records **1013 ledger rows** (1006
+distinct names), live `max(version)` **`20260928025520`**, and effective ordering high-water
+**`20260914100900_repair_commission_history_label_snapshots`**, computed row by row (the stamp in
+each row's `name`, falling back to its `version` only when the name has none). Nothing has applied
+since the 2026-09-27 capture below. The four field-season files `20260914101000`,
+`20260914101100`, `20260914101200` and `20260914101300` all sort above that high-water and none is
+in the ledger; apply them in that ascending order. Re-read the high-water read-only immediately
+before each apply, because another lane can move it.
+
+**Live-ledger capture — 2026-09-27 evening (America/Chicago).** Superseded by the 2026-10-01 read
+above. A read-only ledger read on project `rhyzpcqhnizqbxphqdkr`, taken right after the apply, records
 **1013 ledger rows**, live `max(version)` **`20260928025520`** (UTC, 2026-09-28 02:55:20), and
 effective ordering high-water **`20260914100900_repair_commission_history_label_snapshots`**
 (row 915), applied live 2026-09-27 under `20260928025520` from PR #832's branch checkout (PR #832

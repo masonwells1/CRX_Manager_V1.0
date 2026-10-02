@@ -9,15 +9,25 @@ import {
   coderabbitApprovedHead,
   contentIsRisky,
   createHardGateBudget,
+  expandNestedCommands,
   extractPatchDestinations,
   ghApiMergeRequest,
   ghApiMutates,
+  commandFedToInterpreter,
+  commandFedToInterpreterDenial,
+  ghCommandUnreadableDenial,
+  ghCommandUnreadableIn,
   ghHiddenByShellComposition,
   hardGateBudgetDenial,
+  mentionsMergePullRequest,
+  nestedComputedDenial,
+  nestedTooDeepDenial,
+  rawMergeEndpointCount,
   hookDeadlineMs,
   splitCommandSegments,
   ghMergeRequest,
   gitPushCwd,
+  gitSubcommandIsDynamic,
   isGitPush,
   mainPushSource,
   mcpMergeRequest,
@@ -34,6 +44,11 @@ import {
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
+  pushParseCostExceeded,
+  PUSH_PARSE_COST_BUDGET,
+  MAX_INSPECTABLE_COMMAND_LENGTH,
+  MAX_HOOK_INPUT_LENGTH,
+  readHookInputBounded,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 import {
@@ -779,11 +794,19 @@ function interpreterArgumentIsUnresolvable(command) {
   return SHELL_EXPANSION_RE.test(text);
 }
 
+// Both option spellings below are DISJOINT on purpose. The single-dash form was
+// `-{1,2}[a-z-]+`, which also matched every `--name` the first form matches, so
+// each repeated option doubled the paths tried on a failing match: `node --a`
+// repeated 20 times, an 86-character command, took 26 s — past the hook limit,
+// and a killed hook allows the command. The pipe form's path prefix stops at `|`
+// for the same reason `\S*` did not: from every `|` it ran to the end of the
+// command and backtracked (quadratic). A prefix that spanned a `|` has a match
+// starting at that later `|`, so what matches is unchanged in both.
 function usesDynamicProcessEval(command) {
   const text = String(command || "");
-  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
+  return /(?:^|[\s"'\\/])node(?:\.exe)?["']?\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-[a-z][a-z-]*)\s+)*(?:-e|--eval|-p|--print)(?:\s|=|$)/i.test(text) ||
     /(?:^|[|;&]\s*)node(?:\.exe)?["']?\s*(?:-|$)/i.test(text) ||
-    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
+    /\|\s*(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:[^\s|]*[\\/])?node(?:\.exe)?)\s*(?:-|$)/i.test(text);
 }
 
 function denied(reason) {
@@ -1225,9 +1248,10 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (!coderabbitApprovedHead(pullRequest)) {
     return denied(
       `CODEX PRODUCTION GATE: CodeRabbit has not APPROVED this exact head (${String(pullRequest.headRefOid).slice(0, 12)}). ` +
-      "Agents merge only after CodeRabbit's final review of the frozen head is clean. Once every required check " +
-      "is green, apply the `ready-for-coderabbit` label so the default-branch workflow dispatches one review, " +
-      "fix every real finding, and retry. Do not post `@coderabbitai` commands by hand."
+      "Agents merge only after CodeRabbit's final review of the frozen head is clean. CodeRabbit reviews every " +
+      "non-draft push automatically (since 2026-09-26): wait for its review of this head, fix every real " +
+      "finding, and retry. If CodeRabbit skipped or was rate limited on this exact head, post " +
+      "`@coderabbitai review` on the PR once (Mason, 2026-09-27)."
     );
   }
   if (!pullRequestChecksGreen(pullRequest)) {
@@ -1361,6 +1385,9 @@ export function evaluateProductionAction({
   // suite) gets a fresh budget per evaluation. See createHardGateBudget.
   hardGateDeadlineMs = Date.now() + CODEX_HOOK_TIMEOUT_MS - CODEX_HOOK_RESERVE_MS,
   clock = () => Date.now(),
+  // Internal: > 0 when this call inspects a command found INSIDE another
+  // command (see expandNestedCommands). Not part of the hook's input.
+  nestingDepth = 0,
 } = {}) {
   const name = String(toolName);
   const baseRepoDir = path.resolve(repoDir);
@@ -1484,8 +1511,74 @@ export function evaluateProductionAction({
     return denied("CODEX PRODUCTION GATE: direct GitHub write tools are blocked because they bypass the reviewed git push and Husky pipeline. Use a normal feature-branch commit/push workflow.");
   }
 
-  const command = String(toolInput.command ?? toolInput.cmd ?? "").trim();
+  // Measured BEFORE the trim, so the trim never runs over unbounded input.
+  const untrimmedCommand = String(toolInput.command ?? toolInput.cmd ?? "");
+  const command = untrimmedCommand.length > MAX_INSPECTABLE_COMMAND_LENGTH ? untrimmedCommand : untrimmedCommand.trim();
   if (!command) return { blocked: false };
+
+  // First, before any parser (the nested-shell expansion below included): a
+  // hook killed at its time limit allows the command.
+  if (pushParseCostExceeded(command)) {
+    return denied(
+      "CODEX PRODUCTION GATE: this command is too large to inspect safely (it is over " +
+      `${MAX_INSPECTABLE_COMMAND_LENGTH.toLocaleString("en-US")} characters, or its \`git\` count times its length is ` +
+      `over ${PUSH_PARSE_COST_BUDGET.toLocaleString("en-US")}). A guard that runs out of time lets the command ` +
+      "through, so it is refused instead. Split it into smaller commands, or move long text into a file."
+    );
+  }
+  // A command handed to another program as one argument — `bash -c "…"`,
+  // `cmd /c "…"`, `pwsh -Command "…"`, `pwsh -EncodedCommand …`, `eval`,
+  // `Invoke-Expression`, `Start-Process`, a `&{ … }` block — is one word to every
+  // check below, so an administrator merge inside it was allowed (measured on
+  // PR #630's head, 2026-09-24). Each such inner command is evaluated here by
+  // this same function, on the same hard-gate deadline. Its advisory lookups are
+  // carried out to THIS call's allow point, after every hard gate has run.
+  const nestedAdvisories = [];
+  if (nestingDepth === 0) {
+    const nested = expandNestedCommands(command);
+    if (nested.tooDeep) return denied(nestedTooDeepDenial("CODEX PRODUCTION GATE"));
+    if (nested.computed) return denied(nestedComputedDenial("CODEX PRODUCTION GATE"));
+    if ([command, ...nested.commands].some((text) => commandFedToInterpreter(text))) {
+      return denied(commandFedToInterpreterDenial("CODEX PRODUCTION GATE"));
+    }
+    // One policy with Claude's push guard: a push carried by another program is
+    // refused, not evaluated. Evaluating it here allowed
+    // `bash -c "git push origin HEAD:feature"` while Claude's guard refused the
+    // same command (Codex luna, PR #795, 2026-09-26, finding 10). Read without
+    // the `{ }` / `( )` regrouping, as Claude's push guard reads it: that pass
+    // re-emits the outer command itself, so `git push origin HEAD:feature/x &&
+    // (npm test)` was refused as a nested push (CodeRabbit, PR #795,
+    // 2026-09-30). A push behind grouping is still refused by the whole-command
+    // composition check below.
+    const pushNested = expandNestedCommands(command, { grouping: false });
+    if (pushNested.commands.some((inner) =>
+      isGitPush(inner) || gitSubcommandIsDynamic(inner) || pushHiddenByShellComposition(inner))) {
+      return denied(
+        "CODEX PRODUCTION GATE: this command runs a git push inside another shell or an evaluator (bash -c, " +
+        "cmd /c, pwsh -Command or -EncodedCommand, eval, Invoke-Expression, Start-Process). The gate reads the " +
+        "outer command's text, so it cannot prove where a push carried that way would go. Run the push as its " +
+        "own plain command: `git -C <repo> push <remote> <refspec>`.");
+    }
+    for (const inner of nested.commands) {
+      const verdict = evaluateProductionAction({
+        toolName,
+        toolInput: { ...input, command: inner, cmd: undefined },
+        eventCwd,
+        branch,
+        repoDir,
+        nowMs,
+        runGit,
+        runGh,
+        hardGateDeadlineMs,
+        clock,
+        nestingDepth: 1,
+      });
+      if (verdict.blocked) {
+        return { ...verdict, reason: `${verdict.reason} [Found in a command run by a nested shell: ${inner.slice(0, 160)}]` };
+      }
+      nestedAdvisories.push(...(verdict.deferredAdvisories || []));
+    }
+  }
 
   if (reviewProofPathMentioned(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell access to review proof files is blocked. Run the real review wrapper instead.");
@@ -1560,7 +1653,12 @@ export function evaluateProductionAction({
   // destination literally and the segment is gated normally. Scoped to the
   // MUTATING segment so `npm test 2>&1 | Where-Object { $_ -match "x" }` — a
   // redirect in one stage and a variable in another — is not caught.
-  const computedSegment = mutatingSegmentWithComputedText(command);
+  // Not applied to a NESTED command: its text was already inspected here as part
+  // of the outer command, and its grouping reading turns `{ $_ -match "x" }` into
+  // a bare `$_ …` segment these two rules would refuse on its own. The merge
+  // gate's own substitution refusal and the push gate's unresolvable-ref denial
+  // still apply to it.
+  const computedSegment = nestingDepth === 0 && mutatingSegmentWithComputedText(command);
   if (computedSegment) {
     return denied(
       "CODEX PRODUCTION GATE: this mutating shell command builds a path or argument at run time " +
@@ -1590,7 +1688,7 @@ export function evaluateProductionAction({
   // run time may contain only recognised read-only command words, because the
   // guard cannot read what a writer it does not know will do with a value it
   // cannot see.
-  const computedAccess = computedSegmentWithUnrecognizedCommand(command, actionRepoDir);
+  const computedAccess = nestingDepth === 0 && computedSegmentWithUnrecognizedCommand(command, actionRepoDir);
   if (computedAccess) {
     return denied(
       "CODEX PRODUCTION GATE: this shell segment builds text at run time (a `$` variable, a subexpression, " +
@@ -1663,6 +1761,9 @@ export function evaluateProductionAction({
   // slow (CodeRabbit, 2026-09-09). Keyed on the COMPLETE parse — see
   // mergeRequestKey for why selector+repo would erase an `--admin` reading.
   const gatedRequests = new Set();
+  // A gh alias or extension expands into a command no check below can read.
+  const unreadableGh = ghCommandUnreadableIn(command);
+  if (unreadableGh) return denied(ghCommandUnreadableDenial("CODEX PRODUCTION GATE", unreadableGh));
   for (const segment of commandSegments) {
     const ghRequest = ghMergeRequest(segment) || ghApiMergeRequest(segment);
     // ── raw merge transports (Codex proof on PR #541, 2026-09-01) ───────────
@@ -1678,15 +1779,16 @@ export function evaluateProductionAction({
     // in a command substitution (Codex bot P1 on PR #541). Counting occurrences
     // keeps the ONE endpoint a `gh api ... /merge` request legitimately names
     // from denying its own gated route.
-    const endpointMentions = segment.match(/\/pulls\/[^\s/]+\/merge\b/gi) || [];
-    if (endpointMentions.length > (ghApiMergeRequest(segment)?.selector ? 1 : 0)) {
+    // Counted with the segment's shell quoting consumed too, so `mer\ge` or
+    // `mer^ge` inside a nested shell still counts.
+    if (rawMergeEndpointCount(segment) > (ghApiMergeRequest(segment)?.selector ? 1 : 0)) {
       return denied(
         "CODEX PRODUCTION GATE: raw GitHub REST merge calls (curl/wget/Invoke-RestMethod/fetch against " +
         ".../pulls/<n>/merge) are denied because the guard cannot resolve and verify the PR's base, head, " +
         "and checks for them. Use `gh pr merge <number>` so the gate can verify the merge."
       );
     }
-    if (/\bmergePullRequest\b/i.test(segment)) {
+    if (mentionsMergePullRequest(segment)) {
       return denied(
         "CODEX PRODUCTION GATE: GraphQL mergePullRequest mutations are denied — whatever transport carries " +
         "them — because the guard cannot resolve and verify the PR's base, head, and checks for them. " +
@@ -1758,10 +1860,15 @@ export function evaluateProductionAction({
     }
     const pushRepoDir = gitPushCwd(segment, actionRepoDir);
     let currentBranch = requestedWorkingDir ? "" : normalize(branch).toLowerCase();
+    // The push checks spend the same hard-gate budget as the merge checks: each
+    // segment costs a branch lookup plus several git calls in gateMainChange, and
+    // a chain of pushes could otherwise walk past the hook's timeout — where a
+    // hook that says nothing ALLOWS (CodeRabbit on PR #630, 2026-09-21).
     if (!currentBranch || pushRepoDir !== actionRepoDir) {
       try {
-        currentBranch = normalize(runGit(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir)).toLowerCase();
+        currentBranch = normalize(gateRunGit(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir)).toLowerCase();
       } catch (error) {
+        if (hardGateBudget.exhausted) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE", "push"));
         return denied(`CODEX PRODUCTION GATE: could not determine the push branch, so the push is denied (fail closed). ${error?.message || error}`);
       }
     }
@@ -1776,7 +1883,9 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: `git push origin :main` deletes the production branch and is always denied.");
     }
     if (sourceRef) {
-      const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit });
+      const result = gateMainChange({ repoDir: pushRepoDir, sourceRef, nowMs, runGit: gateRunGit });
+      // Checked before `blocked`: a gate that swallowed the refusal must not allow.
+      if (hardGateBudget.exhausted) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE", "push"));
       if (result.blocked) return result;
     }
   }
@@ -1796,21 +1905,15 @@ export function evaluateProductionAction({
   // any of them — including a LATER merge's gates, which is what running the
   // advisory inside the loop allowed (Codex round 8, SEC-001). One deadline is
   // shared by every lookup so N merges cannot multiply the budget.
+  // A nested command hands its cleared merges to the outer call, whose allow
+  // point is the only one that comes after EVERY hard gate in the command.
+  if (nestingDepth > 0) return { blocked: false, deferredAdvisories };
   const advisoryDeadlineMs = Date.now() + CODEX_ADVISORY_BUDGET_MS;
-  for (const request of deferredAdvisories) {
+  for (const request of [...nestedAdvisories, ...deferredAdvisories]) {
     const advisory = codexAppAdvisory({ request, repoDir: actionRepoDir, runGh, deadlineMs: advisoryDeadlineMs });
     if (advisory) return advisory;
   }
   return { blocked: false };
-}
-
-function readStdin() {
-  return new Promise((resolve) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => { input += chunk; });
-    process.stdin.on("end", () => resolve(input));
-  });
 }
 
 function writeDenial(reason) {
@@ -1824,7 +1927,22 @@ function writeDenial(reason) {
 }
 
 async function main() {
-  const raw = await readStdin();
+  // Measured while reading, before decoding: JSON.parse on an unbounded input is
+  // itself a way to outrun the hook limit, and a killed hook allows the action.
+  const input = await readHookInputBounded();
+  if (input.failed) {
+    writeDenial(`CODEX PRODUCTION GATE: hook input could not be read (${input.failed}), so the action is denied (fail closed).`);
+    return;
+  }
+  const raw = input.text;
+  if (input.tooLarge) {
+    writeDenial(
+      "CODEX PRODUCTION GATE: this tool call is too large to inspect safely (its hook input is over " +
+      `${MAX_HOOK_INPUT_LENGTH.toLocaleString("en-US")} bytes). A guard that runs out of time lets the ` +
+      "action through, so it is refused instead. Split it into smaller steps, or move long text into a file."
+    );
+    return;
+  }
   let payload;
   try {
     payload = raw.trim() ? JSON.parse(raw) : {};
