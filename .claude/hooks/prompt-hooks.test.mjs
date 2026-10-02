@@ -727,12 +727,14 @@ rmSync(hbProj, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 
-  // A bare agent-message turn: every hook silent, no hold, no freeze flag. The
-  // exception is a TRUNCATED report and the latch: it is kept for the latch
-  // (fail-safe, Sol review of #826), so its own "stop" latches the hold.
+  // A bare agent-message turn: every hook silent, no hold, no freeze flag. A
+  // TRUNCATED report used to latch the hold as a fail-safe (Sol review of #826);
+  // since 2026-10-02 (Mason) a turn that opens with the harness preamble never
+  // latches, because that fail-safe is what froze a session on a subagent report.
+  // A truncated report WITHOUT the preamble keeps the fail-safe.
   for (const [label, turn] of SPELLINGS) {
     const dir = mkdtempSync(path.join(tmpdir(), "crx-agentmsg-"));
-    const truncated = /truncated/.test(label);
+    const truncated = /truncated/.test(label) && !turn.trimStart().startsWith("Another Claude session sent a message:");
     for (const hook of PHRASE_HOOKS) {
       const r = run(hook, dir, turn);
       eq(r.status, 0, `${hook} exits 0 on a ${label} report`);
@@ -814,4 +816,23 @@ const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-rem
 ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed intent");
 
 rmSync(tmpProj, { recursive: true, force: true });
+
+// A Codex scheduled automation opens with "Automation: <name>" + "Automation ID:".
+// One latched the main checkout's hold on 2026-09-28 and left it stuck for days.
+// It must neither latch nor clear the hold (Mason, 2026-10-02).
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "crx-automation-"));
+  const holdFile = path.join(dir, ".claude", "session-state", "hold.json");
+  const runHold = (prompt) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+    input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+  });
+  const AUTOMATION = "Automation: Codex Weekly Usage Coach\nAutomation ID: codex-weekly-usage-coach\nStop any run that is over budget and pause the report.";
+  eq(runHold(AUTOMATION).stdout.trim(), "", "automation prompt is silent");
+  ok(!existsSync(holdFile), "automation prompt does not latch the hold");
+  runHold("pause");
+  ok(existsSync(holdFile), "setup: Mason's pause latched the hold");
+  runHold(AUTOMATION.replace(/Stop|pause/g, "skip"));
+  ok(existsSync(holdFile), "automation prompt does not clear Mason's hold");
+  rmSync(dir, { recursive: true, force: true });
+}
 console.log(`prompt-hooks: ${pass} assertions passed`);

@@ -1,12 +1,20 @@
 # Decision Log
 
-Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected)
+Last verified: 2026-10-02 (guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-02 — guards block only what cannot be undone; everything else warns. Lighter review for UI and wording changes
+
+**Decision (Mason, in chat):** Guards hard-block only irreversible or outward-facing actions: force pushes, wiping files or the database, secrets, live database changes and unreviewed migration applies, merging without the required reviews, forged review proofs, and Mason's own "stop". Every other guard warns instead of blocking or is removed. No new guard, hook or gate is built for 30 days unless something actually breaks for a customer. Separately, Mason said YES to lighter review: screen and wording changes ship on green checks plus CodeRabbit approval, while money, inventory, database and security changes keep the full Codex review (Luna rounds plus the exact-SHA Sol proof). The lighter-review rule is not implemented yet; it needs its own change to the merge gate and `.claude/commands/ship.md`.
+
+**Why:** In the 14 days to 2026-10-02 the guards recorded 915 blocks, about two-thirds from three sources that protect nothing irreversible (review-proof-guard's shell allowlist 359, the two "prove it" Stop hooks 280, a cosmetic PostToolUse migration block 109). Each false positive tended to spawn a guard-fix PR, which ran the full review chain and added more guard code: the hook stack grew from about 16k to 39k lines after the 2026-09-10 "fewer guards, more product" request. Only about 2 of the 23 merges after 2026-09-20 were product work.
+
+**Operative rule:** When a guard blocks a harmless command, work around it and note it; do not open a PR to tighten or patch that guard. A reviewer finding that a speed-bump guard can be bypassed is not a blocker unless the bypass reaches something irreversible. Branch protection, CI and CodeRabbit are the boundary for guard files. Detail: `docs/changelog.d/2026-10-02-guard-cleanup-noisy-blocks.md`.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
 

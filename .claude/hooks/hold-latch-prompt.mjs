@@ -24,6 +24,17 @@ try { payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(
 // Proven 2026-07-04: a <task-notification> audit digest containing "stop" latched hold.json.
 if (isMachineGenerated(payload?.prompt)) emit();
 
+// Whole turns the harness generates, recognised by how they START rather than by
+// parsing their envelopes (Mason, 2026-10-02): a subagent hand-back or peer
+// message (the harness always opens it with this preamble — one latched this
+// hold on 2026-10-02 despite the span-stripping below), and a Codex scheduled
+// automation ("Automation: <name>" then "Automation ID:", which latched the
+// main checkout's hold on 2026-09-28 and left it stuck). Mason never types
+// either opening, so these turns neither latch nor clear the hold.
+const rawPrompt = String(payload?.prompt ?? "");
+if (/^\s*Another Claude session sent a message:/.test(rawPrompt) ||
+    /^\s*Automation: [^\n]*\n\s*Automation ID: /.test(rawPrompt)) emit();
+
 // Strip the spans of THIS prompt that Mason did not author — peer-session
 // <cross-session-message> blocks, subagent <~agent-message> hand-backs and the
 // "Another Claude session sent a message:" preamble (2026-09-25), machine

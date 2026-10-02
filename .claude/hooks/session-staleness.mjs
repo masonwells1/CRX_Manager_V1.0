@@ -300,6 +300,14 @@ function offsiteBackupEvidence() {
   const cachePath = process.env.CRX_OFFSITE_BACKUP_CACHE ||
     path.join(os.homedir(), ".crx-offsite-backup-check.json");
 
+  // A cached SUCCESS that would raise the alarm (stale or missing date) is never
+  // trusted on its own: it is re-checked first (2026-10-02 — one stale answer
+  // from gh's server-side `--status success` filter sat in this cache and told
+  // every session for hours that the backup was 39 days old, when a run had
+  // succeeded five days earlier). If the re-check fails, the cached answer is
+  // still used, so a real outage is still reported.
+  let staleCachedAt;            // floor for the new answer (any cached success)
+  let freshAlarmingCache = false; // the cache is inside its TTL but would alarm
   try {
     const cached = JSON.parse(readFileSync(cachePath, "utf8"));
     const age = Date.now() - Date.parse(cached?.fetched_at);
@@ -307,19 +315,28 @@ function offsiteBackupEvidence() {
     if (Number.isFinite(age) && age >= 0 && age < ttl) {
       if (!cached.ok) return { available: false };
       const at = Date.parse(cached.completed_at);
-      return { available: true, completedAt: Number.isFinite(at) ? at : null };
+      const completedAt = Number.isFinite(at) ? at : null;
+      if (completedAt !== null && (Date.now() - completedAt) / DAY_MS <= STALE_AFTER_DAYS) {
+        return { available: true, completedAt };
+      }
+      staleCachedAt = completedAt ?? undefined;
+      freshAlarmingCache = true;
+    } else if (cached?.ok) {
+      const at = Date.parse(cached.completed_at);
+      if (Number.isFinite(at)) staleCachedAt = at;   // expired, but a floor for the new answer
     }
   } catch { /* no cache yet, or unreadable: ask gh */ }
 
   let entry;
   try {
+    // Fetch recent runs UNFILTERED and pick the newest success here, rather than
+    // trusting the server-side status filter that returned a stale run.
     const out = execFileSync(process.env.CRX_OFFSITE_BACKUP_GH || "gh", [
       "run", "list",
       "--repo", OFFSITE_REPO,
       "--workflow", OFFSITE_WORKFLOW,
-      "--status", "success",
-      "--limit", "1",
-      "--json", "updatedAt",
+      "--limit", "20",
+      "--json", "conclusion,updatedAt",
     ], {
       encoding: "utf8",
       timeout: OFFSITE_GH_TIMEOUT_MS,
@@ -328,8 +345,15 @@ function offsiteBackupEvidence() {
     });
     const runs = JSON.parse(out);
     if (!Array.isArray(runs)) throw new Error("unexpected gh output shape");
-    entry = { ok: true, completed_at: runs[0]?.updatedAt ?? null };
+    const successes = runs
+      .filter((run) => run?.conclusion === "success")
+      .map((run) => Date.parse(run.updatedAt))
+      .filter(Number.isFinite);
+    // Never move backwards: an older answer than one already seen is ignored.
+    const newest = Math.max(staleCachedAt ?? -Infinity, ...successes);
+    entry = { ok: true, completed_at: Number.isFinite(newest) ? new Date(newest).toISOString() : null };
   } catch {
+    if (freshAlarmingCache) return { available: true, completedAt: staleCachedAt ?? null };
     entry = { ok: false };
   }
   try {

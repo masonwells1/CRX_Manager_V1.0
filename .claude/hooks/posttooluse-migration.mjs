@@ -40,4 +40,8 @@ Before continuing, you MUST:
 
 Do NOT proceed to other tasks until these steps are complete.`;
 
-process.stdout.write(JSON.stringify({ decision: "block", reason }));
+// Context, not `decision: "block"`: a PostToolUse block cannot undo the edit, it
+// only rendered as a "blocking error" (109 times in 14 days before 2026-10-02).
+process.stdout.write(JSON.stringify({
+  hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: reason },
+}));

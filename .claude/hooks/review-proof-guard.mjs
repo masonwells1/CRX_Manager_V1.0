@@ -67,6 +67,9 @@ const rawToolInput = payload.tool_input ?? payload.toolInput;
 const isRawPatch = typeof rawToolInput === "string" && /(?:^|__)apply_patch$/i.test(toolName.trim());
 const isObjectInput = typeof rawToolInput === "object" && rawToolInput !== null && !Array.isArray(rawToolInput);
 let uninspectable = "";
+// Set by the enforcement-surface shell rule when a command cannot be vouched
+// for as read-only but does not plainly write; emitted as a warning at the end.
+let enforcementWarning = "";
 if (typeof rawToolName !== "string" || !rawToolName.trim()) uninspectable = "input had no tool name";
 else if (!isRawPatch && !isObjectInput) uninspectable = "input had no usable tool input";
 const eventCwd = String(payload?.cwd || "");
@@ -753,7 +756,8 @@ if (shellTool) {
       .some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolveDotSegments(token)}`));
   };
   const redirectTargetsEnforcementSurface = (v) => {
-    for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
+    // `>|` is the noclobber-override spelling of `>`; it writes just the same.
+    for (const m of v.matchAll(/>>?\|?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
       if (namesEnforcementSurface(m[1].replace(/["']/g, ""))) return true;
     }
     return false;
@@ -781,13 +785,49 @@ if (shellTool) {
   // the same thing indirectly.
   const COMMAND_RESOLUTION_RE =
     /(?:^|[\s;&|(])(?:export\s+)?(?:PATH|BASH_ENV|ENV|SHELL|IFS|LD_PRELOAD|LD_LIBRARY_PATH|NODE_OPTIONS|PATHEXT)\s*=/i;
+  // OBVIOUS WRITES DENY; EVERYTHING ELSE WARNS (Mason, 2026-10-02). The
+  // fail-closed allowlist above denied 359 commands in 14 days, almost all of
+  // them reads (`for` loops, `sed -n`, `diff`, `node -e` that only reads). This
+  // rule was always a speed bump — branch protection, CI and CodeRabbit are the
+  // boundary for these files — so a false refusal now costs more than the exotic
+  // bypasses the allowlist closed. A command that plainly writes INTO a guarded
+  // path (a redirect, a delete/copy/move verb, an in-place edit, a git subcommand
+  // that rewrites the working tree) is still denied. Anything the allowlist
+  // cannot vouch for is let through with a visible warning instead.
+  const GIT_WRITER_SUBCOMMANDS = new Set([
+    "checkout", "restore", "apply", "am", "rm", "mv", "clean", "stash", "reset",
+    "revert", "cherry-pick", "rebase", "switch", "merge", "pull",
+  ]);
+  const WRITER_HEADS = new Set([
+    "rm", "rmdir", "unlink", "mv", "cp", "tee", "install", "dd", "truncate", "ln",
+    "patch", "rsync", "shred", "rimraf",
+    "set-content", "add-content", "out-file", "copy-item", "move-item", "remove-item",
+    "new-item", "ni", "del", "erase", "copy", "move", "ri", "sc", "ac",
+  ]);
+  const WRAPPER_PREFIX_RE = /^(?:sudo|command|env|exec|eval|nice|nohup|xargs|timeout\s+\S+|npx|npm\s+exec|yarn|pnpm(?:\s+exec)?)\s+/i;
+  const segmentObviouslyWrites = (segment) => {
+    let s = String(segment).trim();
+    while (WRAPPER_PREFIX_RE.test(s)) s = s.replace(WRAPPER_PREFIX_RE, "");
+    const head = ((s.match(/^([\w.:\\/-]+)/) || [])[1] || "").replace(/^.*[/\\]/, "").toLowerCase();
+    if (WRITER_HEADS.has(head)) return true;
+    if ((head === "sed" || head === "perl") && /(?:^|\s)(?:-[A-Za-z]*i|--in-place)/.test(s)) return true;
+    if (head === "git") {
+      const sub = gitSubcommandOf(s);
+      return Boolean(sub && GIT_WRITER_SUBCOMMANDS.has(sub));
+    }
+    return false;
+  };
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
+    enforcementSegments(v).some((seg) => namesEnforcementSurface(seg) && segmentObviouslyWrites(seg)))) {
+    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed. Change one deliberately through Edit/Write.");
+  }
+  if (destructiveViews.some((v) =>
     ((REDEFINES_COMMANDS_RE.test(v) || NESTED_EXECUTION_RE.test(v) || COMMAND_RESOLUTION_RE.test(v)) &&
       namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
-    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+    enforcementWarning = "⚠ review-proof-guard: this command names a guard/CI file (.husky, .github/workflows, .claude/hooks, .codex/hooks, .coderabbit.yaml) and could not be confirmed read-only, so it was ALLOWED with this warning. If it was meant to change one of those files, use Edit/Write instead so the change is visible.";
   }
 }
 
@@ -853,4 +893,7 @@ if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {
 }
 
 if (uninspectable) skippedCheck(uninspectable);
+if (enforcementWarning) {
+  process.stdout.write(JSON.stringify({ systemMessage: enforcementWarning }));
+}
 process.exit(0);
