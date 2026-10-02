@@ -14,8 +14,8 @@ the code and real data, and both are valid.
    those reads and the status could be missed. Both paths now read the `Review completed` status
    first. Only then do they read the head's PR association, the inline comments and a fresh copy of
    the reviews (`GET /repos/{o}/{r}/pulls/{n}/reviews`, paginated). CodeRabbit posts findings 6-8 s
-   before its completion status on every observed run, so the evidence read after the status always
-   includes them.
+   before its completion status on every observed run. In those runs, the post-status evidence included
+   them; comment-list freshness was not verified.
 
 Applied in `coderabbitClearedHead()` / `codeRabbitInlineFindingSince()` in
 `.claude/hooks/codex-push-lib.mjs`, and in `inspectCodeRabbitFollowUp()` in
