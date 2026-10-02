@@ -23,6 +23,15 @@ eq([...extractClaudeHookRefs('node ".../.claude/hooks/sql-safety.mjs"')], ["sql-
 eq([...extractClaudeHookRefs("node \".claude\\hooks\\bash-safety.mjs\"")], ["bash-safety.mjs"], "extracts a single-backslash Windows-style ref");
 eq([...extractClaudeHookRefs("no hooks here")], [], "no refs → empty set");
 eq(new Set(extractClaudeHookRefs("a/.claude/hooks/x.mjs b/.claude/hooks/x.mjs")).size, 1, "dedupes repeats");
+eq(
+  [...extractClaudeHookRefs(JSON.stringify({
+    permissions: { ask: ["Edit(.claude/hooks/codex-push-lib.mjs)"] },
+    hooks: { PreToolUse: [{ hooks: [{ command: 'node ".claude/hooks/bash-safety.mjs"' }] }] },
+  }))],
+  ["bash-safety.mjs"],
+  "a permission rule naming a hook file is not hook wiring — only the hooks block counts",
+);
+eq([...extractClaudeHookRefs(JSON.stringify({ note: ".claude/hooks/y.mjs" }))], ["y.mjs"], "JSON without a hooks block is scanned whole, as before");
 
 // ── hookManifestParity: symmetric, allowlist-aware ──────────────────────────
 eq(hookManifestParity({ claudeHooks: ["a.mjs", "b.mjs"], codexHooks: ["a.mjs", "b.mjs"] }).ok, true, "identical sets → parity");
