@@ -16,7 +16,7 @@
  *     other than draft/unposted (the migration's group-aware lock surface).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import FieldApplicationInvoice from './FieldApplicationInvoice';
 import FieldApplicationInvoiceRoute from '../components/FieldApplicationInvoiceRoute';
@@ -174,6 +174,19 @@ function makeFromMock(perTable: Record<string, { data: unknown; error?: unknown 
     chain.term = term;
     return chain;
   });
+}
+
+// Tests that pin the clock with pinBusinessDay() get the real clock back here, even on failure.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// A NEW invoice starts on today's Chicago date. A test that changes the date must start from a
+// known day, or the "change" is a no-op on the one day it equals today (2026-10-01 did exactly
+// that). Only Date is faked, so testing-library's waitFor/findBy timers keep running for real.
+function pinBusinessDay(day: string) {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(`${day}T17:00:00Z`)); // 12:00 CDT: the same calendar day in Chicago
 }
 
 beforeEach(() => {
@@ -465,6 +478,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
   });
 
   it('discards a rendered preview when the transaction date changes', async () => {
+    pinBusinessDay('2026-09-30');
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
@@ -480,6 +494,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
 
     const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    expect(dateInput).toHaveValue('2026-09-30'); // so the change below is a real change
     fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
 
     await waitFor(() => {
@@ -492,6 +507,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
     // nothing about a Preview RPC that is ALREADY in flight. Without a version guard that
     // request resolves later and unconditionally repaints a breakdown priced for the OLD date
     // — across the Oct 1 season boundary, a different per-acre rate than save will use.
+    pinBusinessDay('2026-09-30');
     await renderPage();
 
     fireEvent.click(screen.getByRole('button', { name: /Select Locations/i }));
@@ -519,6 +535,7 @@ describe('FieldApplicationInvoice — #33 discount on a NEW invoice reaches the 
     // Operator moves the date across the season boundary while the request is still open.
     const dateInput = screen.getByText('Transaction Date').parentElement?.querySelector('input[type="date"]');
     expect(dateInput).toBeInstanceOf(HTMLInputElement);
+    expect(dateInput).toHaveValue('2026-09-30'); // so the change below crosses Oct 1
     fireEvent.change(dateInput as HTMLInputElement, { target: { value: '2026-10-01' } });
 
     // The old-date answer lands now. It must be discarded, not rendered.
