@@ -819,7 +819,8 @@ if (shellTool) {
   };
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
-    enforcementSegments(v).some((seg) => namesEnforcementSurface(seg) && segmentObviouslyWrites(seg)))) {
+    enforcementSegments(v).some((seg) => namesEnforcementSurface(seg) &&
+      (segmentObviouslyWrites(seg) || flagValueNamesEnforcementSurface(seg))))) {
     deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed. Change one deliberately through Edit/Write.");
   }
   if (destructiveViews.some((v) =>

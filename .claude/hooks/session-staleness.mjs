@@ -323,7 +323,9 @@ function offsiteBackupEvidence() {
       freshAlarmingCache = true;
     } else if (cached?.ok) {
       const at = Date.parse(cached.completed_at);
-      if (Number.isFinite(at)) staleCachedAt = at;   // expired, but a floor for the new answer
+      // Expired, but a floor for the new answer — unless it claims a future date,
+      // which no real run can have and which would otherwise mask an outage forever.
+      if (Number.isFinite(at) && at <= Date.now()) staleCachedAt = at;
     }
   } catch { /* no cache yet, or unreadable: ask gh */ }
 

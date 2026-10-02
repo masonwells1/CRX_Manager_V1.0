@@ -474,17 +474,14 @@ const WARN_ONLY_SINCE_2026_10_02 = new Set([
   "node -e require('fs').writeFileSync('.husky/pre-push','')",
   "node --eval require('fs').writeFileSync('.husky/pre-push','')",
   "sed -n w .husky/pre-push /dev/null",
-  "sort -o .husky/pre-push /dev/null",
   "find . -name x -fprintf .husky/pre-push %p",
   "awk -v p=.husky/pre-push END{print>p}",
   "uniq /tmp/in .husky/pre-push",
-  "diff --output=.husky/pre-push a b",
   "yq -i .a=1 .codex/hooks.json",
   "xxd -r /tmp/x .husky/pre-push",
-  "git diff --output=.husky/pre-push HEAD~1 HEAD",
-  "git show --output=.github/workflows/ci.yml HEAD:package.json",
-  "git diff --output .husky/pre-push HEAD~1 HEAD",
-  "grep --output=.husky/pre-push x /tmp/in",
+  // `sort -o`, `diff --output=`, `git diff/show --output` and `grep --output=`
+  // name the guarded path as an output flag's VALUE — a plain write — so they
+  // still deny (Luna round 1, 2026-10-02).
   "scripts/cat .husky/pre-push",
   "/tmp/git diff .github/workflows/ci.yml",
   "./cat .husky/pre-push",
