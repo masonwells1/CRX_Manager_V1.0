@@ -879,7 +879,7 @@ export default function FieldAppSplitInvoiceEditor() {
       <div className="max-w-2xl mx-auto p-6">
         <Card>
           <div className="flex items-start gap-3">
-            <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
             <div>
               <h2 className="text-lg font-semibold font-heading text-nav-dark">Per-line split billing is not enabled</h2>
               <p className="text-sm text-secondary mt-1">

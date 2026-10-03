@@ -1297,7 +1297,7 @@ export default function DeliveryDetail() {
                   </Badge>
                 )}
               </h2>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 {delivery.priority && delivery.priority !== 'normal' && (
                   <Badge variant={PRIORITY_BADGE[delivery.priority] || 'default'} size="sm">
                     {PRIORITY_LABELS[delivery.priority]}
@@ -1370,7 +1370,7 @@ export default function DeliveryDetail() {
           {rupWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div className="text-sm text-amber-800">
                   {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
                 </div>
@@ -1382,7 +1382,7 @@ export default function DeliveryDetail() {
           {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
                   <div className="text-sm text-amber-700 mt-1">
@@ -1427,7 +1427,7 @@ export default function DeliveryDetail() {
                           type="number"
                           value={currentQty}
                           onChange={(e) => updateDeliveryQty(item.id, parseFloat(e.target.value) || 0, item.quantity)}
-                          className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
+                          className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green"
                           min="0"
                           step="any"
                           aria-label={`Quantity for ${(item.product as unknown as { product_name: string })?.product_name || 'item'}`}
@@ -1536,7 +1536,7 @@ export default function DeliveryDetail() {
               <select
                 value={driverIssueType}
                 onChange={(e) => setDriverIssueType(e.target.value as DeliveryIssueType)}
-                className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
+                className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green"
               >
                 {Object.entries(ISSUE_TYPE_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>{label}</option>
@@ -1548,7 +1548,7 @@ export default function DeliveryDetail() {
                   onChange={(e) => setDriverIssueNotes(e.target.value)}
                   placeholder="Describe the issue..."
                   rows={2}
-                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green resize-none"
+                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green resize-none"
                 />
               )}
             </div>
@@ -1565,7 +1565,7 @@ export default function DeliveryDetail() {
                   value={signedBy}
                   onChange={(e) => setSignedBy(e.target.value)}
                   placeholder="Customer name"
-                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green"
+                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green"
                 />
               </div>
               <div className="flex items-center gap-1 mb-1">
@@ -1593,7 +1593,7 @@ export default function DeliveryDetail() {
               )}
               {!isOnline && (
                 <div className="flex items-center gap-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
-                  <WifiOff className="h-4 w-4 flex-shrink-0" />
+                  <WifiOff className="h-4 w-4 shrink-0" />
                   <span>You are offline. Delivery will be saved locally and synced when you reconnect.</span>
                 </div>
               )}
@@ -1889,7 +1889,7 @@ export default function DeliveryDetail() {
                 <select
                   value={editDriver}
                   onChange={(e) => setEditDriver(e.target.value)}
-                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">Unassigned</option>
                   {drivers.map((d) => (
@@ -1902,7 +1902,7 @@ export default function DeliveryDetail() {
                 <select
                   value={editPriority}
                   onChange={(e) => setEditPriority(e.target.value)}
-                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {Object.entries(PRIORITY_LABELS).map(([key, label]) => (
                     <option key={key} value={key}>{label}</option>
@@ -1943,7 +1943,7 @@ export default function DeliveryDetail() {
               <select
                 value={editAddress}
                 onChange={(e) => setEditAddress(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Use billing address</option>
                 {addresses.map((a) => (
@@ -1965,7 +1965,7 @@ export default function DeliveryDetail() {
               <h4 className="text-sm font-medium text-secondary mb-2">Delivery Items</h4>
               {delivery.status !== 'scheduled' && (
                 <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700 mb-3 flex items-start gap-2">
-                  <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <Lock className="w-4 h-4 mt-0.5 shrink-0" />
                   <div>
                     <p className="font-medium">Items are locked while delivery is in progress</p>
                     <p className="text-xs mt-1">Adjust quantities during completion if needed.</p>
@@ -1974,7 +1974,7 @@ export default function DeliveryDetail() {
               )}
               {delivery.status === 'scheduled' && (
                 <div className="p-3 bg-green-50 rounded-lg border border-green-200 text-sm text-green-700 mb-3 flex items-start gap-2">
-                  <Pencil className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <Pencil className="w-4 h-4 mt-0.5 shrink-0" />
                   <div>
                     <p className="font-medium">You can add, remove, or adjust items</p>
                     <p className="text-xs mt-1">Removed items will stay on the order for a future delivery.</p>
@@ -2021,7 +2021,7 @@ export default function DeliveryDetail() {
                               )
                             );
                           }}
-                          className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                           min="0"
                           max={item.max_quantity}
                           step="any"
@@ -2070,7 +2070,7 @@ export default function DeliveryDetail() {
                       setEditItems(next.editItems);
                       setAvailableOrderItems(next.availableItems);
                     }}
-                    className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Select a product to add...</option>
                     {availableOrderItems.map((a) => (
@@ -2095,7 +2095,7 @@ export default function DeliveryDetail() {
       {delivery.status === 'cancelled' && delivery.cancel_reason && (
         <Card>
           <div className="flex items-start gap-3">
-            <Ban className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+            <Ban className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-semibold text-red-700">Cancelled</h3>
               <p className="text-sm text-secondary mt-1">{delivery.cancel_reason}</p>
@@ -2134,7 +2134,7 @@ export default function DeliveryDetail() {
       {delivery.status === 'completed' && delivery.issue_type && delivery.issue_type !== 'none' && (
         <Card>
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+            <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-semibold text-amber-700">
                 Issue Reported: {ISSUE_TYPE_LABELS[delivery.issue_type] || delivery.issue_type}
@@ -2169,7 +2169,7 @@ export default function DeliveryDetail() {
       {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
               <div className="text-sm text-amber-700 mt-1">
@@ -2276,7 +2276,7 @@ export default function DeliveryDetail() {
                       type="number"
                       value={currentQty}
                       onChange={(e) => updateDeliveryQty(item.id, parseFloat(e.target.value) || 0, item.quantity)}
-                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       min="0"
                       step="any"
                     />
@@ -2306,7 +2306,7 @@ export default function DeliveryDetail() {
               <select
                 value={driverIssueType}
                 onChange={(e) => setDriverIssueType(e.target.value as DeliveryIssueType)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 {Object.entries(ISSUE_TYPE_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>{label}</option>
@@ -2535,7 +2535,7 @@ export default function DeliveryDetail() {
       <Modal open={voidOpen} onClose={() => setVoidOpen(false)} title="Void Completed Delivery">
         <div className="space-y-4">
           <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
-            <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <RotateCcw className="w-5 h-5 text-red-600 shrink-0" />
             <p className="text-sm text-red-800">
               You are about to void delivery <strong>{delivery?.delivery_number}</strong>. This will:
               <ul className="mt-1 list-disc list-inside space-y-0.5">
@@ -2554,7 +2554,7 @@ export default function DeliveryDetail() {
               onChange={(e) => setVoidReason(e.target.value)}
               placeholder="Enter reason for voiding this delivery..."
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">
@@ -2576,7 +2576,7 @@ export default function DeliveryDetail() {
       <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel Delivery">
         <div className="space-y-4">
           <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
-            <Ban className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <Ban className="w-5 h-5 text-red-600 shrink-0" />
             <p className="text-sm text-red-800">
               You are about to cancel delivery <strong>{delivery.delivery_number}</strong>.
               The assigned driver will be notified.
@@ -2594,7 +2594,7 @@ export default function DeliveryDetail() {
               onChange={(e) => setCancelReason(e.target.value)}
               placeholder="Enter reason for cancellation..."
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">

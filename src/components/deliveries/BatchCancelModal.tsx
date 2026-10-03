@@ -33,7 +33,7 @@ export default function BatchCancelModal({
     <Modal open={open} onClose={onClose} title="Batch Cancel Deliveries">
       <div className="space-y-4">
         <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
-          <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+          <XCircle className="w-5 h-5 text-red-600 shrink-0" />
           <p className="text-sm text-red-800">
             You are about to cancel <strong>{count}</strong> delivery{count !== 1 ? 'ies' : ''}. This action will be
             recorded in the audit log.
@@ -47,7 +47,7 @@ export default function BatchCancelModal({
             onChange={(e) => setReason(e.target.value)}
             placeholder="Enter reason for cancelling these deliveries..."
             rows={3}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
           />
         </div>
 

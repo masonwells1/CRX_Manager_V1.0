@@ -154,14 +154,14 @@ export default function JobBatchesManager({ open, onClose, batches, memberCounts
                   const dirty = e.name.trim() !== b.name || e.description.trim() !== (b.description ?? '');
                   return (
                     <div key={b.id} className="flex items-start gap-3 p-2.5 border border-gray-200 rounded-lg">
-                      <Layers className="w-4 h-4 text-crx-green flex-shrink-0 mt-2" aria-hidden="true" />
+                      <Layers className="w-4 h-4 text-crx-green shrink-0 mt-2" aria-hidden="true" />
                       <div className="flex-1 min-w-0 space-y-1.5">
                         <input
                           type="text"
                           value={e.name}
                           onChange={(ev) => setEdit(b.id, { name: ev.target.value })}
                           aria-label={`Batch name for ${b.name}`}
-                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                         />
                         <input
                           type="text"
@@ -169,7 +169,7 @@ export default function JobBatchesManager({ open, onClose, batches, memberCounts
                           onChange={(ev) => setEdit(b.id, { description: ev.target.value })}
                           placeholder="Description (optional)"
                           aria-label={`Batch description for ${b.name}`}
-                          className="w-full px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="w-full px-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                         />
                       </div>
                       <span className="text-xs text-secondary whitespace-nowrap mt-2">{memberHint(b)}</span>
@@ -214,7 +214,7 @@ export default function JobBatchesManager({ open, onClose, batches, memberCounts
                 onKeyDown={(ev) => ev.key === 'Enter' && createBatch()}
                 placeholder="Batch name (e.g. Tuesday corn run)"
                 aria-label="New batch name"
-                className="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <input
                 type="text"
@@ -223,7 +223,7 @@ export default function JobBatchesManager({ open, onClose, batches, memberCounts
                 onKeyDown={(ev) => ev.key === 'Enter' && createBatch()}
                 placeholder="Description (optional)"
                 aria-label="New batch description"
-                className="flex-1 min-w-[10rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="flex-1 min-w-[10rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <Button
                 icon={<Plus className="w-4 h-4" />}

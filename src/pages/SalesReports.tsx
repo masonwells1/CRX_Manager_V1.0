@@ -418,12 +418,12 @@ export default function SalesReports() {
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
               <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
             </div>
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
               <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
             </div>
             <div className="flex gap-1.5">
               {[
@@ -448,7 +448,7 @@ export default function SalesReports() {
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">Product</label>
               <select value={productId} onChange={e => setProductId(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[180px]">
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[180px]">
                 <option value="">All Products</option>
                 {productOptions.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
@@ -463,7 +463,7 @@ export default function SalesReports() {
                 value={customerSearch}
                 onChange={e => { setCustomerSearch(e.target.value); setShowCustomerDropdown(true); }}
                 onFocus={() => setShowCustomerDropdown(true)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]"
               />
               {showCustomerDropdown && customerSearch && filteredCustomerOptions.length > 0 && (
                 <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
@@ -482,7 +482,7 @@ export default function SalesReports() {
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">Sales Rep</label>
                 <select value={salesRepId} onChange={e => setSalesRepId(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[160px]">
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[160px]">
                   <option value="">All Reps</option>
                   {salesRepOptions.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
                 </select>
@@ -493,7 +493,7 @@ export default function SalesReports() {
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">Category</label>
               <select value={category} onChange={e => setCategory(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[140px]">
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[140px]">
                 <option value="">All Categories</option>
                 {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -503,7 +503,7 @@ export default function SalesReports() {
             <div>
               <label className="block text-xs font-medium text-secondary mb-1">Season</label>
               <select value={season} onChange={e => setSeason(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[100px]">
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[100px]">
                 <option value="">All</option>
                 {seasonOptions.map(s => <option key={s} value={s}>{s}</option>)}
               </select>

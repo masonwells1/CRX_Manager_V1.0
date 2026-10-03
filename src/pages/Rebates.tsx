@@ -723,7 +723,7 @@ export default function Rebates() {
               <select
                 value={pForm.product_id}
                 onChange={(e) => setPForm({ ...pForm, product_id: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">All products from manufacturer</option>
                 {products.map((p) => (
@@ -741,7 +741,7 @@ export default function Rebates() {
               <select
                 value={pForm.rebate_type}
                 onChange={(e) => setPForm({ ...pForm, rebate_type: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="per_unit">Per Unit ($)</option>
                 <option value="percentage">Percentage (%)</option>
@@ -844,7 +844,7 @@ export default function Rebates() {
             <select
               value={cForm.program_id}
               onChange={(e) => setCForm({ ...cForm, program_id: e.target.value })}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select program...</option>
               {programs
@@ -863,7 +863,7 @@ export default function Rebates() {
               <select
                 value={cForm.customer_id}
                 onChange={(e) => setCForm({ ...cForm, customer_id: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Optional...</option>
                 {customers.map((c) => (
@@ -878,7 +878,7 @@ export default function Rebates() {
               <select
                 value={cForm.order_id}
                 onChange={(e) => setCForm({ ...cForm, order_id: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Optional...</option>
                 {orders.map((o) => (
@@ -895,7 +895,7 @@ export default function Rebates() {
             <select
               value={cForm.product_id}
               onChange={(e) => setCForm({ ...cForm, product_id: e.target.value })}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Optional...</option>
               {products.map((p) => (

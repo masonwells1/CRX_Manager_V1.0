@@ -1794,7 +1794,7 @@ export default function Jobs() {
                 onKeyDown={(e) => e.key === 'Enter' && runSearch()}
                 placeholder="Job number"
                 aria-label="Filter by job number"
-                className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <MultiSelectDropdown
@@ -1820,7 +1820,7 @@ export default function Jobs() {
                 value={draft.startDate}
                 onChange={(e) => patchDraft('startDate', e.target.value)}
                 aria-label="Schedule date from"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <div>
@@ -1830,7 +1830,7 @@ export default function Jobs() {
                 value={draft.endDate}
                 onChange={(e) => patchDraft('endDate', e.target.value)}
                 aria-label="Schedule date to"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <MultiSelectDropdown
@@ -1916,7 +1916,7 @@ export default function Jobs() {
                   onKeyDown={(e) => e.key === 'Enter' && runSearch()}
                   placeholder="Crop"
                   aria-label="Filter by crop"
-                  className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1928,7 +1928,7 @@ export default function Jobs() {
                   onKeyDown={(e) => e.key === 'Enter' && runSearch()}
                   placeholder="Product"
                   aria-label="Filter by chemical"
-                  className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1940,7 +1940,7 @@ export default function Jobs() {
                   onKeyDown={(e) => e.key === 'Enter' && runSearch()}
                   placeholder="Field"
                   aria-label="Filter by field name"
-                  className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1952,7 +1952,7 @@ export default function Jobs() {
                   onKeyDown={(e) => e.key === 'Enter' && runSearch()}
                   placeholder="County"
                   aria-label="Filter by county"
-                  className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1964,7 +1964,7 @@ export default function Jobs() {
                   onKeyDown={(e) => e.key === 'Enter' && runSearch()}
                   placeholder="State"
                   aria-label="Filter by state"
-                  className="w-20 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-20 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
             </div>
@@ -2004,7 +2004,7 @@ export default function Jobs() {
           never shown. Be honest about it when the cap is hit. */}
       {atFetchCap && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <Info className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
             Showing the most recent {JOBS_FETCH_LIMIT} jobs — older jobs aren&apos;t searched.
             Narrow by date or customer to include them.

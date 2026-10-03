@@ -106,7 +106,7 @@ export default function ReportShell({
                 value={startDate}
                 onChange={(e) => handleStartChange(e.target.value)}
                 aria-label="Report start date"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <div>
@@ -116,7 +116,7 @@ export default function ReportShell({
                 value={endDate}
                 onChange={(e) => handleEndChange(e.target.value)}
                 aria-label="Report end date"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <div className="flex gap-1.5">

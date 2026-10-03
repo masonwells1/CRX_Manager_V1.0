@@ -51,7 +51,7 @@ export function LegacyLoaderWorksheet({
             step="0.1"
             min="0"
             placeholder="e.g. 15"
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
           />
           <p className="mt-1 text-xs text-secondary">Spray volume = total acres × carrier rate.</p>
         </div>
@@ -61,7 +61,7 @@ export function LegacyLoaderWorksheet({
             value={loaderVesselId}
             onChange={(event) => onVesselChange(event.target.value)}
             disabled={!canEdit}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
           >
             {loaderVesselOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -76,7 +76,7 @@ export function LegacyLoaderWorksheet({
             step="1"
             min="0"
             placeholder={assignedVehicleCapacity ? `Vehicle: ${assignedVehicleCapacity}` : 'Enter capacity'}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
           />
           <p className="mt-1 text-xs text-secondary">
             {tankCapacity.trim() !== ''
@@ -157,7 +157,7 @@ export function LegacyLoaderWorksheet({
           onChange={(event) => onLoaderCommentChange(event.target.value)}
           rows={2}
           disabled={!canEdit}
-          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
           placeholder="Instructions for the loader (mix order, etc.)..."
         />
       </div>

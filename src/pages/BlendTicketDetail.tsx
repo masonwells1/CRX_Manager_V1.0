@@ -1096,12 +1096,12 @@ export function BlendTicketDetail() {
       {duplicateWarning && (
         <div className="flex items-center justify-between gap-2 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg px-4 py-3 text-sm">
           <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <AlertCircle className="h-4 w-4 shrink-0" />
             {duplicateWarning.message}
           </div>
           <button
             onClick={() => navigate(`/blend-tickets/${duplicateWarning.dupeId}`)}
-            className="text-yellow-700 hover:text-yellow-900 underline font-medium flex-shrink-0 text-xs"
+            className="text-yellow-700 hover:text-yellow-900 underline font-medium shrink-0 text-xs"
           >
             View {duplicateWarning.dupeNumber}
           </button>
@@ -1266,7 +1266,7 @@ export function BlendTicketDetail() {
               <select
                 value={selectedJobId}
                 onChange={(e) => { setSelectedJobId(e.target.value); setIsDirty(true); }}
-                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">— No linked job —</option>
                 {availableJobs.map((j) => (
@@ -1350,7 +1350,7 @@ export function BlendTicketDetail() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Application Service</label>
-              <select value={formData.application_service_id} onChange={(e) => setFormData({ ...formData, application_service_id: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+              <select value={formData.application_service_id} onChange={(e) => setFormData({ ...formData, application_service_id: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
                 <option value="">None (no application fee)</option>
                 {appServices.map((svc) => (<option key={svc.id} value={svc.id}>{svc.name}</option>))}
               </select>
@@ -1659,7 +1659,7 @@ export function BlendTicketDetail() {
                     onChange={(e) => updateTicketField(idx, { planned_acres: e.target.value })}
                     placeholder="0"
                     disabled={fieldControlsDisabled}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
                 <div className="col-span-3 flex justify-end">
@@ -1723,10 +1723,10 @@ export function BlendTicketDetail() {
         {suggestedOrder && !orderActionBlockReason && (
           <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm mb-4">
             <div className="flex items-center gap-2">
-              <ShoppingCart className="h-4 w-4 flex-shrink-0" />
+              <ShoppingCart className="h-4 w-4 shrink-0" />
               <span>May match <strong>Order {suggestedOrder.order_number}</strong> ({suggestedOrder.matchCount} matching product{suggestedOrder.matchCount !== 1 ? 's' : ''})</span>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <Button
                 size="sm"
                 variant="secondary"

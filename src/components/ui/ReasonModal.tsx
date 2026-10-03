@@ -113,7 +113,7 @@ export default function ReasonModal({
     >
       <div className="space-y-4">
         <div className={`flex items-start gap-3 p-3 ${styles.bg} rounded-lg`}>
-          <Icon className={`w-5 h-5 ${styles.icon} flex-shrink-0 mt-0.5`} />
+          <Icon className={`w-5 h-5 ${styles.icon} shrink-0 mt-0.5`} />
           <p className={`text-sm ${styles.text}`}>{message}</p>
         </div>
 
@@ -129,7 +129,7 @@ export default function ReasonModal({
             placeholder={placeholder}
             rows={3}
             disabled={loading}
-            className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+            className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-hidden focus:ring-2 ${
               showError
                 ? 'border-red-400 focus:ring-red-400 focus:border-red-400'
                 : 'border-gray-300 focus:ring-crx-green focus:border-crx-green'

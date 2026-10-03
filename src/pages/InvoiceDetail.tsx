@@ -1627,7 +1627,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       setShowCustomerDrop(true);
                     }}
                     onFocus={() => setShowCustomerDrop(true)}
-                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                   {showCustomerDrop && filteredCustomers.length > 0 && (
                     <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-auto">
@@ -1664,7 +1664,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   value={invoice.invoice_type || 'chemical_sale'}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
                   disabled={isInvoiceTypeLocked}
-                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
                   {/* field_application is NOT selectable here — this editable
@@ -1690,7 +1690,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   type="date"
                   value={invoice.invoice_date?.split('T')[0] || ''}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_date: e.target.value }))}
-                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               ) : (
                 <p className="mt-1 text-sm">{invoice.invoice_date ? new Date(invoice.invoice_date + 'T00:00:00').toLocaleDateString() : '-'}</p>
@@ -1704,7 +1704,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 <select
                   value={invoice.salesman_id || ''}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, salesman_id: e.target.value || null }))}
-                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">No Salesman</option>
                   {salespeople.map((s) => (
@@ -1725,7 +1725,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   value={invoice.purchase_order_ref || ''}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, purchase_order_ref: e.target.value }))}
                   placeholder="Customer PO #"
-                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               ) : (
                 <p className="mt-1 text-sm">{invoice.purchase_order_ref || '-'}</p>
@@ -1744,7 +1744,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       setPaymentTerms(e.target.value);
                       if (e.target.value !== 'Custom date…') setCustomDueDate('');
                     }}
-                    className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="Customer default">Customer default</option>
                     <option value="Net 30">Net 30</option>
@@ -1763,7 +1763,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                       value={customDueDate}
                       onChange={(e) => setCustomDueDate(e.target.value)}
                       required
-                      className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                     />
                   )}
                 </>
@@ -1783,7 +1783,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   value={invoice.header_notes || ''}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, header_notes: e.target.value }))}
                   rows={2}
-                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               ) : (
                 <p className="mt-1 text-sm text-secondary">{invoice.header_notes || '-'}</p>
@@ -1886,7 +1886,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                           onChange={(e) => updateItem(idx, 'quantity', Number(e.target.value) || 0)}
                           min={0}
                           step={0.01}
-                          className="w-24 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                          className="w-24 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
                         />
                       ) : (
                         item.quantity
@@ -1906,7 +1906,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                           }}
                           min={0}
                           step={0.01}
-                          className="w-28 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                          className="w-28 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
                         />
                       ) : (
                         <span className="flex items-center gap-1">
@@ -1966,7 +1966,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   isAdmin && (
                     <button
                       onClick={() => { reverseWoIdem.resetKey(); setReverseWoTarget(wo); setShowReverseWoModal(true); }}
-                      className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium flex-shrink-0"
+                      className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium shrink-0"
                     >
                       <RotateCcw className="w-3 h-3" />
                       Reverse
@@ -2055,7 +2055,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               }}
               // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
               autoFocus
-              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           {productSearchLoading ? (
@@ -2112,7 +2112,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             <select
               value={payMethod}
               onChange={(e) => setPayMethod(e.target.value)}
-              className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="check">Check</option>
               <option value="cash">Cash</option>
@@ -2149,7 +2149,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 setSelectedCreditId(e.target.value);
                 if (c) setApplyCreditAmount((Math.min(-c.balance_cents, invoice?.balance_cents || 0) / 100).toFixed(2));
               }}
-              className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               {availableCredits.map((c) => (
                 <option key={c.id} value={c.id}>{c.invoice_number} — {fmt(-c.balance_cents)} available</option>
@@ -2198,7 +2198,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               onChange={(e) => setReverseWoReason(e.target.value)}
               placeholder="Explain why this write-off is being reversed..."
               rows={3}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crx-green"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-crx-green"
             />
           </div>
           <div className="flex justify-end gap-3">

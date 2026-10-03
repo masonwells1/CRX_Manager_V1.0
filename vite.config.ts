@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { sentryVitePlugin } from '@sentry/vite-plugin';
 
@@ -27,6 +28,7 @@ if (liveSchemaTests && liveSchemaUrl !== liveSchemaProductionUrl) {
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     // Upload sourcemaps to Sentry during production builds, then delete them
     // so they never reach end users.  Only activates when SENTRY_AUTH_TOKEN is set
     // (i.e., in Vercel CI — not local dev).

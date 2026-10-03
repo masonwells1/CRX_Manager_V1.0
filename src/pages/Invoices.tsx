@@ -525,10 +525,10 @@ export default function Invoices() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-crx-green flex-shrink-0" />
+          <FileText className="w-4 h-4 text-crx-green shrink-0" />
           <span className="font-medium text-nav-dark">{row.invoice_number}</span>
           {row.is_quick_delivery && (
-            <span title="Quick Delivery"><Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" /></span>
+            <span title="Quick Delivery"><Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" /></span>
           )}
         </div>
       ),
@@ -798,7 +798,7 @@ export default function Invoices() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as InvoiceStatusFilter)}
                   aria-label="Filter by status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {STATUS_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -810,7 +810,7 @@ export default function Invoices() {
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value)}
                   aria-label="Filter by type"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {TYPE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>

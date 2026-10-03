@@ -811,7 +811,7 @@ export default function SettingsPage() {
             <select
               value={defaultTier}
               onChange={(e) => setDefaultTier(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="1">Tier 1</option>
               <option value="2">Tier 2</option>
@@ -868,7 +868,7 @@ export default function SettingsPage() {
                   setFuelSurcharge((c) => ({ ...c, basis: e.target.value as FuelSurchargeBasis }))
                 }
                 disabled={!fuelSurcharge.enabled}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-gray-400"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-gray-400"
               >
                 <option value="">Select a basis…</option>
                 <option value="per_acre">Per acre ($/acre applied)</option>
@@ -1166,7 +1166,7 @@ export default function SettingsPage() {
               value={preNoticeTemplate.body}
               onChange={(e) => setPreNoticeTemplate((t) => ({ ...t, body: e.target.value }))}
               rows={8}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
               placeholder="Hello {{customer}}, ..."
             />
           </div>
@@ -1213,7 +1213,7 @@ export default function SettingsPage() {
               value={postNoticeTemplate.body}
               onChange={(e) => setPostNoticeTemplate((t) => ({ ...t, body: e.target.value }))}
               rows={8}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-y"
               placeholder="Hello {{customer}}, ..."
             />
           </div>
@@ -1230,7 +1230,7 @@ export default function SettingsPage() {
             <select
               value={newRole}
               onChange={(e) => setNewRole(e.target.value as UserRole)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="admin">Admin</option>
               <option value="sales_rep">Sales Rep</option>
@@ -1257,7 +1257,7 @@ export default function SettingsPage() {
             <select
               value={editRole}
               onChange={(e) => handleEditRoleChange(e.target.value as UserRole)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="admin">Admin</option>
               <option value="sales_rep">Sales Rep</option>

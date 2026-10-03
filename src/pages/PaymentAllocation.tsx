@@ -353,7 +353,7 @@ export default function PaymentAllocation() {
       {lastResult && (
         <Card>
           <div className="flex items-start gap-3">
-            <CheckCircle className="w-6 h-6 text-crx-green flex-shrink-0 mt-0.5" />
+            <CheckCircle className="w-6 h-6 text-crx-green shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-medium text-nav-dark">Payment Applied Successfully</p>
               <p className="text-sm text-secondary mt-1">
@@ -397,7 +397,7 @@ export default function PaymentAllocation() {
                         setLastResult(null);
                       }
                     }}
-                    className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                   {selectedCustomer && (
                     <button
@@ -439,7 +439,7 @@ export default function PaymentAllocation() {
                 <select
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="check">Check</option>
                   <option value="cash">Cash</option>
@@ -458,7 +458,7 @@ export default function PaymentAllocation() {
                   placeholder="Check # or ref..."
                   value={referenceNumber}
                   onChange={(e) => setReferenceNumber(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
             </div>
@@ -471,7 +471,7 @@ export default function PaymentAllocation() {
                 placeholder="Optional payment notes..."
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
           </Card>
@@ -490,7 +490,7 @@ export default function PaymentAllocation() {
                       value={checkAmountInput}
                       onChange={(e) => setCheckAmountInput(e.target.value)}
                       aria-invalid={checkAmountRefused}
-                      className={`w-full pl-10 pr-3 py-3 text-lg font-semibold bg-white border rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${checkAmountRefused ? 'border-red-400' : 'border-gray-200'}`}
+                      className={`w-full pl-10 pr-3 py-3 text-lg font-semibold bg-white border rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${checkAmountRefused ? 'border-red-400' : 'border-gray-200'}`}
                     />
                   </div>
                   {/* A refused amount (more than two decimals) parses to null, so checkCents is
@@ -591,7 +591,7 @@ export default function PaymentAllocation() {
                                       if (cents === null) { toast('error', MONEY_PRECISION_MESSAGE); return; }
                                       setAllocationForInvoice(inv.invoice_id, cents);
                                     }}
-                                    className={`w-[120px] pl-5 pr-2 py-1.5 text-sm text-right border rounded-lg focus:outline-none focus:ring-2 ${
+                                    className={`w-[120px] pl-5 pr-2 py-1.5 text-sm text-right border rounded-lg focus:outline-hidden focus:ring-2 ${
                                       overAllocated
                                         ? 'border-red-300 focus:ring-red-200 bg-red-50'
                                         : inv.allocated_cents > 0

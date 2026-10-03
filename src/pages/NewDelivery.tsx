@@ -483,7 +483,7 @@ export default function NewDelivery() {
               <select
                 value={selectedOrderId}
                 onChange={(e) => setSelectedOrderId(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select an order...</option>
                 {orders.map((o) => (
@@ -513,7 +513,7 @@ export default function NewDelivery() {
               <select
                 value={selectedAddressId}
                 onChange={(e) => setSelectedAddressId(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Use billing address</option>
                 {addresses.map((a) => (
@@ -528,7 +528,7 @@ export default function NewDelivery() {
               <select
                 value={selectedDriverId}
                 onChange={(e) => setSelectedDriverId(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Unassigned</option>
                 {drivers.map((d) => (
@@ -569,7 +569,7 @@ export default function NewDelivery() {
       {rupWarnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="text-sm text-amber-800">
               {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
             </div>
@@ -580,7 +580,7 @@ export default function NewDelivery() {
       {inventoryWarnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
               <div className="text-sm text-amber-700 mt-1">
@@ -629,7 +629,7 @@ export default function NewDelivery() {
                     placeholder="Tote #"
                     value={item.tote_number}
                     onChange={(e) => updateItemTote(item.order_item_id, e.target.value)}
-                    className="w-28 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-28 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                   <div className="flex items-center gap-2">
                     <button
@@ -642,7 +642,7 @@ export default function NewDelivery() {
                       type="number"
                       value={item.quantity}
                       onChange={(e) => updateItemQty(item.order_item_id, parseFloat(e.target.value) || 0)}
-                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       min="0"
                       max={item.max_quantity}
                     />

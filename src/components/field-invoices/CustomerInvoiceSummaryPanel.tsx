@@ -205,7 +205,7 @@ export default function CustomerInvoiceSummaryPanel() {
               value={selectedCustomerId}
               onChange={(e) => { setSelectedCustomerId(e.target.value); setRows(null); }}
               disabled={loadingCustomers}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select customer…</option>
               {customers.map((c) => (
@@ -220,7 +220,7 @@ export default function CustomerInvoiceSummaryPanel() {
               type="date"
               value={headingDate}
               onChange={(e) => setHeadingDate(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full sm:w-auto">
@@ -230,7 +230,7 @@ export default function CustomerInvoiceSummaryPanel() {
               type="date"
               value={discountDate}
               onChange={(e) => setDiscountDate(e.target.value)}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full sm:w-auto">
@@ -241,7 +241,7 @@ export default function CustomerInvoiceSummaryPanel() {
               value={terms}
               onChange={(e) => setTerms(e.target.value)}
               placeholder="e.g. Net 30"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-40"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-40"
             />
           </div>
           <div className="w-full min-w-0 flex-1 sm:min-w-[14rem]">
@@ -252,7 +252,7 @@ export default function CustomerInvoiceSummaryPanel() {
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               placeholder="Optional comment printed on the summary"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           <Button
@@ -409,7 +409,7 @@ function SummarySection({
                 </td>
                 <td className="px-3 py-2">
                   <span className="inline-flex items-center gap-1.5 font-medium text-nav-dark">
-                    <FileText className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />
+                    <FileText className="w-3.5 h-3.5 text-crx-green shrink-0" />
                     {r.invoice_number}
                   </span>
                 </td>

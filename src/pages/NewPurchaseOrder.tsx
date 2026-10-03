@@ -330,7 +330,7 @@ export default function NewPurchaseOrder() {
                 onChange={(e) => setVendor(e.target.value)}
                 list="vendor-list"
                 placeholder="Enter or select vendor..."
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <datalist id="vendor-list">
                 {vendors.map((v) => (
@@ -429,7 +429,7 @@ export default function NewPurchaseOrder() {
                             }
                             min="0"
                             step="any"
-                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </td>
                         <td className="px-4 py-3">
@@ -441,7 +441,7 @@ export default function NewPurchaseOrder() {
                             }
                             min="0"
                             step="0.01"
-                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </td>
                         <td className="px-4 py-3">
@@ -449,7 +449,7 @@ export default function NewPurchaseOrder() {
                             type="text"
                             value={item.unit_size}
                             onChange={(e) => updateItem(item.key, 'unit_size', e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                             placeholder="Gal"
                           />
                         </td>
@@ -523,7 +523,7 @@ export default function NewPurchaseOrder() {
               <input
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
                 placeholder="Search by name, SKU, or vendor..."
                 // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
                 autoFocus

@@ -1423,7 +1423,7 @@ export default function InventoryPage() {
                           onClick={() => navigate(`/purchase-orders/new?product=${item.product_id}`)}
                           title="Create a purchase order for this product"
                           aria-label={`Reorder ${item.product_name}`}
-                          className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-crx-green px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-crx-green/90 sm:col-span-4 md:min-h-0 md:flex-shrink-0"
+                          className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-crx-green px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-crx-green/90 sm:col-span-4 md:min-h-0 md:shrink-0"
                         >
                           <ShoppingCart className="w-3.5 h-3.5" />
                           Reorder
@@ -1447,14 +1447,14 @@ export default function InventoryPage() {
             value={mobileSearch}
             onChange={(e) => setMobileSearch(e.target.value)}
             placeholder="Search products..."
-            className="min-h-11 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+            className="min-h-11 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
           />
           <div className="mt-2 grid grid-cols-2 gap-2">
             <select
               value={locationFilter}
               onChange={(e) => setLocationFilter(e.target.value)}
               aria-label="Filter inventory cards by location"
-              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+              className="min-h-11 min-w-0 rounded-lg border border-gray-200 px-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
             >
               <option value="">All Locations</option>
               {locations.map((location) => <option key={location} value={location}>{location}</option>)}
@@ -1505,7 +1505,7 @@ export default function InventoryPage() {
                   value={locationFilter}
                   onChange={(e) => setLocationFilter(e.target.value)}
                   aria-label="Filter by location"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Locations</option>
                   {locations.map((l) => (
@@ -1743,7 +1743,7 @@ export default function InventoryPage() {
               onChange={(e) => setProductSearch(e.target.value)}
               placeholder="Search products..."
               disabled={createHoldIntent.isIntentLocked}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
             />
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
               {createHoldIntent.isIntentLocked && holdProductId && !filteredProducts.some((product) => product.id === holdProductId) ? (
@@ -1794,7 +1794,7 @@ export default function InventoryPage() {
               value={holdCustomerId}
               onChange={(e) => setHoldCustomerId(e.target.value)}
               disabled={createHoldIntent.isIntentLocked}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">No customer</option>
               {holdCustomerId && !customers.some((customer) => customer.id === holdCustomerId) && (
@@ -1845,7 +1845,7 @@ export default function InventoryPage() {
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
               placeholder="Search products..."
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
             />
             <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
               {filteredProducts.length === 0 ? (

@@ -78,7 +78,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg
-                  focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
+                  focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
                   transition-colors"
                 placeholder="you@croprx.com"
               />
@@ -95,7 +95,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg
-                  focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
+                  focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
                   transition-colors"
                 placeholder="Enter your password"
               />

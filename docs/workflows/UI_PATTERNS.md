@@ -151,6 +151,9 @@ Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets, Orders, Vehicle
 ### Tailwind CSS only
 - No other CSS frameworks (no Bootstrap, no styled-components, no CSS modules)
 - All styling uses Tailwind utility classes
+- Tailwind 4 (since 2026-10-03). There is no `tailwind.config.js`: theme tokens (brand colours, fonts, `shadow-card`) live in the `@theme` block of `src/index.css`.
+- `src/index.css` pins several names to their **Tailwind 3** meaning so the app looked the same after the upgrade: the standard palette uses Tailwind 3's hex values; `shadow-sm`, `shadow`, `rounded-sm`, `rounded`, `blur-sm`, `blur`, `drop-shadow-sm` and `drop-shadow` keep their 3.x sizes; bare `ring` is 3px blue-500/50; borders default to gray-200; hover styles apply on touch devices too. Tailwind 4's documentation describes those names differently — follow the existing pages, not the docs, for these.
+- Use `shrink-0`/`grow`, `outline-hidden` (hides the outline but keeps it in high-contrast mode) and opacity modifiers such as `bg-black/50`; the old `flex-shrink-0`, `bg-opacity-*` spellings no longer exist, and `outline-none` now removes the outline outright.
 
 ### Brand color
 - Primary green: `crx-green` (#28A26A)

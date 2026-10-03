@@ -199,7 +199,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
             onChange={(e) => setCellValue(row, col.key, e.target.checked)}
             className="sr-only peer"
           />
-          <div className="relative w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-crx-green/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-crx-green" />
+          <div className="relative w-9 h-5 bg-gray-200 peer-focus:outline-hidden peer-focus:ring-2 peer-focus:ring-crx-green/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-crx-green" />
         </label>
       );
     }
@@ -210,7 +210,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
           aria-label={typeof col.editAriaLabel === 'function' ? col.editAriaLabel(row) : col.editAriaLabel ?? col.header}
           value={String(value ?? '')}
           onChange={(e) => setCellValue(row, col.key, e.target.value)}
-          className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 bg-white"
+          className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 bg-white"
         >
           <option value="">—</option>
           {col.editOptions.map((opt) => (
@@ -238,7 +238,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
               raw === '' ? null : col.editType === 'decimal' ? raw : parseFloat(raw),
             );
           }}
-          className="w-full px-2 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+          className="w-full px-2 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30"
         />
       );
     }
@@ -249,7 +249,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
         type="text"
         value={String(value ?? '')}
         onChange={(e) => setCellValue(row, col.key, e.target.value)}
-        className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+        className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30"
       />
     );
   };
@@ -269,7 +269,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
                 placeholder={searchPlaceholder}
                 aria-label={searchPlaceholder}
                 className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg
-                  focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
+                  focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
                   transition-colors"
               />
             </div>
@@ -278,7 +278,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
         </div>
 
         {/* Edit mode controls */}
-        <div className="flex gap-2 items-center flex-shrink-0">
+        <div className="flex gap-2 items-center shrink-0">
           {headerActions}
           {canEdit && !editMode && (
             <Button
@@ -374,7 +374,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
                     className={`
                       border-b border-gray-50 transition-colors
                       ${isDirty ? 'bg-amber-50' : ''}
-                      ${!editMode && onRowClick ? 'cursor-pointer hover:bg-crx-green-tint focus:outline-none focus:ring-2 focus:ring-crx-green/30' : ''}
+                      ${!editMode && onRowClick ? 'cursor-pointer hover:bg-crx-green-tint focus:outline-hidden focus:ring-2 focus:ring-crx-green/30' : ''}
                     `}
                   >
                     {columns.map((col) => (

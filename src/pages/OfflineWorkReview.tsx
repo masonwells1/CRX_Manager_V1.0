@@ -314,7 +314,7 @@ export default function OfflineWorkReview() {
                 setResolution(event.target.value as OfflineActionReviewResolution);
                 renewResolutionKey();
               }}
-              className="mt-1 min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+              className="mt-1 min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
             >
               <option value="already_completed">Already handled outside this offline receipt</option>
               <option value="abandoned">Do not run this saved action</option>
@@ -332,7 +332,7 @@ export default function OfflineWorkReview() {
               maxLength={1000}
               rows={4}
               placeholder="Explain what you checked and why this resolution is safe."
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
             />
             <span className="mt-1 block text-xs text-tertiary">Minimum 10 characters; {note.trim().length}/1000</span>
           </label>

@@ -436,7 +436,7 @@ export default function ReceivingLogPanel() {
       {/* Damaged This Week alert */}
       {summary && summary.damaged_this_week > 0 && (
         <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 shrink-0" />
           <span>
             <strong>{summary.damaged_this_week}</strong> item{summary.damaged_this_week !== 1 ? 's' : ''} received
             with issues this week
@@ -454,7 +454,7 @@ export default function ReceivingLogPanel() {
             value={mobileSearch}
             onChange={(e) => setMobileSearch(e.target.value)}
             placeholder="Search PO, vendor, product, lot..."
-            className="min-h-11 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+            className="min-h-11 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-base focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
           />
           <div className="grid grid-cols-2 gap-2">
             <select
@@ -538,7 +538,7 @@ export default function ReceivingLogPanel() {
                   value={conditionFilter}
                   onChange={(e) => setConditionFilter(e.target.value)}
                   aria-label="Filter by condition"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Conditions</option>
                   <option value="good">Good</option>
@@ -551,7 +551,7 @@ export default function ReceivingLogPanel() {
                   value={receivedByFilter}
                   onChange={(e) => setReceivedByFilter(e.target.value)}
                   aria-label="Filter by received by"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Staff</option>
                   {staffProfiles.map((p) => (
@@ -563,7 +563,7 @@ export default function ReceivingLogPanel() {
                     value={vendorFilter}
                     onChange={(e) => setVendorFilter(e.target.value)}
                     aria-label="Filter by vendor"
-                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">All Vendors</option>
                     {vendors.map((v) => (
@@ -578,7 +578,7 @@ export default function ReceivingLogPanel() {
                     onChange={(e) => setDateFrom(e.target.value)}
                     placeholder="From"
                     aria-label="Date from"
-                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                   <span className="text-xs text-secondary">to</span>
                   <input
@@ -587,7 +587,7 @@ export default function ReceivingLogPanel() {
                     onChange={(e) => setDateTo(e.target.value)}
                     placeholder="To"
                     aria-label="Date to"
-                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
                 {(conditionFilter || receivedByFilter || vendorFilter || dateFrom || dateTo) && (

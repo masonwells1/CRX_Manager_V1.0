@@ -90,7 +90,7 @@ export default function CommissionSplitEditor({
   };
 
   const selectClass =
-    'flex-1 px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150';
+    'flex-1 px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150';
 
   return (
     <div className="w-full">
@@ -134,7 +134,7 @@ export default function CommissionSplitEditor({
                   min="0"
                   max="100"
                   step="any"
-                  className="w-full px-3 py-2 pr-7 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150"
+                  className="w-full px-3 py-2 pr-7 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg placeholder:text-gray-400 focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150"
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">%</span>
               </div>

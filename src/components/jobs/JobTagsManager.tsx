@@ -169,7 +169,7 @@ export default function JobTagsManager({ open, onClose, tags, onChanged }: JobTa
                   return (
                     <div key={tag.id} className="flex items-center gap-3 p-2.5 border border-gray-200 rounded-lg">
                       <span
-                        className="w-3 h-3 rounded-full flex-shrink-0"
+                        className="w-3 h-3 rounded-full shrink-0"
                         style={{ backgroundColor: e.color }}
                         aria-hidden="true"
                       />
@@ -178,7 +178,7 @@ export default function JobTagsManager({ open, onClose, tags, onChanged }: JobTa
                         value={e.name}
                         onChange={(ev) => setEdit(tag.id, { name: ev.target.value })}
                         aria-label={`Tag name for ${tag.name}`}
-                        className="flex-1 min-w-0 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                        className="flex-1 min-w-0 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       />
                       <ColorPicker value={e.color} onChange={(hex) => setEdit(tag.id, { color: hex })} />
                       <Button
@@ -222,7 +222,7 @@ export default function JobTagsManager({ open, onClose, tags, onChanged }: JobTa
                 onKeyDown={(ev) => ev.key === 'Enter' && createTag()}
                 placeholder="Tag name (e.g. Fungicide)"
                 aria-label="New tag name"
-                className="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <ColorPicker value={newColor} onChange={setNewColor} />
               <Button

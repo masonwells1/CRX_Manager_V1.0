@@ -567,7 +567,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         {/* Instructions */}
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start gap-3">
-            <Sparkles className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <Sparkles className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
             <div className="text-sm text-blue-900">
               <p className="font-medium mb-1">Upload vendor invoices — PDF or photo</p>
               <ul className="list-disc list-inside space-y-0.5 text-xs">
@@ -665,9 +665,9 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpanded(poIdx); } }}
                     >
                       {po.expanded ? (
-                        <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                        <ChevronDown className="w-4 h-4 text-gray-500 shrink-0" />
                       ) : (
-                        <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                        <ChevronRight className="w-4 h-4 text-gray-500 shrink-0" />
                       )}
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-nav-dark truncate">{po.source_file}</p>
@@ -751,7 +751,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                               onChange={(e) => updatePOField(poIdx, 'vendor_name', e.target.value)}
                               list={`vendor-list-${poIdx}`}
                               placeholder="Vendor name..."
-                              className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                              className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                             />
                             <datalist id={`vendor-list-${poIdx}`}>
                               {vendors.map((v) => (
@@ -766,7 +766,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                               value={po.invoice_number}
                               onChange={(e) => updatePOField(poIdx, 'invoice_number', e.target.value)}
                               placeholder="Reference #..."
-                              className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                              className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                             />
                           </div>
                           <div>
@@ -776,7 +776,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                               value={po.invoice_date}
                               onChange={(e) => updatePOField(poIdx, 'invoice_date', e.target.value)}
                               placeholder="MM/DD/YYYY"
-                              className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                              className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                             />
                           </div>
                         </div>
@@ -849,7 +849,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                           updateItemField(poIdx, itemIdx, 'quantity_ordered', parseFloat(e.target.value) || 0)
                                         }
                                         min="0"
-                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                       />
                                     </td>
                                     <td className="px-3 py-2">
@@ -861,7 +861,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                         }
                                         min="0"
                                         step="0.01"
-                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                       />
                                     </td>
                                     <td className="px-3 py-2">
@@ -869,7 +869,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                         type="text"
                                         value={item.unit_size}
                                         onChange={(e) => updateItemField(poIdx, itemIdx, 'unit_size', e.target.value)}
-                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                        className="w-full px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                         placeholder="GL"
                                       />
                                     </td>
@@ -970,7 +970,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
               <input
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
                 placeholder="Search by name, SKU, or vendor..."
                 // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
                 autoFocus

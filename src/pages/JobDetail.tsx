@@ -3822,7 +3822,7 @@ export default function JobDetail() {
                 }
               }}
               disabled={!canEdit}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
             >
               <option value="">Select customer...</option>
               {customers.map((c) => (
@@ -3850,7 +3850,7 @@ export default function JobDetail() {
               value={applicatorId}
               onChange={(e) => setApplicatorId(e.target.value)}
               disabled={!canEdit}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
             >
               <option value="">Select applicator...</option>
               {applicators.map((a) => (
@@ -3893,7 +3893,7 @@ export default function JobDetail() {
               value={vehicleId}
               onChange={(e) => setVehicleId(e.target.value)}
               disabled={!canEdit}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
             >
               <option value="">Select vehicle...</option>
               {vehicles.map((v) => (
@@ -3969,7 +3969,7 @@ export default function JobDetail() {
                   value={consultantId}
                   onChange={(e) => setConsultantId(e.target.value)}
                   disabled={!canEdit}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
                 >
                   <option value="">Select consultant...</option>
                   {applicators.map((a) => (
@@ -3985,7 +3985,7 @@ export default function JobDetail() {
                   onChange={(e) => setGroundCrewId(e.target.value)}
                   disabled={!canEdit}
                   aria-label="Ground crew"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
                 >
                   <option value="">No crew</option>
                   {groundCrews.map((c) => (
@@ -4275,13 +4275,13 @@ export default function JobDetail() {
                   <div key={i} className={`border rounded-lg p-3 space-y-2 ${hazard || rowDefect ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
                     {rowDefect && (
                       <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
-                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                         <span><strong>This line cannot be saved</strong> because {rowDefect}.</span>
                       </div>
                     )}
                     {hazard && (
                       <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
-                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                         <span>
                           <strong>This line cannot be saved.</strong> Its quantity ({totalApplied}) is counted in{' '}
                           <strong>{hazard.quantityUnit}</strong>, but its cost and price are quoted per{' '}
@@ -4482,7 +4482,7 @@ export default function JobDetail() {
                 step="0.1"
                 min="0"
                 placeholder="e.g. 15"
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
               />
               <p className="mt-1 text-xs text-secondary">Spray volume = total acres × carrier rate.</p>
             </div>
@@ -4496,7 +4496,7 @@ export default function JobDetail() {
                   setTankCapacity(capacityForLoaderVesselSelection(selectedVesselId, loaderVesselOptions));
                 }}
                 disabled={!canEdit}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
               >
                 {loaderVesselOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -4511,7 +4511,7 @@ export default function JobDetail() {
                 step="1"
                 min="0"
                 placeholder={assignedVehicleCapacity ? `Vehicle: ${assignedVehicleCapacity}` : 'Enter capacity'}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
               />
               <p className="mt-1 text-xs text-secondary">
                 {tankCapacity.trim() !== ''
@@ -4593,7 +4593,7 @@ export default function JobDetail() {
               onChange={(e) => setLoaderComment(e.target.value)}
               rows={2}
               disabled={!canEdit}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
               placeholder="Instructions for the loader (mix order, etc.)..."
             />
           </div>
@@ -4855,13 +4855,13 @@ export default function JobDetail() {
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">Job Notes</label>
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} disabled={!canEdit}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
                 placeholder="Job notes..." />
             </div>
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">Additional Info</label>
               <textarea value={additionalInfo} onChange={(e) => setAdditionalInfo(e.target.value)} rows={2} disabled={!canEdit}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
                 placeholder="Gate codes, directions, customer requests..." />
             </div>
             <div>
@@ -4870,7 +4870,7 @@ export default function JobDetail() {
                 <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">Not printed</span>
               </label>
               <textarea value={internalMemo} onChange={(e) => setInternalMemo(e.target.value)} rows={2} disabled={!canEdit}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
                 placeholder="Internal only — never appears on customer-facing documents." />
             </div>
             {!isNew && (
@@ -4901,7 +4901,7 @@ export default function JobDetail() {
           </p>
           {status === 'scheduled' && (
             <div className="flex items-start gap-2 p-2.5 rounded-lg bg-blue-50 text-xs text-blue-800">
-              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <Check className="w-4 h-4 shrink-0 mt-0.5" />
               <span>This job hasn&apos;t been started yet &mdash; completing it will mark it started and finished in one step (for a job sprayed earlier and recorded now).</span>
             </div>
           )}
@@ -5052,7 +5052,7 @@ export default function JobDetail() {
       <Modal open={showOverrideModal} onClose={() => { if (!saving) setShowOverrideModal(false); }} title="Over-label-rate override">
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <p className="text-sm text-amber-800">
               {guardrailState.overRateCount} chemical line(s) exceed the product&rsquo;s maximum label rate
               {guardrailState.overRateProducts.length > 0 && <> (<strong>{guardrailState.overRateProducts.join(', ')}</strong>)</>}.
@@ -5069,7 +5069,7 @@ export default function JobDetail() {
               onChange={(e) => setOverrideReason(e.target.value)}
               rows={3}
               placeholder="e.g., Split application across two passes; per-pass rate is within label."
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-hidden focus:ring-2 focus:ring-amber-200"
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">

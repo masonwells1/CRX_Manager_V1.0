@@ -96,7 +96,7 @@ export default function DataTable<T extends Record<string, any>>({
                 placeholder={searchPlaceholder}
                 aria-label={searchPlaceholder}
                 className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg
-                  focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
+                  focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
                   transition-colors"
               />
             </div>
@@ -161,7 +161,7 @@ export default function DataTable<T extends Record<string, any>>({
                   role={onRowClick ? 'button' : undefined}
                   className={`
                     border-b border-gray-100 transition-colors even:bg-gray-50/50
-                    ${onRowClick ? 'cursor-pointer hover:bg-crx-green-tint focus:outline-none focus:ring-2 focus:ring-crx-green/30' : ''}
+                    ${onRowClick ? 'cursor-pointer hover:bg-crx-green-tint focus:outline-hidden focus:ring-2 focus:ring-crx-green/30' : ''}
                   `}
                 >
                   {columns.map((col) => (

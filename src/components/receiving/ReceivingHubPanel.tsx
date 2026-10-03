@@ -347,7 +347,7 @@ export default function ReceivingHubPanel() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by product, vendor, or PO #…"
-          className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+          className="w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         />
       </div>
 

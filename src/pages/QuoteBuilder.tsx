@@ -4028,7 +4028,7 @@ export default function QuoteBuilder() {
                 setTier(t);
                 recalcAllForTier(t);
               }}
-              className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value={1}>Tier 1</option>
               <option value={2}>Tier 2</option>
@@ -4060,7 +4060,7 @@ export default function QuoteBuilder() {
             value={headerNotes}
             onChange={(e) => setHeaderNotes(e.target.value)}
             rows={2}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             placeholder="Notes visible at the top of the quote..."
           />
         </div>
@@ -4069,7 +4069,7 @@ export default function QuoteBuilder() {
       {rupWarnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="text-sm text-amber-800">
               {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
             </div>
@@ -4103,7 +4103,7 @@ export default function QuoteBuilder() {
                   <input
                     value={sec.section_name}
                     onChange={(e) => updateSectionName(sec._key, e.target.value)}
-                    className="text-sm font-semibold font-heading text-nav-dark bg-transparent border-none outline-none focus:ring-0 flex-1"
+                    className="text-sm font-semibold font-heading text-nav-dark bg-transparent border-none outline-hidden focus:ring-0 flex-1"
                     placeholder="Section name"
                   />
                   {/* U13 (#111): per-section job badge — a section that already has a
@@ -4113,7 +4113,7 @@ export default function QuoteBuilder() {
                     <button
                       type="button"
                       onClick={() => navigate(`/jobs/${sectionJobs[sec.id as string].id}`)}
-                      className="flex-shrink-0"
+                      className="shrink-0"
                       title="Open the job scheduled from this section"
                     >
                       <Badge variant={statusToBadgeVariant[sectionJobs[sec.id as string].status] || 'info'}>
@@ -4324,7 +4324,7 @@ export default function QuoteBuilder() {
                                     });
                                   }}
                                   aria-label="Price per unit"
-                                  className={`w-20 px-2 py-1 text-sm font-mono border rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green ${
+                                  className={`w-20 px-2 py-1 text-sm font-mono border rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green ${
                                     item.price_override != null
                                       ? 'border-amber-400 bg-amber-50'
                                       : 'border-gray-200'
@@ -4354,7 +4354,7 @@ export default function QuoteBuilder() {
                                   })
                                 }
                                 aria-label="Price unit"
-                                className="w-20 px-1 py-0.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green mt-0.5"
+                                className="w-20 px-1 py-0.5 text-xs border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green mt-0.5"
                               >
                                 <option value="">--</option>
                                 {unitConversions
@@ -4391,7 +4391,7 @@ export default function QuoteBuilder() {
                                   })
                                 }
                                 aria-label="Actual rate"
-                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                 step="any"
                                 min={0}
                               />
@@ -4405,7 +4405,7 @@ export default function QuoteBuilder() {
                                   })
                                 }
                                 aria-label="Rate unit"
-                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                               >
                                 <option value="">--</option>
                                 {unitConversions
@@ -4436,7 +4436,7 @@ export default function QuoteBuilder() {
                                   })
                                 }
                                 aria-label="Acres"
-                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                 step="any"
                                 min={0}
                               />
@@ -4464,7 +4464,7 @@ export default function QuoteBuilder() {
                                   })
                                 }
                                 aria-label="Units needed"
-                                className={`w-20 px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green font-mono ${
+                                className={`w-20 px-2 py-1 text-sm border rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green font-mono ${
                                   item.calc_mode === 'units_direct'
                                     ? 'border-crx-green bg-crx-green-tint'
                                     : 'border-gray-200'
@@ -4549,7 +4549,7 @@ export default function QuoteBuilder() {
             value={footerNotes}
             onChange={(e) => setFooterNotes(e.target.value)}
             rows={2}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             placeholder="Notes visible at the bottom of the quote (terms, disclaimers, etc.)..."
           />
         </div>
@@ -4612,7 +4612,7 @@ export default function QuoteBuilder() {
             <input
               value={productQuery}
               onChange={(e) => setProductQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               placeholder="Search by name, SKU, category, or vendor..."
               // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
               autoFocus
@@ -5025,7 +5025,7 @@ export default function QuoteBuilder() {
                 maxLength={MAX_REVERT_REASON_LENGTH}
                 rows={3}
                 placeholder="Why is this quote being reopened?"
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <p className="mt-1 text-xs text-secondary text-right">
                 {revertReason.length}/{MAX_REVERT_REASON_LENGTH}

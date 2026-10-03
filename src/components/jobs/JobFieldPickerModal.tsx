@@ -189,7 +189,7 @@ export default function JobFieldPickerModal({
             <select
               value={crop}
               onChange={(event) => setCrop(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+              className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
             >
               <option value="">All crops</option>
               {cropOptions.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -203,7 +203,7 @@ export default function JobFieldPickerModal({
                 value={fieldName}
                 onChange={(event) => setFieldName(event.target.value)}
                 placeholder="Search fields..."
-                className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+                className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
               />
             </span>
           </label>
@@ -213,7 +213,7 @@ export default function JobFieldPickerModal({
               value={county}
               onChange={(event) => setCounty(event.target.value)}
               placeholder="Any county"
-              className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+              className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
             />
           </label>
           <div className="flex items-end">

@@ -42,7 +42,7 @@ interface JobMassEditModalProps {
 }
 
 const inputCls =
-  'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-secondary';
+  'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-secondary';
 
 /**
  * Field-app parity #7: Mass Edit over the checkbox-selected jobs. The modal
@@ -259,7 +259,7 @@ export default function JobMassEditModal({
           </select>
           {draft.setStatus && draft.status && !statusSafe && (
             <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-600">
-              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               Starting, completing or invoicing a job creates application records and inventory
               moves, so those happen one job at a time on the job page — they can&apos;t be bulk-set
               here. Only cancelling can be done in bulk.
@@ -371,7 +371,7 @@ export default function JobMassEditModal({
           />
           {draft.setLoader && !loaderValid && (
             <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-600">
-              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               Carrier rate can&apos;t be negative and tank capacity must be greater than zero.
             </p>
           )}
@@ -389,7 +389,7 @@ export default function JobMassEditModal({
             <ul className="text-xs text-secondary space-y-0.5">
               {changes.map((c, i) => (
                 <li key={i} className="flex items-center gap-1.5">
-                  <Check className="w-3 h-3 text-crx-green flex-shrink-0" />
+                  <Check className="w-3 h-3 text-crx-green shrink-0" />
                   {c}
                 </li>
               ))}

@@ -75,7 +75,7 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
                 }}
                 aria-expanded={newMenuOpen}
                 aria-haspopup="menu"
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-crx-green text-white text-sm font-medium hover:bg-crx-green/90 focus:outline-none focus:ring-2 focus:ring-crx-green/30 transition-all"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-crx-green text-white text-sm font-medium hover:bg-crx-green/90 focus:outline-hidden focus:ring-2 focus:ring-crx-green/30 transition-all"
               >
                 <Plus className="w-4 h-4" />
                 + New
@@ -98,7 +98,7 @@ export default function TopBar({ onMenuClick, onSearchClick, title, accent }: To
                         setNewMenuOpen(false);
                         navigate(item.path);
                       }}
-                      className="block w-full px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+                      className="block w-full px-3 py-2 text-left text-sm text-nav-dark hover:bg-gray-50 focus:bg-gray-50 focus:outline-hidden"
                     >
                       {item.label}
                     </button>

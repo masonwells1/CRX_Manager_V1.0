@@ -24,7 +24,7 @@ export default function UnitSelect({
       onChange={(event) => onChange(event.target.value)}
       disabled={disabled}
       aria-label={ariaLabel}
-      className="w-full px-3 py-2.5 text-sm text-nav-dark bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50 transition-colors duration-150"
+      className="w-full px-3 py-2.5 text-sm text-nav-dark bg-white border border-gray-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50 transition-colors duration-150"
     >
       <option value="" disabled>--</option>
       {value && !isKnownUnit(unitConversions, form, value) && (

@@ -539,7 +539,7 @@ export default function FieldInvoicesUnpostedPanel() {
               value={filters.invoiceNumber}
               onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))}
               placeholder="Invoice #"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-36"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-36"
             />
           </div>
           <MultiSelectDropdown
@@ -557,7 +557,7 @@ export default function FieldInvoicesUnpostedPanel() {
               type="date"
               value={filters.dateFrom}
               onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full sm:w-auto">
@@ -567,7 +567,7 @@ export default function FieldInvoicesUnpostedPanel() {
               type="date"
               value={filters.dateTo}
               onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full min-w-0 flex-1 sm:min-w-[12rem]">
@@ -580,7 +580,7 @@ export default function FieldInvoicesUnpostedPanel() {
                 value={filters.search}
                 onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
                 placeholder="Search job, customer, location, crop, chemical…"
-                className="pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
           </div>
@@ -616,7 +616,7 @@ export default function FieldInvoicesUnpostedPanel() {
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
               </div>
-              <div className="flex-shrink-0 text-right">
+              <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-crx-green">
                   Edit <Pencil className="h-3.5 w-3.5" />
@@ -658,7 +658,7 @@ export default function FieldInvoicesUnpostedPanel() {
                     <td className="px-3 py-2 text-gray-700">{row.job_number || '—'}</td>
                     <td className="px-3 py-2">
                       <span className="inline-flex items-center gap-1.5 font-medium text-nav-dark">
-                        <FileText className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />
+                        <FileText className="w-3.5 h-3.5 text-crx-green shrink-0" />
                         {row.invoice_number}
                       </span>
                     </td>

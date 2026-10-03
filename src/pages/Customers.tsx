@@ -549,7 +549,7 @@ export default function Customers() {
               value={assignmentRepId}
               onChange={(event) => setAssignmentRepId(event.target.value)}
               disabled={assignableRepsLoading || assignableRepsError || assignableReps.length === 0}
-              className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+              className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
             >
               <option value="">
                 {assignableRepsLoading
@@ -613,7 +613,7 @@ export default function Customers() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as 'active' | 'inactive' | 'all')}
                   aria-label="Filter by status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="active">Active only</option>
                   <option value="inactive">Inactive only</option>
@@ -623,7 +623,7 @@ export default function Customers() {
                   value={repFilter}
                   onChange={(e) => setRepFilter(e.target.value)}
                   aria-label="Filter by sales rep"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All reps</option>
                   <option value={UNASSIGNED_REP}>Unassigned</option>
@@ -635,7 +635,7 @@ export default function Customers() {
                   value={tierFilter}
                   onChange={(e) => setTierFilter(e.target.value)}
                   aria-label="Filter by tier"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Tiers</option>
                   <option value="1">Tier 1</option>
@@ -646,7 +646,7 @@ export default function Customers() {
                   value={needsFilter}
                   onChange={(e) => setNeedsFilter(e.target.value as ProfileNeedFilter)}
                   aria-label="Filter by profile needs"
-                  className="min-h-11 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="min-h-11 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All profile needs</option>
                   <option value="missing-rep">Missing rep</option>

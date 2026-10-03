@@ -658,7 +658,7 @@ export default function Compliance() {
                   type="date"
                   value={rupStartDate}
                   onChange={(e) => setRUPStartDate(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -667,7 +667,7 @@ export default function Compliance() {
                   type="date"
                   value={rupEndDate}
                   onChange={(e) => setRUPEndDate(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -675,7 +675,7 @@ export default function Compliance() {
                 <select
                   value={rupComplianceFilter}
                   onChange={(e) => setRUPComplianceFilter(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All</option>
                   <option value="compliant">Compliant</option>
@@ -900,7 +900,7 @@ export default function Compliance() {
               <select
                 value={form.customer_id}
                 onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select customer...</option>
                 {customers.map((c) => (
@@ -927,7 +927,7 @@ export default function Compliance() {
                     holder_name: selected?.full_name || '',
                   });
                 }}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select staff member...</option>
                 {staff.map((s) => (
@@ -959,7 +959,7 @@ export default function Compliance() {
               <select
                 value={form.license_type}
                 onChange={(e) => setForm({ ...form, license_type: e.target.value as 'private' | 'commercial' | 'public' })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="private">Private</option>
                 <option value="commercial">Commercial</option>

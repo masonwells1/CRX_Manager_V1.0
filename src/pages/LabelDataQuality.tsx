@@ -1130,7 +1130,7 @@ export default function LabelDataQuality() {
                 aria-label="Filter by finding type"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value as FindingFilter)}
-                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-nav-dark focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
               >
                 {FILTERS.map((type) => (
                   <option key={type} value={type}>{findingLabel(type)}</option>

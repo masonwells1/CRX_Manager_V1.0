@@ -209,7 +209,7 @@ export default function Vehicles() {
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value as VehicleType | '')}
           aria-label="Filter by vehicle type"
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         >
           <option value="">All Types</option>
           <option value="ground">Ground</option>
@@ -219,7 +219,7 @@ export default function Vehicles() {
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as VehicleStatus | '')}
           aria-label="Filter by vehicle status"
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+          className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         >
           <option value="">All Statuses</option>
           <option value="active">Active</option>

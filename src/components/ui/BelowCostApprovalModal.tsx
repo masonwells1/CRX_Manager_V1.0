@@ -45,7 +45,7 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
       <div className="space-y-4">
         <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
             <div>
               <p className="font-medium">{detail?.product_name || 'This product'} is priced below its locked cost.</p>
               {hasMoney && shortfall !== null && (
@@ -71,7 +71,7 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
             onChange={(event) => setReason(event.target.value)}
             rows={3}
             placeholder="Example: approved price match for this customer"
-            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
           />
         </div>
       </div>

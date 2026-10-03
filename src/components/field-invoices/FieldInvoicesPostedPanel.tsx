@@ -477,7 +477,7 @@ export default function FieldInvoicesPostedPanel() {
 
       {/* Posted-records warning banner (always on) */}
       <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
         <p>
           Posted records are from the most recent month roll. Modifying a posted invoice will cause the
           previous batch totals to update, and any applicable reports will need to be reprinted.
@@ -487,7 +487,7 @@ export default function FieldInvoicesPostedPanel() {
       {/* Dynamic month-batch span warning (only when the shown set crosses batches) */}
       {crossesBatches && (
         <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <p>
             The invoices shown span more than one month-end batch. A bulk action here would affect
             multiple batch totals — narrow the scope to a single batch (below) to act on one batch at a time.
@@ -505,7 +505,7 @@ export default function FieldInvoicesPostedPanel() {
               value={scopeValue}
               onChange={(e) => onScopeChange(e.target.value)}
               aria-label="Posting scope"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             >
               <option value="season">This Season</option>
               <option value="mtd">Month-to-date</option>
@@ -526,7 +526,7 @@ export default function FieldInvoicesPostedPanel() {
               value={filters.invoiceNumber}
               onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))}
               placeholder="Invoice #"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-36"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-36"
             />
           </div>
           <MultiSelectDropdown
@@ -544,7 +544,7 @@ export default function FieldInvoicesPostedPanel() {
               type="date"
               value={filters.dateFrom}
               onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full sm:w-auto">
@@ -554,7 +554,7 @@ export default function FieldInvoicesPostedPanel() {
               type="date"
               value={filters.dateTo}
               onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full min-w-0 flex-1 sm:min-w-[12rem]">
@@ -567,7 +567,7 @@ export default function FieldInvoicesPostedPanel() {
                 value={filters.search}
                 onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
                 placeholder="Search job, customer, location, crop, chemical…"
-                className="pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
           </div>
@@ -603,7 +603,7 @@ export default function FieldInvoicesPostedPanel() {
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
               </div>
-              <div className="flex-shrink-0 text-right">
+              <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <p className={row.balance_cents > 0 ? 'mt-1 text-xs font-semibold text-red-600' : 'mt-1 text-xs text-crx-green'}>
                   {fmt(row.balance_cents)} due
@@ -649,7 +649,7 @@ export default function FieldInvoicesPostedPanel() {
                     <td className="px-3 py-2 text-gray-700">{row.job_number || '—'}</td>
                     <td className="px-3 py-2">
                       <span className="inline-flex items-center gap-1.5 font-medium text-nav-dark">
-                        <FileText className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />
+                        <FileText className="w-3.5 h-3.5 text-crx-green shrink-0" />
                         {row.invoice_number}
                       </span>
                     </td>
