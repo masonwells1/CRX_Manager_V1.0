@@ -127,7 +127,9 @@ record(/cannot safely review code or diffs/i.test(agents), "AGENTS.md acknowledg
 record(/never have to nudge[\s\S]*Keep moving through authorized work/i.test(agents), "owner communication keeps authorized work moving without nudges");
 record(/what failed, what it means, and what (?:the agent is|you are) trying next/i.test(agents), "owner communication makes failures explicit");
 record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.test(agents), "owner communication makes genuine stops unmistakable");
-record(/Codex proceeds after a short plan[\s\S]*Claude retains its global pre-code approval checkpoint/i.test(agents), "tool-specific plan authority stays explicit");
+// Mason, 2026-10-03: Claude dropped its pre-code approval pause and plans-then-proceeds like Codex.
+record(/Codex and Claude both proceed after a short plan without waiting for approval/i.test(agents), "plan authority stays explicit for both agents");
+record(/never ask Mason to comment, label, or click for CodeRabbit/i.test(agents), "agents request CodeRabbit reviews themselves");
 record(/Deliver what was asked at the scope intended[\s\S]*rather than quietly narrowing, widening, or transforming it/i.test(agents), "shared contract prevents silent scope changes");
 record(/Before presenting findings as current, confirm the checkout is not behind `origin\/main`/i.test(agents), "reviews and audits require a current checkout");
 record(/simplest complete implementation/i.test(agents), "AGENTS.md requires simple, complete implementations");
