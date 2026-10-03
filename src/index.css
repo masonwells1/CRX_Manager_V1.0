@@ -280,6 +280,18 @@
   @apply bg-gray-400;
 }
 
+/* Windows high-contrast (forced-colors) mode hides box-shadow focus rings. Tailwind 3's
+   `outline-none` left a transparent outline that this mode draws in the system colour, so
+   keyboard focus stayed visible; Tailwind 4's `outline-none` removes it. Until the existing
+   uses move to `outline-hidden`, show the outline on keyboard focus in this mode only.
+   Unlayered on purpose, so it outranks the utilities layer. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
 /* Utility: hide scrollbar while keeping scroll functionality */
 .scrollbar-hide {
   -ms-overflow-style: none;

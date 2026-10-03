@@ -48,12 +48,14 @@ browser bundle. `npm audit` now reports 0 vulnerabilities.
 - A compliance review found the purchase-order grid and file-picker hover regressions; both are fixed.
 - Typecheck, lint, the full suite (382 files), build, `verify-deps` and `npm audit --audit-level=high` pass.
 
-**Follow-up (separate PR).** Tailwind 3's `outline-none` hid focus outlines with a transparent outline,
-which Windows high-contrast (forced-colours) mode still draws; Tailwind 4's `outline-none` removes it, and
-its name for the old behaviour is `outline-hidden`. The 406 uses across 115 files are renamed in a
-follow-up PR so this one stays under CodeRabbit's 150-file limit. Until it lands, those elements show
-no keyboard-focus indicator in Windows high-contrast mode (that mode hides the `focus:ring-*` box
-shadows they rely on otherwise). Normal display is unaffected.
+**High-contrast focus.** Tailwind 3's `outline-none` hid focus outlines with a transparent outline,
+which Windows high-contrast (forced-colours) mode still draws; Tailwind 4's `outline-none` removes it
+(its name for the old behaviour is `outline-hidden`), and that mode also hides `focus:ring-*` box
+shadows. Renaming the 406 uses across 115 files would have taken this PR past CodeRabbit's 150-file
+limit, so an unlayered `@media (forced-colors: active) { :focus-visible { … } }` rule in `src/index.css`
+restores the visible outline instead. Under emulated forced colours, a keyboard-focused input, button and
+workspace tab show the same 2px system-colour outline as on 3.4; normal display is unchanged. Renaming
+the uses to `outline-hidden` later is optional tidying.
 
 **Known residual.** On a few form pages the text inside `<select>` dropdowns differs at single-pixel
 anti-aliasing level, with no difference in any computed style, size or position. It is indistinguishable
