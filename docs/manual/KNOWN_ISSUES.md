@@ -338,7 +338,7 @@ is required so a return can never reverse more COGS than those reports recognize
 reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
 older copy.
 
-## OPEN 2026-09-21 (fix in open PR #800, migration parked) — a sales rep cannot remove a customer document (admins can)
+## OPEN 2026-09-21 (database fix LIVE 2026-10-02; page change in review) — a sales rep cannot remove a customer document (admins can)
 
 Found while proving the customer-document download-link fix (now in the archive); separate from it and
 unchanged by it. `customer_documents_rep_select`
@@ -349,7 +349,9 @@ without `RETURNING`. Reproduced on a local copy of the live policies; admins are
 document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
 `SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
 
-**Fix written, NOT applied (checked 2026-09-28).** Open PR #800 (it replaced the closed PR #785) carries
+**Database fix APPLIED LIVE 2026-10-02** (`20260921180000_soft_delete_customer_document_rpc`, ledger version `20261002230949`; PR #800 merged as `c78b73b67`). What remains is the page change: until it ships, the live Documents tab still updates the row directly, so a rep's Remove is still refused. It is on branch `claude/customer-document-rep-remove-page-v4`, rebuilt on current `main`. The history below is the pre-apply record.
+
+**Pre-apply record (checked 2026-09-28).** Open PR #800 (it replaced the closed PR #785) carries
 the parked migration `20260921180000_soft_delete_customer_document_rpc` (on the PR branch, not on
 `main`) — a `SECURITY DEFINER` soft-delete RPC with an idempotency key, no policy change — plus its
 provers. The Documents-tab change that calls the RPC is on the separate unmerged branch
