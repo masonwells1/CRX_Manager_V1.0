@@ -52,11 +52,11 @@ function gitToplevelOr(candidate) {
 }
 const projectDir = gitToplevelOr(candidateDir);
 
-function runGit(args) {
+function runGit(args, opts = {}) {
   try {
     return execFileSync("git", args, {
       encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
-      cwd: projectDir,
+      cwd: projectDir, ...opts,
     });
   } catch {
     return "";
@@ -527,12 +527,170 @@ const porcelainPath = (l) => {
   const arrow = rel.lastIndexOf(" -> ");
   return (arrow === -1 ? rel : rel.slice(arrow + 4)).replace(/^"|"$/g, "").trim();
 };
+// Files a merge commit's author wrote by hand, as [{ path, status }]. Compares
+// the committed merge against git's own automatic merge of the same parents
+// (`merge-tree --write-tree`, which exits 1 but still prints the tree when it
+// hits conflicts, so runGit — which swallows non-zero exits — cannot be used).
+// A path the automatic merge lacks is "A" (e.g. a changelog.d entry written
+// during the resolution); every other difference is "M". A git too old for
+// --write-tree falls back to the combined diff, which catches resolutions that
+// differ from every parent.
+const isTreeId = (s) => /^[0-9a-f]{40,64}$/.test(s);
+function mergeTreeOnce(args) {
+  let out = "";
+  try {
+    out = execFileSync("git", ["merge-tree", "--write-tree", ...args], {
+      encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir,
+    });
+  } catch (err) {
+    out = typeof err?.stdout === "string" && err.status === 1 ? err.stdout : "";
+  }
+  return out.split("\n")[0].trim();
+}
+// Git's automatic octopus result for these parents, rebuilt the way the octopus
+// strategy builds it: fold each parent into the running tree, using its merge
+// base against every parent merged so far. Rebuilt rather than looked up so an
+// amended octopus is judged correctly even when the original was made in another
+// clone and never touched this worktree's reflog (Codex P2, PR #827 round 16).
+// Each intermediate tree is wrapped in an unreferenced commit, because
+// `merge-tree` before git 2.45 accepts only commits; git's gc prunes them.
+function automaticOctopusTree(parents) {
+  let current = parents[0];
+  let tree = "";
+  for (let i = 1; i < parents.length; i++) {
+    const base = runGit(["merge-base", parents[i], ...parents.slice(0, i)]).split("\n")[0].trim();
+    if (!base) return "";
+    tree = mergeTreeOnce([`--merge-base=${base}`, current, parents[i]]);
+    if (!isTreeId(tree)) return "";
+    if (i < parents.length - 1) {
+      try {
+        current = execFileSync("git", ["commit-tree", tree, "-p", current, "-p", parents[i], "-m", "stop-wrap octopus rebuild"], {
+          encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir,
+          env: { ...process.env, GIT_AUTHOR_NAME: "stop-wrap", GIT_AUTHOR_EMAIL: "stop-wrap@localhost",
+            GIT_COMMITTER_NAME: "stop-wrap", GIT_COMMITTER_EMAIL: "stop-wrap@localhost" },
+        }).trim();
+      } catch { return ""; }
+      if (!isTreeId(current)) return "";
+    }
+  }
+  return tree;
+}
+function authoredMergeFiles(sha, automaticOctopus = false) {
+  const parents = runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).slice(1);
+  let autoTree = "";
+  if (parents.length === 2) {
+    autoTree = mergeTreeOnce([parents[0], parents[1]]);
+  } else if (parents.length > 2 && !automaticOctopus) {
+    // An octopus rewritten by hand (`commit --amend`) is compared against the
+    // automatic octopus of the same parents, like a two-parent merge. The
+    // combined diff misses an edit that makes a file equal to one parent, e.g.
+    // `git checkout <parent> -- f` before the amend (Codex P2, round 15).
+    autoTree = automaticOctopusTree(parents);
+  }
+  const parse = (out, isAdded) => out.split("\n").map((s) => s.trim()).filter(Boolean)
+    .map((s) => {
+      const parts = s.split("\t");
+      if (parts.length < 2) return null;
+      return { path: parts[parts.length - 1], status: isAdded(parts[0].trim()) ? "A" : "M" };
+    })
+    .filter(Boolean);
+  if (isTreeId(autoTree)) {
+    // -M: a resolution that only RENAMES an existing fragment reports "R", not
+    // "A", so it cannot pass as a new record (Codex P2, PR #827 round 9).
+    return parse(runGit(["diff-tree", "-r", "-M", "--name-status", autoTree, sha]), (st) => st === "A");
+  }
+  // Combined-diff fallback: one status letter per parent; all-"A" = new file.
+  const combined = parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
+  // Git's octopus strategy refuses any merge that needs a hand resolution, so
+  // an "M" row in a commit the strategy itself wrote is an automatic same-file
+  // merge, not authored work; only a file it added can be (CodeRabbit, PR
+  // #827). An octopus later rewritten by `commit --amend` keeps every row: the
+  // amend is hand-authored (Codex P2, PR #827 round 14). A two-parent merge on
+  // a git without --write-tree keeps both.
+  return automaticOctopus ? combined.filter(({ status }) => status === "A") : combined;
+}
+
 try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
-    const since = `--since=${new Date(sessionStartMs).toISOString()}`;
-    const sessionCommits = runGit(["log", "--oneline", since]).trim();
-    if (sessionCommits) {
+    // Session work = the commits this checkout CREATED since the snapshot, read
+    // from HEAD's reflog (per worktree), not inferred from the commit graph.
+    // Every graph-based rule failed a Codex P2 on PR #827: `git log --since`
+    // pulled in main's post-snapshot commits once main was merged; a
+    // first-parent scan dropped commits made on a topic branch and merged in;
+    // subtracting main's current tip dropped the session's own commits once
+    // they landed on main. The reflog records each commit where it was made,
+    // whichever branch it is on later, and never records commits that only
+    // arrive by fetch/merge. Checkouts, resets and fast-forwards create
+    // nothing and are skipped. No reflog (disabled) → nothing counted, the
+    // same fail-open as the rest of this hook.
+    // Rebase replays are logged under the command that ran them: `rebase (pick)`,
+    // or the whole pull command line, e.g. `pull -q --rebase origin main (pick)`
+    // (Codex P2, PR #827 round 12). That command line can itself contain colons
+    // (a `https://` or `file://` remote, a Windows `D:\` path), so match up to
+    // the first `(<action>): ` rather than excluding colons.
+    const AUTHORING_RE = /^(commit|cherry-pick|revert|am)\b|^(pull|rebase)\b.*?\((pick|reword|edit|squash|fixup|continue)\):|: Merge made by /;
+    // Which entries are this session's: everything newer than the anchor entry
+    // session-snapshot.mjs recorded at session start (newest entries come
+    // first). Entry timestamps are the committer date, which a rebase can
+    // backdate (`--committer-date-is-author-date`; Codex P2, PR #827 round
+    // 10), and the reflog's length changes when old entries expire (round 11),
+    // so neither marks the boundary. Timestamps are only the fallback when no
+    // anchor was recorded or the anchor entry itself has since expired.
+    const sessionStartSec = Math.floor(sessionStartMs / 1000);
+    // The whole reflog can outgrow execFileSync's 1 MiB default in a
+    // long-lived checkout; overflowing it returns "" and silently disables
+    // this check (CodeRabbit, PR #827).
+    const reflogEntries = runGit(["reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"],
+      { maxBuffer: 64 * 1024 * 1024 })
+      .split("\n").filter(Boolean);
+    let anchor = null;
+    try {
+      anchor = readFileSync(snapPath.replace(/\.snapshot$/, ".reflog"), "utf8").split("\n")[0].trim();
+    } catch { /* no recorded anchor — use timestamps */ }
+    // An empty anchor means the reflog was empty at session start: every entry is new.
+    const anchorIndex = anchor === null ? -1 : anchor === "" ? reflogEntries.length : reflogEntries.findIndex((entry) => entry.trim() === anchor);
+    const sessionEntries = anchorIndex >= 0
+      ? reflogEntries.slice(0, anchorIndex)
+      : reflogEntries.filter((entry) => Number(/@\{(\d+)\}/.exec(entry.split("\t")[1] ?? "")?.[1]) >= sessionStartSec);
+    const authored = new Set();
+    // Commits written by git's octopus strategy itself (see authoredMergeFiles).
+    const automaticOctopus = new Set();
+    for (const entry of sessionEntries) {
+      const [sha, , subject = ""] = entry.split("\t");
+      if (sha && AUTHORING_RE.test(subject)) authored.add(sha.trim());
+      if (sha && /: Merge made by the 'octopus' strategy/.test(subject)) automaticOctopus.add(sha.trim());
+    }
+    // Only commits still reachable from HEAD or a branch/remote/tag count: an
+    // amended, reset or rebased-away commit stays in the reflog, and counting
+    // it let a ledger edit that was amended OUT still satisfy the check (Codex
+    // P2, PR #827 round 6). Checked per commit, with no date bound, for the
+    // same backdating reason as above.
+    const isReachable = (sha) => {
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
+          timeout: 5000, stdio: "ignore", cwd: projectDir,
+        });
+        return true;
+      } catch {
+        return runGit(["for-each-ref", "--count=1", "--contains", sha, "--format=%(refname)",
+          "refs/heads", "refs/remotes", "refs/tags"]).trim() !== "";
+      }
+    };
+    const isMerge = (sha) => runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).length > 2;
+    const authoredShas = [...authored].filter(isReachable);
+    const nonMergeShas = authoredShas.filter((sha) => !isMerge(sha));
+    // A merge itself counts only for what the resolver AUTHORED (2026-09-26;
+    // Codex P2s, PRs #824/#827). Merging main authors nothing, and
+    // `--name-status` lists no files for a merge, so a merge-only session was
+    // warned in a loop. `git merge-tree --write-tree` recomputes git's own
+    // automatic result for the two parents; every file where the committed
+    // merge differs from it was written by hand — conflict fixes, including
+    // taking one side, plus anything added — while a clean automatic merge,
+    // even of separate hunks in one file, differs in nothing.
+    const mergeResolutionFiles = authoredShas.filter(isMerge)
+      .flatMap((sha) => authoredMergeFiles(sha, automaticOctopus.has(sha)));
+    if (nonMergeShas.length > 0 || mergeResolutionFiles.length > 0) {
       // Two sources, which together cover the whole accepted set: files still
       // dirty in the working tree, plus files already COMMITTED this session —
       // those have left the status listing entirely. An earlier version stat'd
@@ -547,8 +705,11 @@ try {
       // split, adding ENTRY_RE here would have made the hook LOOSER than before.
       const BACKSLASH = String.fromCharCode(92);
       const toPosixPath = (s) => s.split(BACKSLASH).join("/").trim();
-      const fromLog = runGit(["log", "--name-status", "-M", "--pretty=format:", since])
-        .split("\n").map(s => s.trim()).filter(Boolean)
+      // Same session scope as above: a ledger file that only arrived by merging
+      // main records main's work, not this session's.
+      const fromLog = nonMergeShas
+        .flatMap((sha) => runGit(["diff-tree", "--no-commit-id", "-r", "--root", "--name-status", "-M", sha]).split("\n"))
+        .map(s => s.trim()).filter(Boolean)
         .map((s) => {
           const parts = s.split("\t");
           if (parts.length < 2) return null;
@@ -557,6 +718,9 @@ try {
       const touched = [
         ...lines.map((l) => ({ path: porcelainPath(l), status: l.slice(0, 2) })),
         ...fromLog,
+        // Files authored while resolving a merge, with the combined status
+        // mapped above ("A" only when new relative to every parent).
+        ...mergeResolutionFiles.map(({ path: p, status }) => ({ path: toPosixPath(p), status })),
       ];
       // "A" or an untracked "?" is an addition; a rename destination ("R100") is not.
       const isAdded = (st) => !/^R/.test(st) && /[A?]/.test(st);

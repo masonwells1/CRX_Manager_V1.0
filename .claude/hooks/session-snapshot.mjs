@@ -33,4 +33,19 @@ try {
   writeFileSync(snapPath, porcelain, "utf8");
 } catch { /* ignore */ }
 
+// HEAD's newest reflog entry at session start, as an anchor. stop-wrap.mjs
+// treats every entry newer than it as the session's own, instead of trusting
+// entry timestamps, which come from the committer date and can be backdated
+// (`rebase --committer-date-is-author-date`), or the reflog's length, which
+// expiry changes (Codex P2s, PR #827). The line format must match the one
+// stop-wrap.mjs reads. An empty file means the reflog was empty.
+try {
+  const newest = execFileSync("git", ["reflog", "show", "-n", "1", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"], {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).split("\n")[0] ?? "";
+  writeFileSync(path.join(dir, `session-${sessionId}.reflog`), newest, "utf8");
+} catch { /* no HEAD yet — stop-wrap falls back to timestamps */ }
+
 process.exit(0);

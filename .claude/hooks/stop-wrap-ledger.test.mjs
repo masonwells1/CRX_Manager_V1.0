@@ -1,0 +1,527 @@
+#!/usr/bin/env node
+// stop-wrap.mjs "Commits exist this session but no ledger file was touched".
+//
+// 2026-09-26 regression: a session whose only commit was a merge of main into
+// the feature branch was warned in a loop. `git log --name-status` lists no
+// files for a merge commit, so the branch's changelog entry (committed before
+// the session-start snapshot) was invisible. Session work is what this
+// checkout created (HEAD's reflog): commits fetched from elsewhere, and the
+// clean part of a merge, are not; a real commit without a ledger — on this
+// branch, on a side branch merged in, or already landed on main — still warns.
+
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const hooksDir = path.dirname(fileURLToPath(import.meta.url));
+const stopWrapPath = path.join(hooksDir, "stop-wrap.mjs");
+
+// Never spawn git (directly or via a hook under test) with an inherited GIT_DIR
+// — see applied-source-containment.test.mjs for the incident this prevents.
+const cleanEnv = { ...process.env };
+for (const name of [
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
+  "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
+]) delete cleanEnv[name];
+
+// Commits made "before the session" are backdated so `git log --since=<snapshot
+// mtime>` cannot pick them up regardless of clock granularity.
+const PAST = "2020-01-01T00:00:00Z";
+function git(args, cwd, { past = false } = {}) {
+  const env = past ? { ...cleanEnv, GIT_AUTHOR_DATE: PAST, GIT_COMMITTER_DATE: PAST } : cleanEnv;
+  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", env });
+  assert.equal(r.status, 0, `git ${args.join(" ")} failed: ${r.stderr}`);
+  return r.stdout;
+}
+function runStopWrap(sessionId, projectDir) {
+  return spawnSync(process.execPath, [stopWrapPath], {
+    encoding: "utf8",
+    input: JSON.stringify({ session_id: sessionId }),
+    env: { ...cleanEnv, CLAUDE_PROJECT_DIR: projectDir },
+  });
+}
+const snapDir = path.join(os.tmpdir(), "crx-claude-hooks");
+const sessionSnapshotPath = path.join(hooksDir, "session-snapshot.mjs");
+function startSession(sessionId) {
+  // Reflog timestamps have one-second granularity: wait past the previous
+  // session's last entry so the timestamp fallback cannot pick it up either.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
+  // The real SessionStart hook writes the status snapshot and HEAD's reflog
+  // position, exactly as a live session would.
+  const r = spawnSync(process.execPath, [sessionSnapshotPath], {
+    encoding: "utf8", cwd: tmp, input: JSON.stringify({ session_id: sessionId }), env: cleanEnv,
+  });
+  assert.equal(r.status, 0, `session-snapshot exits 0: ${r.stderr}`);
+  return path.join(snapDir, `session-${sessionId}`);
+}
+const LEDGER_WARNING = /no ledger file was touched/;
+
+let pass = 0;
+const tmp = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-ledger-"));
+const snapshots = [];
+try {
+  git(["init", "-q", "-b", "main"], tmp);
+  git(["config", "user.email", "test@test"], tmp);
+  git(["config", "user.name", "test"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "base\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "init"], tmp, { past: true });
+
+  // Feature branch: real work plus its changelog entry, committed BEFORE the session.
+  git(["checkout", "-qb", "feat"], tmp);
+  mkdirSync(path.join(tmp, "docs", "changelog.d"), { recursive: true });
+  writeFileSync(path.join(tmp, "feature.txt"), "feature\n");
+  writeFileSync(path.join(tmp, "docs", "changelog.d", "2020-01-01-feature.md"),
+    "## 2020-01-01 — feature\n\nAdded the feature.\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feature with ledger"], tmp, { past: true });
+
+  // main moves on.
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "other.txt"), "other\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrelated main work"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+
+  // ── Session 1: the ONLY commit this session is a merge of main → no warning ──
+  const s1 = "ledger-test-merge-only";
+  snapshots.push(startSession(s1));
+  git(["merge", "--no-ff", "--no-edit", "main"], tmp);
+  const mergeOnly = runStopWrap(s1, tmp);
+  assert.equal(mergeOnly.status, 0, `stop-wrap exits 0: ${mergeOnly.stderr}`);
+  assert.ok(!LEDGER_WARNING.test(mergeOnly.stdout),
+    `a merge-only session must not get the "no ledger" warning; got: ${mergeOnly.stdout}`);
+  pass++;
+
+  // ── Session 1b: a merge that needed a hand-written conflict resolution is
+  //    real work (Codex P2, PR #824) → still warns when nothing was recorded ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base"], tmp, { past: true });
+  const s1b = "ledger-test-conflicted-merge";
+  snapshots.push(startSession(s1b));
+  const conflicted = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted.status, 0, "setup: the merge must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "hand-resolved: both sides combined\n");
+  git(["add", "base.txt"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const resolvedMerge = runStopWrap(s1b, tmp);
+  assert.match(resolvedMerge.stdout, LEDGER_WARNING,
+    "a merge carrying an authored conflict resolution with no ledger must still warn");
+  pass++;
+
+  // ── Session 1c: the merge resolution itself ADDS this session's changelog
+  //    entry (Codex P2, PR #827) → that counts as the ledger, no warning ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side 2\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base again"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side 2\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base again"], tmp, { past: true });
+  const s1c = "ledger-test-merge-adds-entry";
+  snapshots.push(startSession(s1c));
+  const conflicted2 = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted2.status, 0, "setup: the second merge must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "hand-resolved again\n");
+  writeFileSync(path.join(tmp, "docs", "changelog.d", "2026-09-27-merge-resolution.md"),
+    "## 2026-09-27 — merge resolution\n\nCombined both sides of base.txt by hand.\n");
+  git(["add", "base.txt", "docs/changelog.d/2026-09-27-merge-resolution.md"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const mergeWithEntry = runStopWrap(s1c, tmp);
+  assert.ok(!LEDGER_WARNING.test(mergeWithEntry.stdout),
+    `a merge whose resolution adds a changelog entry must count as recorded; got: ${mergeWithEntry.stdout}`);
+  pass++;
+
+  // ── Session 1d (Codex P2, PR #827): main gains an unrecorded commit AFTER the
+  //    snapshot and is merged cleanly — main's commit is not this session's
+  //    work (first-parent scan), and a clean merge of separate hunks in the
+  //    SAME file is not authored work either → no warning ──
+  mkdirSync(path.join(tmp, "src"), { recursive: true });
+  writeFileSync(path.join(tmp, "src", "shared.txt"), "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "shared file on feat"], tmp, { past: true });
+  git(["checkout", "-q", "main"], tmp);
+  git(["merge", "-q", "--no-edit", "feat"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "src", "shared.txt"), "ONE feat\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits top of shared"], tmp, { past: true });
+  const s1d = "ledger-test-upstream-after-snapshot";
+  snapshots.push(startSession(s1d));
+  // Someone else's commit reaches main the real way: made in another clone,
+  // then fetched — it never passes through this checkout's HEAD.
+  const other = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other], os.tmpdir());
+    git(["config", "user.email", "other@test"], other);
+    git(["config", "user.name", "other"], other);
+    writeFileSync(path.join(other, "src", "shared.txt"), "one\ntwo\nthree\nfour\nfive\nsix\nSEVEN main\n");
+    git(["add", "."], other);
+    git(["commit", "-qm", "main edits bottom of shared, no ledger"], other);
+    git(["fetch", "-q", other, "main:main"], tmp);
+  } finally {
+    rmSync(other, { recursive: true, force: true });
+  }
+  git(["merge", "--no-ff", "--no-edit", "main"], tmp);
+  const upstreamMerge = runStopWrap(s1d, tmp);
+  assert.ok(!LEDGER_WARNING.test(upstreamMerge.stdout),
+    `merging main's post-snapshot commit (clean, same-file hunks) must not warn; got: ${upstreamMerge.stdout}`);
+  pass++;
+
+  // ── Session 1e (Codex P2, PR #827): a conflict resolved by taking one side
+  //    ("ours") equals a parent, but it is still a hand-made resolution → warns ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side 3\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base a third time"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side 3\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base a third time"], tmp, { past: true });
+  const s1e = "ledger-test-take-ours";
+  snapshots.push(startSession(s1e));
+  const conflicted3 = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted3.status, 0, "setup: the third merge must conflict");
+  git(["checkout", "--ours", "base.txt"], tmp);
+  git(["add", "base.txt"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const tookOurs = runStopWrap(s1e, tmp);
+  assert.match(tookOurs.stdout, LEDGER_WARNING,
+    "a conflict resolved by taking one side is authored work and must still warn without a ledger");
+  pass++;
+
+  // ── Session 1f (Codex P2, PR #827 round 4): an unrecorded commit made THIS
+  //    session on a local topic branch, then merged cleanly into feat, is
+  //    session work — it is not on main, so it must still warn ──
+  const s1f = "ledger-test-topic-branch";
+  snapshots.push(startSession(s1f));
+  git(["checkout", "-qb", "topic"], tmp);
+  writeFileSync(path.join(tmp, "topic.txt"), "topic work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded topic work"], tmp);
+  git(["checkout", "-q", "feat"], tmp);
+  git(["merge", "--no-ff", "--no-edit", "topic"], tmp);
+  const topicMerge = runStopWrap(s1f, tmp);
+  assert.match(topicMerge.stdout, LEDGER_WARNING,
+    "an unrecorded commit authored this session on a side branch and merged in must still warn");
+  pass++;
+
+  // ── Session 1g (Codex P2, PR #827 round 5): an unrecorded session commit
+  //    that has already LANDED on main before the stop hook runs is still
+  //    this session's work → still warns ──
+  const s1g = "ledger-test-landed-on-main";
+  snapshots.push(startSession(s1g));
+  writeFileSync(path.join(tmp, "landed.txt"), "landed work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded work that lands on main"], tmp);
+  git(["branch", "-f", "main", "feat"], tmp);
+  const landed = runStopWrap(s1g, tmp);
+  assert.match(landed.stdout, LEDGER_WARNING,
+    "a session commit that already reached main must still warn without a ledger");
+  pass++;
+
+  // ── Session 1h (Codex P2, PR #827 round 6): a ledger edit that was amended
+  //    OUT of the session's commit no longer records anything — the superseded
+  //    commit stays in the reflog but is unreachable → still warns ──
+  const s1h = "ledger-test-amended-out";
+  snapshots.push(startSession(s1h));
+  mkdirSync(path.join(tmp, "docs", "manual"), { recursive: true });
+  writeFileSync(path.join(tmp, "src", "amended.txt"), "real work\n");
+  writeFileSync(path.join(tmp, "docs", "manual", "NOTES.md"), "# Notes\n\nRecorded the work.\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "work plus ledger"], tmp);
+  git(["rm", "-q", "docs/manual/NOTES.md"], tmp);
+  git(["commit", "-q", "--amend", "-m", "work only"], tmp);
+  const amendedOut = runStopWrap(s1h, tmp);
+  assert.match(amendedOut.stdout, LEDGER_WARNING,
+    "a ledger edit amended out of the session's commit must not count as the record");
+  pass++;
+
+  // ── Session 1i (Codex P2, PR #827 round 7): an unrecorded session commit
+  //    replayed by a rebase that needed a conflict resolution is recorded as
+  //    `rebase (continue)`; the original commit is then unreachable → still
+  //    warns ──
+  // Line main up with feat first, so the rebase replays ONLY this session's
+  // commit (replaying 1h's unrecorded commit would warn on its own).
+  git(["branch", "-f", "main", "feat"], tmp);
+  const other2 = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other2], os.tmpdir());
+    git(["config", "user.email", "other@test"], other2);
+    git(["config", "user.name", "other"], other2);
+    writeFileSync(path.join(other2, "base.txt"), "upstream rewrite\n");
+    git(["add", "."], other2);
+    git(["commit", "-qm", "upstream edits base"], other2);
+    const s1i = "ledger-test-rebase-continue";
+    snapshots.push(startSession(s1i));
+    writeFileSync(path.join(tmp, "base.txt"), "session rewrite\n");
+    git(["add", "."], tmp);
+    git(["commit", "-qm", "unrecorded session edit"], tmp);
+    git(["fetch", "-q", other2, "main:main"], tmp);
+  } finally {
+    rmSync(other2, { recursive: true, force: true });
+  }
+  const rebase = spawnSync("git", ["-C", tmp, "rebase", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(rebase.status, 0, "setup: the rebase must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "resolved during rebase\n");
+  git(["add", "base.txt"], tmp);
+  const cont = spawnSync("git", ["-C", tmp, "-c", "core.editor=true", "rebase", "--continue"],
+    { encoding: "utf8", env: { ...cleanEnv, GIT_EDITOR: "true" } });
+  assert.equal(cont.status, 0, `setup: rebase --continue must succeed: ${cont.stderr}`);
+  const rebased = runStopWrap("ledger-test-rebase-continue", tmp);
+  assert.match(rebased.stdout, LEDGER_WARNING,
+    "a session commit replayed through a conflict-resolved rebase must still warn without a ledger");
+  pass++;
+
+  // ── Session 1j (Codex P2, PR #827 round 9): a conflict resolution that only
+  //    RENAMES an existing changelog fragment writes no new record → warns ──
+  git(["checkout", "-q", "main"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "main side 4\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "main edits base a fourth time"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  writeFileSync(path.join(tmp, "base.txt"), "feat side 4\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "feat edits base a fourth time"], tmp, { past: true });
+  const s1j = "ledger-test-rename-in-merge";
+  snapshots.push(startSession(s1j));
+  const conflicted4 = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "main"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(conflicted4.status, 0, "setup: the fourth merge must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "hand-resolved a fourth time\n");
+  git(["mv", "docs/changelog.d/2026-09-27-merge-resolution.md", "docs/changelog.d/2026-09-27-renamed.md"], tmp);
+  git(["add", "base.txt"], tmp);
+  git(["commit", "--no-edit", "-q"], tmp);
+  const renamedInMerge = runStopWrap(s1j, tmp);
+  assert.match(renamedInMerge.stdout, LEDGER_WARNING,
+    "renaming an existing changelog entry during a merge resolution must not count as a new record");
+  pass++;
+
+  // ── Session 1k (Codex P2, PR #827 round 10): `rebase
+  //    --committer-date-is-author-date` backdates the new commit AND its reflog
+  //    entry to an old author date. Session membership comes from the reflog
+  //    position recorded at session start, not timestamps → still warns ──
+  git(["branch", "-f", "main", "feat"], tmp);
+  const other3 = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other3], os.tmpdir());
+    git(["config", "user.email", "other@test"], other3);
+    git(["config", "user.name", "other"], other3);
+    writeFileSync(path.join(other3, "base.txt"), "upstream rewrite again\n");
+    git(["add", "."], other3);
+    git(["commit", "-qm", "upstream edits base again"], other3);
+    const s1k = "ledger-test-backdated-rebase";
+    snapshots.push(startSession(s1k));
+    writeFileSync(path.join(tmp, "base.txt"), "session rewrite again\n");
+    git(["add", "."], tmp);
+    const oldAuthor = spawnSync("git", ["-C", tmp, "commit", "-qm", "unrecorded edit, old author date"],
+      { encoding: "utf8", env: { ...cleanEnv, GIT_AUTHOR_DATE: PAST } });
+    assert.equal(oldAuthor.status, 0, `setup: commit with an old author date: ${oldAuthor.stderr}`);
+    git(["fetch", "-q", other3, "main:main"], tmp);
+  } finally {
+    rmSync(other3, { recursive: true, force: true });
+  }
+  const rebase2 = spawnSync("git", ["-C", tmp, "rebase", "--committer-date-is-author-date", "main"],
+    { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(rebase2.status, 0, "setup: the backdated rebase must conflict");
+  writeFileSync(path.join(tmp, "base.txt"), "resolved during backdated rebase\n");
+  git(["add", "base.txt"], tmp);
+  const cont2 = spawnSync("git", ["-C", tmp, "rebase", "--continue"],
+    { encoding: "utf8", env: { ...cleanEnv, GIT_EDITOR: "true" } });
+  assert.equal(cont2.status, 0, `setup: backdated rebase --continue must succeed: ${cont2.stderr}`);
+  const backdated = runStopWrap("ledger-test-backdated-rebase", tmp);
+  assert.match(backdated.stdout, LEDGER_WARNING,
+    "a session commit backdated by --committer-date-is-author-date must still warn without a ledger");
+  pass++;
+
+  // ── Session 1l (Codex P2, PR #827 round 11): an old reflog entry expires
+  //    while the session adds one, so the reflog's LENGTH is unchanged. The
+  //    session boundary is an anchor entry, not a length → still warns ──
+  const s1l = "ledger-test-reflog-expiry";
+  snapshots.push(startSession(s1l));
+  writeFileSync(path.join(tmp, "expiry.txt"), "unrecorded work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded work while an old entry expires"], tmp);
+  const oldest = git(["reflog", "show", "--format=%gd", "HEAD"], tmp).trim().split("\n").pop();
+  git(["reflog", "delete", "--rewrite", oldest], tmp);
+  const expired = runStopWrap(s1l, tmp);
+  assert.match(expired.stdout, LEDGER_WARNING,
+    "a session commit must still warn when an old reflog entry expired during the session");
+  pass++;
+
+  // ── Session 1m (Codex P2, PR #827 round 12): `git pull --rebase` replays an
+  //    unrecorded session commit and logs it as `pull --rebase (pick)`; the
+  //    original commit is then unreachable → still warns ──
+  git(["branch", "-f", "main", "feat"], tmp);
+  const other4 = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  try {
+    git(["clone", "-q", "-b", "main", tmp, other4], os.tmpdir());
+    git(["config", "user.email", "other@test"], other4);
+    git(["config", "user.name", "other"], other4);
+    writeFileSync(path.join(other4, "upstream.txt"), "upstream moves on\n");
+    git(["add", "."], other4);
+    git(["commit", "-qm", "upstream adds a file"], other4);
+    const s1m = "ledger-test-pull-rebase";
+    snapshots.push(startSession(s1m));
+    writeFileSync(path.join(tmp, "pulled.txt"), "unrecorded work before a pull\n");
+    git(["add", "."], tmp);
+    git(["commit", "-qm", "unrecorded work replayed by pull --rebase"], tmp);
+    // A file:// URL puts a colon in the logged command line, as an https://
+    // remote or a Windows drive path does (a Windows CI failure, PR #827).
+    git(["pull", "-q", "--rebase", pathToFileURL(other4).href, "main"], tmp);
+  } finally {
+    rmSync(other4, { recursive: true, force: true });
+  }
+  const pulled = runStopWrap("ledger-test-pull-rebase", tmp);
+  assert.match(pulled.stdout, LEDGER_WARNING,
+    "a session commit replayed by git pull --rebase must still warn without a ledger");
+  pass++;
+
+  // ── Session 1n (CodeRabbit, PR #827): a clean octopus merge of two branches
+  //    that edited separate hunks of the SAME file authors nothing (git's
+  //    octopus strategy refuses hand resolutions) → no warning ──
+  mkdirSync(path.join(tmp, "src"), { recursive: true });
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "octo base"], tmp, { past: true });
+  git(["checkout", "-qb", "octo-one"], tmp);
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "A one\nb\nc\nd\ne\nf\ng\n");
+  git(["commit", "-qam", "octo-one edits top"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  git(["checkout", "-qb", "octo-two"], tmp);
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "a\nb\nc\nd\ne\nf\nG two\n");
+  git(["commit", "-qam", "octo-two edits bottom"], tmp, { past: true });
+  git(["checkout", "-q", "feat"], tmp);
+  const s1n = "ledger-test-clean-octopus";
+  snapshots.push(startSession(s1n));
+  git(["merge", "--no-ff", "--no-edit", "-q", "octo-one", "octo-two"], tmp);
+  assert.equal(git(["rev-list", "--parents", "-n", "1", "HEAD"], tmp).trim().split(/\s+/).length, 4,
+    "setup: HEAD must be a three-parent octopus merge");
+  const octopus = runStopWrap(s1n, tmp);
+  assert.ok(!LEDGER_WARNING.test(octopus.stdout),
+    `a clean octopus merge of separate same-file hunks must not warn; got: ${octopus.stdout}`);
+  pass++;
+
+  // ── Session 1o (Codex P2, PR #827 round 14): amending that octopus merge with
+  //    a hand edit to an existing file is authored work, even though the
+  //    amended commit keeps its three parents → still warns ──
+  const s1o = "ledger-test-amended-octopus";
+  snapshots.push(startSession(s1o));
+  writeFileSync(path.join(tmp, "src", "octo.txt"), "A one\nb\nc\nD by hand\ne\nf\nG two\n");
+  git(["commit", "-q", "-a", "--amend", "--no-edit"], tmp);
+  assert.equal(git(["rev-list", "--parents", "-n", "1", "HEAD"], tmp).trim().split(/\s+/).length, 4,
+    "setup: the amended commit must still be a three-parent octopus merge");
+  const amendedOctopus = runStopWrap(s1o, tmp);
+  assert.match(amendedOctopus.stdout, LEDGER_WARNING,
+    "a hand edit amended into an octopus merge must still warn without a ledger");
+  pass++;
+
+  // ── Session 1p (Codex P2, PR #827 round 15): amending that octopus so a file
+  //    EQUALS one parent (`checkout <parent> -- f`) drops out of the combined
+  //    diff, which lists only files differing from every parent. Compared
+  //    against the original automatic octopus, it is still a hand edit → warns ──
+  const s1p = "ledger-test-parent-equal-octopus-amend";
+  snapshots.push(startSession(s1p));
+  git(["checkout", "octo-one", "--", "src/octo.txt"], tmp);
+  git(["commit", "-q", "--amend", "--no-edit"], tmp);
+  assert.equal(git(["diff-tree", "--cc", "--no-commit-id", "--name-only", "-r", "HEAD"], tmp).trim(), "",
+    "setup: the parent-equal edit must be invisible to the combined diff");
+  const parentEqualOctopus = runStopWrap(s1p, tmp);
+  assert.match(parentEqualOctopus.stdout, LEDGER_WARNING,
+    "a parent-equal edit amended into an octopus merge must still warn without a ledger");
+  pass++;
+
+  // ── Sessions 1q/1r (Codex P2, PR #827 round 16): an octopus made in ANOTHER
+  //    worktree never enters this HEAD's reflog. Amending it here is judged
+  //    against git's rebuilt automatic octopus: rewording alone authors
+  //    nothing (1q); a parent-equal edit still warns (1r) ──
+  writeFileSync(path.join(tmp, "src", "q.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "q base"], tmp, { past: true });
+  const otherWt = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-other-"));
+  rmSync(otherWt, { recursive: true, force: true });
+  git(["worktree", "add", "-q", "-b", "q-octo", otherWt, "HEAD"], tmp);
+  git(["checkout", "-qb", "q-one"], otherWt);
+  writeFileSync(path.join(otherWt, "src", "q.txt"), "A q-one\nb\nc\nd\ne\nf\ng\n");
+  git(["commit", "-qam", "q-one edits top"], otherWt, { past: true });
+  git(["checkout", "-q", "q-octo"], otherWt);
+  git(["checkout", "-qb", "q-two"], otherWt);
+  writeFileSync(path.join(otherWt, "src", "q.txt"), "a\nb\nc\nd\ne\nf\nG q-two\n");
+  git(["commit", "-qam", "q-two edits bottom"], otherWt, { past: true });
+  git(["checkout", "-q", "q-octo"], otherWt);
+  git(["merge", "--no-ff", "--no-edit", "-q", "q-one", "q-two"], otherWt, { past: true });
+  const foreignOctopus = git(["rev-parse", "HEAD"], otherWt).trim();
+  git(["worktree", "remove", "--force", otherWt], tmp);
+  // Brought here by a reset, which authors nothing and logs no merge.
+  git(["reset", "-q", "--hard", foreignOctopus], tmp);
+  assert.ok(!git(["reflog", "show", "--format=%H %gs", "HEAD"], tmp).split("\n")
+    .some((line) => line.startsWith(`${foreignOctopus} merge`)),
+  "setup: this worktree's reflog must not record the foreign octopus as a merge");
+
+  const s1q = "ledger-test-foreign-octopus-reword";
+  snapshots.push(startSession(s1q));
+  git(["commit", "-q", "--amend", "-m", "octopus of q-one and q-two, reworded"], tmp);
+  const reworded = runStopWrap(s1q, tmp);
+  assert.ok(!LEDGER_WARNING.test(reworded.stdout),
+    `rewording a clean foreign octopus authors no file and must not warn; got: ${reworded.stdout}`);
+  pass++;
+
+  const s1r = "ledger-test-foreign-octopus-parent-equal";
+  snapshots.push(startSession(s1r));
+  git(["checkout", "q-one", "--", "src/q.txt"], tmp);
+  git(["commit", "-q", "--amend", "--no-edit"], tmp);
+  assert.equal(git(["diff-tree", "--cc", "--no-commit-id", "--name-only", "-r", "HEAD"], tmp).trim(), "",
+    "setup: the parent-equal edit must be invisible to the combined diff");
+  const foreignParentEqual = runStopWrap(s1r, tmp);
+  assert.match(foreignParentEqual.stdout, LEDGER_WARNING,
+    "a parent-equal edit amended into a foreign octopus must still warn without a ledger");
+  pass++;
+
+  // ── Session 1s (CodeRabbit, PR #827): a reflog larger than execFileSync's
+  //    1 MiB default buffer must not empty the read and silence the check ──
+  const headSha = git(["rev-parse", "HEAD"], tmp).trim();
+  const filler = `${headSha} ${headSha} test <test@test> 1577836800 +0000\tcheckout: ${"x".repeat(1000)}\n`;
+  const headLog = path.join(tmp, ".git", "logs", "HEAD");
+  writeFileSync(headLog, filler.repeat(1500) + readFileSync(headLog, "utf8"));
+  const bigRead = spawnSync("git", ["-C", tmp, "reflog", "show", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"],
+    { encoding: "utf8", env: cleanEnv, maxBuffer: 64 * 1024 * 1024 });
+  assert.ok(bigRead.status === 0 && bigRead.stdout.length > 1024 * 1024,
+    "setup: the reflog output must exceed 1 MiB");
+  const s1s = "ledger-test-large-reflog";
+  snapshots.push(startSession(s1s));
+  writeFileSync(path.join(tmp, "large-reflog.txt"), "unrecorded work\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded work with a large reflog"], tmp);
+  const largeReflog = runStopWrap(s1s, tmp);
+  assert.match(largeReflog.stdout, LEDGER_WARNING,
+    "a session commit must still warn when the reflog is larger than 1 MiB");
+  pass++;
+
+  // ── Session 2: a real commit without any ledger → still warns ──
+  const s2 = "ledger-test-real-commit";
+  snapshots.push(startSession(s2));
+  writeFileSync(path.join(tmp, "feature.txt"), "feature v2\n");
+  git(["add", "."], tmp);
+  git(["commit", "-qm", "unrecorded change"], tmp);
+  const realCommit = runStopWrap(s2, tmp);
+  assert.match(realCommit.stdout, LEDGER_WARNING,
+    "a real commit with no ledger entry must still get the warning");
+  pass++;
+} finally {
+  rmSync(tmp, { recursive: true, force: true });
+  for (const p of snapshots) {
+    rmSync(`${p}.snapshot`, { force: true });
+    rmSync(`${p}.reflog`, { force: true });
+  }
+}
+
+console.log(`stop-wrap-ledger: ${pass} assertions passed`);
