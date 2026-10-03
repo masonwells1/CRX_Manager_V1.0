@@ -8,10 +8,12 @@
 THE CURRENT BOUNDARY AND THE ONLY CAPTURE IN THIS SECTION.** Read-only reads on project
 `rhyzpcqhnizqbxphqdkr`:
 
-- **Ledger:** **1017 rows**, live `max(version)` **`20261002201609`**, effective ordering high-water
-  **`20260914101300_finish_generic_field_invoice_cutover`**, computed row by row (the 14-digit stamp in
-  each row's `name`, falling back to its `version` only when the name has none). Any new candidate
-  must sort above `20260914101300`.
+- **Ledger (re-read 2026-10-03 03:19 UTC, after PR #800's apply):** **1018 rows / 1011 distinct
+  names**, live `max(version)` **`20261002230949`**, effective ordering high-water
+  **`20260921180000_soft_delete_customer_document_rpc`** (row 936), computed row by row (the 14-digit
+  stamp in each row's `name`, falling back to its `version` only when the name has none). Any new
+  candidate must sort above `20260921180000`. At the 20:16 UTC capture this block describes it was
+  1017 rows, `max(version)` `20261002201609`, high-water `20260914101300_finish_generic_field_invoice_cutover`.
 - **Field-season migrations,** applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Nothing is waiting on `main`.
 - **Post-apply checks (read-only):**
   - `public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)` is the new wrapper, body md5

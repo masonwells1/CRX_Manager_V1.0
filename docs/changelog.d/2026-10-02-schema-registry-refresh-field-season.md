@@ -19,7 +19,10 @@ Second refresh (started 2026-10-03 03:19:35 UTC, after merging `main` at `8bf73b
 `20260921180000_soft_delete_customer_document_rpc` had applied live at ledger version
 `20261002230949`, so it was added too (`applied_migration_names` 1010 → 1011, `migrations_high_water`
 → `20261002230949`). Again no change to any other section. `docs/manual/CURRENT_STATE.md`'s
-"Schema registry" bullet now matches.
+"Schema registry" bullet now matches, and its ledger stamp and effective ordering high-water (plus the
+ledger bullet at the top of `docs/reference/migration-history.md`) now read 1018 rows / 1011 names,
+`max(version)` `20261002230949`, high-water `20260921180000` — from a live read-only count at
+2026-10-03 03:19 UTC — instead of the pre-#800 `20260914101300`.
 
 Moving the authored boundary to `20260914101300` made `src/lib/rpcContracts.test.ts` fail (3 tests):
 the four field-season files no longer sort above the boundary, and `src/types/supabase.ts` has not
@@ -33,5 +36,5 @@ Proof: a section-by-section comparison against the previous registry showed only
 changes above, and re-running `.claude/hooks/session-staleness.mjs` no longer reports the registry
 as behind. No `REGISTRY-STALE.flag` existed in any worktree.
 
-Not done here: `docs/reference/migration-history.md` still describes `20260914101000`..`101300` as
-unapplied. Recording those applies belongs to the field-season install lane that applied them.
+`docs/reference/migration-history.md` rows 931–934 already record `20260914101000`..`101300` as
+APPLIED LIVE; PR #871 (merged as `27c450f0a`, now merged into this branch) made that change.

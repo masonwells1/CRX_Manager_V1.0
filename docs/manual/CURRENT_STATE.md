@@ -1,18 +1,18 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-02 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr` after the four field-season applies: 1017 rows / 1010
-distinct names, `max(version)` `20261002201609`; the 2026-09-27 evening read had 1013 rows,
-`max(version)` `20260928025520`). Every
+query against project `rhyzpcqhnizqbxphqdkr` after PR #800's apply, 2026-10-03 03:19 UTC: 1018 rows /
+1011 distinct names, `max(version)` `20261002230949`; the read right after the four field-season
+applies had 1017 rows, `max(version)` `20261002201609`). Every
 other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-02)
 
-- **Effective ordering high-water: `20260914101300_finish_generic_field_invoice_cutover`**
-  (ledger version `20261002201609`, UTC; applied live 2026-10-02). It replaced
-  `20260914100900_repair_commission_history_label_snapshots` (ledger `20260928025520`). The effective ordering high-water is the
+- **Effective ordering high-water: `20260921180000_soft_delete_customer_document_rpc`**
+  (ledger version `20261002230949`, UTC; applied live 2026-10-02 from PR #800). It replaced
+  `20260914101300_finish_generic_field_invoice_cutover` (ledger `20261002201609`). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
