@@ -683,7 +683,14 @@ for (const command of [
 
 // Luna round 2 (2026-10-02): writes behind an env assignment, and mode changes,
 // are plain writes and deny.
-for (const command of ["env APP=1 rm -f .husky/pre-push", "APP=1 rm -f .husky/pre-push", "chmod -x .husky/pre-push"]) {
+// Codex GitHub review (P1) and Luna round 3: wrapper OPTIONS must not hide the
+// real program.
+for (const command of [
+  "env APP=1 rm -f .husky/pre-push", "APP=1 rm -f .husky/pre-push", "chmod -x .husky/pre-push",
+  "sudo -u root rm -f .husky/pre-push", "xargs -0 rm -f .husky/pre-push", "timeout -s KILL 5 rm -f .husky/pre-push",
+  "nice -n 10 cp /tmp/x .claude/hooks/sql-safety.mjs", "sudo -- rm -f .husky/pre-push", "env -i PATH=/bin rm .husky/pre-push",
+  "npm exec rimraf .husky/pre-push", "git checkout-index --force -- .husky/pre-push",
+]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
 }

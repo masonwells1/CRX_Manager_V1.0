@@ -796,7 +796,7 @@ if (shellTool) {
   // cannot vouch for is let through with a visible warning instead.
   const GIT_WRITER_SUBCOMMANDS = new Set([
     "checkout", "restore", "apply", "am", "rm", "mv", "clean", "stash", "reset",
-    "revert", "cherry-pick", "rebase", "switch", "merge", "pull",
+    "revert", "cherry-pick", "rebase", "switch", "merge", "pull", "checkout-index", "read-tree",
   ]);
   const WRITER_HEADS = new Set([
     "rm", "rmdir", "unlink", "mv", "cp", "tee", "install", "dd", "truncate", "ln",
@@ -804,11 +804,36 @@ if (shellTool) {
     "set-content", "add-content", "out-file", "copy-item", "move-item", "remove-item",
     "new-item", "ni", "del", "erase", "copy", "move", "ri", "sc", "ac",
   ]);
-  // Wrappers, plus leading `NAME=value` assignments (`env APP=1 rm …`, `APP=1 rm …`).
-  const WRAPPER_PREFIX_RE = /^(?:sudo|command|env|exec|eval|nice|nohup|xargs|timeout\s+\S+|npx|npm\s+exec|yarn|pnpm(?:\s+exec)?|[A-Za-z_]\w*=\S*)\s+/i;
+  // Wrappers are skipped together with their OPTIONS (`sudo -u root rm …`,
+  // `xargs -0 rm …`, `timeout -s KILL 5 rm …`), plus leading `NAME=value`
+  // assignments (`env APP=1 rm …`), so the real program is judged.
+  const WRAPPERS = new Set(["sudo", "command", "env", "exec", "eval", "nice", "nohup", "xargs", "timeout", "npx", "yarn", "pnpm", "stdbuf", "doas"]);
+  const WRAPPER_VALUE_OPTIONS = new Set([
+    "-u", "-g", "-U", "-C", "-h", "-p", "-r", "-t", "-T", "-n", "-I", "-L", "-P", "-s", "-d", "-E", "-a", "-k",
+    "-i", "-o", "-e", "--user", "--group", "--signal", "--kill-after", "--max-args", "--replace", "--max-procs",
+    "--delimiter", "--arg-file", "--adjustment", "--input", "--output", "--error",
+  ]);
+  const unwrapCommand = (segment) => {
+    const tokens = String(segment).trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    while (i < tokens.length) {
+      const word = tokens[i].replace(/["']/g, "").replace(/^.*[/\\]/, "").toLowerCase();
+      if (/^[A-Za-z_]\w*=/.test(tokens[i])) { i += 1; continue; }
+      if (word === "npm" && tokens[i + 1] === "exec") { i += 2; continue; }
+      if (!WRAPPERS.has(word)) break;
+      i += 1;
+      while (i < tokens.length && tokens[i].startsWith("-")) {
+        const option = tokens[i];
+        i += 1;
+        if (option === "--") break;
+        if (!option.includes("=") && WRAPPER_VALUE_OPTIONS.has(option)) i += 1;
+      }
+      if (word === "timeout" && i < tokens.length && /^\d/.test(tokens[i])) i += 1;   // the duration
+    }
+    return tokens.slice(i).join(" ");
+  };
   const segmentObviouslyWrites = (segment) => {
-    let s = String(segment).trim();
-    while (WRAPPER_PREFIX_RE.test(s)) s = s.replace(WRAPPER_PREFIX_RE, "");
+    const s = unwrapCommand(segment);
     const head = ((s.match(/^([\w.:\\/-]+)/) || [])[1] || "").replace(/^.*[/\\]/, "").toLowerCase();
     if (WRITER_HEADS.has(head)) return true;
     if ((head === "sed" || head === "perl") && /(?:^|\s)(?:-[A-Za-z]*i|--in-place)/.test(s)) return true;
