@@ -191,6 +191,8 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
     - To Ship: deliveries and purchase orders 500, open orders 2,000, order lines 5,000.
     - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
       `.range()` and are not capped.
+    - Reports: the price list and posted-applications datasets each stop at 500 (`fetchPriceList`,
+      `fetchPostedApplications`).
   - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
     Application Records stop silently, and the other pages were not checked for a warning.
   - On a capped query, records past the cap are missing from that page and its browser-side filters.

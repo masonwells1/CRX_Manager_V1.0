@@ -401,6 +401,22 @@ and missing from every other tracker. Sources are recoverable with `git show 4b6
   invoiced. Last, a screen for the
   product return-policy fields, which nothing in the app edits (product data model D-4, "not yet" on
   2026-08-18).
+- **Quote discount, tax and fee model (decide)**: quotes have no discount, tax or fee fields and no
+  server-side order of operations for them. Adjustments go through per-line price overrides. Ag inputs
+  are often tax-exempt, so this may be deliberate, but no decision is recorded (Q1 audits
+  `PHASE6_RESPONSIBILITY_AUDIT.md` and `PHASE7_COMPLETE_DEFECT_BACKLOG.md`). The invoice prompt-pay
+  discount item is a separate feature.
+- **Earmarked prepay plan, only partly built (decide)**: the 2026-02-24 plan (v3, with your locked
+  decisions) called for:
+  - Chemical, Fertilizer and General buckets matched to invoice lines by each product's bucket;
+  - cross-bucket use allowed only as an admin override with a required reason and an audit entry;
+  - admin alerts above a dollar threshold set in Settings;
+  - a standalone prepay history report.
+
+  What shipped in March is `prepay_credits.bucket_label` with free labels and the prepay workspace. The
+  product matching, override reason, threshold alerts and history report were not found in code on
+  2026-10-03. This differs from the shelved booking "earmark engine" above. Recover the plan with
+  `git show 4b6ff6293:docs/archive/2026-Q1-brainstorms/2026-02-24-earmarked-prepayments-plan.md`.
 
 **Found by a sweep of every removed audit's findings (2026-10-02)**: about 100 removed audit and review
 reports, from February to July 2026, were read finding by finding. Most findings were already fixed. These
