@@ -4,7 +4,7 @@
 
 `AGENTS.md` is the canonical shared contract. This file holds only Claude-specific routing and never weakens shared policy.
 
-- Follow the `AGENTS.md` routing table; load nothing extra at session start. For architecture, difficult debugging, tracing, structural audits, and PR impact, invoke `graphify` before broad searching.
+- Follow the `AGENTS.md` routing table; load nothing extra at session start. For architecture, difficult debugging, tracing, structural audits, and PR impact, invoke `graphify` before broad searching. It narrows source reads and never replaces source or live verification; documentation is outside its code-only corpus, so inspect docs directly.
 - Search `.claude/schema-registry.json` by table or column (too large to read whole); refresh it after schema changes.
 - Read `docs/reference/claude-model-tuning.md` only when choosing models or effort, delegating, or writing reviewer prompts.
 - Cloud sessions may lack `node_modules`, `gh`, Codex, Graphify, or the Supabase MCP: say early which gates cannot run, finish what can, and deliver a draft PR. Never report an unrun gate as passed.
@@ -16,8 +16,11 @@ Route Mason's plain-English requests; he should not need workflow names.
 
 | Need | Workflow |
 |---|---|
-| Second-model or adversarial review | `codex-review`, `codex-gauntlet`, or `agent-pair-review` |
-| Durable handoff or PR review comment | `codex-to-claude-handoff` or `agent-pr-comment` |
+| Read-only second-model review | `codex-review` from Claude; `claude-review` from Codex |
+| Claude + Codex reconciliation | `agent-pair-review` |
+| Adversarial review | `codex-gauntlet` or `codex-review` |
+| Durable handoff | `codex-to-claude-handoff` |
+| PR review comment | `agent-pr-comment` |
 | Agent/tooling health | `agent-health` |
 | Pre-ship verification and delivery | `preflight` or `ship` |
 | Migration work | `migration-review`, `create-migration`, or `explain-migration` |

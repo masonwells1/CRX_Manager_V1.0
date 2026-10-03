@@ -22,7 +22,7 @@ The always-loaded shared contract for Codex, Claude, and any other coding agent.
 - Deliver what was asked at the scope intended. If a better approach exists, say so briefly and continue with the requested outcome rather than quietly narrowing, widening, or transforming it.
 - Codex and Claude both proceed after a short plan without waiting for approval (Mason, 2026-10-03). Never pause to ask “Should I continue?” while safe, in-scope work remains; ask only when a missing choice would materially change the business outcome or a hard-gated action below has not been approved.
 - Treat explicit limits (`read-only`, `do not push`, `do not merge`, `do not query production`) and "stop", "pause", or "hold on" literally.
-- Stop and hand over, with both positions and a recommendation, only when the same BLOCKER or HIGH survives two fix rounds, you and a reviewer still disagree on a BLOCKER after checking the code, a required gate cannot run, or the next step is hard-gated.
+- Stop and hand over, with both positions and a recommendation, only when the same BLOCKER or HIGH survives two fix rounds, you and a reviewer still disagree on a BLOCKER after checking the code, a required gate cannot run, or the next step is hard-gated. A workflow's round cap is a ceiling: stop at the cap or the first of these, whichever comes first.
 
 ## Start and Route
 
@@ -52,7 +52,7 @@ The always-loaded shared contract for Codex, Claude, and any other coding agent.
 ## CRX Hard Rules
 
 - Add database changes as new files under `supabase/migrations/`; never edit an applied migration. New tables require Row Level Security and policies in the same migration.
-- Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NULL`. `SECURITY DEFINER` functions require deliberate grants and normally `SET search_path = public, pg_temp`.
+- Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NULL`. `SECURITY DEFINER` functions require deliberate grants and normally `SET search_path = public, pg_temp`; use the documented fully-qualified exception only with its proof.
 - Money must resolve to exact whole cents. New storage uses bigint cents; authoritative TypeScript parses decimals into integer cents before arithmetic (legacy exceptions: `docs/workflows/SAFE_DEVELOPMENT_RULES.md`).
 - Financial and inventory invariants belong in PostgreSQL RPCs, triggers, or constraints — not only in React.
 - Use `src/lib/db.ts` as the only Supabase client. Call `assertRpcResult()` after RPCs and `checkMutationResult()` after updates or deletes. Never write generated columns.
@@ -70,9 +70,10 @@ The always-loaded shared contract for Codex, Claude, and any other coding agent.
 ## Verification and Closeout
 
 - Done means the changed behavior ran and was observed; match proof to risk. Tests written alongside a change are supporting evidence, not sole proof. If real verification cannot run, say exactly what remains unverified.
+- A review, audit, or diagnosis is done when each finding is checked against current code or live read-only evidence and reported with location and severity; a plan is done when it names the files, risks, and proof it will need.
 - Close substantial work with `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`: what changed, the proof, who owns what remains, and one next step.
 
 ## Guidance Ownership
 
 - `AGENTS.md` is hand-maintained; `CLAUDE.md` imports it and adds Claude-only routing. `.claude/commands/`, `.claude/skills/`, and `.claude/hooks/` are workflow sources; `.agents/` holds generated Codex adapters (`node scripts/sync-agent-workflows.mjs --write`).
-- Whoever changes a policy or ships work updates the affected manual or reference doc in the same change and adds `docs/changelog.d/<YYYY-MM-DD>-<slug>.md`. Volatile counts and status belong in `docs/reference/` or `docs/manual/`, never here.
+- Whoever changes a policy, or ships or parks work, updates the affected manual or reference doc in the same change and adds `docs/changelog.d/<YYYY-MM-DD>-<slug>.md`. Volatile counts and status belong in `docs/reference/` or `docs/manual/`, never here.
