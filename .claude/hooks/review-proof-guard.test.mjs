@@ -691,6 +691,9 @@ for (const command of [
   "nice -n 10 cp /tmp/x .claude/hooks/sql-safety.mjs", "sudo -- rm -f .husky/pre-push", "env -i PATH=/bin rm .husky/pre-push",
   "npm exec rimraf .husky/pre-push", "git checkout-index --force -- .husky/pre-push",
   "find .husky -name pre-push -delete", "find .claude/hooks -name x.mjs -exec rm {} ;",
+  // Valueless wrapper options must not swallow the real command (CodeRabbit).
+  "sudo -n rm -f .husky/pre-push", "env -i rm -f .husky/pre-push", "xargs -0 -r rm -f .husky/pre-push",
+  "sudo -n -u root rm -f .husky/pre-push",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);

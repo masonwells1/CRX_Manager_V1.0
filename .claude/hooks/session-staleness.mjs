@@ -352,11 +352,18 @@ function offsiteBackupEvidence() {
       .filter((run) => run?.conclusion === "success")
       .map((run) => Date.parse(run.updatedAt))
       .filter((at) => Number.isFinite(at) && at <= Date.now());
-    // Never move backwards: an older answer than one already seen is ignored.
-    const newest = Math.max(staleCachedAt ?? -Infinity, ...successes);
-    entry = { ok: true, completed_at: Number.isFinite(newest) ? new Date(newest).toISOString() : null };
+    if (successes.length === 0 && staleCachedAt === undefined) {
+      // No success in the sample and none on record: an older success may sit
+      // beyond the 20 runs, so this is "could not verify", never "never
+      // succeeded" (CodeRabbit, PR #874).
+      entry = { ok: false };
+    } else {
+      // Never move backwards: an older answer than one already seen is ignored.
+      const newest = Math.max(staleCachedAt ?? -Infinity, ...successes);
+      entry = { ok: true, completed_at: new Date(newest).toISOString() };
+    }
   } catch {
-    if (freshAlarmingCache) return { available: true, completedAt: staleCachedAt ?? null };
+    if (freshAlarmingCache && staleCachedAt !== undefined) return { available: true, completedAt: staleCachedAt };
     entry = { ok: false };
   }
   try {

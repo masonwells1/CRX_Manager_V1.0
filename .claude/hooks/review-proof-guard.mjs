@@ -807,12 +807,22 @@ if (shellTool) {
   // Wrappers are skipped together with their OPTIONS (`sudo -u root rm …`,
   // `xargs -0 rm …`, `timeout -s KILL 5 rm …`), plus leading `NAME=value`
   // assignments (`env APP=1 rm …`), so the real program is judged.
-  const WRAPPERS = new Set(["sudo", "command", "env", "exec", "eval", "nice", "nohup", "xargs", "timeout", "npx", "yarn", "pnpm", "stdbuf", "doas"]);
-  const WRAPPER_VALUE_OPTIONS = new Set([
-    "-u", "-g", "-U", "-C", "-h", "-p", "-r", "-t", "-T", "-n", "-I", "-L", "-P", "-s", "-d", "-E", "-a", "-k",
-    "-i", "-o", "-e", "--user", "--group", "--signal", "--kill-after", "--max-args", "--replace", "--max-procs",
-    "--delimiter", "--arg-file", "--adjustment", "--input", "--output", "--error",
-  ]);
+  // Per wrapper: the options that consume the NEXT token as their value. Every
+  // other option is valueless (`sudo -n`, `env -i`, `xargs -0`), so it must not
+  // swallow the real command (CodeRabbit, PR #874).
+  const WRAPPER_VALUE_OPTIONS = {
+    sudo: ["-u", "-g", "-U", "-C", "-h", "-p", "-r", "-t", "-T", "-D", "--user", "--group", "--other-user", "--close-from", "--host", "--prompt", "--role", "--type", "--command-timeout", "--chdir"],
+    doas: ["-u", "-C"],
+    env: ["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+    nice: ["-n", "--adjustment"],
+    xargs: ["-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "--max-args", "--replace", "--max-procs", "--delimiter", "--arg-file", "--max-lines", "--max-chars", "--eof"],
+    timeout: ["-s", "-k", "--signal", "--kill-after"],
+    stdbuf: ["-i", "-o", "-e", "--input", "--output", "--error"],
+    exec: ["-a"],
+    npx: ["-p", "--package"],
+    command: [], eval: [], nohup: [], yarn: [], pnpm: [],
+  };
+  const WRAPPERS = new Set(Object.keys(WRAPPER_VALUE_OPTIONS));
   const unwrapCommand = (segment) => {
     const tokens = String(segment).trim().split(/\s+/).filter(Boolean);
     let i = 0;
@@ -826,7 +836,7 @@ if (shellTool) {
         const option = tokens[i];
         i += 1;
         if (option === "--") break;
-        if (!option.includes("=") && WRAPPER_VALUE_OPTIONS.has(option)) i += 1;
+        if (!option.includes("=") && WRAPPER_VALUE_OPTIONS[word].includes(option)) i += 1;
       }
       if (word === "timeout" && i < tokens.length && /^\d/.test(tokens[i])) i += 1;   // the duration
     }

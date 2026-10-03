@@ -321,15 +321,18 @@ try {
   const cacheLAfter = JSON.parse(readFileSync(cacheL, "utf8"));
   eq(cacheLAfter.ok, false, "OFFSITE(e): the failed refetch is cached as a failure");
 
-  // OFFSITE (f): gh answers but the workflow has NO successful run on record —
-  // that is a real answer, and with no marker it must warn loudly.
+  // OFFSITE (f): a cached answer with NO success date is re-checked rather than
+  // trusted (2026-10-02). With gh unavailable and no marker it must still warn
+  // loudly, but labeled unverified — an empty sample is not proof that the
+  // workflow never succeeded (CodeRabbit, PR #874).
   const dirM = path.join(tmpRoot, "m");
   scaffoldWithMarker(dirM, null);
   const cacheM = path.join(tmpRoot, "cache-m.json");
   seedCache(cacheM, { ok: true, completed_at: null });
   r = runHook(dirM, offsiteEnv(cacheM));
   const ctxM = additionalContextOf(r);
-  ok(ctxM.includes("💾") && ctxM.includes("never succeeded"), "OFFSITE(f): no marker + no successful off-site run -> real no-backup warning");
+  ok(ctxM.includes("💾") && ctxM.includes("No database backup exists yet"), "OFFSITE(f): no marker + no dated off-site success -> no-backup warning");
+  ok(ctxM.includes("Could not verify") && !ctxM.includes("never succeeded"), "OFFSITE(f): the warning is labeled unverified, not 'never succeeded'");
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {
