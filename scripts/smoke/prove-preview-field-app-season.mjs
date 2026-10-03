@@ -198,11 +198,6 @@ const ACRES = 10;
 // Boundary dates are DERIVED from the season the container is actually in, never hardcoded,
 // so this prover does not start failing on 2026-10-01 and read as a broken migration.
 let SEASON_NOW = 0;
-// The season of the America/Chicago business date -- the fallback the 5-argument preview uses
-// when it is called without p_invoice_date. It is NOT always SEASON_NOW: current_season() reads
-// CURRENT_DATE on this UTC container, so from 19:00 to 24:00 Chicago time on Sep 30 the UTC date
-// is already Oct 1 and SEASON_NOW is one season AHEAD of this. See PHASE 1d and PHASE 4d.
-let BUSINESS_SEASON = 0;
 let DATE_IN_SEASON = '';   // Y-09-30: the ambient season
 let DATE_NEXT_SEASON = ''; // Y-10-01: the next season
 
@@ -491,12 +486,19 @@ const AUTHENTICATE = `
  *
  * `withDate` is false before the candidate, where the function has no date parameter at
  * all -- which is precisely why this could never be fixed in the frontend.
- * `season` is the season the RATE_CUR row is seeded under (RATE_NEXT goes one season later).
- * It defaults to SEASON_NOW; only a probe that leans on the preview's Chicago fallback
- * passes BUSINESS_SEASON instead.
+ * RATE_CUR is seeded under the probe season and RATE_NEXT one season later. The probe season is
+ * SEASON_NOW, unless `businessClock` is set: then it is the America/Chicago business date's
+ * season -- the fallback a date-less preview prices at -- read INSIDE this probe's own
+ * transaction, and `invoiceDate` is ignored in favour of Sep 30 of that season. now() is
+ * transaction-stable, so the preview's own fallback sees exactly the same clock even if the run
+ * crosses Chicago midnight on Sep 30 (Codex GitHub App review of PR #858, 2026-10-03).
  * Everything the probe writes is rolled back by its own terminating exception.
  */
-function parityProbe(label, { mode, invoiceDate, createDate = null, withDate, named = false, season = SEASON_NOW }) {
+function parityProbe(label, { mode, invoiceDate, createDate = null, withDate, named = false, businessClock = false }) {
+  const seasonInit = businessClock
+    ? "compute_season((now() AT TIME ZONE 'America/Chicago')::date)"
+    : String(SEASON_NOW);
+  const invoiceDateSql = businessClock ? 'make_date(v_season, 9, 30)::text' : `'${invoiceDate}'`;
   const locations = `jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES}))`;
   // `named` emits PostgreSQL's named notation (p_locations => ...). PostgREST resolves an RPC by
   // the SET OF ARGUMENT NAMES in the JSON body, which is the entire reason this migration does
@@ -506,7 +508,7 @@ function parityProbe(label, { mode, invoiceDate, createDate = null, withDate, na
   const previewArgs = named
     ? `p_locations => ${locations}, p_chemicals => '[]'::jsonb, p_application_service_id => v_svc, p_invoice_id => v_inv`
     : withDate
-      ? `${locations}, '[]'::jsonb, v_svc, v_inv, DATE '${invoiceDate}'`
+      ? `${locations}, '[]'::jsonb, v_svc, v_inv, (${invoiceDateSql})::date`
       : `${locations}, '[]'::jsonb, v_svc, v_inv`;
   const createStep = mode === 'reopen'
     ? `
@@ -524,6 +526,7 @@ DECLARE
   v_cust uuid; v_field uuid; v_svc uuid; v_res jsonb; v_inv uuid := NULL;
   v_preview jsonb; v_preview_rate bigint; v_preview_total bigint;
   v_saved_rate bigint; v_saved_total bigint; v_saved_season int; v_stored_season int := NULL;
+  v_season int := ${seasonInit};
 BEGIN
 ${AUTHENTICATE}
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] preview ${label} ' || substr(gen_random_uuid()::text, 1, 8)) RETURNING id INTO v_cust;
@@ -531,7 +534,7 @@ ${AUTHENTICATE}
   INSERT INTO application_services (name, default_rate_per_acre_cents, cost_per_acre_cents, is_active)
     VALUES ('[SMOKE] service ${label}', ${RATE_DEFAULT}, 0, true) RETURNING id INTO v_svc;
   INSERT INTO customer_application_rates (customer_id, application_service_id, rate_per_acre_cents, season)
-    VALUES (v_cust, v_svc, ${RATE_CUR}, ${season}), (v_cust, v_svc, ${RATE_NEXT}, ${season + 1});
+    VALUES (v_cust, v_svc, ${RATE_CUR}, v_season), (v_cust, v_svc, ${RATE_NEXT}, v_season + 1);
 ${createStep}
 
   -- What Mason sees on the Customers tab, for the form as it stands right now.
@@ -545,7 +548,7 @@ ${createStep}
 
   -- What he is actually charged when he then clicks Save on that same form.
   v_res := ${SAVE_IMPL}(
-    v_inv, jsonb_build_object('invoice_date', '${invoiceDate}'),
+    v_inv, jsonb_build_object('invoice_date', ${invoiceDateSql}),
     jsonb_build_array(jsonb_build_object('field_id', v_field, 'applied_acres', ${ACRES})),
     '[]'::jsonb, '${ADMIN}'::uuid, v_svc, NULL);
   SELECT i.id, i.season, i.total_amount_cents INTO v_inv, v_saved_season, v_saved_total
@@ -554,13 +557,13 @@ ${createStep}
   SELECT ii.unit_price_cents INTO v_saved_rate FROM invoice_items ii WHERE ii.invoice_id = v_inv AND ii.is_application_fee LIMIT 1;
   IF v_saved_rate IS NULL THEN RAISE EXCEPTION 'PROBE_SETUP ${label}: no application-fee line on invoice %', v_inv; END IF;
 
-  RAISE EXCEPTION 'PROBE_ROLLBACK ${label} preview_rate=% saved_rate=% preview_total=% saved_total=% saved_season=% stored_season=%',
-    v_preview_rate, v_saved_rate, v_preview_total, v_saved_total, v_saved_season, coalesce(v_stored_season::text, 'none');
+  RAISE EXCEPTION 'PROBE_ROLLBACK ${label} preview_rate=% saved_rate=% preview_total=% saved_total=% saved_season=% stored_season=% probe_season=%',
+    v_preview_rate, v_saved_rate, v_preview_total, v_saved_total, v_saved_season, coalesce(v_stored_season::text, 'none'), v_season;
 END
 $probe$;`;
   const r = psql(sql, { allowFailure: true });
   const out = `${r.stdout}\n${r.stderr}`;
-  const m = /PROBE_ROLLBACK \S+ preview_rate=(\S+) saved_rate=(\S+) preview_total=(\S+) saved_total=(\S+) saved_season=(\S+) stored_season=(\S+)/.exec(out);
+  const m = /PROBE_ROLLBACK \S+ preview_rate=(\S+) saved_rate=(\S+) preview_total=(\S+) saved_total=(\S+) saved_season=(\S+) stored_season=(\S+) probe_season=(\S+)/.exec(out);
   assert.ok(m, `${label}: parity probe did not reach its rollback marker:\n${out.slice(-2500)}`);
   return {
     label,
@@ -570,6 +573,7 @@ $probe$;`;
     savedTotal: Number(m[4]),
     savedSeason: Number(m[5]),
     storedSeason: m[6] === 'none' ? null : Number(m[6]),
+    probeSeason: Number(m[7]),
   };
 }
 
@@ -1775,16 +1779,12 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   DATE_NEXT_SEASON = `${SEASON_NOW}-10-01`;
   assert.equal(Number(scalar(`SELECT compute_season(DATE '${DATE_IN_SEASON}')`)), SEASON_NOW, `${DATE_IN_SEASON} must be in the ambient season`);
   assert.equal(Number(scalar(`SELECT compute_season(DATE '${DATE_NEXT_SEASON}')`)), SEASON_NOW + 1, `${DATE_NEXT_SEASON} must be in the next season`);
-  // Two clocks, read separately on purpose. SEASON_NOW stays on current_season() (UTC) because
-  // the old body phases 2 and 6a run prices from exactly that read. The 5-argument preview called
-  // WITHOUT a date falls back to the America/Chicago business date instead -- the product's rule --
-  // and the two disagree from 19:00 to 24:00 Chicago time on Sep 30. Moving SEASON_NOW to Chicago
-  // would only move the failure into phase 2 for that window, so PHASE 4d seeds and dates its
-  // probe from BUSINESS_SEASON. Chicago is always behind UTC, so it is this season or the one before.
-  BUSINESS_SEASON = Number(scalar(`SELECT compute_season((now() AT TIME ZONE 'America/Chicago')::date)`));
-  assert.ok(BUSINESS_SEASON === SEASON_NOW || BUSINESS_SEASON === SEASON_NOW - 1,
-    `the Chicago business season must equal the UTC season or trail it by one: ${BUSINESS_SEASON} vs ${SEASON_NOW}`);
-  log(`PHASE 1d: boundary derived from the container clock -- ambient season ${SEASON_NOW}; ${DATE_IN_SEASON} is ${SEASON_NOW}, ${DATE_NEXT_SEASON} is ${SEASON_NOW + 1}; Chicago business season ${BUSINESS_SEASON}`);
+  // SEASON_NOW stays on current_season() (UTC) on purpose: the old body phases 2 and 6a run prices
+  // from exactly that read. The 5-argument preview called WITHOUT a date falls back to the
+  // America/Chicago business date instead -- the product's rule -- and the two disagree from 19:00
+  // to 24:00 Chicago time on Sep 30. Moving SEASON_NOW to Chicago would only move the failure into
+  // phase 2 for that window, so the one date-less probe, PHASE 4d, reads the Chicago season itself.
+  log(`PHASE 1d: boundary derived from the container clock -- ambient season ${SEASON_NOW}; ${DATE_IN_SEASON} is ${SEASON_NOW}, ${DATE_NEXT_SEASON} is ${SEASON_NOW + 1}`);
 
   // ---- PHASE 2: reproduce the defect through the REAL installed functions ------------
   const beforeSameSeason = parityProbe('BEFORE_NEW_SAME_SEASON', { mode: 'new', invoiceDate: DATE_IN_SEASON, withDate: false });
@@ -1901,17 +1901,21 @@ ${saveOut.stderr}`, /POSTFLIGHT_OK/, 'the 20260904180000 save-side migration did
   // defaults work, which was never in doubt, while the claim under test is about resolution by
   // argument NAME.
   // With no date argument the preview prices at the Chicago business date's season, so the probe is
-  // seeded and dated in BUSINESS_SEASON, not SEASON_NOW: then the Chicago fallback and the invoice
-  // date land in the same season by construction, which is what makes agreement the right
-  // expectation rather than a coincidence. Using SEASON_NOW here failed every Sep 30 from 19:00 to
-  // 24:00 Chicago time (observed 2026-09-30 21:00 CDT): the UTC season had rolled over, the Chicago
-  // one had not, and the preview found no seeded rate at all.
+  // seeded and dated in that season (businessClock), read inside the probe's own transaction: the
+  // Chicago fallback and the invoice date then land in the same season by construction, which is
+  // what makes agreement the right expectation rather than a coincidence. Seeding from SEASON_NOW
+  // failed every Sep 30 from 19:00 to 24:00 Chicago time (observed 2026-09-30 21:00 CDT): the UTC
+  // season had rolled over, the Chicago one had not, and the preview found no seeded rate at all.
+  // Reading the Chicago season up front instead would still break a run that crosses Chicago
+  // midnight between that read and this probe.
   const fourArgCaller = parityProbe('AFTER_FOUR_ARGUMENT_CALLER',
-    { mode: 'new', invoiceDate: `${BUSINESS_SEASON}-09-30`, season: BUSINESS_SEASON, withDate: false, named: true });
+    { mode: 'new', withDate: false, named: true, businessClock: true });
   assertAgrees(fourArgCaller);
   assert.equal(fourArgCaller.previewRate, RATE_CUR,
     `a 4-argument caller must still resolve through the DEFAULTs and price at ${RATE_CUR}: ${JSON.stringify(fourArgCaller)}`);
-  log(`PHASE 4d: the deploy-order fallback is real -- a 4-NAMED-argument caller resolves against the 5-argument function and quotes ${fourArgCaller.previewRate}c/acre`);
+  assert.equal(fourArgCaller.savedSeason, fourArgCaller.probeSeason,
+    `precondition: the probe's Sep 30 invoice must be filed in the Chicago season it was seeded for: ${JSON.stringify(fourArgCaller)}`);
+  log(`PHASE 4d: the deploy-order fallback is real -- a 4-NAMED-argument caller resolves against the 5-argument function and quotes ${fourArgCaller.previewRate}c/acre (Chicago season ${fourArgCaller.probeSeason})`);
 
   // PHASE 4e: the invoice-GROUP branch, which every single-customer probe above leaves untouched.
   const groupReopen = groupProbe('AFTER_GROUP_REOPEN', { createDate: DATE_IN_SEASON, invoiceDate: DATE_NEXT_SEASON });

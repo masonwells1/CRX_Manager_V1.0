@@ -12,19 +12,23 @@ Oct 1 while Chicago is still Sep 30. The probe seeded rates for the UTC season, 
 the Chicago season, and it found nothing.
 
 **Fix.** The prover now reads two clocks separately. `SEASON_NOW` stays on `current_season()` (UTC),
-because the old live preview body that phases 2 and 6a exercise reads the clock that way. A new
-`BUSINESS_SEASON` is read from
-`compute_season((now() AT TIME ZONE 'America/Chicago')::date)`, and it is asserted to equal
-`SEASON_NOW` or trail it by one. `parityProbe` takes an optional `season` that sets which season the
-rates are seeded under (default `SEASON_NOW`). PHASE 4d is the only probe that relies on the Chicago
-fallback, and it is now seeded and dated in `BUSINESS_SEASON`. Outside the window the two values are
-equal, so every probe behaves exactly as before. No assertion was removed or loosened.
+because the old live preview body that phases 2 and 6a exercise reads the clock that way.
+`parityProbe` gains a `businessClock` option. With it set, the probe declares
+`v_season := compute_season((now() AT TIME ZONE 'America/Chicago')::date)` inside its own `DO` block.
+It seeds the rates under that season and dates the invoice Sep 30 of it. PHASE 4d is the only
+date-less probe, and it now uses `businessClock`. `now()` is transaction-stable, so the preview's own
+Chicago fallback reads exactly the same clock as the seed. That holds even when a run crosses Chicago
+midnight on Sep 30. The first version of this fix read the Chicago season once at PHASE 1d, and the
+Codex GitHub App review of PR #858 (P2) pointed out that a run crossing midnight between that read and
+PHASE 4d would still fail. 4d also now asserts that the saved invoice is filed in the season the probe
+seeded. Outside the window every other probe behaves exactly as before. No assertion was removed or
+loosened.
 
 **Why `SEASON_NOW` itself was not moved to Chicago.** That was the first proposal. A window
 simulation showed it only moves the failure: with `SEASON_NOW` on Chicago, PHASE 2a's same-season
 control failed because the old body priced at the UTC season (preview 2222c/acre against save 1111c/acre).
 
-**Proof (Docker, 2026-10-01).** Throwaway copies of the prover, never committed, replaced
+**Proof (Docker, 2026-10-01; rerun 2026-10-03 on the in-transaction version, same results).** Throwaway copies of the prover, never committed, replaced
 `current_season()` inside the container with one that reads one season ahead of the Chicago date.
 That is the 19:00–24:00 Sep 30 relationship. Results:
 
