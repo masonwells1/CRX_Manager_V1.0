@@ -194,7 +194,8 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
     - Reports: the price list and posted-applications datasets each stop at 500 (`fetchPriceList`,
       `fetchPostedApplications`). Its Chemical History product picker loads 500 products and its Year-End
       customer picker 1,000 customers; Sales Reports has the same 500-product and 1,000-customer pickers.
-      Past those counts a record cannot be picked for the report.
+      Past those counts a record cannot be selected in the direct picker (Year-End "Generate All" finds
+      customers separately, and Sales Reports can still include linked farms through `get_customer_farm_group`).
   - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
     Application Records stop silently, and the other pages were not checked for a warning.
   - On a capped query, records past the cap are missing from that page and its browser-side filters.
