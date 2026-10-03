@@ -192,7 +192,9 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
     - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
       `.range()` and are not capped.
     - Reports: the price list and posted-applications datasets each stop at 500 (`fetchPriceList`,
-      `fetchPostedApplications`).
+      `fetchPostedApplications`). Its Chemical History product picker loads 500 products and its Year-End
+      customer picker 1,000 customers; Sales Reports has the same 500-product and 1,000-customer pickers.
+      Past those counts a record cannot be picked for the report.
   - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
     Application Records stop silently, and the other pages were not checked for a warning.
   - On a capped query, records past the cap are missing from that page and its browser-side filters.

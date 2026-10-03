@@ -432,7 +432,6 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     prepay credits.
   - `complete_job` deducts inventory and only warns on a shortfall, while `complete_delivery` blocks.
     Decide which is intended.
-  - `complete_delivery` accepts a blank signed-by name.
   - Order and quote CSV imports split on bare commas, so a quoted value that contains a comma lands in the
     wrong column. Reuse the customer import's quoted-CSV parser.
   - Blend-ticket OCR auto-approves at a fixed 70% in `process-blend-ticket`, ignoring the thresholds
