@@ -837,6 +837,7 @@ if (shellTool) {
     const head = ((s.match(/^([\w.:\\/-]+)/) || [])[1] || "").replace(/^.*[/\\]/, "").toLowerCase();
     if (WRITER_HEADS.has(head)) return true;
     if ((head === "sed" || head === "perl") && /(?:^|\s)(?:-[A-Za-z]*i|--in-place)/.test(s)) return true;
+    if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir)\b/.test(s)) return true;
     if (head === "git") {
       const sub = gitSubcommandOf(s);
       return Boolean(sub && GIT_WRITER_SUBCOMMANDS.has(sub));

@@ -690,6 +690,7 @@ for (const command of [
   "sudo -u root rm -f .husky/pre-push", "xargs -0 rm -f .husky/pre-push", "timeout -s KILL 5 rm -f .husky/pre-push",
   "nice -n 10 cp /tmp/x .claude/hooks/sql-safety.mjs", "sudo -- rm -f .husky/pre-push", "env -i PATH=/bin rm .husky/pre-push",
   "npm exec rimraf .husky/pre-push", "git checkout-index --force -- .husky/pre-push",
+  "find .husky -name pre-push -delete", "find .claude/hooks -name x.mjs -exec rm {} ;",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);

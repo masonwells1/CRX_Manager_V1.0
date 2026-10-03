@@ -115,7 +115,7 @@ Runs on Codex's `*` (all-tools) PreToolUse matcher through portable POSIX and Wi
 ### UserPromptSubmit Hooks (`.claude/hooks/`)
 These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording or nudged toward the right workflow.
 
-`prompt-router.mjs` is the single registered command for this event. It reads the prompt once and invokes the same independently tested rule modules below; Claude also includes the existing autopilot-intent rule. This consolidation changes process count, not rule behavior.
+`prompt-router.mjs` is the single registered command for this event. It reads the prompt once and invokes only `ship-intent-reminder.mjs` and `hold-latch-prompt.mjs` on both Claude and Codex. Since 2026-10-02 (Mason) the other reminder modules below, and `autopilot-intent-reminder.mjs`, are unwired: the router does not call them, so the overnight handshake never fires.
 
 | Hook | What it warns on / reminds | Why |
 |------|------------------|-----|
@@ -125,7 +125,7 @@ These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra
 | `codex-to-claude-handoff-reminder.mjs` | Plain-English requests for Claude to review or continue Codex's work | Reminds Claude that direct review is preferred, with durable handoff as the continuation fallback **Unwired 2026-10-02 (Mason)**; the file remains until a follow-up removes it. |
 | `ship-intent-reminder.mjs` | Build/fix/ship/push/"go live"/"do it" intent | Reminds Claude to drive the work through the `/ship` pipeline rather than requiring Mason to know slash commands |
 
-`hold-latch-prompt.mjs` and `autopilot-intent-reminder.mjs` are also UserPromptSubmit hooks — see the Correction-mined guards table below for what they do.
+`hold-latch-prompt.mjs` is also a UserPromptSubmit hook, and `autopilot-intent-reminder.mjs` was one until it was unwired on 2026-10-02 — see the Correction-mined guards table below for what they do.
 
 ### SessionStart Hooks (`.claude/hooks/`)
 Run when a session begins. Inject `additionalContext` so Claude sees state-drift warnings up front. **Matcher-gated by source since 2026-08-18, in `.claude/settings.json` only** (SessionStart fires with source `startup`, `resume`, `clear`, or `compact`; before the gating, every hook that then existed re-ran on EVERY auto-compact — 1,228 compact firings across the last 50 session transcripts in all projects, with p90 ~11s and a 14% timeout rate; `session-context-reminder` postdates that audit, so it is not part of those measured firings): `session-heartbeat` and `session-context-reminder` run on all sources; `session-snapshot`, `session-staleness`, and `worktree-awareness` run on `startup|resume|clear` only (re-running `session-snapshot` on compact also OVERWROTE the pre-session dirty-file baseline mid-session, degrading `stop-wrap`'s comparison); `worktree-cleanup` runs on `startup` only. **No source gating is declared on the Codex side**: `.codex/hooks.json`'s SessionStart group has no `matcher` key, so the three hooks it wires (`session-snapshot`, `session-staleness`, `worktree-awareness`) are not source-gated there.
