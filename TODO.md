@@ -300,6 +300,13 @@ then read it with `git show e81853970:<path>`. Re-verify against the live app be
   never real customer data; an agent does this only with Mason's explicit approval in the current conversation: Quotes list
   "Convert to Order", Deliveries list "Complete" (signed-by popup), and Receiving Hub "Receive" on a PO
   line. Each should match its detail-page flow.
+- Import one sanitized boundary export in genuine John Deere, FieldView or .zip vendor format (never an
+  actual customer's export) into a fresh, disposable `[E2E]` test customer, never a real one; an agent does
+  this only with Mason's explicit approval in the current
+  conversation. Confirm it bills on the file's acres, the ±10% difference flag appears, and redrawing the
+  map does not change the billed acres. Then remove the test fields, since a re-import or a failed save can
+  leave duplicates or partial field data (see the field boundary import item below). This was the one check
+  left open at the June field-acre billing go-live.
 
 **Features approved or requested but never built**
 - **Record Payment prefill** (approved 2026-05-04): Record Payment from an order, invoice or customer opens
@@ -308,6 +315,236 @@ then read it with `git show e81853970:<path>`. Re-verify against the live app be
   separate hand-maintained route list.
 - **Vendor Purchase Order PDF/email** and a **single combined PDF for batch invoice print** (2026-05-04
   reports audit): neither exists today.
+
+**Deferred by the June 2026 UI overhaul** (source: `docs/archive/2026-summer-closeout/build-loops/ui-overhaul-v2/STATE.md`,
+removed in this cleanup; recover with
+`git show 4b6ff6293:docs/archive/2026-summer-closeout/build-loops/ui-overhaul-v2/STATE.md`; each was still open in code on 2026-09-28)
+- **Owner decision — old A/R pages:** `/ar-aging`, `/payment-history` and the other old money pages still
+  have their own routes and links next to the combined `/accounts-receivable` workspace. Turning them into
+  redirects and dropping the extra links would change where you click, so the overhaul left it to you.
+  Related: each A/R workspace tab still has its own customer picker; the overhaul planned picking the
+  customer once for all tabs (see the comment in `src/pages/AccountsReceivable.tsx`).
+- **Dashboard alerts not built:** overdue vendor bills (the summary RPC has no AP-due field) and blend
+  tickets awaiting approval.
+- **Act-from-the-list actions not built:** "Create Invoice" from the Orders list (it branches on split
+  allocations, so it stays on the order page) and "Link Order" / "Create Invoice" on Blend Tickets rows (it
+  needs an order picker).
+- **Search and balance gaps:** a by-product filter on Field Invoices / Unbilled Applications (invoice lines
+  need a product join), and a per-field outstanding balance on the customer Fields tab (it needs a new
+  field-level source).
+- **Customer 360 summary bar:** add field count, license expiry and next compliance date to the cards on
+  the customer page. `CustomerSummaryBar` shows only AR, orders, deliveries, credit tier and last activity,
+  and `get_customer_summary` returns only those five, so this needs an RPC change or extra queries. Making
+  the bar stay put while scrolling (sticky) was left as visual polish for you to decide.
+- **Customer drawer actions:** the slide-out customer drawer was planned with quick actions (new order, new
+  quote, add note) and recent orders / open invoices; it only has "Open full profile".
+- Dropped as low value: sticky summary cards on A/R Aging, which shows aging as table columns.
+
+**Found by a full sweep of every removed doc (2026-09-30)** — each item was checked as still open in code
+and missing from every other tracker. Sources are recoverable with `git show 4b6ff6293:<path>`.
+- **Approved 2026-05-04, never built** (`docs/archive/2026-summer-closeout/build-loops/ui-overhaul/STATE.md`):
+  make the customer name on Order, Invoice and Delivery pages a link with a small balance/credit card;
+  status text under each step of the quote→order→delivery→invoice strip; a "+ Create Invoice ▾" menu on
+  Invoices linking to filtered Orders / Blend Tickets; one main button plus a "More ▾" menu on Order,
+  Invoice and Delivery pages. Optional phone polish: a Map/List/Selected toggle in Select Locations and a
+  phone-first blend ticket page.
+- **Field boundary import** (`docs/build-loops/field-acre-billing/STATE.md` and `HANDOFF.md`): bulk import
+  never runs the existing overlapping-field check, so re-importing a farm creates duplicate fields; add a
+  Skip / Replace / Import-as-new choice at preview. Separately, saving a field, its boundary and its billable
+  acres is not one transaction, so a lost response or a rejected boundary can leave a duplicate or a field
+  with no map. Fixing that needs a migration (your call).
+- **Inventory and loader safety (low)**: the hold function still accepts a "crop program" hold with no
+  quote, which would never auto-release (the app only sends "manual"; narrow the function or require the
+  quote). No check catches a job reservation left active on a cancelled, finished or deleted job (add a
+  read-only sweep that should always count 0). Ticked "loads done" on a loader worksheet survive a change
+  to the job's acres or the tank layout, so a crew can see stale progress.
+- **Field-app parity leftovers (June 2026 parity loop)**: confirm one real job-attachment upload and delete
+  works in production; decide whether you want a fuel-surcharge rate (built, off by default) and whether
+  projected use should count only remaining field acres. On the Dispatch board, the retry key is lost after
+  a reload and failed applicator/recipe loads are not reported.
+- **Cosmetic**: pop-up and toast open/close animations never run, because their Tailwind animation plugin
+  is not installed. Install it or remove the classes. A short customer statement prints its last-page
+  footer twice: `src/lib/statementPdf.ts` draws it from the table's `didDrawPage` and again after the
+  remittance stub (2026-05-30 p2/p3 sprint handoff).
+- **Access gaps (low, same class as the tracked field-app access lows)**: `save_field` lets any sales rep
+  edit any customer's fields and billing defaults (no per-customer ownership check, the pattern already
+  closed for `save_customer`); every active user, including drivers and applicators, can read every
+  customer's addresses (the July change added only an active-user check, on purpose); and the By-Customer
+  invoice summary on Field Invoices under-totals for a sales rep, because it reads only the invoices that
+  rep can see. Narrow each, or record that you accept it in KNOWN_ISSUES.
+- **Owner actions and decisions (field app)**: the pre- and post-application customer notification emails
+  are built, but code comments say the `send-email` Edge Function deploy that turns them on was never
+  done. Confirm the live version, then the deploy needs your approval. Decide whether an over-label
+  chemical rate should block the save or keep warning (warn is today's default). Decide whether to build
+  the "wrong field" alert (as-applied acres far from the job's planned acres) and the F2 in-field acre
+  nudge, or keep today's display-only "Full field / Edited" badge.
+- **Field-app bugs (low)**: the Jobs list's tag, crop, county, state, chemical and field-name filters only
+  see the first 500 jobs fetched; bulk Loader Worksheet print stamps "printed" on jobs that dropped out of
+  the PDF; auto-created split draft invoices on delivery completion raise no bell notification; and on a
+  blend ticket, a product line with a saved name but no catalog match shows a blank "Select Product".
+- **Field-app polish**: a recipe filter on mobile FieldView and the Dispatched List (only the office
+  Dispatch Board has one; `get_dispatched_list` returns no recipe); "undo last point" in the guided
+  map-drawing tool; tab semantics and arrow-key support on the Customer 360 tab strip; finishing the
+  visual refresh on Modal, Breadcrumbs, Combobox and the app shell; and a sidebar link for Payment
+  History (today it is reachable only by URL or the A/R workspace).
+- **Ordering (sell-side plan, 2026-06)**: `create_direct_order` checks its idempotency key and then runs
+  with no lock until it saves the key. `create_rush_order` got an advisory lock for exactly this race, and
+  this one never did. Confirm whether two simultaneous same-key submits can both create an order, and add
+  the same lock if so (migration). Separately, field-staff (driver/applicator) rush ordering was scaffolded,
+  then switched off pending scoped RLS and page permissions. Decide whether to finish it or remove the
+  dormant `isFieldStaff` branch in `src/pages/NewOrder.tsx`.
+- **Decide keep or drop** (2026-05-09 implementation plan, "not in this plan"): bank reconciliation, vendor
+  1099 tracking, line items on vendor bills, and linking purchase orders to the vendor record instead of a
+  typed name. Also optional: a count badge for unpriced rush orders (sell-side plan); and, as a decision for you, whether a
+  price-later rush order should count an estimated amount (from its suggested price) against the customer's
+  credit limit before it is priced. Today credit exposure is only checked once the order is priced or
+  invoiced. Last, a screen for the
+  product return-policy fields, which nothing in the app edits (product data model D-4, "not yet" on
+  2026-08-18).
+- **Quote discount, tax and fee model (decide)**: quotes have no discount, tax or fee fields and no
+  server-side order of operations for them. Adjustments go through per-line price overrides. Ag inputs
+  are often tax-exempt, so this may be deliberate, but no decision is recorded (Q1 audits
+  `PHASE6_RESPONSIBILITY_AUDIT.md` and `PHASE7_COMPLETE_DEFECT_BACKLOG.md`). The invoice prompt-pay
+  discount item is a separate feature.
+- **Earmarked prepay plan, only partly built (decide)**: the 2026-02-24 plan (v3, with your locked
+  decisions) called for:
+  - Chemical, Fertilizer and General buckets matched to invoice lines by each product's bucket;
+  - cross-bucket use allowed only as an admin override with a required reason and an audit entry;
+  - admin alerts above a dollar threshold set in Settings;
+  - a standalone prepay history report.
+
+  What shipped in March is `prepay_credits.bucket_label` with free labels and the prepay workspace. The
+  product matching, override reason, threshold alerts and history report were not found in code on
+  2026-10-03. This differs from the shelved booking "earmark engine" above. Recover the plan with
+  `git show 4b6ff6293:docs/archive/2026-Q1-brainstorms/2026-02-24-earmarked-prepayments-plan.md`.
+
+**Found by a sweep of every removed audit's findings (2026-10-02)**: about 100 removed audit and review
+reports, from February to July 2026, were read finding by finding. Most findings were already fixed. These
+were still open in code on 2026-10-02 and in no tracker. Sources are recoverable with
+`git show 4b6ff6293:<path>`.
+- **Money and data integrity**:
+  - The financial audit log still references hard-deleted invoices and payments with no snapshot of what
+    they were (see KNOWN_ISSUES §0).
+  - `save_quote` never checks a line's price against the product's tier pricing.
+  - QuoteBuilder uses its own untested tier and recalculation math instead of the tested `quoteCalc.ts`,
+    and `NewOrder.tsx` duplicates it again.
+  - No Integrity Report check compares `customers.prepay_balance_cents` with the sum of the customer's
+    prepay credits.
+  - `complete_job` deducts inventory and only warns on a shortfall, while `complete_delivery` blocks.
+    Decide which is intended.
+  - Order and quote CSV imports split on bare commas, so a quoted value that contains a comma lands in the
+    wrong column. Reuse the customer import's quoted-CSV parser.
+  - Blend-ticket OCR auto-approves at a fixed 70% in `process-blend-ticket`, ignoring the thresholds
+    setting the app shows.
+  - Email and notification "don't resend" keys include the current time, so a double-click or retry can
+    send twice.
+  - `require_admin()` and `require_admin_or_sales_rep()` exist only in the live database (no migration
+    defines them), so a from-scratch rebuild would fail.
+  - Smaller items: `restore_quote_version` returns a generic "duplicate" on a retry instead of the
+    original result; `update_order_items` checks an order status (`pending`) that never existed;
+    `create_planned_holds` uses its own idempotency check instead of the shared helpers; some idempotency
+    keys use an empty user segment before the profile loads.
+- **Database safeguards** (`docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`, re-checked against code and the live database on
+  2026-10-02):
+  - **Accounting periods and dates:** `allocate_payment` defaults its payment date to the server's
+    `CURRENT_DATE`, which is UTC, and the payment screen never sends a date. A payment recorded in the
+    last hours of the Central business day can therefore be checked against the wrong accounting period.
+    Pass a Chicago date, or set the database timezone (high).
+  - **Edits after completion:** admins can still edit `delivery_items` directly after a delivery is in
+    progress or completed, which can desync the inventory ledger (high).
+  - **Invoice source rule:** no database constraint enforces that an invoice comes from an order or a
+    blend ticket (or a documented exception such as a misc charge or a field-app invoice). Only app code
+    and RPCs enforce it (high).
+  - **Concurrency:** `generate_ticket_number`, the `allocate_payment` allocation-set version and
+    `check_period_open` take no lock. Orders have no `row_version` stale-write guard, unlike quotes and
+    customers.
+  - **Orphans and cascades:** some live deliveries and commissions point at soft-deleted orders, and
+    `inventory_holds.product_id` still cascades on product delete.
+  - **Timing:** the overnight cron jobs run at fixed UTC times. Finance-charge `period_start` ignores
+    each customer's grace days. Season boundaries can differ between the browser and the server near
+    Sep 30/Oct 1.
+  - **Customer emails:** delivery emails insert values such as the signer's name and product names into
+    HTML without escaping.
+  - **Field app:** job completion has no offline queue (Delivery, FieldStop and FieldView do).
+  - **Smaller items:** the Action Queue shows only 10 items per category with no "view all", and list
+    search isn't debounced.
+- **Access (decide, or record as accepted)**: every sales rep can read all orders and order lines; any
+  sales rep can insert inventory-ledger rows directly; `FORCE ROW LEVEL SECURITY` is on only 2 tables.
+  Order Detail offers editing to sales reps although the `orders` update policy is admin-only (confirm
+  whether their saves go through an RPC). Sales reps can record a payment on `/payments` but not from
+  Invoice Detail; pick one rule.
+- **Alerts never built** (Q1 audit): a driver-reported delivery issue (damaged, shortage, refused, wrong
+  product, access) sends only the generic "Delivery Completed" notice; `cancel_delivery` notifies the
+  driver and sometimes an admin, but never the order's sales rep; and `dashboard_summary()` computes
+  driver-issue, expired-hold and cancelled-but-posted counts that no screen shows. Smaller cleanups:
+  `getPresetDates` has 5 copies, `CommentsSection` has an unused `noteTitle` prop, and
+  `useOCRThresholds` is a hook wrapping a constant.
+- **Errors that show as empty screens**: `DataTable` has no error state, so a failed load shows "No …
+  found"; `WorkloadView` ignores the `get_team_workload` error; four of Blend Ticket Detail's ten loads
+  fail silently; `runCriticalAction`/`sanitizeError` are used on only about a third of pages, so others can
+  show raw database errors. Queries that read only `data` and drop the `error` (checked 2026-10-02 in the
+  pages the Q1 risk audit §2.1–2.4 named) remain in Reports (for example, the Chemical History product
+  filter just shows empty), QuoteBuilder, Blend Ticket Detail, Deliveries, AR Aging, Cycle Counts and
+  Inventory, and likely elsewhere. A lint rule (see engineering hygiene below) is the durable fix.
+- **Activity feed gaps**: posting, voiding and recording a payment on an invoice write no activity entry,
+  and neither do the key actions in `PaymentAllocation`, `VendorBillDetail`, the prepay workspace and
+  quick receive. Field-app invoice events are logged as plain `invoice`. `logActivity` takes an untyped
+  entity name and is awaited in some places but not others, and QuoteBuilder passes an empty
+  performed-by.
+- **Compliance and field work**:
+  - Application Records has no detail page and no per-record PDF to hand an inspector.
+  - The Compliance page (RUP register, field/FSA listing) exports CSV only.
+  - The load-sheet PDF is on Deliveries but not on the Dispatch Board.
+  - Decide whether the Dispatch Board should also show deliveries.
+  - A blend ticket's free-text field-names box duplicates its structured field rows.
+  - The field-app invoice split preview works only while the invoice is editable.
+  - Job, blend ticket and field-app invoice headers don't show the customer.
+  - Only New Order saves a draft that survives an iPad app kill (`useFormDraft`); QuoteBuilder and the
+    field-app invoice should be next.
+- **Money screens**:
+  - The credit-limit check runs only after a quote converts; show AR and credit status in the quote
+    header first.
+  - Posting an invoice gives no next step.
+  - Voiding an invoice and prepay "Apply All" have no preview of what will change.
+  - The month-end delivery check counts all deliveries, not just the period's.
+  - A write-off blocked by a closed period shows a generic error.
+  - The commission payment screen doesn't show split percentages.
+  - The prepayment manager runs one query per customer.
+  - AR reminders dedupe on the local date.
+- **Reports and PDFs**:
+  - The Reports export comment promises PDF, but only CSV exists.
+  - Emails don't use the shared `companyInfo.ts` branding.
+  - There's no on-screen preview before printing.
+  - `invoicePdf.ts` drawing callbacks have no try/catch.
+  - The bulk invoice "Email" button is still a disabled "Coming soon".
+- **Navigation**:
+  - The command palette searches only 5 record types.
+  - Browser tab titles don't name the record.
+  - The customer page has no Invoices tab or at-a-glance overview.
+  - The quote→invoice status strip is text, not links.
+  - There's no Notifications sidebar link.
+  - Clicking a field on a customer opens the boundary editor, not the field history.
+  - Customer notes appear only on the Info tab.
+  - The Customers list has no balance or overdue columns.
+- **Engineering hygiene**:
+  - QuoteBuilder (over 5,000 lines), DeliveryDetail, CustomerDetail, InvoiceDetail and BlendTicketDetail
+    keep growing. Split them when a change touches them.
+  - `SettingsPage` calls Edge Functions with a hand-built `fetch` instead of `supabase.functions.invoke`.
+  - `Jobs.tsx` formats CSV money with its own `toLocaleString` helper.
+  - Status badges, empty states and spinners are re-implemented page by page.
+  - No lint rule catches `.select('*')` with raw casts, or unchecked storage/select errors.
+  - No smoke test mounts every lazy page.
+  - DeliveryDetail and InventoryPage have no characterization tests.
+  - The deferred content-freshness gate for docs was never built.
+  - `scripts/db-invariant-sweeps/FIN-README.md` still lists the fixed `void_payment` overpayment bug as
+    open.
+  - E2E comments in `workflow-financial-operations.spec.ts` still describe `window.confirm()`.
+- **Not fully re-checked**: lower-tier rows in these removed audits were not re-verified one by one:
+  - `docs/archive/2026-summer-closeout/roadmap/app-wide-structure-audit-2026-07-01.md` (tiers 1–3);
+  - `docs/archive/2026-spring/2026-05-11-phase0-verification.md`;
+  - `docs/archive/2026-spring/2026-05-09-full-scope-review-campaign.html`.
+
+  Re-read them from git history before acting in those areas.
 
 **Proof still owed**
 - **Commission as-of report, live real-path proof** (acceptance #6 of the 2026-09-03 spec, removed in

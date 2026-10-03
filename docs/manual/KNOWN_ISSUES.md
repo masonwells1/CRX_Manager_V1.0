@@ -129,19 +129,27 @@ Each item was re-checked against `main` on 2026-09-26. Each source doc named bel
 docs cleanup; recover it from git history with `git show e81853970:<path>`. Owner decisions from the
 same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
 
+- **Financial audit log points at deleted records (HIGH, data integrity; open since 2026-05-25).**
+  `financial_audit_log` rows still reference invoices and payments that were later hard-deleted, and those
+  rows carry no `old_values`/`new_values` snapshot. The audit trail therefore cannot say what the deleted
+  record was. A read-only live count on 2026-10-02 found the orphaned references essentially unchanged
+  since the May review. Fix: snapshot the record at audit-write time, or block hard-delete of invoices,
+  payments and orders with a trigger (a migration; Mason's call). (Source:
+  `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` D14-01, removed in the 2026-09-26
+  docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`.)
 - **Field Mode driver receipt gap (latent; RLS fix declined 2026-06-14).** The `customers_select` driver
   branch (`20260510070000`) shows a customer only when the delivery's `scheduled_date >= today - 1`. A driver
   completing an assigned stop with a NULL or older `scheduled_date` sees "Unknown customer" in `/my-route`,
   and `FieldStop` silently skips the customer receipt email. Fix: widen the driver branch for assigned open
-  stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`,
-  `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`.)
+  stops, or fetch receipt data through a SECURITY DEFINER RPC. (Sources: `docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/field-mode-build-plan.md`),
+  `docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-14-codex-field-mode-prompt.md`).)
 - **Public photo buckets (owner security decision, open since 2026-06-15).** `delivery-photos`,
   `receiving-photos` and `team-note-attachments` are `public=true` (checked live 2026-09-27). Delivery and
   team-note photos are served through `getPublicUrl` (`DeliveryDetail.tsx`, `FieldStop.tsx`,
   `NotePhotoUpload.tsx`); `receiving-photos` has no app reference but is still publicly readable by URL. So
   anyone holding a URL has permanent unauthenticated access to those photos. Paths are non-enumerable and type/size are capped
   (`20260615182721`). Decide: keep public, or make private and switch to `createSignedUrl`.
-  (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`.)
+  (Source: `docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/2026-06-15-foundation-ultra-review.md`).)
 - **Field-app access-scope lows (June 2026 parity ledger).** (1) `fields_select` (`20260214210000`) lets every
   active applicator read all customers' fields, not only dispatched ones; (2) `job_chemicals_select_location_dispatchee`
   (`20260627120000`) lets dispatched applicators read `cost_per_unit_cents`; (3) `update_field_app_invoice_billing`
@@ -151,7 +159,7 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
 - **Split-acre rounding drift (deferred MED, Track B B1.4).** `derive_customer_shares_from_fields` (latest body
   `20260429140635`) rounds `share_acres` to 2 dp, so small multi-customer splits can drift a few cents from the
   field's applied acres. Re-verify the current billing path still consumes it, then bill at 4 dp / display 2 dp,
-  or reconcile per field by largest remainder. (Source: `docs/archive/2026-summer-closeout/roadmap/2026-06-22-field-mapping-billing-BUILD-SPEC.md`.)
+  or reconcile per field by largest remainder. (Source: `docs/archive/2026-summer-closeout/roadmap/2026-06-22-field-mapping-billing-BUILD-SPEC.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/2026-06-22-field-mapping-billing-BUILD-SPEC.md`).)
 - **FieldSetup boundary-save follow-ups E1/E2 (Track A, 2026-06-23).** E1: after a boundary/override save the
   page does not refresh `total_acres` from the RPC result, so an attribute-only re-save can revert legacy
   `total_acres` to the stale loaded value (see the KNOWN FOLLOW-UP comment in `src/pages/FieldSetup.tsx`).
@@ -168,22 +176,43 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   as current on one and 30–59 on the other. (2) `invoice_date` has no future-date bound in the UI or on the
   server, so a typo like 2206 is accepted. (3) Three filters cut the day at UTC midnight rather than Chicago:
   `Invoices.tsx` season filter, `TeamBoard.tsx` date filter, and the `CustomerDetail.tsx` 90-day window.
-  (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`.)
-- **List-page row caps (scale limit).** Orders stops at 500 and Invoices at 2000 with a warning toast;
-  Deliveries stops at 500 silently; `DataTable` has no pagination. Revisit before volumes near the caps.
+  (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
+- **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load a fixed
+  number of rows and filter in the browser.
+  - Main list query caps (checked 2026-10-02 by searching `src/pages` for `.limit(` and `*_LIMIT`):
+    - 2000: Invoices.
+    - 1000: Customers.
+    - 500: Orders, Deliveries, Application Records (the compliance history), Blend Tickets, Jobs, Quotes,
+      Purchase Orders, Field Setup, Delivery Remainders and Customer Transaction Review.
+    - 200: Payment History and Notifications.
+  - Pages that cap one of several queries:
+    - Crop Programs: its product list, 500.
+    - Commission Payments: payment history 200 and unpaid commissions 500.
+    - To Ship: deliveries and purchase orders 500, open orders 2,000, order lines 5,000.
+    - Dispatch Board: the job list is capped at 500, but its dispatch and chemical rows are paged with
+      `.range()` and are not capped.
+    - Reports: the price list and posted-applications datasets each stop at 500 (`fetchPriceList`,
+      `fetchPostedApplications`). Its Chemical History product picker loads 500 products and its Year-End
+      customer picker 1,000 customers; Sales Reports has the same 500-product and 1,000-customer pickers.
+      Past those counts a record cannot be selected in the direct picker (Year-End "Generate All" finds
+      customers separately, and Sales Reports can still include linked farms through `get_customer_farm_group`).
+  - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
+    Application Records stop silently, and the other pages were not checked for a warning.
+  - On a capped query, records past the cap are missing from that page and its browser-side filters.
+    Revisit before volumes near the caps.
   `SelectLocationsModal` still splits map and list 50/50 on tablets.
-  (Source: `docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md`.)
+  (Source: `docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-04-phase-8-mobile-performance-recovery-audit.md`).)
 - **Customer-facing PDF polish (LOW).** `src/lib/quotePdf.ts` advances section-header notes only 4pt per line
   at 9pt font, so multi-line section notes overprint the items table; `src/lib/yearEndSummaryPdf.ts` sets the
   YoY "Change" colour in `didDrawCell` (after the cell is drawn), so it never shows — move it to `didParseCell`.
-  (Source: `docs/archive/2026-spring/2026-05-30-whole-codebase-audit.md`.)
+  (Source: `docs/archive/2026-spring/2026-05-30-whole-codebase-audit.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-30-whole-codebase-audit.md`).)
 - **Edge Function alerting fails quiet (LOW).** All eight Edge Functions (`create-user`,
   `customer-document-files`, `epa-lookup`, `process-blend-ticket`, `process-document`, `reset-user-password`,
   `send-email`, `setup-blend-tickets-storage`) only use `captureEdgeException`, which logs
   `[SENTRY_MISCONFIG]` and drops the alert when `SENTRY_DSN` is unset; none calls
   `validateSentryDsnOrThrow()`. Calling it at module boot would make them fail loud; that needs `SENTRY_DSN`
   confirmed on each function and eight live Edge Function deploys (Mason's approval).
-  (Source: `docs/archive/2026-spring/2026-05-30-p2p3-sprint-handoff.md`.)
+  (Source: `docs/archive/2026-spring/2026-05-30-p2p3-sprint-handoff.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-30-p2p3-sprint-handoff.md`).)
 - **CRM Phase 5 (AI receptionist) preconditions.** (1) `get_customer_prep_card` is not service-role callable
   (its in-body authz needs an active user profile), so the receptionist needs an additive server-only entry
   point sharing the same logic; (2) `customer_documents` cannot take service ingestion yet — `uploaded_by` is
