@@ -1,7 +1,7 @@
 # Structure-Fix Loop — Ledger
 
 **Branch:** `fix/structure-wave-2026-07` (worktree `C:\CRX_StructureFix`) · **Started:** 2026-07-02
-**Mission:** [structure-fix-loop-2026-07-02.md](structure-fix-loop-2026-07-02.md)
+**Mission:** `structure-fix-loop-2026-07-02.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-summer-closeout/loops/structure-fix-loop-2026-07-02.md`)
 **Live high-water at start:** `20260701205341` · **Baseline:** typecheck + build clean, tests 3106 pass / 122 skip (GREEN)
 
 ## ★★ SHIPPED LIVE 2026-07-02 (Mason authorized "push and ship it all live")
