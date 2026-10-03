@@ -22,7 +22,10 @@ Second refresh (started 2026-10-03 03:19:35 UTC, after merging `main` at `8bf73b
 "Schema registry" bullet now matches, and its ledger stamp and effective ordering high-water (plus the
 ledger bullet at the top of `docs/reference/migration-history.md`) now read 1018 rows / 1011 names,
 `max(version)` `20261002230949`, high-water `20260921180000` — from a live read-only count at
-2026-10-03 03:19 UTC — instead of the pre-#800 `20260914101300`.
+2026-10-03 03:19 UTC — instead of the pre-#800 `20260914101300`. The migration-history boundary
+block is re-headed as the 03:19 capture, its "registry last regenerated 2026-09-26; refresh it"
+sentence and its later boundary reference now name this refresh, and `docs/manual/KNOWN_ISSUES.md`
+no longer says the registry stops at `100700`.
 
 Moving the authored boundary to `20260914101300` made `src/lib/rpcContracts.test.ts` fail (3 tests):
 the four field-season files no longer sort above the boundary, and `src/types/supabase.ts` has not
