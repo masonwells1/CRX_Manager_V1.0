@@ -4,8 +4,11 @@ Mason asked for leaner `AGENTS.md`/`CLAUDE.md`, as much agent autonomy as possib
 step that needs him.
 
 - `AGENTS.md` (11,995 → ~8,800 bytes) and `CLAUDE.md` (3,283 → ~2,000 bytes): removed text that
-  repeated the global rules, `ship.md`, and `codex-model-tuning.md`; every hard rule, approval gate,
-  and the autonomous-landing conditions are unchanged and still pinned by `scripts/check-agent-guidance.mjs`.
+  repeated the global rules, `ship.md`, and `codex-model-tuning.md`. The CRX Hard Rules, the approval
+  sentence, and the autonomous-landing conditions are unchanged and pinned by
+  `scripts/check-agent-guidance.mjs`. This first pass also dropped several review-chain and closeout
+  details; two Luna rounds caught them, and they are restored (see the two follow-up entries dated
+  2026-10-03).
 - Claude no longer waits for Mason's OK after posting a plan; Codex and Claude now both plan, then
   proceed (Mason, 2026-10-03). Hard-gated actions still need his explicit approval.
   `docs/workflows/SAFE_DEVELOPMENT_RULES.md` updated to match.

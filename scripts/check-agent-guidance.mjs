@@ -159,6 +159,18 @@ for (const [name, pattern] of autonomousLandingChecks) {
   record(pattern.test(autonomousLandingBullet), `AGENTS.md autonomous-landing rule requires ${name}`);
 }
 record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
+// Pinned after a 2026-10-03 slimming pass dropped these and a Luna round caught it.
+const reviewChainChecks = [
+  ["never disabling a gate", /never bypass, disable, or weaken hooks/i],
+  ["pinned reviewer models only", /never a newer model the gates do not yet accept/i],
+  ["the Luna exit bar", /no BLOCKER or HIGH remains and every MED\/LOW is fixed, refuted with evidence, or named as a deferral/i],
+  ["a fresh exact-SHA Sol review for every merge", /Every merge into `main` requires one fresh independent \*\*Sol\*\* high-effort review of the exact candidate SHA/i],
+  ["the Sol proof binding to HEAD and base", /binds to that HEAD and GitHub's real base, so a later commit or moved base voids it/i],
+  ["review fixes staying on the same PR", /fixes stay on the same PR/i],
+];
+for (const [name, pattern] of reviewChainChecks) {
+  record(pattern.test(protectedDelivery), `AGENTS.md delivery rules keep ${name}`);
+}
 record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
 record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md routes collaboration details on demand");
 record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents), "AGENTS.md routes delegation guidance on demand");
