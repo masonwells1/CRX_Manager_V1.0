@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-10-02 (guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected)
+Last verified: 2026-10-02 (guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -15,6 +15,19 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Why:** In the 14 days to 2026-10-02 the guards recorded 915 blocks, about two-thirds from three sources that protect nothing irreversible (review-proof-guard's shell allowlist 359, the two "prove it" Stop hooks 280, a cosmetic PostToolUse migration block 109). Each false positive tended to spawn a guard-fix PR, which ran the full review chain and added more guard code: the hook stack grew from about 16k to 39k lines after the 2026-09-10 "fewer guards, more product" request. Only about 2 of the 23 merges after 2026-09-20 were product work.
 
 **Operative rule:** When a guard blocks a harmless command, work around it and note it; do not open a PR to tighten or patch that guard. A reviewer finding that a speed-bump guard can be bypassed is not a blocker unless the bypass reaches something irreversible. Branch protection, CI and CodeRabbit are the boundary for guard files. Detail: `docs/changelog.d/2026-10-02-guard-cleanup-noisy-blocks.md`.
+
+## 2026-10-02 — CORRECTION: PRs do merge on CodeRabbit's approval under `protect-main`
+
+**This amends the 2026-09-26 "Fewer permission prompts" entry below**, which said "no PR has yet merged on such an approval." PRs had in fact been merging on that approval since 2026-09-28.
+**What is true.** All 13 PRs merged between the ruleset's last update (2026-09-27 13:05Z) and #841's merge (2026-10-02 17:39Z), #830 first and #841 last, merged with CodeRabbit's APPROVED review on their exact merged heads, checked 2026-10-02 from each PR's reviews. The full list is in `docs/changelog.d/2026-10-02-coderabbit-approval-merges-recorded.md`. A push after an approval still dismisses it, as that entry says.
+**What this forbids/implies:** no rule changes. Read that entry's approval observation through this correction.
+
+## 2026-10-01 — Mason accepts the owner-approval "self-verifier" residual and hand-merges PR #857
+
+**Source:** Mason, "I'll merge 857" (2026-10-01); he merged #857 himself (`653addd6b`). Detail in `docs/changelog.d/2026-10-01-owner-approval-hand-merge-and-install-preflight.md`.
+**Decision.** Sol's second #857 finding (the approval verifier is code in the same checkout, so a local edit could disable it) is the 2026-09-29 residual. Mason accepted it for the #857 merge only; it remains a known, open weakness of the route, and reviewers stay free to raise it and anything else.
+**Why.** On one PC any process running as Mason can edit any local check and read the Supabase token directly, so this cannot be closed locally. What stands in the way is policy: agents must not edit guard files or call the database API outside the gated doors. Hooks and permission prompts only narrow the supported agent tool paths (native edits to guard files ask Mason; they are not denied), and a same-user process outside those paths is not stopped.
+**Closing it** needs parked-migration applies in a GitHub Actions workflow on protected `main` (token as a repository secret): a separate project that needs Mason's go.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
 

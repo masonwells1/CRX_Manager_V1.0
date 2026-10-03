@@ -4,14 +4,16 @@
 >
 > **Count is dated (checked 2026-09-26).** The 2026-08-11 live count above has not been re-measured. More than 40 function names were added by later migrations, and `src/types/supabase.ts` (generated 2026-09-11) already lists 481 function names. Re-measure with a read-only `pg_proc` query before quoting a current total.
 >
-> **2026-09-26 status pass:** every "LOCAL", "candidate", "queued", "not live", and "pending apply" marker in this file was re-checked against the live migration ledger (read 2026-09-26) and corrected. Since then `20260914100800_bind_transfer_invoice_intent` was applied live on 2026-09-27 (ledger `20260927060531`); the only migration still NOT applied is `20260914100900_repair_commission_history_label_snapshots`.
+> **2026-09-26 status pass:** every "LOCAL", "candidate", "queued", "not live", and "pending apply" marker in this file was re-checked against the live migration ledger (read 2026-09-26) and corrected. Since then `20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 (ledger `20260927060531`), `20260914100900_repair_commission_history_label_snapshots` on 2026-09-27 evening (ledger `20260928025520`), and the four field-season migrations `20260914101000`..`20260914101300` on 2026-10-02 (ledgers `20261002201451`, `20261002201523`, `20261002201542`, `20261002201609`). No migration on disk through `20260914101300` is still waiting to apply.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 >
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
 
-**Local generic-creation follow-up, September 12–13 (NOT APPLIED; no live-count change):**
-Both phases retain the existing `save_invoice(jsonb,jsonb,text)` public RPC contract.
+**Generic-creation follow-up, September 12–13 (LIVE 2026-10-02; no live-count change):**
+Phase 1 (`20260914101200`) applied as ledger `20261002201542` and phase 2
+(`20260914101300`) as ledger `20261002201609`, so the public RPC now refuses CREATE
+`field_application` invoices. Both phases retain the existing `save_invoice(jsonb,jsonb,text)` public RPC contract.
 Phase 1, `20260914101200_refuse_generic_field_invoice_creation.sql`, installs the
 advisory cutover barrier but deliberately continues to allow generic
 `field_application` creation and committed receipt retries. The bypass is NOT closed
@@ -24,7 +26,7 @@ malformed or no longer resolvable, because an unidentifiable receipt could be a 
 save. A receipt that resolves to a live invoice of another type does NOT block — the
 cutover does not change those paths, and blocking on them required a 24-hour freeze on
 all invoice saving (receipts live 24h), which left phase 2 effectively unappliable.
-Do not wait for unrelated receipts to expire before applying phase 2. Only after phase 2 commits does the public
+Unrelated receipts therefore never delayed phase 2. Only after phase 2 committed did the public
 RPC refuse CREATE `field_application` invoices. Dedicated field-app/job/blend creators
 remain the supported creation paths. Other generic field edits, other types and
 below-cost/idempotency delegation remain unchanged, with two exceptions that apply to
@@ -33,17 +35,12 @@ becomes, a field-application invoice must pass the filed-season date validation 
 unchanged stored date is not an edit), and a change to the filed `season` itself is
 refused. A universal INSERT draft was rejected.
 
-Phase 2 also REQUIRES total database transaction quiescence: no other open
-transaction (`pg_stat_activity.xact_start IS NOT NULL`) and no prepared transaction,
-including background workers, autovacuum, and scheduled jobs. This is a hard
-apply-time prerequisite, not merely recommended quiet customer traffic. A refused
-phase 2 rolls back completely, leaving phase 1 and legitimate receipt retries in
-place. In a later separately authorized rollout, wait for natural expiry of the
-BLOCKING receipts only (unexpired ones that resolve to a live `field_application`
-invoice or cannot be identified; receipts of other invoice types never delay phase 2)
-and a genuinely quiet window, rerun the live preconditions, then retry through the
-full governed review/apply gate. Never delete receipts, terminate background work,
-disable jobs, or force the apply to get past a refusal.
+Install history (phase 2 is already live; do not re-apply it): phase 2 required total
+database transaction quiescence at apply time: no other open transaction
+(`pg_stat_activity.xact_start IS NOT NULL`) and no prepared transaction, including
+background workers, autovacuum, and scheduled jobs. The 2026-10-02 apply ran after the
+quiet-database check returned no rows. A refused phase 2 would have rolled back
+completely, leaving phase 1 and legitimate receipt retries in place.
 
 The phase-one wrapper has three explicit `40001` refusals that roll back without
 changing an invoice. `InvoiceDetail` retries only the RPC request, retaining its
@@ -57,7 +54,7 @@ the normal error handler with the key retained for a later identical retry.
 Other SQL errors and uncertain transport failures are never automatically retried.
 `runCriticalAction` remains reporting/loading-state handling, not mutation replay.
 
-**Unchanged source dates, September 13 (LOCAL; NOT APPLIED):**
+**Unchanged source dates, September 13 (LIVE 2026-10-02, ledger `20261002201523`):**
 `20260914101100_preserve_unchanged_source_invoice_dates.sql` follows the existing
 guard and preserves each invoice member's own unchanged stored date, including
 prior-season job/blend invoices created with today's date. Preview still prices
