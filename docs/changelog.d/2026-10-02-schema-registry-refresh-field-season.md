@@ -15,6 +15,12 @@ Rebuilt with the real `--from-introspection` mode from the six read-only queries
   constraints, NOT NULL columns, column lists (160 tables), tables without `updated_at` (94), or
   sequences (7).
 
+Second refresh (started 2026-10-03 03:19:35 UTC, after merging `main` at `8bf73bf4a`): PR #800's
+`20260921180000_soft_delete_customer_document_rpc` had applied live at ledger version
+`20261002230949`, so it was added too (`applied_migration_names` 1010 → 1011, `migrations_high_water`
+→ `20261002230949`). Again no change to any other section. `docs/manual/CURRENT_STATE.md`'s
+"Schema registry" bullet now matches.
+
 Moving the authored boundary to `20260914101300` made `src/lib/rpcContracts.test.ts` fail (3 tests):
 the four field-season files no longer sort above the boundary, and `src/types/supabase.ts` has not
 been regenerated since they applied, so their RPCs would have dropped out of the mutator inventory.

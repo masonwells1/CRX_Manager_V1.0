@@ -40,9 +40,9 @@ ships or quarterly, whichever comes first.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
-- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-09-26 by
-  merged PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100` through
-  `100700` but **not** `20260914100800` through `20260914101300`. Refresh it before relying on it for ordering.
+- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-02 by
+  PR #873 (`migrations_high_water` `20261002230949`), so it records every applied name through
+  `20260921180000_soft_delete_customer_document_rpc`. Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration
