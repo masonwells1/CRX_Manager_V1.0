@@ -372,7 +372,7 @@ export default function Fields() {
 
   const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
 
-  const filterSelect = "px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green";
+  const filterSelect = "px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green";
 
   return (
     <div className="space-y-4">

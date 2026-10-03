@@ -345,7 +345,7 @@ export default function CustomerDocuments({ customerId, userId }: CustomerDocume
           </div>
           <div>
             <label htmlFor="customer-document-notes" className="mb-1 block text-sm font-medium text-secondary">Notes <span className="font-normal">(optional)</span></label>
-            <textarea id="customer-document-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-nav-dark focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20" />
+            <textarea id="customer-document-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20" />
           </div>
           <div className="flex justify-end">
             <Button type="submit" loading={saving} disabled={!selectedFile} icon={<Upload className="h-4 w-4" />} showChevron={false} className="min-h-11">Upload document</Button>

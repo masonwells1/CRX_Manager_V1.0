@@ -46,7 +46,7 @@ export default function UpdatePrompt() {
       <button
         type="button"
         onClick={() => updateServiceWorker(true)}
-        className="min-h-11 shrink-0 rounded-lg bg-crx-green px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-crx-green-hover focus:outline-hidden focus:ring-2 focus:ring-crx-green focus:ring-offset-2"
+        className="min-h-11 shrink-0 rounded-lg bg-crx-green px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-crx-green-hover focus:outline-none focus:ring-2 focus:ring-crx-green focus:ring-offset-2"
       >
         Update now
       </button>
@@ -54,7 +54,7 @@ export default function UpdatePrompt() {
         type="button"
         onClick={() => setVisible(false)}
         aria-label="Dismiss"
-        className="min-h-11 min-w-11 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-hidden focus:ring-2 focus:ring-crx-green focus:ring-offset-2"
+        className="min-h-11 min-w-11 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-crx-green focus:ring-offset-2"
       >
         <X className="w-4 h-4" />
       </button>

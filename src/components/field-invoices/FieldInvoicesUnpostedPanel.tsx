@@ -539,7 +539,7 @@ export default function FieldInvoicesUnpostedPanel() {
               value={filters.invoiceNumber}
               onChange={(e) => setFilters((f) => ({ ...f, invoiceNumber: e.target.value }))}
               placeholder="Invoice #"
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-36"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-36"
             />
           </div>
           <MultiSelectDropdown
@@ -557,7 +557,7 @@ export default function FieldInvoicesUnpostedPanel() {
               type="date"
               value={filters.dateFrom}
               onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full sm:w-auto">
@@ -567,7 +567,7 @@ export default function FieldInvoicesUnpostedPanel() {
               type="date"
               value={filters.dateTo}
               onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             />
           </div>
           <div className="w-full min-w-0 flex-1 sm:min-w-[12rem]">
@@ -580,7 +580,7 @@ export default function FieldInvoicesUnpostedPanel() {
                 value={filters.search}
                 onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
                 placeholder="Search job, customer, location, crop, chemical…"
-                className="pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
           </div>

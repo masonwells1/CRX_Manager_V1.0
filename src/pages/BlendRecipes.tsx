@@ -576,7 +576,7 @@ export default function BlendRecipes() {
                   value={typeFilter}
                   onChange={(e) => setTypeFilter(e.target.value)}
                   aria-label="Filter by type"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Types</option>
                   <option value="crop_specific">Crop Specific</option>
@@ -586,7 +586,7 @@ export default function BlendRecipes() {
                   value={cropFilter}
                   onChange={(e) => setCropFilter(e.target.value)}
                   aria-label="Filter by crop"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Crops</option>
                   {CROP_OPTIONS.map((c) => (
@@ -618,7 +618,7 @@ export default function BlendRecipes() {
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               rows={2}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green text-sm"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green text-sm"
               placeholder="Optional description..."
             />
           </div>
@@ -629,7 +629,7 @@ export default function BlendRecipes() {
               <select
                 value={form.recipe_type}
                 onChange={(e) => setForm({ ...form, recipe_type: e.target.value as RecipeType })}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="generic">Generic</option>
                 <option value="crop_specific">Crop Specific</option>
@@ -642,7 +642,7 @@ export default function BlendRecipes() {
                   <select
                     value={form.crop_type}
                     onChange={(e) => setForm({ ...form, crop_type: e.target.value })}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Select Crop</option>
                     {CROP_OPTIONS.map((c) => (
@@ -655,7 +655,7 @@ export default function BlendRecipes() {
                   <select
                     value={form.timing}
                     onChange={(e) => setForm({ ...form, timing: e.target.value })}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Select Timing</option>
                     {TIMING_OPTIONS.map((t) => (
@@ -696,7 +696,7 @@ export default function BlendRecipes() {
                       }
                     }}
                     aria-label={`Product ${idx + 1}`}
-                    className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
+                    className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >
                     <option value="">Select Product</option>
                     {products.map((p) => (
@@ -709,7 +709,7 @@ export default function BlendRecipes() {
                     value={item.quantity || ''}
                     onChange={(e) => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)}
                     placeholder="Qty"
-                    className="w-20 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
+                    className="w-20 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
                   <div className="w-28 shrink-0">
                     <UnitSelect
@@ -729,7 +729,7 @@ export default function BlendRecipes() {
                     value={item.rate_per_acre ?? ''}
                     onChange={(e) => updateItem(idx, 'rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)}
                     placeholder="Rate/ac"
-                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
+                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
                   <input
                     type="text"
@@ -738,7 +738,7 @@ export default function BlendRecipes() {
                     onChange={(e) => updateItem(idx, 'price_input', e.target.value)}
                     placeholder="$/unit"
                     title="Price per unit (optional) — seeds the job's chemical price when this recipe is loaded"
-                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
+                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
                   <button onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-600 p-1">
                     <Trash2 className="w-4 h-4" />

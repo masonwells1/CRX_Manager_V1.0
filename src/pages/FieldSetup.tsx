@@ -995,7 +995,7 @@ export default function FieldSetup() {
                     }}
                     onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
                     placeholder="Search customers..."
-                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
                 {showCustomerDropdown && (
@@ -1117,7 +1117,7 @@ export default function FieldSetup() {
                 <select
                   value={field.crop_type || ''}
                   onChange={(e) => update('crop_type', e.target.value || null)}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">Select crop...</option>
                   <option value="corn">Corn</option>
@@ -1235,7 +1235,7 @@ export default function FieldSetup() {
                                 min={0}
                                 max={100}
                                 step={0.01}
-                                className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green pr-7"
+                                className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green pr-7"
                               />
                               <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-secondary">%</span>
                             </div>
@@ -1280,7 +1280,7 @@ export default function FieldSetup() {
                                 min={0}
                                 step={0.01}
                                 placeholder="—"
-                                className="w-full pl-5 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                                className="w-full pl-5 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                               />
                             </div>
                           </div>
@@ -1291,7 +1291,7 @@ export default function FieldSetup() {
                               value={split.pricing_note}
                               onChange={(e) => updateSplit(idx, 'pricing_note', e.target.value)}
                               placeholder="e.g. Prepaid rate, Landlord rate"
-                              className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                              className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                             />
                           </div>
                         </div>
@@ -1323,7 +1323,7 @@ export default function FieldSetup() {
                       onFocus={() => setShowSplitDropdown(true)}
                       onBlur={() => setTimeout(() => setShowSplitDropdown(false), 200)}
                       placeholder="Search customer to add to billing split..."
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                     />
                   </div>
                   {showSplitDropdown && splitCustomerSearch && (
@@ -1360,7 +1360,7 @@ export default function FieldSetup() {
               value={field.notes || ''}
               onChange={(e) => update('notes', e.target.value)}
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               placeholder="General notes about this field..."
             />
           </Card>
@@ -1502,7 +1502,7 @@ export default function FieldSetup() {
                           id="field-obstacle-kind"
                           value={obstacleKind}
                           onChange={(event) => setObstacleKind(event.target.value as FieldObstacleKind)}
-                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
+                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
                         >
                           {FIELD_OBSTACLE_KINDS.map((kind) => (
                             <option key={kind} value={kind}>{FIELD_OBSTACLE_KIND_LABELS[kind]}</option>
@@ -1519,7 +1519,7 @@ export default function FieldSetup() {
                           value={obstacleLabel}
                           onChange={(event) => setObstacleLabel(event.target.value)}
                           placeholder="e.g. North windmill"
-                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
+                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
                         />
                       </div>
                     </div>

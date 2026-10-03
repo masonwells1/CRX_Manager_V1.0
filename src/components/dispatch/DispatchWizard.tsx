@@ -364,7 +364,7 @@ export default function DispatchWizard({
                     const val = e.target.value;
                     setActiveAssignee(val ? assigneeOptions.find((o) => `${o.kind}:${o.id}` === val) ?? null : null);
                   }}
-                  className="flex-1 min-w-[160px] text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] focus:outline-hidden focus:ring-2 focus:ring-crx-green/40"
+                  className="flex-1 min-w-[160px] text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] focus:outline-none focus:ring-2 focus:ring-crx-green/40"
                 >
                   <option value="">Choose…</option>
                   {applicators.length > 0 && (
@@ -412,7 +412,7 @@ export default function DispatchWizard({
                           const val = e.target.value;
                           applyToLocation(loc.jobFieldId, val ? assigneeOptions.find((o) => `${o.kind}:${o.id}` === val) : undefined);
                         }}
-                        className={`text-sm rounded-lg bg-slate-800 border px-3 py-2.5 text-slate-100 min-h-[44px] min-w-[170px] focus:outline-hidden focus:ring-2 focus:ring-crx-green/40 ${
+                        className={`text-sm rounded-lg bg-slate-800 border px-3 py-2.5 text-slate-100 min-h-[44px] min-w-[170px] focus:outline-none focus:ring-2 focus:ring-crx-green/40 ${
                           current ? 'border-crx-green/50' : 'border-amber-500/50'
                         }`}
                       >

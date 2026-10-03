@@ -1100,7 +1100,7 @@ export default function ProductDetail() {
                   value={product.signal_word || ''}
                   onChange={(e) => update('signal_word', e.target.value || null)}
                   disabled={!isAdmin}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                 >
                   <option value="">None</option>
                   <option value="Danger">Danger</option>
@@ -1284,7 +1284,7 @@ export default function ProductDetail() {
                     }
                   }}
                   disabled={!isAdmin}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                 >
                   <option value="">-- Select --</option>
                   <option value="liquid">Liquid</option>
@@ -1305,7 +1305,7 @@ export default function ProductDetail() {
                     value={product.container_unit || ''}
                     onChange={(e) => update('container_unit', e.target.value || null)}
                     disabled={!isAdmin}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                   >
                     <option value="">-- Select --</option>
                     {unitConversions
@@ -1325,7 +1325,7 @@ export default function ProductDetail() {
                     value={product.container_type || ''}
                     onChange={(e) => update('container_type', e.target.value || null)}
                     disabled={!isAdmin}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                   >
                     <option value="">-- Select --</option>
                     <option value="Jug">Jug</option>
@@ -1351,7 +1351,7 @@ export default function ProductDetail() {
                   value={product.inventory_unit || ''}
                   onChange={(e) => update('inventory_unit', e.target.value || null)}
                   disabled={!isAdmin}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                 >
                   <option value="">-- Select --</option>
                   {/* WaveB: grandfather a legacy value the form filter would otherwise hide, so a save can't blank it */}
@@ -1378,7 +1378,7 @@ export default function ProductDetail() {
                     value={product.rate_unit || ''}
                     onChange={(e) => update('rate_unit', e.target.value)}
                     disabled={!isAdmin}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
                   >
                     <option value="">-- Select --</option>
                     {/* WaveB: grandfather a legacy value the form filter would otherwise hide, so a save can't blank it */}
@@ -1403,7 +1403,7 @@ export default function ProductDetail() {
                 onChange={(e) => update('notes', e.target.value)}
                 disabled={!isAdmin}
                 rows={3}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
               />
             </div>
 
@@ -1417,7 +1417,7 @@ export default function ProductDetail() {
                 onChange={(e) => update('internal_notes', e.target.value)}
                 disabled={!isAdmin}
                 rows={3}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
               />
             </div>
 
@@ -1431,7 +1431,7 @@ export default function ProductDetail() {
                 onChange={(e) => update('quoting_notes', e.target.value)}
                 disabled={!isAdmin}
                 rows={3}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
               />
             </div>
           </Card>
@@ -1450,7 +1450,7 @@ export default function ProductDetail() {
                     id="product-pricing-mode"
                     value={pricingMode}
                     onChange={(event) => setPricingMode(event.target.value as PricingMode | '')}
-                    className="w-full sm:max-w-xs px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full sm:max-w-xs px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Choose a mode</option>
                     <option value="margin_driven">Margin-driven — cost + margins set prices</option>
@@ -1599,7 +1599,7 @@ export default function ProductDetail() {
                           value={costBasisPricingBehavior}
                           onChange={(event) => setCostBasisPricingBehavior(event.target.value as CostBasisPricingBehavior)}
                           disabled={!costBasisWorkspace.enabled || costBasisBusy || pricingReloadRequired}
-                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
+                          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
                         >
                           <option value="keep_sell_prices">Keep current sell prices; recalculate margins</option>
                           <option value="keep_margins_and_reprice">Keep current margins; recalculate sell prices</option>
@@ -1728,7 +1728,7 @@ export default function ProductDetail() {
               value={pricingMode}
               onChange={(event) => setPricingMode(event.target.value as PricingMode | '')}
               disabled={pricingReloadRequired}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Choose a mode</option>
               <option value="margin_driven">Keep margins; recalculate prices</option>

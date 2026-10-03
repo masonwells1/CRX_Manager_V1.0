@@ -634,7 +634,7 @@ export default function DispatchBoard() {
                 value={filters.search}
                 onChange={(e) => patchFilter('search', e.target.value)}
                 placeholder="Search job # or customer…"
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green/40 focus:border-crx-green"
+                className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-crx-green/40 focus:border-crx-green"
               />
             </div>
             )}
@@ -808,7 +808,7 @@ export default function DispatchBoard() {
                       value={filters.search}
                       onChange={(e) => patchFilter('search', e.target.value)}
                       placeholder="Search job # or customer…"
-                      className="w-full pl-9 pr-3 py-3 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green/40"
+                      className="w-full pl-9 pr-3 py-3 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-crx-green/40"
                     />
                   </div>
 
@@ -1365,7 +1365,7 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
           <select
             value={filterValue}
             onChange={(e) => onFilterChange(e.target.value)}
-            className="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-sm text-slate-100 min-h-[44px] min-w-[180px] focus:outline-hidden focus:ring-2 focus:ring-crx-green/40"
+            className="rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-sm text-slate-100 min-h-[44px] min-w-[180px] focus:outline-none focus:ring-2 focus:ring-crx-green/40"
           >
             <option value="">All assignees</option>
             {applicators.length > 0 && (
@@ -1485,7 +1485,7 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
                         value={reassignChoice}
                         onChange={(e) => setReassignChoice(e.target.value)}
                         disabled={busy}
-                        className="text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] min-w-[180px] focus:outline-hidden focus:ring-2 focus:ring-crx-green/40 disabled:opacity-50"
+                        className="text-sm rounded-lg bg-slate-800 border border-slate-700 px-3 py-2.5 text-slate-100 min-h-[44px] min-w-[180px] focus:outline-none focus:ring-2 focus:ring-crx-green/40 disabled:opacity-50"
                       >
                         <option value="">Choose new assignee…</option>
                         {applicators.length > 0 && (

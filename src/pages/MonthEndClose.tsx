@@ -718,7 +718,7 @@ export default function MonthEndClose() {
               onChange={(e) => setReopenReason(e.target.value)}
               placeholder="Explain why this period needs to be reopened..."
               rows={3}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-crx-green"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crx-green"
             />
           </div>
           <div className="flex justify-end gap-3">

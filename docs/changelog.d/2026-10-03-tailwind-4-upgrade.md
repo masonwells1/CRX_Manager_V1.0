@@ -21,9 +21,8 @@ browser bundle. `npm audit` now reports 0 vulnerabilities.
   - preflight: gray-200 default borders, gray-400 placeholders, button pointer cursor, hover on touch
     devices, browser-default backgrounds on form fields, corner radius on controls, padding on
     `option` and table cells, and browser-default date/time, search and "Choose file" button styling.
-- Class changes Tailwind 4 requires: `flex-shrink-0` → `shrink-0` (162 uses), `outline-none` →
-  `outline-hidden` (Tailwind 4's name for the 3.x behaviour; 406 uses), `bg-black bg-opacity-50` →
-  `bg-black/50`; `grid-cols-[1fr,100px,100px]` → `grid-cols-[1fr_100px_100px]` on the purchase-order
+- Class changes Tailwind 4 requires: `flex-shrink-0` → `shrink-0` (162 uses), `bg-black bg-opacity-50`
+  → `bg-black/50`; `grid-cols-[1fr,100px,100px]` → `grid-cols-[1fr_100px_100px]` on the purchase-order
   line items (Tailwind 4 passes commas through, producing invalid CSS that collapsed the grid); and
   `hover:file:` → `file:hover:` on three bulk-import file pickers (Tailwind 4 reads stacked variants
   left to right, so the old order turned the button green when any part of the input was hovered).
@@ -34,7 +33,7 @@ browser bundle. `npm audit` now reports 0 vulnerabilities.
 - *Every class, by computed style.* Headless Chromium applied each of the 874 distinct base utilities
   found in `src/` (1,243 class names with variants) under both builds and compared every computed
   property plus element boxes, normalising colour notation, empty shadow layers and transform notation.
-  Remaining differences: `outline-hidden` differs only in forced-colours mode; `hidden`/`contents` have
+  Remaining differences: `outline-none` differs only in forced-colours mode (see below); `hidden`/`contents` have
   no box; and `border-3` on the Payment Allocation loading spinner, a no-op in 3.x (so the spinner never
   showed), now draws its intended 3px ring.
 - *Every HTML tag the app uses* (62 tags and input types, in context: cells in a table, options in a
@@ -48,6 +47,13 @@ browser bundle. `npm audit` now reports 0 vulnerabilities.
   820 and 390px.
 - A compliance review found the purchase-order grid and file-picker hover regressions; both are fixed.
 - Typecheck, lint, the full suite (382 files), build, `verify-deps` and `npm audit --audit-level=high` pass.
+
+**Follow-up (separate PR).** Tailwind 3's `outline-none` hid focus outlines with a transparent outline,
+which Windows high-contrast (forced-colours) mode still draws; Tailwind 4's `outline-none` removes it, and
+its name for the old behaviour is `outline-hidden`. The 406 uses across 115 files are renamed in a
+follow-up PR so this one stays under CodeRabbit's 150-file limit. Until it lands, those elements show
+no keyboard-focus indicator in Windows high-contrast mode (that mode hides the `focus:ring-*` box
+shadows they rely on otherwise). Normal display is unaffected.
 
 **Known residual.** On a few form pages the text inside `<select>` dropdowns differs at single-pixel
 anti-aliasing level, with no difference in any computed style, size or position. It is indistinguishable

@@ -817,7 +817,7 @@ export default function Returns() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   aria-label="Filter by status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Statuses</option>
                   <option value="requested">Requested</option>
@@ -864,7 +864,7 @@ export default function Returns() {
                   setOrderItems([]);
                   loadCustomerOrders(e.target.value);
                 }}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select Customer</option>
                 {customers.map((c) => (
@@ -882,7 +882,7 @@ export default function Returns() {
                   setNewForm({ ...newForm, order_id: e.target.value });
                   loadOrderItems(e.target.value);
                 }}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select Order</option>
                 {customerOrders.map((o) => (
@@ -900,7 +900,7 @@ export default function Returns() {
                 value={newForm.reason}
                 disabled={createPayloadLocked}
                 onChange={(e) => setNewForm({ ...newForm, reason: e.target.value as ReturnReason })}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 {Object.entries(REASON_LABELS).map(([val, label]) => (
                   <option key={val} value={val}>{label}</option>
@@ -954,7 +954,7 @@ export default function Returns() {
                       };
                       setNewItems(updated);
                     }}
-                    className="w-full min-w-0 flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
+                    className="w-full min-w-0 flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >
                     <option value="">Select Product</option>
                     {orderItems
@@ -984,14 +984,14 @@ export default function Returns() {
                     disabled={createPayloadLocked}
                     onChange={(e) => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)}
                     placeholder="Qty"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green sm:w-20"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green sm:w-20"
                   />
                   <select
                     aria-label={`Return condition ${idx + 1}`}
                     value={item.condition}
                     disabled={createPayloadLocked}
                     onChange={(e) => updateItem(idx, 'condition', e.target.value)}
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green sm:w-28"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green sm:w-28"
                   >
                     <option value="unopened">Unopened</option>
                     <option value="opened">Opened</option>

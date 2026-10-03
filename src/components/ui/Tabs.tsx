@@ -97,7 +97,7 @@ export default function Tabs({
                 className={`
                   -mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-2
                   text-sm font-medium whitespace-nowrap transition-colors
-                  focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-crx-green/30
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-crx-green/30
                   focus-visible:ring-offset-2
                   ${isActive
                     ? 'border-crx-green text-crx-green'

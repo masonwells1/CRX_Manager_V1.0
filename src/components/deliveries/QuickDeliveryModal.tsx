@@ -576,7 +576,7 @@ export default function QuickDeliveryModal({
                             step="any"
                             value={item.quantity}
                             onChange={(e) => updateItemQty(item._key, parseFloat(e.target.value) || 0)}
-                            className="w-20 text-center px-2 py-1 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green/30"
+                            className="w-20 text-center px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
                           />
                         </td>
                         <td className="px-3 py-2 text-secondary">{item.unit_size || '—'}</td>
@@ -626,7 +626,7 @@ export default function QuickDeliveryModal({
               <select
                 value={selectedDriver}
                 onChange={(e) => setSelectedDriver(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Unassigned</option>
                 {drivers.map((d) => (
@@ -652,7 +652,7 @@ export default function QuickDeliveryModal({
               onChange={(e) => setDeliveryNotes(e.target.value)}
               placeholder="Optional notes..."
               rows={2}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
             />
           </div>
 
@@ -709,7 +709,7 @@ export default function QuickDeliveryModal({
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
               placeholder="Search products..."
-              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened modal; user expects to type immediately
               autoFocus
             />

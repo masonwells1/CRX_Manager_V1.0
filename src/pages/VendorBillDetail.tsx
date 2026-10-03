@@ -1027,7 +1027,7 @@ export default function VendorBillDetail() {
               value={payMethod}
               onChange={(e) => setPayMethod(e.target.value)}
               disabled={paymentIntent.isIntentLocked}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="check">Check</option>
               <option value="ach">ACH</option>

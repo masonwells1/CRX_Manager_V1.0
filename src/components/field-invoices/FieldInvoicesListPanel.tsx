@@ -710,7 +710,7 @@ export default function FieldInvoicesListPanel() {
                   value={statusFilter}
                   onChange={(e) => { setStatusFilter(e.target.value); setCardFilter(null); }}
                   aria-label="Filter by status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {STATUS_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>

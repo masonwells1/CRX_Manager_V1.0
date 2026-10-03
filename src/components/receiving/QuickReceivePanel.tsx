@@ -589,7 +589,7 @@ export default function QuickReceivePanel() {
                   onChange={(e) => setVendor(e.target.value)}
                   list="qr-vendor-list"
                   placeholder="Enter or select vendor..."
-                  className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
                 <datalist id="qr-vendor-list">
                   {vendors.map((v) => (
@@ -602,7 +602,7 @@ export default function QuickReceivePanel() {
                 <select
                   value={storageLocation}
                   onChange={(e) => setStorageLocation(e.target.value)}
-                  className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {STORAGE_LOCATIONS.map((loc) => (
                     <option key={loc} value={loc}>
@@ -691,7 +691,7 @@ export default function QuickReceivePanel() {
                           }
                           min="0"
                           placeholder="Qty"
-                          className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-center font-medium border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm text-center font-medium border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                         />
                       </div>
 
@@ -727,7 +727,7 @@ export default function QuickReceivePanel() {
                           <select
                             value={item.condition}
                             onChange={(e) => updateItem(item.key, 'condition', e.target.value)}
-                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           >
                             {CONDITIONS.map((c) => (
                               <option key={c.value} value={c.value}>
@@ -745,7 +745,7 @@ export default function QuickReceivePanel() {
                             value={item.lot_number}
                             onChange={(e) => updateItem(item.key, 'lot_number', e.target.value)}
                             placeholder="e.g. T-1234"
-                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </div>
                         <div>
@@ -755,7 +755,7 @@ export default function QuickReceivePanel() {
                             value={item.notes}
                             onChange={(e) => updateItem(item.key, 'notes', e.target.value)}
                             placeholder="Any issues..."
-                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                            className="min-h-11 w-full px-3 py-2.5 text-base md:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </div>
                       </div>
@@ -1103,7 +1103,7 @@ export default function QuickReceivePanel() {
               <input
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
                 placeholder="Search by name, SKU, or vendor..."
                 // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
                 autoFocus

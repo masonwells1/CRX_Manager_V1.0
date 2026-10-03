@@ -356,7 +356,7 @@ export default function NewVendorBill() {
           value={purchaseOrderId}
           onChange={(e) => handlePOSelect(e.target.value)}
           disabled={createBillIntent.isIntentLocked}
-          className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+          className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         >
           <option value="">No linked PO</option>
           {purchaseOrders.map((po) => (
@@ -380,7 +380,7 @@ export default function NewVendorBill() {
               value={vendorId}
               onChange={(e) => setVendorId(e.target.value)}
               disabled={createBillIntent.isIntentLocked}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select vendor...</option>
               {vendors.map((v) => (
@@ -428,7 +428,7 @@ export default function NewVendorBill() {
                     setPaymentTermsDays(daysMap[e.target.value]);
                   }
                 }}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select...</option>
                 <option value="Due on Receipt">Due on Receipt</option>

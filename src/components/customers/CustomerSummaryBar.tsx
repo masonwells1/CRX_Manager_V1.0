@@ -132,7 +132,7 @@ export default function CustomerSummaryBar({ customerId, onCardClick }: Customer
             type="button"
             onClick={() => onCardClick!(card.tab!)}
             title={`View ${card.label}`}
-            className="text-left bg-white rounded-lg border border-gray-100 shadow-sm p-3 transition-colors hover:border-crx-green/40 hover:shadow focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
+            className="text-left bg-white rounded-lg border border-gray-100 shadow-sm p-3 transition-colors hover:border-crx-green/40 hover:shadow focus:outline-none focus:ring-2 focus:ring-crx-green/20"
           >
             {body}
           </button>

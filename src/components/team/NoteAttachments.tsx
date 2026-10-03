@@ -98,7 +98,7 @@ export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteA
           <button
             type="button"
             onClick={() => window.open(attachment.file_url, '_blank')}
-            className="w-full aspect-square rounded-lg overflow-hidden bg-gray-100 focus:outline-hidden focus:ring-2 focus:ring-crx-green"
+            className="w-full aspect-square rounded-lg overflow-hidden bg-gray-100 focus:outline-none focus:ring-2 focus:ring-crx-green"
           >
             {attachment.file_type.startsWith('image/') ? (
               <img

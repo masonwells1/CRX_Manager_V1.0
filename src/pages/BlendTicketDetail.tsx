@@ -1266,7 +1266,7 @@ export function BlendTicketDetail() {
               <select
                 value={selectedJobId}
                 onChange={(e) => { setSelectedJobId(e.target.value); setIsDirty(true); }}
-                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">— No linked job —</option>
                 {availableJobs.map((j) => (
@@ -1350,7 +1350,7 @@ export function BlendTicketDetail() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Application Service</label>
-              <select value={formData.application_service_id} onChange={(e) => setFormData({ ...formData, application_service_id: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+              <select value={formData.application_service_id} onChange={(e) => setFormData({ ...formData, application_service_id: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
                 <option value="">None (no application fee)</option>
                 {appServices.map((svc) => (<option key={svc.id} value={svc.id}>{svc.name}</option>))}
               </select>
@@ -1659,7 +1659,7 @@ export function BlendTicketDetail() {
                     onChange={(e) => updateTicketField(idx, { planned_acres: e.target.value })}
                     placeholder="0"
                     disabled={fieldControlsDisabled}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
                 <div className="col-span-3 flex justify-end">

@@ -92,20 +92,20 @@ export default function ProgramTracker() {
       <div className="flex gap-3 flex-wrap">
         <div>
           <label className="block text-xs text-secondary mb-1">Season</label>
-          <select value={season} onChange={(e) => setSeason(Number(e.target.value))} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+          <select value={season} onChange={(e) => setSeason(Number(e.target.value))} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
             {[currentSeason() - 1, currentSeason(), currentSeason() + 1].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
         <div>
           <label className="block text-xs text-secondary mb-1">Customer</label>
-          <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+          <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
             <option value="">All Customers</option>
             {uniqueCustomers.map(([cid, name]) => <option key={cid} value={cid}>{name}</option>)}
           </select>
         </div>
         <div>
           <label className="block text-xs text-secondary mb-1">Status</label>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
             <option value="">All</option>
             <option value="not_started">Not Started</option>
             <option value="in_progress">In Progress</option>

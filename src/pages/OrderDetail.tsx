@@ -1358,7 +1358,7 @@ export default function OrderDetail() {
                   onChange={(e) => setPriceInputs((p) => ({ ...p, [i.id]: e.target.value }))}
                   placeholder="price/unit"
                   aria-label={`Price per unit for ${i.product_name}`}
-                  className="w-28 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-28 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
             ))}
@@ -1908,7 +1908,7 @@ export default function OrderDetail() {
                   <select
                     value={newShareCustomerId}
                     onChange={(e) => setNewShareCustomerId(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Select customer...</option>
                     {shareCustomers.map((c) => (
@@ -1926,7 +1926,7 @@ export default function OrderDetail() {
                     min="0.01"
                     max="100"
                     step="0.01"
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
               </div>
@@ -2002,7 +2002,7 @@ export default function OrderDetail() {
                             const f = allocFields.find((x) => x.id === e.target.value);
                             if (f && f.total_acres != null) setNewAllocAcres(String(f.total_acres));
                           }}
-                          className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+                          className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
                           <option value="">Select field...</option>
                           {allocFields.filter((f) => !used.has(f.id)).map((f) => (
                             <option key={f.id} value={f.id}>{f.field_name}{f.total_acres != null ? ` (${f.total_acres} ac)` : ' (no acres on file)'}</option>
@@ -2013,7 +2013,7 @@ export default function OrderDetail() {
                         <label className="text-[11px] font-medium text-secondary mb-1 block">Acres</label>
                         <input type="number" value={newAllocAcres} onChange={(e) => setNewAllocAcres(e.target.value)}
                           min="0.01" step="0.01" placeholder="acres"
-                          className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+                          className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
                       </div>
                       <div className="sm:col-span-3 flex items-center justify-end gap-2">
                         <Button variant="ghost" size="sm" onClick={() => setAllocEditorItemId(null)}>Cancel</Button>
@@ -2101,7 +2101,7 @@ export default function OrderDetail() {
               onChange={(e) => setVoidReason(e.target.value)}
               placeholder="e.g. Customer cancelled, duplicate order, data entry error..."
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-red-500/20 focus:border-red-400 resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 resize-none"
             />
           </div>
           <div className="flex justify-end gap-3">

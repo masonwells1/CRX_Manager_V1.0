@@ -774,7 +774,7 @@ export default function NewOrder() {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
               placeholder="Additional notes..."
             />
           </div>
@@ -807,7 +807,7 @@ export default function NewOrder() {
                       <button
                         type="button"
                         onClick={() => openProductModal(item._key)}
-                        className="w-full px-3 py-2 text-left border border-gray-200 rounded-lg hover:border-crx-green transition-colors focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
+                        className="w-full px-3 py-2 text-left border border-gray-200 rounded-lg hover:border-crx-green transition-colors focus:outline-none focus:ring-2 focus:ring-crx-green/20"
                       >
                         {item.product_name ? <>
                           <span>{item.product_name}</span>
@@ -863,7 +863,7 @@ export default function NewOrder() {
                             });
                           }}
                           aria-label="Price per unit"
-                          className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${
+                          className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${
                             item.price_override != null
                               ? 'border-amber-400 bg-amber-50'
                               : 'border-gray-200'

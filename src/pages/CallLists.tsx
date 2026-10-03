@@ -642,7 +642,7 @@ export default function CallLists() {
                 tabIndex={active ? 0 : -1}
                 onClick={() => selectList(definition.key)}
                 onKeyDown={(event) => handleListKeyDown(event, index)}
-                className={`min-h-11 min-w-[10rem] snap-start rounded-xl border px-3 py-2 text-left transition-colors focus:outline-hidden focus:ring-2 focus:ring-crx-green sm:min-h-[92px] sm:min-w-0 sm:p-4 ${active ? 'border-crx-green bg-crx-green/5 ring-2 ring-crx-green/20' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+                className={`min-h-11 min-w-[10rem] snap-start rounded-xl border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-crx-green sm:min-h-[92px] sm:min-w-0 sm:p-4 ${active ? 'border-crx-green bg-crx-green/5 ring-2 ring-crx-green/20' : 'border-gray-200 bg-white hover:border-gray-300'}`}
               >
                 <span className="flex items-center gap-2 sm:block">
                   <Icon className={`h-5 w-5 shrink-0 ${active ? 'text-crx-green' : 'text-secondary'}`} />
@@ -717,7 +717,7 @@ export default function CallLists() {
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative w-full sm:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary" />
-            <input aria-label="Search call list by farm name" value={search} maxLength={100} onChange={(event) => updateQuery({ search: event.target.value || null }, true)} placeholder="Search farm name" className="min-h-11 w-full rounded-lg border border-gray-300 bg-white pl-10 pr-3 text-sm text-nav-dark focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20" />
+            <input aria-label="Search call list by farm name" value={search} maxLength={100} onChange={(event) => updateQuery({ search: event.target.value || null }, true)} placeholder="Search farm name" className="min-h-11 w-full rounded-lg border border-gray-300 bg-white pl-10 pr-3 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20" />
           </div>
           {!loading && !requiredEnrichmentPending && !loadError && <p className="text-sm text-secondary">Showing {filteredRows.length} of {rows.length} customers</p>}
         </div>

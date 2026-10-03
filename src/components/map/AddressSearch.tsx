@@ -87,7 +87,7 @@ export default function AddressSearch({ onSelect }: AddressSearchProps) {
           onKeyDown={handleKeyDown}
           onFocus={() => results.length > 0 && setShowResults(true)}
           placeholder="Search address or coordinates..."
-          className="w-full pl-9 pr-8 py-2 bg-white rounded-lg shadow-md border-0 text-sm focus:ring-2 focus:ring-crx-green focus:outline-hidden"
+          className="w-full pl-9 pr-8 py-2 bg-white rounded-lg shadow-md border-0 text-sm focus:ring-2 focus:ring-crx-green focus:outline-none"
         />
         {query && (
           <button

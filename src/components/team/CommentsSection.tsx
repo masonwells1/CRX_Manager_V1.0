@@ -280,7 +280,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
                   <textarea
                     value={editContent}
                     onChange={(e) => setEditContent(e.target.value)}
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                     rows={2}
                     placeholder="Edit your comment..."
                   />
@@ -319,7 +319,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
                 <textarea
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
-                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   rows={2}
                   placeholder="Write a reply..."
                 />
@@ -383,7 +383,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
             <textarea
               value={newComment}
               onChange={(e) => setNewComment(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               rows={3}
               placeholder="Write a comment... (use @name to mention someone)"
             />

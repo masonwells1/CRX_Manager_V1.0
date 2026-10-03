@@ -42,7 +42,7 @@ interface JobMassEditModalProps {
 }
 
 const inputCls =
-  'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-secondary';
+  'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-secondary';
 
 /**
  * Field-app parity #7: Mass Edit over the checkbox-selected jobs. The modal

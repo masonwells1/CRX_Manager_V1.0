@@ -1155,7 +1155,7 @@ export default function CustomerDetail() {
                 <select
                   value={customer.assigned_tier}
                   onChange={(e) => update('assigned_tier', parseInt(e.target.value))}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value={1}>Tier 1</option>
                   <option value={2}>Tier 2</option>
@@ -1233,7 +1233,7 @@ export default function CustomerDetail() {
                     }}
                     onBlur={() => setTimeout(() => setShowParentDropdown(false), 200)}
                     placeholder="Search parent customer..."
-                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   />
                 </div>
                 {customer.parent_customer_id && (
@@ -1386,7 +1386,7 @@ export default function CustomerDetail() {
               value={customer.notes || ''}
               onChange={(e) => update('notes', e.target.value)}
               rows={4}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               placeholder="General notes about this customer..."
             />
           </Card>

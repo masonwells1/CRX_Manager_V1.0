@@ -1404,7 +1404,7 @@ export default function Deliveries() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   aria-label="Filter by delivery status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Statuses</option>
                   <option value="scheduled">Scheduled</option>
@@ -1417,7 +1417,7 @@ export default function Deliveries() {
                   value={driverFilter}
                   onChange={(e) => setDriverFilter(e.target.value)}
                   aria-label="Filter by driver"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Drivers</option>
                   {drivers.map((d) => (
@@ -1428,7 +1428,7 @@ export default function Deliveries() {
                   value={priorityFilter}
                   onChange={(e) => setPriorityFilter(e.target.value)}
                   aria-label="Filter by priority"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Priorities</option>
                   <option value="low">Low</option>
@@ -1440,7 +1440,7 @@ export default function Deliveries() {
                   value={customerFilter}
                   onChange={(e) => setCustomerFilter(e.target.value)}
                   aria-label="Filter by customer"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Customers</option>
                   {customers.map((c) => (
@@ -1454,7 +1454,7 @@ export default function Deliveries() {
                     setDatePreset(e.target.value === 'custom' ? '' : e.target.value);
                   }}
                   aria-label="Filter by date range"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {DATE_PRESETS.map((p) => (
                     <option key={p.value} value={p.value}>{p.label}</option>
@@ -1498,7 +1498,7 @@ export default function Deliveries() {
               value={rescheduleDate}
               onChange={(e) => setRescheduleDate(e.target.value)}
               min={todayStr}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
             <div className="flex justify-end gap-3">
               <Button variant="ghost" onClick={() => { setShowReschedule(false); setRescheduleDate(''); }}>
@@ -1550,7 +1550,7 @@ export default function Deliveries() {
               value={signedBy}
               onChange={(e) => setSignedBy(e.target.value)}
               placeholder="Name of person who received"
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           <div>
@@ -1561,7 +1561,7 @@ export default function Deliveries() {
               value={deliveredOnDate}
               onChange={(e) => setDeliveredOnDate(e.target.value)}
               max={todayStr}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
             <p className="mt-1 text-xs text-secondary">Recording a delivery that already happened? Set the real date — it becomes the invoice date.</p>
           </div>

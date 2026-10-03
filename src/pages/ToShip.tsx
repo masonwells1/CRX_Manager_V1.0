@@ -414,7 +414,7 @@ export default function ToShip() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder={view === 'product' ? 'Search a product…' : 'Search a customer…'}
             aria-label="Search"
-            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
           />
         </div>
         {view === 'product' && (
@@ -564,7 +564,7 @@ export default function ToShip() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search a product…"
                 aria-label="Search low stock"
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <p className="text-sm text-secondary">Products at or below reorder point, or where open orders exceed free stock.</p>
@@ -627,7 +627,7 @@ export default function ToShip() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search a customer…"
                 aria-label="Search deliveries"
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <p className="text-sm text-secondary">Open deliveries (scheduled or in progress). Overdue and unassigned are flagged.</p>
@@ -684,7 +684,7 @@ export default function ToShip() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search vendor or product…"
                 aria-label="Search inbound"
-                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
             </div>
             <p className="text-sm text-secondary">Open purchase orders — stock on the way, soonest arrival first. Overdue arrivals flagged.</p>

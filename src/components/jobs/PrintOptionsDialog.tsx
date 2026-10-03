@@ -45,7 +45,7 @@ function ToggleSelect({
         value={value ? 'yes' : 'no'}
         onChange={(event) => onChange(event.target.value === 'yes')}
         disabled={disabled}
-        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-secondary"
+        className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-secondary"
       >
         <option value="yes">Yes</option>
         <option value="no">No</option>
@@ -145,7 +145,7 @@ export default function PrintOptionsDialog({ open, onClose, onPrint }: PrintOpti
             value={format}
             onChange={(event) => setFormat(event.target.value as ApplicatorSheetFormat)}
             disabled={busy}
-            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 disabled:bg-gray-50"
+            className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 disabled:bg-gray-50"
           >
             {(['original', 'enhanced', 'custom'] as ApplicatorSheetFormat[]).map((sheetFormat) => (
               <option key={sheetFormat} value={sheetFormat}>{SHEET_FORMAT_LABELS[sheetFormat]}</option>
@@ -163,7 +163,7 @@ export default function PrintOptionsDialog({ open, onClose, onPrint }: PrintOpti
               value={options.mapPages}
               onChange={(event) => updateOption('mapPages', event.target.value as ApplicatorPrintOptions['mapPages'])}
               disabled={busy}
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 disabled:bg-gray-50"
+              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 disabled:bg-gray-50"
             >
               <option value="none">None</option>
               <option value="overview">Combined overview only</option>
@@ -178,7 +178,7 @@ export default function PrintOptionsDialog({ open, onClose, onPrint }: PrintOpti
               value={options.blankSections}
               onChange={(event) => updateOption('blankSections', Number(event.target.value))}
               disabled={busy}
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 disabled:bg-gray-50"
+              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 disabled:bg-gray-50"
             >
               {[0, 1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
             </select>
@@ -197,7 +197,7 @@ export default function PrintOptionsDialog({ open, onClose, onPrint }: PrintOpti
               value={options.previousApplicationsPerField}
               onChange={(event) => updateOption('previousApplicationsPerField', Number(event.target.value))}
               disabled={busy || !options.includePreviousApplications}
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 disabled:cursor-not-allowed disabled:bg-gray-50"
+              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-charcoal focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 disabled:cursor-not-allowed disabled:bg-gray-50"
             >
               {[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}
             </select>

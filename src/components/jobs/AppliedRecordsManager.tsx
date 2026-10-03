@@ -590,7 +590,7 @@ export default function AppliedRecordsManager({
                 value={w.time}
                 onChange={(e) => updateWeather(set, 'time', e.target.value)}
                 aria-label={`${label} weather time`}
-                className="flex-1 px-2 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="flex-1 px-2 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <Button type="button" size="sm" variant="secondary" onClick={() => stampNow(set)} title="Stamp the current time">
                 Now
@@ -608,7 +608,7 @@ export default function AppliedRecordsManager({
               onChange={(e) => updateWeather(set, 'temp_f', e.target.value)}
               aria-label={`${label} temperature`}
               placeholder="degrees F"
-              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           <div>
@@ -621,7 +621,7 @@ export default function AppliedRecordsManager({
               onChange={(e) => updateWeather(set, 'wind_direction', e.target.value)}
               aria-label={`${label} wind direction`}
               placeholder="e.g. NNW"
-              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           <div>
@@ -636,7 +636,7 @@ export default function AppliedRecordsManager({
               onChange={(e) => updateWeather(set, 'wind_mph', e.target.value)}
               aria-label={`${label} wind speed`}
               placeholder="mph"
-              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           <div>
@@ -652,7 +652,7 @@ export default function AppliedRecordsManager({
               onChange={(e) => updateWeather(set, 'humidity_pct', e.target.value)}
               aria-label={`${label} humidity`}
               placeholder="%"
-              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
         </div>
@@ -729,7 +729,7 @@ export default function AppliedRecordsManager({
                 value={memberFilter}
                 onChange={(e) => setMemberFilter(e.target.value)}
                 aria-label="Filter by crew member"
-                className="px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">All crew members</option>
                 {filterableMembers.map((m) => (
@@ -948,7 +948,7 @@ export default function AppliedRecordsManager({
               value={draft.applicator_id}
               onChange={(e) => onApplicatorChange(e.target.value)}
               aria-label="Applicator"
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select applicator...</option>
               {applicatorOptions.map((a) => (
@@ -963,7 +963,7 @@ export default function AppliedRecordsManager({
               value={draft.vehicle_id}
               onChange={(e) => setDraft({ ...draft, vehicle_id: e.target.value })}
               aria-label="Vehicle"
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select vehicle...</option>
               {vehicleOptions.map((v) => (
@@ -1010,7 +1010,7 @@ export default function AppliedRecordsManager({
                         value={row.field_id}
                         onChange={(e) => onFieldPicked(idx, e.target.value)}
                         aria-label={`Location ${idx + 1}`}
-                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       >
                         <option value="">Select location...</option>
                         {availableFieldsFor(row.field_id).map((f) => (
@@ -1027,7 +1027,7 @@ export default function AppliedRecordsManager({
                         onChange={(e) => updateFieldRow(idx, 'applied_acres', e.target.value)}
                         aria-label={`Applied acres for location ${idx + 1}`}
                         placeholder="Acres"
-                        className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                        className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       />
                       <button
                         type="button"
@@ -1126,7 +1126,7 @@ export default function AppliedRecordsManager({
                   onChange={(e) => setDraft({ ...draft, beginningTach: e.target.value })}
                   aria-label="Beginning tach"
                   placeholder="e.g. 1200.0"
-                  className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1139,7 +1139,7 @@ export default function AppliedRecordsManager({
                   onChange={(e) => setDraft({ ...draft, endTach: e.target.value })}
                   aria-label="End tach"
                   placeholder="e.g. 1206.5"
-                  className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1181,7 +1181,7 @@ export default function AppliedRecordsManager({
               value={draft.crew_id}
               onChange={(e) => onCrewChange(e.target.value)}
               aria-label="Ground crew"
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">No ground crew</option>
               {activeCrews.map((c) => (
@@ -1223,7 +1223,7 @@ export default function AppliedRecordsManager({
               value={draft.notes}
               onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
               rows={2}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
               placeholder="Optional notes about this pass..."
             />
           </div>

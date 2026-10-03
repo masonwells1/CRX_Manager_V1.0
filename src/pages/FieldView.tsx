@@ -893,7 +893,7 @@ export default function FieldView() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search job # or customer…"
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green/40 focus:border-crx-green min-h-[44px]"
+                className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-crx-green/40 focus:border-crx-green min-h-[44px]"
               />
             </div>
             <button

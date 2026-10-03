@@ -188,7 +188,7 @@ export default function FieldProfitability() {
           id="field-profitability-season"
           value={selectedSeason ?? 'all'}
           onChange={(event) => setSelectedSeason(event.target.value === 'all' ? null : event.target.value)}
-          className="min-w-48 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-hidden focus:ring-2 focus:ring-crx-green/20"
+          className="min-w-48 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
         >
           {seasonOptions.map((season) => <option key={season} value={season}>{season}</option>)}
           <option value="all">All seasons</option>

@@ -1050,7 +1050,7 @@ export default function TeamBoard() {
                   type="date"
                   value={completedDateFrom}
                   onChange={(e) => setCompletedDateFrom(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1059,7 +1059,7 @@ export default function TeamBoard() {
                   type="date"
                   value={completedDateTo}
                   onChange={(e) => setCompletedDateTo(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               {(completedDateFrom || completedDateTo) && (
@@ -1153,7 +1153,7 @@ export default function TeamBoard() {
                   type="date"
                   value={activityDateFrom}
                   onChange={(e) => setActivityDateFrom(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1162,7 +1162,7 @@ export default function TeamBoard() {
                   type="date"
                   value={activityDateTo}
                   onChange={(e) => setActivityDateTo(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -1170,7 +1170,7 @@ export default function TeamBoard() {
                 <select
                   value={activityUser}
                   onChange={(e) => setActivityUser(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Members</option>
                   {profiles.map(p => (
@@ -1183,7 +1183,7 @@ export default function TeamBoard() {
                 <select
                   value={activityAction}
                   onChange={(e) => setActivityAction(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Actions</option>
                   <option value="created">Created</option>
@@ -1307,7 +1307,7 @@ export default function TeamBoard() {
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -1316,7 +1316,7 @@ export default function TeamBoard() {
               <select
                 value={noteType}
                 onChange={(e) => setNoteType(e.target.value as NoteType)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="note">Note</option>
                 <option value="todo">To-Do</option>
@@ -1328,7 +1328,7 @@ export default function TeamBoard() {
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as NotePriority)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -1343,7 +1343,7 @@ export default function TeamBoard() {
               <select
                 value={assignedTo}
                 onChange={(e) => setAssignedTo(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Unassigned</option>
                 {profiles.map((p) => (
@@ -1359,7 +1359,7 @@ export default function TeamBoard() {
               <select
                 value={linkedEntityType}
                 onChange={(e) => { setLinkedEntityType(e.target.value); setLinkedEntityId(''); }}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">None</option>
                 <option value="delivery">Delivery</option>
@@ -1378,7 +1378,7 @@ export default function TeamBoard() {
                   value={linkedEntityId}
                   onChange={(e) => setLinkedEntityId(e.target.value)}
                   placeholder="Paste entity UUID"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
             )}

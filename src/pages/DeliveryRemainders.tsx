@@ -299,7 +299,7 @@ export default function DeliveryRemainders() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   aria-label="Filter by status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Statuses</option>
                   <option value="pending">Pending</option>
@@ -311,7 +311,7 @@ export default function DeliveryRemainders() {
                   value={customerFilter}
                   onChange={(e) => setCustomerFilter(e.target.value)}
                   aria-label="Filter by customer"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Customers</option>
                   {uniqueCustomers.map(([id, name]) => (

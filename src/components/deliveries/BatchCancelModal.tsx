@@ -47,7 +47,7 @@ export default function BatchCancelModal({
             onChange={(e) => setReason(e.target.value)}
             placeholder="Enter reason for cancelling these deliveries..."
             rows={3}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
           />
         </div>
 

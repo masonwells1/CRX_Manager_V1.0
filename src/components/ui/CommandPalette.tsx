@@ -411,7 +411,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search pages, customers, orders, invoices..."
-            className="flex-1 text-sm bg-transparent outline-hidden placeholder:text-gray-400"
+            className="flex-1 text-sm bg-transparent outline-none placeholder:text-gray-400"
             aria-label="Search"
           />
           <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-gray-400 bg-gray-100 rounded border border-gray-200">

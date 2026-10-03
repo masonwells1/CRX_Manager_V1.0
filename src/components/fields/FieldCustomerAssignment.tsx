@@ -56,7 +56,7 @@ function CustomerSelect({
           }}
           onBlur={() => setTimeout(() => setOpen(false), 200)}
           placeholder={placeholder}
-          className={`w-full pl-8 pr-3 py-1.5 text-sm border rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${
+          className={`w-full pl-8 pr-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${
             invalid ? 'border-red-300 bg-red-50' : 'border-gray-200'
           }`}
         />

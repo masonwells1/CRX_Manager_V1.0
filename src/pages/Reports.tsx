@@ -1133,11 +1133,11 @@ export default function Reports() {
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
         </div>
         <div>
           <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
         </div>
         <div className="flex gap-1.5">
           {[
@@ -1158,7 +1158,7 @@ export default function Reports() {
         {category === 'financial' && financialTab === 'gross_sales' && (
           <div>
             <label className="block text-xs font-medium text-secondary mb-1">Group By</label>
-            <select value={grossSalesGroupBy} onChange={(e) => setGrossSalesGroupBy(e.target.value as 'product' | 'customer' | 'salesman')} aria-label="Group by" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+            <select value={grossSalesGroupBy} onChange={(e) => setGrossSalesGroupBy(e.target.value as 'product' | 'customer' | 'salesman')} aria-label="Group by" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
               <option value="product">Product</option>
               <option value="customer">Customer</option>
               <option value="salesman">Salesman</option>
@@ -1170,7 +1170,7 @@ export default function Reports() {
         {category === 'operational' && operationalTab === 'chemical_history' && (
           <div>
             <label className="block text-xs font-medium text-secondary mb-1">Product</label>
-            <select value={chemProductId} onChange={(e) => setChemProductId(e.target.value)} aria-label="Select product" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]">
+            <select value={chemProductId} onChange={(e) => setChemProductId(e.target.value)} aria-label="Select product" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]">
               <option value="">— Select Product —</option>
               {productOptions.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
@@ -1406,7 +1406,7 @@ export default function Reports() {
                   <select
                     value={yeSelectedCustomer}
                     onChange={(e) => setYeSelectedCustomer(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">— Select Customer —</option>
                     {yeCustomerOptions.map((c) => (

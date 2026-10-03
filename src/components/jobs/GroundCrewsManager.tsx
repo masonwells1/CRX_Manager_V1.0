@@ -200,7 +200,7 @@ export default function GroundCrewsManager({ open, onClose, crews, onChanged }: 
                           value={name}
                           onChange={(ev) => setEdits((prev) => ({ ...prev, [crew.id]: ev.target.value }))}
                           aria-label={`Crew name for ${crew.name}`}
-                          className="flex-1 min-w-0 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="flex-1 min-w-0 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                         />
                         <Button
                           variant="secondary"
@@ -260,7 +260,7 @@ export default function GroundCrewsManager({ open, onClose, crews, onChanged }: 
                               onKeyDown={(ev) => ev.key === 'Enter' && addMember()}
                               placeholder="Member name"
                               aria-label="New member name"
-                              className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                              className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                             />
                             <Button
                               variant="secondary"
@@ -295,7 +295,7 @@ export default function GroundCrewsManager({ open, onClose, crews, onChanged }: 
                 onKeyDown={(ev) => ev.key === 'Enter' && createCrew()}
                 placeholder="Crew name (e.g. Ground Crew A)"
                 aria-label="New crew name"
-                className="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               />
               <Button
                 icon={<Plus className="w-4 h-4" />}

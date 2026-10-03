@@ -1022,7 +1022,7 @@ export default function CycleCounts() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 aria-label="Filter by status"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">All Statuses</option>
                 <option value="in_progress">In Progress</option>
@@ -1042,7 +1042,7 @@ export default function CycleCounts() {
             <select
               value={newWarehouse}
               onChange={(e) => setNewWarehouse(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               {warehouses.map((w) => (
                 <option key={w} value={w}>{w}</option>
@@ -1155,7 +1155,7 @@ export default function CycleCounts() {
                                 const val = e.target.value === '' ? null : parseFloat(e.target.value);
                                 updateCountedQty(item.id, val);
                               }}
-                              className="w-24 px-2 py-1 text-right text-sm border border-gray-200 rounded focus:outline-hidden focus:ring-1 focus:ring-crx-green"
+                              className="w-24 px-2 py-1 text-right text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                               placeholder="Count..."
                             />
                           ) : (

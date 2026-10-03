@@ -619,7 +619,7 @@ export default function PurchaseOrders() {
                       value={statusFilter}
                       onChange={(e) => setStatusFilter(e.target.value)}
                       aria-label="Filter by PO status"
-                      className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                     >
                       <option value="">All Statuses</option>
                       <option value="draft">Draft</option>
@@ -725,7 +725,7 @@ export default function PurchaseOrders() {
                       value={vendorFilter}
                       onChange={(e) => setVendorFilter(e.target.value)}
                       aria-label="Filter by vendor"
-                      className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                     >
                       <option value="">All Vendors</option>
                       {outstandingVendors.map((v) => (

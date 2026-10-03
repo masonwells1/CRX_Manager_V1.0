@@ -1427,7 +1427,7 @@ export default function DeliveryDetail() {
                           type="number"
                           value={currentQty}
                           onChange={(e) => updateDeliveryQty(item.id, parseFloat(e.target.value) || 0, item.quantity)}
-                          className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green"
+                          className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
                           min="0"
                           step="any"
                           aria-label={`Quantity for ${(item.product as unknown as { product_name: string })?.product_name || 'item'}`}
@@ -1536,7 +1536,7 @@ export default function DeliveryDetail() {
               <select
                 value={driverIssueType}
                 onChange={(e) => setDriverIssueType(e.target.value as DeliveryIssueType)}
-                className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green"
+                className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
               >
                 {Object.entries(ISSUE_TYPE_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>{label}</option>
@@ -1548,7 +1548,7 @@ export default function DeliveryDetail() {
                   onChange={(e) => setDriverIssueNotes(e.target.value)}
                   placeholder="Describe the issue..."
                   rows={2}
-                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green resize-none"
+                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green resize-none"
                 />
               )}
             </div>
@@ -1565,7 +1565,7 @@ export default function DeliveryDetail() {
                   value={signedBy}
                   onChange={(e) => setSignedBy(e.target.value)}
                   placeholder="Customer name"
-                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-hidden focus:ring-2 focus:ring-crx-green"
+                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green"
                 />
               </div>
               <div className="flex items-center gap-1 mb-1">
@@ -1889,7 +1889,7 @@ export default function DeliveryDetail() {
                 <select
                   value={editDriver}
                   onChange={(e) => setEditDriver(e.target.value)}
-                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">Unassigned</option>
                   {drivers.map((d) => (
@@ -1902,7 +1902,7 @@ export default function DeliveryDetail() {
                 <select
                   value={editPriority}
                   onChange={(e) => setEditPriority(e.target.value)}
-                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {Object.entries(PRIORITY_LABELS).map(([key, label]) => (
                     <option key={key} value={key}>{label}</option>
@@ -1943,7 +1943,7 @@ export default function DeliveryDetail() {
               <select
                 value={editAddress}
                 onChange={(e) => setEditAddress(e.target.value)}
-                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Use billing address</option>
                 {addresses.map((a) => (
@@ -2021,7 +2021,7 @@ export default function DeliveryDetail() {
                               )
                             );
                           }}
-                          className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                           min="0"
                           max={item.max_quantity}
                           step="any"
@@ -2070,7 +2070,7 @@ export default function DeliveryDetail() {
                       setEditItems(next.editItems);
                       setAvailableOrderItems(next.availableItems);
                     }}
-                    className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Select a product to add...</option>
                     {availableOrderItems.map((a) => (
@@ -2276,7 +2276,7 @@ export default function DeliveryDetail() {
                       type="number"
                       value={currentQty}
                       onChange={(e) => updateDeliveryQty(item.id, parseFloat(e.target.value) || 0, item.quantity)}
-                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       min="0"
                       step="any"
                     />
@@ -2306,7 +2306,7 @@ export default function DeliveryDetail() {
               <select
                 value={driverIssueType}
                 onChange={(e) => setDriverIssueType(e.target.value as DeliveryIssueType)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 {Object.entries(ISSUE_TYPE_LABELS).map(([key, label]) => (
                   <option key={key} value={key}>{label}</option>
@@ -2554,7 +2554,7 @@ export default function DeliveryDetail() {
               onChange={(e) => setVoidReason(e.target.value)}
               placeholder="Enter reason for voiding this delivery..."
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">
@@ -2594,7 +2594,7 @@ export default function DeliveryDetail() {
               onChange={(e) => setCancelReason(e.target.value)}
               placeholder="Enter reason for cancellation..."
               rows={3}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">

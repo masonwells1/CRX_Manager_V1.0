@@ -788,7 +788,7 @@ export default function PrepaymentManagerPanel() {
               <select
                 value={editForm.bucket_label}
                 onChange={(e) => setEditForm({ ...editForm, bucket_label: e.target.value })}
-                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">No bucket</option>
                 {bucketLabels.map((l) => (
@@ -930,7 +930,7 @@ export default function PrepaymentManagerPanel() {
             <select
               value={checkForm.customer_id}
               onChange={(e) => setCheckForm({ ...checkForm, customer_id: e.target.value })}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="">Select customer...</option>
               {allCustomers.map((c) => (
@@ -970,7 +970,7 @@ export default function PrepaymentManagerPanel() {
                       updated[idx] = { ...updated[idx], label: e.target.value };
                       setBucketSplits(updated);
                     }}
-                    className="flex-1 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                    className="flex-1 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   >
                     <option value="">Select bucket...</option>
                     {bucketLabels.map((l) => (

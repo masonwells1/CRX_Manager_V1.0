@@ -854,7 +854,7 @@ export default function ARaging() {
                   type="date"
                   value={asOfDate}
                   onChange={(e) => setAsOfDate(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <Button variant="secondary" size="sm" onClick={fetchAging}>
@@ -972,7 +972,7 @@ export default function ARaging() {
                 <select
                   value={selectedCustomer}
                   onChange={(e) => setSelectedCustomer(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green min-w-[200px]"
                 >
                   <option value="">Select customer...</option>
                   {customers.map((c) => (
@@ -988,7 +988,7 @@ export default function ARaging() {
                   type="date"
                   value={stmtStart}
                   onChange={(e) => setStmtStart(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <div>
@@ -997,7 +997,7 @@ export default function ARaging() {
                   type="date"
                   value={stmtEnd}
                   onChange={(e) => setStmtEnd(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </div>
               <Button icon={<FileText className="w-4 h-4" />} onClick={fetchStatement}>
@@ -1099,7 +1099,7 @@ export default function ARaging() {
                 <select
                   value={seasonA}
                   onChange={(e) => setSeasonA(Number(e.target.value))}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {seasonOptions.map((s) => (
                     <option key={s} value={s}>
@@ -1114,7 +1114,7 @@ export default function ARaging() {
                 <select
                   value={seasonB}
                   onChange={(e) => setSeasonB(Number(e.target.value))}
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   {seasonOptions.map((s) => (
                     <option key={s} value={s}>

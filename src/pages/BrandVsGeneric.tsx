@@ -288,7 +288,7 @@ export default function BrandVsGeneric() {
         <select
           value={selectedProductId}
           onChange={(e) => setSelectedProductId(e.target.value)}
-          className="w-full max-w-md px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+          className="w-full max-w-md px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
         >
           <option value="">Choose a product...</option>
           {products.map((p) => (
@@ -532,7 +532,7 @@ export default function BrandVsGeneric() {
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
                 placeholder="Optional notes for the sales team..."
-                className="w-full px-3 py-2.5 text-sm text-nav-dark bg-white border border-gray-300 rounded-lg placeholder:text-gray-400 focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150"
+                className="w-full px-3 py-2.5 text-sm text-nav-dark bg-white border border-gray-300 rounded-lg placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green transition-colors duration-150"
               />
             </div>
 

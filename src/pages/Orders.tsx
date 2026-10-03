@@ -676,7 +676,7 @@ export default function Orders() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
                   aria-label="Filter by order status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Statuses</option>
                   <option value="confirmed">Confirmed</option>
@@ -689,7 +689,7 @@ export default function Orders() {
                   value={planFilter}
                   onChange={(e) => setPlanFilter(e.target.value)}
                   aria-label="Filter by planned or committed"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Orders</option>
                   <option value="planned">Planned Only</option>
@@ -699,7 +699,7 @@ export default function Orders() {
                   value={pricingFilter}
                   onChange={(e) => setPricingFilter(e.target.value)}
                   aria-label="Filter by pricing status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Pricing</option>
                   <option value="needs_pricing">Needs Pricing</option>
@@ -709,7 +709,7 @@ export default function Orders() {
                   value={splitFilter}
                   onChange={(e) => setSplitFilter(e.target.value)}
                   aria-label="Filter by split billing status"
-                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Orders</option>
                   <option value="needs_split">Needs Split Billing</option>

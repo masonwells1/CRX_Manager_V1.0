@@ -197,7 +197,7 @@ export default function VehicleDetail() {
             <select
               value={form.vehicle_type}
               onChange={(e) => updateField('vehicle_type', e.target.value as VehicleType)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="ground">Ground</option>
               <option value="air">Air</option>
@@ -233,7 +233,7 @@ export default function VehicleDetail() {
               <select
                 value={form.capacity_unit}
                 onChange={(e) => updateField('capacity_unit', e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="gallons">Gallons</option>
                 <option value="lbs">Lbs</option>
@@ -252,7 +252,7 @@ export default function VehicleDetail() {
             <select
               value={form.status}
               onChange={(e) => updateField('status', e.target.value as VehicleStatus)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
@@ -266,7 +266,7 @@ export default function VehicleDetail() {
             value={form.notes}
             onChange={(e) => updateField('notes', e.target.value)}
             rows={3}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
             placeholder="Maintenance schedule, special considerations..."
           />
         </div>

@@ -197,7 +197,7 @@ export default function JobBatchAssignModal({
               onKeyDown={(e) => e.key === 'Enter' && createBatch()}
               placeholder="Batch name"
               aria-label="New batch name"
-              className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
             <Button
               variant="secondary"

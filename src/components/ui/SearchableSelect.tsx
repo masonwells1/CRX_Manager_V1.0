@@ -136,7 +136,7 @@ export default function SearchableSelect({
           placeholder={placeholder}
           disabled={disabled}
           required={required}
-          className="w-full pl-9 pr-9 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-100 disabled:text-gray-500"
+          className="w-full pl-9 pr-9 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-100 disabled:text-gray-500"
         />
         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
       </div>

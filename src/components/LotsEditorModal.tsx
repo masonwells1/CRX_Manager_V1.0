@@ -282,7 +282,7 @@ export default function LotsEditorModal({ open, onClose, record, onSaved }: Lots
                             onChange={(e) => onLotNumberChange(p.product_id, idx, e.target.value)}
                             placeholder="Lot number"
                             aria-label={`Lot number for ${p.product_name}`}
-                            className="flex-1 min-w-[10rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                            className="flex-1 min-w-[10rem] px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                           />
                           <input
                             type="number"
@@ -292,14 +292,14 @@ export default function LotsEditorModal({ open, onClose, record, onSaved }: Lots
                             onChange={(e) => updateLot(p.product_id, idx, { quantity_from_lot: e.target.value })}
                             placeholder="Qty (optional)"
                             aria-label={`Quantity from lot for ${p.product_name}`}
-                            className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                            className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                           />
                           <input
                             value={row.unit}
                             onChange={(e) => updateLot(p.product_id, idx, { unit: e.target.value })}
                             placeholder="Unit"
                             aria-label={`Unit for ${p.product_name}`}
-                            className="w-24 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                            className="w-24 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                           />
                           <button
                             type="button"

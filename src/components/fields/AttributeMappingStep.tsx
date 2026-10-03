@@ -117,7 +117,7 @@ export default function AttributeMappingStep({
                     <select
                       value={selectedAttr}
                       onChange={(e) => handleChange(key, e.target.value)}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green bg-white"
+                      className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green bg-white"
                     >
                       <option value="">(none)</option>
                       {attributeKeys.map((attr) => (

@@ -41,7 +41,7 @@ export default function MobileCardList<T>({
             type="button"
             onClick={() => onRowClick(row)}
             aria-label={getRowLabel(row)}
-            className={`block min-h-[44px] w-full rounded-xl border border-gray-200 bg-white p-4 text-left shadow-card transition-colors hover:bg-crx-green-tint focus:outline-hidden focus:ring-2 focus:ring-crx-green/40 ${cardClassName}`}
+            className={`block min-h-[44px] w-full rounded-xl border border-gray-200 bg-white p-4 text-left shadow-card transition-colors hover:bg-crx-green-tint focus:outline-none focus:ring-2 focus:ring-crx-green/40 ${cardClassName}`}
           >
             {renderCard(row)}
           </button>
