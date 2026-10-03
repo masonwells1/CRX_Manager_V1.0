@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase } from "./hold-latch-lib.mjs";
-import { isMachineGenerated, authoredByMason, hasAuthoredText } from "./prompt-source-lib.mjs";
+import { isMachineGenerated, authoredByMason, hasAuthoredText, withoutSubagentReports } from "./prompt-source-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -24,6 +24,19 @@ try { payload = globalThis.__CRX_ROUTED_HOOK_PAYLOAD ?? JSON.parse(readFileSync(
 // Proven 2026-07-04: a <task-notification> audit digest containing "stop" latched hold.json.
 if (isMachineGenerated(payload?.prompt)) emit();
 
+// Turns the harness generates, recognised by how they START (2026-10-02).
+// A Codex scheduled automation ("Automation: <name>" then "Automation ID:")
+// latched the main checkout's hold on 2026-09-28 and left it stuck; it is
+// wholly machine text, so it neither latches nor clears the hold.
+const rawPrompt = String(payload?.prompt ?? "");
+if (/^\s*Automation: [^\n]*\n\s*Automation ID: /.test(rawPrompt)) emit();
+// A turn opening with the subagent/peer preamble latched this hold on
+// 2026-10-02 through the strict truncated-report fail-safe below. For such a
+// turn the report is removed NON-strictly (closed or truncated) before the
+// usual stripping, so the report's own words cannot latch while a stop Mason
+// typed after it still does (Codex review, PR #874). It never clears a hold.
+const isPeerTurn = /^\s*Another Claude session sent a message:/.test(rawPrompt);
+
 // Strip the spans of THIS prompt that Mason did not author — peer-session
 // <cross-session-message> blocks, subagent <~agent-message> hand-backs and the
 // "Another Claude session sent a message:" preamble (2026-09-25), machine
@@ -36,7 +49,9 @@ if (isMachineGenerated(payload?.prompt)) emit();
 // This narrows the INPUT, never the vocabulary: if Mason typed a hold phrase
 // anywhere outside those spans it still latches, including in the same message
 // as a stripped block.
-const prompt = authoredByMason(payload?.prompt);
+const prompt = isPeerTurn
+  ? authoredByMason(withoutSubagentReports(rawPrompt))
+  : authoredByMason(payload?.prompt);
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const stateDir = path.join(projectDir, ".claude", "session-state");
@@ -68,7 +83,7 @@ if (isHoldPhrase(prompt)) {
 // union of both strip orders (a "stop" either keeps must halt), while "Mason
 // spoke" needs both orders to agree, so a halt only one order keeps is still
 // honored above instead of being dropped here.
-if (!hasAuthoredText(payload?.prompt)) emit();
+if (isPeerTurn || !hasAuthoredText(payload?.prompt)) emit();
 
 // Not a hold phrase → clear any existing latch.
 if (wasHeld()) {

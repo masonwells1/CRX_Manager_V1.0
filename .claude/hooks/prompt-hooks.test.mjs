@@ -727,12 +727,14 @@ rmSync(hbProj, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 
-  // A bare agent-message turn: every hook silent, no hold, no freeze flag. The
-  // exception is a TRUNCATED report and the latch: it is kept for the latch
-  // (fail-safe, Sol review of #826), so its own "stop" latches the hold.
+  // A bare agent-message turn: every hook silent, no hold, no freeze flag. A
+  // TRUNCATED report used to latch the hold as a fail-safe (Sol review of #826);
+  // since 2026-10-02 (Mason) a turn that opens with the harness preamble never
+  // latches, because that fail-safe is what froze a session on a subagent report.
+  // A truncated report WITHOUT the preamble keeps the fail-safe.
   for (const [label, turn] of SPELLINGS) {
     const dir = mkdtempSync(path.join(tmpdir(), "crx-agentmsg-"));
-    const truncated = /truncated/.test(label);
+    const truncated = /truncated/.test(label) && !turn.trimStart().startsWith("Another Claude session sent a message:");
     for (const hook of PHRASE_HOOKS) {
       const r = run(hook, dir, turn);
       eq(r.status, 0, `${hook} exits 0 on a ${label} report`);
@@ -800,7 +802,7 @@ ok(/authoredByMason\(payload\?\.prompt\)/.test(
 // after the latch so a halt only one order keeps is never dropped by the gate.
 {
   const hookSrc = readFileSync(path.join(__dirname, "hold-latch-prompt.mjs"), "utf8");
-  const gateAt = hookSrc.indexOf("if (!hasAuthoredText(payload?.prompt)) emit();");
+  const gateAt = hookSrc.indexOf("if (isPeerTurn || !hasAuthoredText(payload?.prompt)) emit();");
   ok(gateAt > hookSrc.indexOf("if (isHoldPhrase(prompt))") && gateAt < hookSrc.indexOf("if (wasHeld())"),
     "hold-latch-prompt gates clearing on hasAuthoredText, after the latch and before the clear");
 }
@@ -814,4 +816,43 @@ const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-rem
 ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed intent");
 
 rmSync(tmpProj, { recursive: true, force: true });
+
+// A peer/subagent turn (Codex review, PR #874): the report's own words never
+// latch — closed OR truncated — but a stop Mason typed after a closed report
+// does, and such a turn never clears a hold.
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "crx-peer-turn-"));
+  const holdFile = path.join(dir, ".claude", "session-state", "hold.json");
+  const runHold = (prompt) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+    input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+  });
+  const PRE = "Another Claude session sent a message:\n";
+  const OPEN = '<agent-message from="a1">\n[Subagent hand-back] report\n';
+  runHold(`${PRE}${OPEN}  the guard honors Mason's stop and pause latch\n  stop now, do not continue`);
+  ok(!existsSync(holdFile), "a truncated report's own 'stop' does not latch on a peer turn");
+  runHold(`${PRE}${OPEN}  all done\n</agent-message>\nstop now`);
+  ok(existsSync(holdFile), "Mason's stop typed after a closed report on a peer turn latches the hold");
+  runHold(`${PRE}${OPEN}  all done, carry on\n</agent-message>`);
+  ok(existsSync(holdFile), "a peer turn never clears the hold");
+  rmSync(dir, { recursive: true, force: true });
+}
+
+// A Codex scheduled automation opens with "Automation: <name>" + "Automation ID:".
+// One latched the main checkout's hold on 2026-09-28 and left it stuck for days.
+// It must neither latch nor clear the hold (Mason, 2026-10-02).
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "crx-automation-"));
+  const holdFile = path.join(dir, ".claude", "session-state", "hold.json");
+  const runHold = (prompt) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+    input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+  });
+  const AUTOMATION = "Automation: Codex Weekly Usage Coach\nAutomation ID: codex-weekly-usage-coach\nStop any run that is over budget and pause the report.";
+  eq(runHold(AUTOMATION).stdout.trim(), "", "automation prompt is silent");
+  ok(!existsSync(holdFile), "automation prompt does not latch the hold");
+  runHold("pause");
+  ok(existsSync(holdFile), "setup: Mason's pause latched the hold");
+  runHold(AUTOMATION.replace(/Stop|pause/g, "skip"));
+  ok(existsSync(holdFile), "automation prompt does not clear Mason's hold");
+  rmSync(dir, { recursive: true, force: true });
+}
 console.log(`prompt-hooks: ${pass} assertions passed`);

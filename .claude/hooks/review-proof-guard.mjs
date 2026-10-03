@@ -67,6 +67,9 @@ const rawToolInput = payload.tool_input ?? payload.toolInput;
 const isRawPatch = typeof rawToolInput === "string" && /(?:^|__)apply_patch$/i.test(toolName.trim());
 const isObjectInput = typeof rawToolInput === "object" && rawToolInput !== null && !Array.isArray(rawToolInput);
 let uninspectable = "";
+// Set by the enforcement-surface shell rule when a command cannot be vouched
+// for as read-only but does not plainly write; emitted as a warning at the end.
+let enforcementWarning = "";
 if (typeof rawToolName !== "string" || !rawToolName.trim()) uninspectable = "input had no tool name";
 else if (!isRawPatch && !isObjectInput) uninspectable = "input had no usable tool input";
 const eventCwd = String(payload?.cwd || "");
@@ -753,7 +756,8 @@ if (shellTool) {
       .some((token) => ENFORCEMENT_SURFACE_RE.test(`/${resolveDotSegments(token)}`));
   };
   const redirectTargetsEnforcementSurface = (v) => {
-    for (const m of v.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
+    // `>|` is the noclobber-override spelling of `>`; it writes just the same.
+    for (const m of v.matchAll(/>>?\|?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
       if (namesEnforcementSurface(m[1].replace(/["']/g, ""))) return true;
     }
     return false;
@@ -781,13 +785,104 @@ if (shellTool) {
   // the same thing indirectly.
   const COMMAND_RESOLUTION_RE =
     /(?:^|[\s;&|(])(?:export\s+)?(?:PATH|BASH_ENV|ENV|SHELL|IFS|LD_PRELOAD|LD_LIBRARY_PATH|NODE_OPTIONS|PATHEXT)\s*=/i;
+  // OBVIOUS WRITES DENY; EVERYTHING ELSE WARNS (Mason, 2026-10-02). The
+  // fail-closed allowlist above denied 359 commands in 14 days, almost all of
+  // them reads (`for` loops, `sed -n`, `diff`, `node -e` that only reads). This
+  // rule was always a speed bump — branch protection, CI and CodeRabbit are the
+  // boundary for these files — so a false refusal now costs more than the exotic
+  // bypasses the allowlist closed. A command that plainly writes INTO a guarded
+  // path (a redirect, a delete/copy/move verb, an in-place edit, a git subcommand
+  // that rewrites the working tree) is still denied. Anything the allowlist
+  // cannot vouch for is let through with a visible warning instead.
+  const GIT_WRITER_SUBCOMMANDS = new Set([
+    "checkout", "restore", "apply", "am", "rm", "mv", "clean", "stash", "reset",
+    "revert", "cherry-pick", "rebase", "switch", "merge", "pull", "checkout-index", "read-tree",
+  ]);
+  const WRITER_HEADS = new Set([
+    "rm", "rmdir", "unlink", "mv", "cp", "tee", "install", "dd", "truncate", "ln",
+    "patch", "rsync", "shred", "rimraf", "chmod", "chown",
+    "set-content", "add-content", "out-file", "copy-item", "move-item", "remove-item",
+    "new-item", "ni", "del", "erase", "copy", "move", "ri", "sc", "ac",
+  ]);
+  // Wrappers are skipped together with their OPTIONS (`sudo -u root rm …`,
+  // `xargs -0 rm …`, `timeout -s KILL 5 rm …`), plus leading `NAME=value`
+  // assignments (`env APP=1 rm …`), so the real program is judged.
+  // Per wrapper: the options that consume the NEXT token as their value. Every
+  // other option is valueless (`sudo -n`, `env -i`, `xargs -0`), so it must not
+  // swallow the real command (CodeRabbit, PR #874).
+  const WRAPPER_VALUE_OPTIONS = {
+    sudo: ["-u", "-g", "-U", "-C", "-h", "-p", "-r", "-t", "-T", "-D", "--user", "--group", "--other-user", "--close-from", "--host", "--prompt", "--role", "--type", "--command-timeout", "--chdir"],
+    doas: ["-u", "-C"],
+    env: ["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+    nice: ["-n", "--adjustment"],
+    xargs: ["-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "--max-args", "--replace", "--max-procs", "--delimiter", "--arg-file", "--max-lines", "--max-chars", "--eof"],
+    timeout: ["-s", "-k", "--signal", "--kill-after"],
+    stdbuf: ["-i", "-o", "-e", "--input", "--output", "--error"],
+    exec: ["-a"],
+    npx: ["-p", "--package"],
+    command: [], eval: [], nohup: [], yarn: [], pnpm: [],
+  };
+  const WRAPPERS = new Set(Object.keys(WRAPPER_VALUE_OPTIONS));
+  // Shell launchers whose payload IS the command (`sh -c 'rm …'`, `pwsh -Command …`,
+  // `cmd /c …`): the payload is judged as the command (Codex review, PR #874).
+  const SHELL_LAUNCHERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"]);
+  const SHELL_PAYLOAD_FLAG = /^(?:-[A-Za-z]*c[A-Za-z]*|-Command|-command|\/[cCkK])$/;   // -c, -lc, -ec, -Command, /c
+  const unwrapCommand = (segment) => {
+    const tokens = String(segment).trim().split(/\s+/).filter(Boolean);
+    let i = 0;
+    while (i < tokens.length) {
+      const word = tokens[i].replace(/["']/g, "").replace(/^.*[/\\]/, "").toLowerCase();
+      if (/^[A-Za-z_]\w*=/.test(tokens[i])) { i += 1; continue; }
+      if (word === "npm" && tokens[i + 1] === "exec") { i += 2; continue; }
+      if (SHELL_LAUNCHERS.has(word)) {
+        let j = i + 1;
+        while (j < tokens.length && tokens[j].startsWith("-") && !SHELL_PAYLOAD_FLAG.test(tokens[j])) j += 1;
+        if (j < tokens.length && SHELL_PAYLOAD_FLAG.test(tokens[j])) {
+          return unwrapCommand(tokens.slice(j + 1).join(" ").replace(/^["']|["']$/g, ""));
+        }
+        break;
+      }
+      if (!WRAPPERS.has(word)) break;
+      i += 1;
+      while (i < tokens.length && tokens[i].startsWith("-")) {
+        const option = tokens[i];
+        i += 1;
+        if (option === "--") break;
+        if (!option.includes("=") && WRAPPER_VALUE_OPTIONS[word].includes(option)) i += 1;
+      }
+      if (word === "timeout" && i < tokens.length && /^\d/.test(tokens[i])) i += 1;   // the duration
+    }
+    return tokens.slice(i).join(" ");
+  };
+  const segmentObviouslyWrites = (segment) => {
+    const s = unwrapCommand(segment);
+    const head = ((s.match(/^([\w.:\\/-]+)/) || [])[1] || "").replace(/^.*[/\\]/, "").toLowerCase();
+    if (WRITER_HEADS.has(head)) return true;
+    if ((head === "sed" || head === "perl") && /(?:^|\s)(?:-[A-Za-z]*i|--in-place)/.test(s)) return true;
+    if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir)\b/.test(s)) return true;
+    if (head === "git") {
+      const sub = gitSubcommandOf(s);
+      // A `git config` WRITE that names a guarded path (`core.hooksPath /evil/.husky`,
+      // `--unset core.hooksPath .husky`) decides whether the husky gates run at
+      // all. The allowlist's config logic already admits reads and the exact
+      // `.husky` repair, so any other config write here denies (Codex review, PR #874).
+      if (sub === "config") return !enforcementSegmentIsReadOnly(s);
+      return Boolean(sub && GIT_WRITER_SUBCOMMANDS.has(sub));
+    }
+    return false;
+  };
   if (destructiveViews.some((v) =>
     redirectTargetsEnforcementSurface(v) ||
+    enforcementSegments(v).some((seg) => namesEnforcementSurface(seg) &&
+      (segmentObviouslyWrites(seg) || flagValueNamesEnforcementSurface(seg))))) {
+    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed. Change one deliberately through Edit/Write.");
+  }
+  if (destructiveViews.some((v) =>
     ((REDEFINES_COMMANDS_RE.test(v) || NESTED_EXECUTION_RE.test(v) || COMMAND_RESOLUTION_RE.test(v)) &&
       namesEnforcementSurface(v)) ||
     enforcementSegments(v).some((seg) =>
       namesEnforcementSurface(seg) && !enforcementSegmentIsReadOnly(seg)))) {
-    deny("REVIEW PROOF GUARD: shell commands that WRITE to .husky, .github/workflows, .claude/hooks, .codex/hooks, or .coderabbit.yaml are blocked — these decide whether the commit, push, CI, and review gates run at all. Reading them is always allowed (cat/grep/git diff/git show/ls/…); an unrecognized command head naming one of these paths is treated as a writer and denied. Change one deliberately through Edit/Write, which the `ask` tier in .claude/settings.json gates.");
+    enforcementWarning = "⚠ review-proof-guard: this command names a guard/CI file (.husky, .github/workflows, .claude/hooks, .codex/hooks, .coderabbit.yaml) and could not be confirmed read-only, so it was ALLOWED with this warning. If it was meant to change one of those files, use Edit/Write instead so the change is visible.";
   }
 }
 
@@ -853,4 +948,7 @@ if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {
 }
 
 if (uninspectable) skippedCheck(uninspectable);
+if (enforcementWarning) {
+  process.stdout.write(JSON.stringify({ systemMessage: enforcementWarning }));
+}
 process.exit(0);
