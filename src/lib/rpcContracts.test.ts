@@ -1534,6 +1534,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_purchase_order',
   'save_quote',
   'set_product_phase3_metadata',
+  'soft_delete_customer_document',
   'stage_offline_action',
   'stage_supplier_price_import', // Supplier Pricing 1b — see approve_supplier_price_import note
   'stage_vendor_alias', // Supplier Pricing 1b — see approve_supplier_price_import note
@@ -2985,7 +2986,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // supabase/migrations:
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
-
 ]);
 
 /**

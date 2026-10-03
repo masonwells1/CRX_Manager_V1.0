@@ -14651,6 +14651,14 @@ export type Database = {
         Args: { p_record_id: string }
         Returns: undefined
       }
+      soft_delete_customer_document: {
+        Args: {
+          p_customer_id: string
+          p_document_id: string
+          p_idempotency_key?: string
+        }
+        Returns: Json
+      }
       stage_offline_action: {
         Args: {
           p_client_action_id: string
