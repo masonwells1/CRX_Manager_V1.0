@@ -696,6 +696,9 @@ for (const command of [
   "sudo -n -u root rm -f .husky/pre-push",
   // Repointing or unsetting core.hooksPath disables husky (Codex review).
   "git config core.hooksPath /evil/.husky", "git config --unset core.hooksPath .husky",
+  // A shell launcher's payload is the command (Codex review).
+  "sh -c 'rm .husky/pre-push'", "bash -lc \"rm -f .husky/pre-push\"", "pwsh -Command Remove-Item .husky/pre-push",
+  "cmd /c del .husky\\pre-push",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);

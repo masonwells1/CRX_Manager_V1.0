@@ -823,6 +823,10 @@ if (shellTool) {
     command: [], eval: [], nohup: [], yarn: [], pnpm: [],
   };
   const WRAPPERS = new Set(Object.keys(WRAPPER_VALUE_OPTIONS));
+  // Shell launchers whose payload IS the command (`sh -c 'rm …'`, `pwsh -Command …`,
+  // `cmd /c …`): the payload is judged as the command (Codex review, PR #874).
+  const SHELL_LAUNCHERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell", "cmd"]);
+  const SHELL_PAYLOAD_FLAG = /^(?:-[A-Za-z]*c[A-Za-z]*|-Command|-command|\/[cCkK])$/;   // -c, -lc, -ec, -Command, /c
   const unwrapCommand = (segment) => {
     const tokens = String(segment).trim().split(/\s+/).filter(Boolean);
     let i = 0;
@@ -830,6 +834,14 @@ if (shellTool) {
       const word = tokens[i].replace(/["']/g, "").replace(/^.*[/\\]/, "").toLowerCase();
       if (/^[A-Za-z_]\w*=/.test(tokens[i])) { i += 1; continue; }
       if (word === "npm" && tokens[i + 1] === "exec") { i += 2; continue; }
+      if (SHELL_LAUNCHERS.has(word)) {
+        let j = i + 1;
+        while (j < tokens.length && tokens[j].startsWith("-") && !SHELL_PAYLOAD_FLAG.test(tokens[j])) j += 1;
+        if (j < tokens.length && SHELL_PAYLOAD_FLAG.test(tokens[j])) {
+          return unwrapCommand(tokens.slice(j + 1).join(" ").replace(/^["']|["']$/g, ""));
+        }
+        break;
+      }
       if (!WRAPPERS.has(word)) break;
       i += 1;
       while (i < tokens.length && tokens[i].startsWith("-")) {
