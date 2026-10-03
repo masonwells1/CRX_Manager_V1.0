@@ -681,6 +681,13 @@ for (const command of [
   }
 }
 
+// Luna round 2 (2026-10-02): writes behind an env assignment, and mode changes,
+// are plain writes and deny.
+for (const command of ["env APP=1 rm -f .husky/pre-push", "APP=1 rm -f .husky/pre-push", "chmod -x .husky/pre-push"]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+}
+
 // Ordinary reads that the fail-closed allowlist used to refuse (each one was a
 // real denial in the 14 days before 2026-10-02). They must never deny again; the
 // warning is acceptable.

@@ -315,7 +315,8 @@ function offsiteBackupEvidence() {
     if (Number.isFinite(age) && age >= 0 && age < ttl) {
       if (!cached.ok) return { available: false };
       const at = Date.parse(cached.completed_at);
-      const completedAt = Number.isFinite(at) ? at : null;
+      // A future date is no real run's; treat it as missing so it re-checks.
+      const completedAt = Number.isFinite(at) && at <= Date.now() ? at : null;
       if (completedAt !== null && (Date.now() - completedAt) / DAY_MS <= STALE_AFTER_DAYS) {
         return { available: true, completedAt };
       }
@@ -350,7 +351,7 @@ function offsiteBackupEvidence() {
     const successes = runs
       .filter((run) => run?.conclusion === "success")
       .map((run) => Date.parse(run.updatedAt))
-      .filter(Number.isFinite);
+      .filter((at) => Number.isFinite(at) && at <= Date.now());
     // Never move backwards: an older answer than one already seen is ignored.
     const newest = Math.max(staleCachedAt ?? -Infinity, ...successes);
     entry = { ok: true, completed_at: Number.isFinite(newest) ? new Date(newest).toISOString() : null };

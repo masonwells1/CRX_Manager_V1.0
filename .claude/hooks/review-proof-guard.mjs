@@ -800,11 +800,12 @@ if (shellTool) {
   ]);
   const WRITER_HEADS = new Set([
     "rm", "rmdir", "unlink", "mv", "cp", "tee", "install", "dd", "truncate", "ln",
-    "patch", "rsync", "shred", "rimraf",
+    "patch", "rsync", "shred", "rimraf", "chmod", "chown",
     "set-content", "add-content", "out-file", "copy-item", "move-item", "remove-item",
     "new-item", "ni", "del", "erase", "copy", "move", "ri", "sc", "ac",
   ]);
-  const WRAPPER_PREFIX_RE = /^(?:sudo|command|env|exec|eval|nice|nohup|xargs|timeout\s+\S+|npx|npm\s+exec|yarn|pnpm(?:\s+exec)?)\s+/i;
+  // Wrappers, plus leading `NAME=value` assignments (`env APP=1 rm …`, `APP=1 rm …`).
+  const WRAPPER_PREFIX_RE = /^(?:sudo|command|env|exec|eval|nice|nohup|xargs|timeout\s+\S+|npx|npm\s+exec|yarn|pnpm(?:\s+exec)?|[A-Za-z_]\w*=\S*)\s+/i;
   const segmentObviouslyWrites = (segment) => {
     let s = String(segment).trim();
     while (WRAPPER_PREFIX_RE.test(s)) s = s.replace(WRAPPER_PREFIX_RE, "");
