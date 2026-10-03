@@ -12,9 +12,9 @@ environment safety, and production readiness.
 `protect-main` ruleset, so **direct pushes to `main` are impossible for everyone** — Claude,
 Codex, and Mason alike. The landing path is:
 
-**push a branch → open a PR → finish required checks → freeze the candidate →
-apply `ready-for-coderabbit` → let the default-branch workflow record its receipt and add `coderabbit-review-dispatch` once →
-read and resolve that final review → merge with
+**push a branch → open a PR (CodeRabbit reviews every non-draft push automatically) → finish
+required checks → freeze the candidate → read and resolve CodeRabbit's review of that exact head
+(if it skipped the head, post `@coderabbitai review` once) → merge with
 `--match-head-commit <reviewed-head-sha>`.** The **merge** is what deploys production via Vercel's
 git integration; Vercel's one-click rollback is the accepted safety net.
 
@@ -129,8 +129,12 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 2. Open a PR.
 3. Finish implementation, bring the branch up to date, and wait for required checks;
    **Vercel is a required check**.
-4. Once required checks are green, freeze the candidate, record its head SHA, then apply
-   **`ready-for-coderabbit`**. The default-branch workflow waits out running checks, rechecks the
+4. Once required checks are green, freeze the candidate and record its head SHA. CodeRabbit
+   reviews every non-draft push automatically (since 2026-09-26) and GitHub requires one approving
+   review of the latest push. Only if CodeRabbit did not review that exact head (rate limited or
+   skipped), post **`@coderabbitai review`** on the PR once (Mason, 2026-09-27); with automatic
+   review on, the `ready-for-coderabbit` label no longer triggers a review. For reference, the
+   legacy label route: the default-branch workflow waits out running checks, rechecks the
    exact head, draft/conflict/auto-merge state, actor permission, required checks, and every
    reported non-CodeRabbit check before recording a trusted head/base receipt and adding
    `coderabbit-review-dispatch` once, then releases that provider label once the review lands.
@@ -139,17 +143,19 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    another request. Never clear and re-add the provider label to retry. Follow
    `docs/reference/coderabbit-native-review.md`, including its introducing-PR bootstrap. Read the
    resulting review and fix every real issue; nitpicks may be dismissed with a one-line reason.
-   **A fix goes on the SAME PR:** the push resets the labels, the trusted synchronize run records
-   the new candidate epoch, and after checks pass a relabel earns one follow-up review — no
-   replacement PR. Never use `@coderabbitai resume`, never post `@coderabbitai` commands by hand,
-   and reserve `@coderabbitai full review` for a deliberately justified complete reread.
+   **A fix goes on the SAME PR:** push it and CodeRabbit re-reviews the new head automatically
+   (post `@coderabbitai review` once only if it skipped that head) — no replacement PR. Never use
+   `@coderabbitai resume`, post no other `@coderabbitai` commands, and reserve
+   `@coderabbitai full review` for a deliberately justified complete reread.
 5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
    `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
    merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
    newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound
-   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused;
-   `enforce_admins` is off and no agent may act on that exemption. **The merge is the deploy.**
+   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
+   The classic protection's `enforce_admins` is off, but the `protect-main` ruleset has no bypass
+   actors, so its required review binds admins too; no agent uses `--admin` either way. **The merge
+   is the deploy.**
 
 Landing under Mason's autonomous-landing rule (2026-09-26) needs no in-chat ask once those gates
 pass; report the merge explicitly rather than silently. A direct `vercel --prod` deploy outside the

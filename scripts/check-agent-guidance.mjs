@@ -339,6 +339,75 @@ for (const permission of mustAsk) {
   record(ask.has(permission), `${permission} requires approval`);
 }
 
+// Mason's choice "A" (2026-09-26, DECISION_LOG): a file keeps its Edit/Write `ask`
+// prompt when an UNCOMMITTED local edit to it could change what reaches
+// production before any PR review sees it. That set is derived here, not listed
+// by hand, so it cannot drift: every hook that gates a tool EXECUTION (a
+// PreToolUse group whose matcher covers Bash, PowerShell, MCP or "*" — not the
+// write-time content checks, whose output still goes through PR review) in
+// either manifest, the Codex adapter every Codex hook runs through, the two
+// proof writers, the private-artifact containment check the git hooks run, and
+// every repository module any of them loads. Reviewers found each gap in turn:
+// Sol (merge guard, helper modules, containment check) and the Codex GitHub App
+// (the live-data MCP guards).
+function executionGuardRefs(manifest) {
+  const refs = new Set();
+  for (const group of manifest?.hooks?.PreToolUse || []) {
+    const matcher = String(group?.matcher ?? "*");
+    const writeOnly = matcher.split("|").every((part) => /^(Write|Edit|MultiEdit|NotebookEdit|apply_patch)$/.test(part.trim()));
+    if (writeOnly) continue;
+    for (const match of JSON.stringify(group?.hooks || []).matchAll(/(\.claude|\.codex)[\\/]{1,2}hooks[\\/]{1,2}([\w.-]+\.mjs)/g)) {
+      refs.add(`${match[1]}/hooks/${match[2]}`);
+    }
+  }
+  return refs;
+}
+const productionGateRoots = new Set([
+  ...executionGuardRefs(settings),
+  ...executionGuardRefs(codexHooks),
+  ".codex/hooks/codex-hook-adapter.mjs",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/write-apply-proofs.mjs",
+  // Writes the Claude-review proof (Sol, 2026-09-27): no merge gate consumes it
+  // today, but a proof writer is exactly the kind of file whose local edit acts
+  // before review.
+  "scripts/run-claude-review.mjs",
+  "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+]);
+record(productionGateRoots.has(".claude/hooks/pr-merge-guard.mjs") && productionGateRoots.has(".codex/hooks/production-action-guard.mjs"), "production-gate roots are derived from the hook manifests", [...productionGateRoots].join(", "));
+// Static imports, re-exports, literal dynamic imports, and literal relative
+// script paths (child scripts a gate launches).
+const GATE_IMPORT_RE = /(?:import\s[^'"]*?from\s*|export\s[^'"]*?from\s*|import\s*\(\s*|import\s*)["'](\.{1,2}\/[^"']+)["']/g;
+const GATE_SCRIPT_PATH_RE = /["'](\.{1,2}\/[^"']+\.(?:mjs|cjs|js))["']/g;
+const gateClosure = new Set();
+const gateQueue = [...productionGateRoots];
+while (gateQueue.length) {
+  const relative = gateQueue.shift();
+  if (gateClosure.has(relative)) continue;
+  gateClosure.add(relative);
+  const text = readChecked(relative);
+  for (const pattern of [GATE_IMPORT_RE, GATE_SCRIPT_PATH_RE]) {
+    for (const match of text.matchAll(pattern)) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), match[1]));
+      if (!target.startsWith("..") && /\.(mjs|cjs|js)$/.test(target)) gateQueue.push(target);
+    }
+  }
+}
+const unpromptedGateFiles = [...gateClosure]
+  .filter((relative) => !ask.has(`Edit(${relative})`) || !ask.has(`Write(${relative})`))
+  .sort();
+record(
+  unpromptedGateFiles.length === 0,
+  `every production-gate file and module it loads keeps an Edit/Write ask prompt (${gateClosure.size} files)`,
+  unpromptedGateFiles.join(", "),
+);
+// package.json too (Codex GitHub App P1, PR #841): `npm run <script>` is allowed
+// without a prompt, so an uncommitted script edit could hide a `gh pr merge` from
+// the command-text merge guard, which sees only `npm run <script>`.
+for (const pattern of [".codex/hooks.json", ".github/workflows/**", ".husky/**", "package.json", ".claude/settings.json", ".claude/settings.local.json"]) {
+  record(ask.has(`Edit(${pattern})`) && ask.has(`Write(${pattern})`), `${pattern} keeps an Edit/Write ask prompt`);
+}
+
 const allHooks = Object.values(codexHooks.hooks || {})
   .flatMap((entries) => entries)
   .flatMap((entry) => entry.hooks || [])
