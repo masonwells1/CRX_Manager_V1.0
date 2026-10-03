@@ -15,6 +15,11 @@ step that needs him.
 **Proof observed:** `node scripts/check-agent-guidance.mjs` (all PASS),
 `npm run test:agent-workflows` (exit 0), `node scripts/check-doc-drift.mjs` (exit 0).
 
-**Not done here:** `.claude/hooks/session-context-reminder.mjs` still tells each new session to get
-Mason's approval after a plan. The auto-mode safety classifier refused an agent edit to it as
-self-modification, so the update is left for Mason to approve.
+- `.claude/hooks/session-context-reminder.mjs`: the session-start reminder now says "post a short
+  plan, then continue", with its test updated. The auto-mode classifier first refused this edit as
+  self-modification and allowed it after Mason's explicit approval in chat. Mason's global
+  `~/.claude/CLAUDE.md` (outside the repository) got the same change.
+
+**Not done here:** `.claude/hooks/ship-intent-reminder.mjs` still says "Claude waits for Mason's OK"
+in its per-prompt ship reminder. The classifier refused that edit too (Mason's approval named only
+the two files above), so it waits for his separate approval.
