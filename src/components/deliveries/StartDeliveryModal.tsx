@@ -37,7 +37,7 @@ export default function StartDeliveryModal({
     <Modal open={open} onClose={onClose} title="Start Delivery">
       <div className="space-y-4">
         <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
-          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div>
             <p className="text-sm font-medium text-amber-800">
               Before starting, please verify that all items are loaded and counted on the truck/trailer.

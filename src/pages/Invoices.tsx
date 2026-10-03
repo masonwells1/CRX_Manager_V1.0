@@ -525,10 +525,10 @@ export default function Invoices() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-crx-green flex-shrink-0" />
+          <FileText className="w-4 h-4 text-crx-green shrink-0" />
           <span className="font-medium text-nav-dark">{row.invoice_number}</span>
           {row.is_quick_delivery && (
-            <span title="Quick Delivery"><Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" /></span>
+            <span title="Quick Delivery"><Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" /></span>
           )}
         </div>
       ),

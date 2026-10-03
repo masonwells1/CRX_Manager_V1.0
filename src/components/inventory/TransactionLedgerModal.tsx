@@ -237,7 +237,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                       </td>
                       <td className="py-2 px-3 whitespace-nowrap">
                         <span className={`inline-flex items-center gap-1 text-xs font-medium ${config.color}`}>
-                          <Icon className="w-3 h-3 flex-shrink-0" />
+                          <Icon className="w-3 h-3 shrink-0" />
                           {config.label}
                         </span>
                         {t.requires_review && (

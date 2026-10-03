@@ -353,7 +353,7 @@ export default function PaymentAllocation() {
       {lastResult && (
         <Card>
           <div className="flex items-start gap-3">
-            <CheckCircle className="w-6 h-6 text-crx-green flex-shrink-0 mt-0.5" />
+            <CheckCircle className="w-6 h-6 text-crx-green shrink-0 mt-0.5" />
             <div className="flex-1">
               <p className="font-medium text-nav-dark">Payment Applied Successfully</p>
               <p className="text-sm text-secondary mt-1">

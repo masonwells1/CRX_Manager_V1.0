@@ -154,7 +154,7 @@ export default function JobBatchesManager({ open, onClose, batches, memberCounts
                   const dirty = e.name.trim() !== b.name || e.description.trim() !== (b.description ?? '');
                   return (
                     <div key={b.id} className="flex items-start gap-3 p-2.5 border border-gray-200 rounded-lg">
-                      <Layers className="w-4 h-4 text-crx-green flex-shrink-0 mt-2" aria-hidden="true" />
+                      <Layers className="w-4 h-4 text-crx-green shrink-0 mt-2" aria-hidden="true" />
                       <div className="flex-1 min-w-0 space-y-1.5">
                         <input
                           type="text"
