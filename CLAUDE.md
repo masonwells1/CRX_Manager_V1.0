@@ -27,5 +27,5 @@ Route Mason's plain-English requests; he should not need workflow names.
 
 ## Hooks and Maintenance
 
-- `.claude/settings.json` is the permission and hook manifest; `.claude/hooks/` is the source of truth for guard logic, which `.codex/hooks.json` runs through the portable adapter. Behavior: `docs/reference/agent-guardrails.md`. Declare any Claude/Codex hook difference in `scripts/agent-manifest-parity.mjs`.
+- `.claude/settings.json` is the permission and hook manifest; `.claude/hooks/` is the source of truth for guard logic, which `.codex/hooks.json` runs through the portable adapter; never copy hook implementations into `.codex/`. Behavior: `docs/reference/agent-guardrails.md`. Declare any Claude/Codex hook difference in `scripts/agent-manifest-parity.mjs`.
 - After changing Claude commands, skills, hooks, permissions, or agents, run `node scripts/sync-agent-workflows.mjs --write`, `npm run test:agent-workflows`, and `npm run agent-health`.
