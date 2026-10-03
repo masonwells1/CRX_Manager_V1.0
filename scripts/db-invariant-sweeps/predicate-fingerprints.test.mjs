@@ -14,11 +14,15 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  KNOWN_SWEEP_PREDICATES,
   KNOWN_SWEEP_PREDICATE_SHA256,
   classifySql,
   isKnownSweepPredicate,
+  isKnownSweepQuery,
   normalizePredicateSql as guardNormalizePredicateSql,
+  renderSweepQuery,
 } from "../../.claude/hooks/live-testdata-lib.mjs";
+import { buildSweepQuery } from "./allowlist-match.mjs";
 import {
   GUARD_PATH,
   PREDICATE_DIR,
@@ -419,7 +423,14 @@ eq(normalizePredicateSql, guardNormalizePredicateSql, "the generator uses the gu
   // Every outcome of the decision, driven through the pure function.
   const guardText = before.toString("utf8");
   eq(planRegeneration(guardText, onDisk).status, "current", "planRegeneration agrees the real guard is current");
-  eq(planRegeneration(guardText, onDisk, KNOWN_SWEEP_PREDICATE_SHA256).status, "current", "...and so does the Set the real guard exports");
+  eq(planRegeneration(guardText, onDisk, KNOWN_SWEEP_PREDICATES).status, "current", "...and so does the Map the real guard exports");
+  {
+    // A hash re-pointed at another file changes which name a wrapped query may
+    // carry, so it is an override even though the set of hashes is unchanged.
+    const swapped = new Map(KNOWN_SWEEP_PREDICATES);
+    swapped.set(onDisk[0].sha256, onDisk[1].file);
+    eq(planRegeneration(guardText, onDisk, swapped).status, "overridden", "a hash re-pointed at another file is 'overridden', never 'current'");
+  }
   eq(planRegeneration(guardText.replace(/\n/g, "\r\n").replace(/\r\r\n/g, "\r\n"), onDisk).status, "current", "a CRLF checkout of the guard is still current");
   eq(planRegeneration(guardText.replace(/\r?\n/g, "\r"), onDisk).status, "current", "a lone-CR checkout is still current, as the predicate normaliser treats it");
   const stale = guardText.replace(onDisk[0].sha256, "0".repeat(64));
@@ -443,11 +454,140 @@ eq(normalizePredicateSql, guardNormalizePredicateSql, "the generator uses the gu
     "a near-miss marker line is refused, not taken as the marker",
   );
   eq(
-    planRegeneration(`${guardText}\nKNOWN_SWEEP_PREDICATE_SHA256.clear();\n`, onDisk, new Set()).status,
+    planRegeneration(`${guardText}\nKNOWN_SWEEP_PREDICATES.clear();\n`, onDisk, new Map()).status,
     "overridden",
-    "a matching block whose exported Set is changed after the markers is 'overridden', never 'current'",
+    "a matching block whose exported Map is changed after the markers is 'overridden', never 'current'",
   );
   ok(before.equals(fs.readFileSync(GUARD_PATH)), "the guard is still unchanged after every case above");
+}
+
+// 13. The runner's WRAPPED queries — what `npm run db-sweeps` prints and what
+//     Claude runs through execute_sql — are recognised, and nothing near them is.
+//
+//     Before this, all 29 wrapped queries were refused (2 as audit-log writes,
+//     27 as calls to `predicate()`, `suite()`, `oidvectortypes()` and the like),
+//     because only the BARE predicate text was fingerprinted and --adjudicate
+//     rejects a bare predicate's output. So the documented MCP sweep path could
+//     never produce adjudicable packets.
+{
+  const allowlist = JSON.parse(fs.readFileSync(path.join(path.dirname(PREDICATE_DIR), "allowlist.json"), "utf8"));
+  const entriesFor = (name) => allowlist.entries.filter((e) => e.predicate === name);
+  const nameOf = (p) => p.file.replace(/\.sql$/, "");
+  // Exactly what the runner builds: the file as read, CRLF and all on a Windows
+  // checkout, wrapped with that predicate's own allowlist entries.
+  const wrapped = onDisk.map((p) => ({ p, query: buildSweepQuery({ name: nameOf(p), sql: p.text }, entriesFor(nameOf(p))) }));
+
+  // (a) Every current wrapped query is allowed, BY RECOGNITION.
+  for (const { p, query } of wrapped) {
+    eq(classifySql(query).block, false, `${p.file}: its wrapped sweep query clears the live-data guard`);
+    eq(classifySql(query).kind, "known-sweep-query", `${p.file}: ...because it is recognised as the runner's own envelope`);
+    // Whichever line endings the checkout or the transport used.
+    const lf = query.replace(/\r\n?/g, "\n");
+    ok(isKnownSweepQuery(lf), `${p.file}: an LF copy of the wrapped query is recognised`);
+    ok(isKnownSweepQuery(lf.replace(/\n/g, "\r\n")), `${p.file}: a CRLF copy of the wrapped query is recognised`);
+    // The envelope with no contracts requested is the runner's output for a
+    // predicate with no pinned contracts, and must be recognised for every one.
+    ok(isKnownSweepQuery(buildSweepQuery({ name: nameOf(p), sql: p.text }, [])), `${p.file}: the no-contract envelope is recognised`);
+  }
+  // The proof needs real contract keys in play, not only the empty clause.
+  // (Today that is actor-forgery and actor-forgery-fin-audit; the other entries pin no contracts.)
+  ok(wrapped.filter(({ query }) => query.includes("= ANY(ARRAY[")).length >= 2, "sanity: the actor predicates' wrapped queries request function contracts");
+  // ...and the envelope the guard rebuilds is the one the runner emits.
+  for (const { p, query } of wrapped.slice(0, 3)) {
+    const keys = entriesFor(nameOf(p)).flatMap((e) => Object.keys(e.reviewed_contracts ?? {}));
+    eq(renderSweepQuery(nameOf(p), p.text.replace(/;\s*$/, ""), keys), query, `${p.file}: the guard's envelope is byte-identical to the runner's`);
+  }
+
+  // (b) Near misses are refused, and then judged by the ordinary classifier.
+  const withKeys = wrapped.find(({ query }) => query.includes("= ANY(ARRAY["));
+  const noKeys = wrapped.find(({ query }) => query.includes("'function_contracts', '[]'::json"));
+  ok(withKeys && noKeys, "sanity: there is a wrapped query with contracts and one without");
+  const refused = (query, why) => {
+    ok(!isKnownSweepQuery(query), `refused: ${why}`);
+    ok(classifySql(query).kind !== "known-sweep-query", `...and not allowed by recognition: ${why}`);
+  };
+  for (const { p, query } of [withKeys, noKeys]) {
+    const tag = p.file;
+    // An appended statement.
+    refused(`${query}\nDELETE FROM customers;`, `${tag} + an appended DELETE`);
+    ok(classifySql(`${query}\nDELETE FROM customers;`).block, `${tag} + an appended DELETE is blocked`);
+    refused(`${query} SELECT 1`, `${tag} + trailing text after the final semicolon`);
+    refused(`DELETE FROM customers;\n${query}`, `${tag} with a statement in front`);
+    ok(classifySql(`DELETE FROM customers;\n${query}`).block, `${tag} with a DELETE in front is blocked`);
+    refused(`EXPLAIN ANALYZE ${query}`, `${tag} behind EXPLAIN ANALYZE`);
+    // A statement spliced into the middle of the envelope.
+    refused(query.replace("\n) AS v),", "\n) AS v); DELETE FROM customers; SELECT json_build_object('x', (1),"), `${tag} with a DELETE spliced into the envelope`);
+    // One changed token in the envelope, the predicate, or the case.
+    refused(query.replace("json_agg(v)", "json_agg(w)"), `${tag} with one envelope token changed`);
+    refused(query.replace("AS sweep_result;", "AS sweep_results;"), `${tag} with the result alias changed`);
+    refused(query.replace("SELECT json_build_object(", "SELECT  json_build_object("), `${tag} with one extra space in the envelope`);
+    refused(query.replace(/WHERE/, "WHERE NOT"), `${tag} with one token inserted into the predicate`);
+    refused(query.replace(/\bFROM\b(?![\s\S]*\bFROM\b)/, "from"), `${tag} with one keyword's case changed`);
+    // The label must be the predicate's own name.
+    const other = onDisk.find((x) => x.file !== p.file);
+    refused(query.replace(`'predicate', '${nameOf(p)}'`, `'predicate', '${nameOf(other)}'`), `${tag} labelled as ${other.file}`);
+    refused(query.replace(`'predicate', '${nameOf(p)}'`, `'predicate', '${nameOf(p)}x'`), `${tag} labelled with an unknown name`);
+    // The runner strips the predicate's final semicolon; it never sends one inside FROM (...).
+    refused(renderSweepQuery(nameOf(p), normalizePredicateSql(p.text), []), `${tag} with its semicolon left inside the envelope`);
+  }
+  // A known envelope around an UNKNOWN predicate gets no allowance.
+  refused(renderSweepQuery("actor-forgery", "SELECT 1 AS violation_key", []), "the envelope around an unknown predicate");
+  refused(renderSweepQuery("actor-forgery", "SELECT 1 AS violation_key FROM customers WHERE false", ["public.is_admin()"]), "the envelope around an unknown predicate, with contracts");
+  ok(classifySql(renderSweepQuery("x", "SELECT save_customer('{}'::jsonb) AS violation_key", [])).block, "an app RPC inside the envelope is still blocked");
+  ok(classifySql(renderSweepQuery("x", "SELECT 1 AS violation_key FROM (DELETE FROM customers RETURNING 1) d", [])).block, "a DELETE inside the envelope is still blocked");
+
+  // Contract keys are literals the guard can see are inert: plain identity
+  // signatures only. buildSweepQuery escapes a quote correctly, but the guard
+  // does not rely on that, so even a correctly escaped hostile key is refused.
+  {
+    const { p } = noKeys;
+    const build = (keys) => buildSweepQuery({ name: nameOf(p), sql: p.text }, [{ reviewed_contracts: Object.fromEntries(keys.map((k) => [k, "0".repeat(32)])) }]);
+    ok(isKnownSweepQuery(build(["auth.uid()", "public.is_admin()"])), "sanity: plain identity keys are recognised");
+    for (const key of [
+      "public.untrusted('); DELETE FROM profiles; --)",
+      "public.f(x text) '",
+      "public.f(x\\' text)",
+      "public.f(x text)\n; DELETE FROM customers; --",
+      "public.F()",
+      "public.f(\"x\" text)",
+      "private.f()",
+      "public.f()) OR true OR p.proname = any(array['x']",
+      "public.f",
+      "",
+    ]) {
+      refused(build(["auth.uid()", key]), `a hostile or malformed contract key ${JSON.stringify(key)}`);
+    }
+    // The keys must be exactly the sorted, de-duplicated list the runner emits.
+    const good = build(["auth.uid()", "public.is_admin()"]);
+    refused(good.replace("'auth.uid()', 'public.is_admin()'", "'public.is_admin()', 'auth.uid()'"), "contract keys out of order");
+    refused(good.replace("'auth.uid()', 'public.is_admin()'", "'auth.uid()', 'auth.uid()', 'public.is_admin()'"), "a repeated contract key");
+    refused(good.replace("'auth.uid()', 'public.is_admin()'", ""), "an empty contract key list");
+    refused(good.replace("pg_catalog.pg_get_functiondef(p.oid)", "pg_catalog.pg_get_functiondef(p.oid) || ''"), "a changed contract query");
+  }
+
+  // Ordinary inputs are untouched: the recognition is checked before the
+  // classifier and only ever ADDS an allowance for an exact rebuild.
+  ok(!isKnownSweepQuery(""), "empty input is not a sweep query");
+  ok(!isKnownSweepQuery(null), "null input is not a sweep query");
+  ok(!isKnownSweepQuery(onDisk[0].text), "a bare predicate is not a wrapped query (it has its own allowance)");
+  eq(classifySql(onDisk[0].text).kind, "known-sweep-predicate", "...and keeps that allowance");
+
+  // Recognition must stay near-linear: it runs on every execute_sql call, and
+  // an input that opens with the envelope's head reaches the scans.
+  const time = (n) => {
+    const q = `SELECT json_build_object(\n  'predicate', '${"\n) AS v),\n  'function_contracts', ".repeat(n / 40)}\n) AS sweep_result;`;
+    let best = Infinity;
+    for (let run = 0; run < 7; run++) {
+      const t = process.hrtime.bigint();
+      isKnownSweepQuery(q);
+      best = Math.min(best, Number(process.hrtime.bigint() - t) / 1e6);
+    }
+    return best;
+  };
+  time(200000);
+  const small = time(200000);
+  const large = time(800000);
+  ok(large < Math.max(small, 0.01) * 8, `wrapped-query recognition stays near-linear: 200k took ${small.toFixed(3)}ms, 800k took ${large.toFixed(3)}ms`);
 }
 
 console.log(`predicate-fingerprints: ${pass} assertions passed (${diskNames.length} predicates)`);

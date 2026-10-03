@@ -131,12 +131,17 @@ try {
   // uncaught TypeError. Run from a COPY of this directory so the repo's predicates/ stays untouched —
   // a stray file there would break the fingerprint and sweep gates. (CodeRabbit on PR #791.)
   {
-    const fakeDir = path.join(scratch, 'sweeps');
+    // Same relative layout as the repo: allowlist-match.mjs imports the sweep envelope from the
+    // live-data guard two directories up.
+    const fakeDir = path.join(scratch, 'scripts', 'db-invariant-sweeps');
     const fakePredicates = path.join(fakeDir, 'predicates');
+    const fakeHooks = path.join(scratch, '.claude', 'hooks');
     mkdirSync(fakePredicates, { recursive: true });
+    mkdirSync(fakeHooks, { recursive: true });
     for (const f of ['run-sweeps.mjs', 'allowlist-match.mjs', 'allowlist.json']) {
       copyFileSync(path.join(root, 'scripts/db-invariant-sweeps', f), path.join(fakeDir, f));
     }
+    copyFileSync(path.join(root, '.claude/hooks/live-testdata-lib.mjs'), path.join(fakeHooks, 'live-testdata-lib.mjs'));
     writeFileSync(path.join(fakePredicates, 'bad-shape.sql'), 'VALUES (1)\n');
     const bad = spawnSync(
       process.execPath,
