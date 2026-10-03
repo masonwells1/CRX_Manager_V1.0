@@ -9,30 +9,49 @@ browser bundle. `npm audit` now reports 0 vulnerabilities.
 **What changed.**
 - `tailwindcss` 4.3.3 plus `@tailwindcss/vite` (added to `vite.config.ts`); `autoprefixer` and the
   direct `postcss` dependency removed; `tailwind.config.js` and `postcss.config.js` deleted.
-- `src/index.css`: `@import 'tailwindcss'`, the old config's brand colours, fonts, card shadows and
-  `darkMode: 'class'` moved into `@theme` / `@custom-variant`, and a compatibility block that pins
-  everything Tailwind 4 changed back to the 3.4 rendering: the Tailwind 3 hex palette for every family
-  the app uses, the shifted `shadow`/`rounded`/`blur`/`drop-shadow` scale names, bare `ring` width and
-  colour, gray-200 default border colour, gray-400 placeholders, button pointer cursor, hover on touch
-  devices, browser-default backgrounds on form fields, and browser-default date/time, search and
-  file-button styling.
-- Class renames Tailwind 4 requires, mechanical and render-identical: `flex-shrink-0` → `shrink-0`
-  (162 uses), `outline-none` → `outline-hidden` (Tailwind 4's name for the 3.x behaviour), and one
-  `bg-black bg-opacity-50` → `bg-black/50`.
-- `docs/workflows/UI_PATTERNS.md` records where the theme lives and which names are pinned to their
-  Tailwind 3 meaning.
+- `src/index.css`: `@import 'tailwindcss' source(none)` with `@source` limited to `index.html` and
+  `src/` (Tailwind 3's `content`); the old config's brand colours, fonts, card shadows and
+  `darkMode: 'class'` moved into `@theme` / `@custom-variant`; and a commented compatibility block that
+  pins what Tailwind 4 changed back to the 3.4 rendering:
+  - the Tailwind 3 hex palette for every colour family the app uses;
+  - the shifted `shadow`/`rounded`/`blur`/`drop-shadow` scale names, and bare `ring` width and colour;
+  - `space-x/y-*` and `divide-*` back on Tailwind 3's "every visible child after the first" rule
+    (Tailwind 4's "every child before the last" left a 24px hole on the new field-application invoice
+    form, whose last child is a `display: contents` fieldset);
+  - preflight: gray-200 default borders, gray-400 placeholders, button pointer cursor, hover on touch
+    devices, browser-default backgrounds on form fields, corner radius on controls, padding on
+    `option` and table cells, and browser-default date/time, search and "Choose file" button styling.
+- Class changes Tailwind 4 requires: `flex-shrink-0` → `shrink-0` (162 uses), `outline-none` →
+  `outline-hidden` (Tailwind 4's name for the 3.x behaviour; 406 uses), `bg-black bg-opacity-50` →
+  `bg-black/50`; `grid-cols-[1fr,100px,100px]` → `grid-cols-[1fr_100px_100px]` on the purchase-order
+  line items (Tailwind 4 passes commas through, producing invalid CSS that collapsed the grid); and
+  `hover:file:` → `file:hover:` on three bulk-import file pickers (Tailwind 4 reads stacked variants
+  left to right, so the old order turned the button green when any part of the input was hovered).
+- `docs/workflows/UI_PATTERNS.md` records where the theme lives, which names keep their Tailwind 3
+  meaning, and the arbitrary-value and variant-order rules.
 
-**Proof.** A headless-Chromium comparison built both versions' CSS, applied each of the 875 distinct
-base utilities found in `src/` (1,243 class names with variants) to a test element with two children,
-and compared every computed property plus the element boxes, after normalising colour notation, empty
-shadow layers and transform notation. Every form and text element (23 input types and tags) now
-computes identically. Remaining differences, all reviewed: `space-x/y-*` and `divide-*` attach the gap
-or rule to the other sibling (same rendered position); `outline-hidden` differs only in forced-colours
-mode; `hidden`/`contents` have no box; and `border-3` on the Payment Allocation loading spinner, a
-no-op in 3.x (so the spinner never showed), now draws its intended 3px ring. Keyboard focus on a
-workspace tab, an input and a button renders the same outline and ring in both. Typecheck, lint, the
-full suite (382 files), build, `verify-deps` and `npm audit --audit-level=high` pass.
+**Proof.**
+- *Every class, by computed style.* Headless Chromium applied each of the 874 distinct base utilities
+  found in `src/` (1,243 class names with variants) under both builds and compared every computed
+  property plus element boxes, normalising colour notation, empty shadow layers and transform notation.
+  Remaining differences: `outline-hidden` differs only in forced-colours mode; `hidden`/`contents` have
+  no box; and `border-3` on the Payment Allocation loading spinner, a no-op in 3.x (so the spinner never
+  showed), now draws its intended 3px ring.
+- *Every HTML tag the app uses* (62 tags and input types, in context: cells in a table, options in a
+  select, legend in a fieldset) computes identically.
+- *Every page, by pixels.* Both builds were served from disk with an entirely mocked backend (a fake
+  signed-in admin, empty data; no request left the machine) and all 94 routes were screenshotted full-page
+  at 1440px and 390px. The final sweep result is recorded on the PR. Before the last fixes it surfaced the
+  field-invoice gap and the dropdown, table-cell and file-button differences above.
+- Keyboard focus on a workspace tab, an input and a button renders the same outline and ring.
+- Signed-out screens (`/login`, `/forgot-password`, `/reset-password`) are pixel-identical at 1440,
+  820 and 390px.
+- A compliance review found the purchase-order grid and file-picker hover regressions; both are fixed.
+- Typecheck, lint, the full suite (382 files), build, `verify-deps` and `npm audit --audit-level=high` pass.
 
-**Not verified here.** Rendering on browsers older than Tailwind 4's floor (Safari 16.4, Chrome 111,
-Firefox 128); an older device would show an unstyled app. Signed-in pages were compared by screenshot
-on the PR preview, recorded on the PR.
+**Known residual.** On a few form pages the text inside `<select>` dropdowns differs at single-pixel
+anti-aliasing level, with no difference in any computed style, size or position. It is indistinguishable
+at 4x zoom.
+
+**Not verified here.** Rendering on browsers older than Tailwind 4's floor (Safari/iOS 16.4, Chrome 111,
+Firefox 128). Pages with real data were not compared; the mocked sweep renders empty states.

@@ -1600,7 +1600,7 @@ export default function PurchaseOrderDetail() {
               {editItems.map((item, idx) => {
                 const isReceived = item.quantity_received > 0;
                 return (
-                <div key={item.id || idx} className="grid grid-cols-[1fr,100px,100px] gap-2 items-start">
+                <div key={item.id || idx} className="grid grid-cols-[1fr_100px_100px] gap-2 items-start">
                   <div>
                     {isReceived ? (
                       <>

@@ -1,4 +1,8 @@
-@import 'tailwindcss';
+/* Scan only what Tailwind 3's `content` setting scanned. Tailwind 4 otherwise scans the
+   whole repository and generates classes for words it finds in docs, scripts and tests. */
+@import 'tailwindcss' source(none);
+@source '../index.html';
+@source '../src';
 
 /* Tailwind 4 (upgraded from 3.4 on 2026-10-03). The app's class names were written
    against Tailwind 3's scales and defaults, several of which Tailwind 4 changed.
@@ -101,8 +105,29 @@
      cream page through every input that has no bg-* class. */
   input:where(:not([type='button'], [type='reset'], [type='submit'])),
   select,
+  optgroup,
   textarea {
     background-color: revert;
+  }
+
+  /* Tailwind 4 zeroes padding on every element and corner radius on every form control;
+     Tailwind 3 left these browser defaults alone. Table cells keep their 1px padding and
+     dropdown options their 1px/2px padding (without it the chosen value sits 1px higher),
+     and controls keep the browser's corner radius unless a rounded-* class sets one. */
+  option {
+    padding: revert;
+  }
+  /* A cell's 1px comes from the table's implicit cellpadding, which `revert` does not restore. */
+  td,
+  th {
+    padding: 1px;
+  }
+  button,
+  input,
+  select,
+  optgroup,
+  textarea {
+    border-radius: revert;
   }
 
   /* Search fields: Tailwind 3's preflight rule, dropped in 4. */
@@ -139,13 +164,57 @@
   }
 
   /* The "Choose file" button: Tailwind 3 left the browser's button look; Tailwind 4
-     resets its border, padding, margin, radius and background. */
+     resets its border, padding, margin, radius, background and text colour. */
   ::file-selector-button {
+    color: revert;
     border: revert;
     padding: revert;
     margin: revert;
     border-radius: revert;
     background-color: revert;
+  }
+}
+
+/* Tailwind 3's `space-*` and `divide-*`. Tailwind 3 put the gap (or rule) on every visible
+   child after the first; Tailwind 4 puts it on every child before the last. They differ when
+   the last child does not render a box (display: contents, hidden, a fixed modal): Tailwind 4
+   then leaves a stray gap under the last visible child, which opened a 24px hole on the field
+   invoice form. Each block below cancels Tailwind 4's rule with type-level specificity (so a
+   child's own margin/border class still wins, as on 3.4) and re-emits Tailwind 3's rule. */
+@utility space-y-* {
+  :where(&) > :where(:not(:last-child)):not(z) {
+    margin-block-end: 0;
+  }
+  & > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(var(--spacing) * --value(number));
+    margin-bottom: 0;
+  }
+}
+@utility space-x-* {
+  :where(&) > :where(:not(:last-child)):not(z) {
+    margin-inline-end: 0;
+  }
+  & > :not([hidden]) ~ :not([hidden]) {
+    margin-left: calc(var(--spacing) * --value(number));
+    margin-right: 0;
+  }
+}
+@utility divide-y {
+  :where(&) > :where(:not(:last-child)):not(z) {
+    border-bottom-width: 0;
+  }
+  & > :not([hidden]) ~ :not([hidden]) {
+    border-style: solid;
+    border-top-width: 1px;
+    border-bottom-width: 0;
+  }
+}
+@utility divide-* {
+  :where(&) > :where(:not(:last-child)):not(z) {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+  & > :not([hidden]) ~ :not([hidden]) {
+    border-color: --value(--color-*);
   }
 }
 
