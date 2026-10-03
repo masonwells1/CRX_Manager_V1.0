@@ -694,6 +694,8 @@ for (const command of [
   // Valueless wrapper options must not swallow the real command (CodeRabbit).
   "sudo -n rm -f .husky/pre-push", "env -i rm -f .husky/pre-push", "xargs -0 -r rm -f .husky/pre-push",
   "sudo -n -u root rm -f .husky/pre-push",
+  // Repointing or unsetting core.hooksPath disables husky (Codex review).
+  "git config core.hooksPath /evil/.husky", "git config --unset core.hooksPath .husky",
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);

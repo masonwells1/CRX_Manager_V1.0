@@ -850,6 +850,11 @@ if (shellTool) {
     if (head === "find" && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir)\b/.test(s)) return true;
     if (head === "git") {
       const sub = gitSubcommandOf(s);
+      // A `git config` WRITE that names a guarded path (`core.hooksPath /evil/.husky`,
+      // `--unset core.hooksPath .husky`) decides whether the husky gates run at
+      // all. The allowlist's config logic already admits reads and the exact
+      // `.husky` repair, so any other config write here denies (Codex review, PR #874).
+      if (sub === "config") return !enforcementSegmentIsReadOnly(s);
       return Boolean(sub && GIT_WRITER_SUBCOMMANDS.has(sub));
     }
     return false;

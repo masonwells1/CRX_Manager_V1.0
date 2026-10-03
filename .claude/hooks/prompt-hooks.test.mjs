@@ -802,7 +802,7 @@ ok(/authoredByMason\(payload\?\.prompt\)/.test(
 // after the latch so a halt only one order keeps is never dropped by the gate.
 {
   const hookSrc = readFileSync(path.join(__dirname, "hold-latch-prompt.mjs"), "utf8");
-  const gateAt = hookSrc.indexOf("if (!hasAuthoredText(payload?.prompt)) emit();");
+  const gateAt = hookSrc.indexOf("if (isPeerTurn || !hasAuthoredText(payload?.prompt)) emit();");
   ok(gateAt > hookSrc.indexOf("if (isHoldPhrase(prompt))") && gateAt < hookSrc.indexOf("if (wasHeld())"),
     "hold-latch-prompt gates clearing on hasAuthoredText, after the latch and before the clear");
 }
@@ -816,6 +816,26 @@ const typed = spawnSync(process.execPath, [path.join(__dirname, "ship-intent-rem
 ok(typed.stdout.includes("additionalContext"), "ship-intent still fires on typed intent");
 
 rmSync(tmpProj, { recursive: true, force: true });
+
+// A peer/subagent turn (Codex review, PR #874): the report's own words never
+// latch — closed OR truncated — but a stop Mason typed after a closed report
+// does, and such a turn never clears a hold.
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "crx-peer-turn-"));
+  const holdFile = path.join(dir, ".claude", "session-state", "hold.json");
+  const runHold = (prompt) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+    input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+  });
+  const PRE = "Another Claude session sent a message:\n";
+  const OPEN = '<agent-message from="a1">\n[Subagent hand-back] report\n';
+  runHold(`${PRE}${OPEN}  the guard honors Mason's stop and pause latch\n  stop now, do not continue`);
+  ok(!existsSync(holdFile), "a truncated report's own 'stop' does not latch on a peer turn");
+  runHold(`${PRE}${OPEN}  all done\n</agent-message>\nstop now`);
+  ok(existsSync(holdFile), "Mason's stop typed after a closed report on a peer turn latches the hold");
+  runHold(`${PRE}${OPEN}  all done, carry on\n</agent-message>`);
+  ok(existsSync(holdFile), "a peer turn never clears the hold");
+  rmSync(dir, { recursive: true, force: true });
+}
 
 // A Codex scheduled automation opens with "Automation: <name>" + "Automation ID:".
 // One latched the main checkout's hold on 2026-09-28 and left it stuck for days.
