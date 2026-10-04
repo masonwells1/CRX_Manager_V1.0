@@ -889,7 +889,7 @@ export default function Deliveries() {
           <div className="flex items-center gap-1.5">
             <span className="text-white font-semibold">{d.delivery_number}</span>
             {shortageDeliveryIds.has(d.id) && (
-              <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" /></span>
+              <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" /></span>
             )}
           </div>
           <Badge variant={statusToBadgeVariant[d.status] || 'default'}>{d.status.replace('_', ' ')}</Badge>
@@ -897,7 +897,7 @@ export default function Deliveries() {
         <p className="text-gray-300 text-sm">{d.customer_name}</p>
         {d.farm_group_name && (
           <div className="flex items-center gap-1">
-            <Users className="w-3 h-3 text-blue-400 flex-shrink-0" />
+            <Users className="w-3 h-3 text-blue-400 shrink-0" />
             <span className="text-xs text-blue-400">{d.farm_group_name}</span>
           </div>
         )}
@@ -1006,7 +1006,7 @@ export default function Deliveries() {
                   <p className="text-gray-300 text-sm">{d.customer_name}</p>
                   {d.farm_group_name && (
                     <div className="flex items-center gap-1">
-                      <Users className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                      <Users className="w-3 h-3 text-blue-400 shrink-0" />
                       <span className="text-xs text-blue-400">{d.farm_group_name}</span>
                     </div>
                   )}
@@ -1060,10 +1060,10 @@ export default function Deliveries() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
-          <Truck className="w-4 h-4 text-crx-green flex-shrink-0" />
+          <Truck className="w-4 h-4 text-crx-green shrink-0" />
           <span className="font-medium text-nav-dark">{row.delivery_number}</span>
           {shortageDeliveryIds.has(row.id) && (
-            <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" /></span>
+            <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" /></span>
           )}
         </div>
       ),
@@ -1089,7 +1089,7 @@ export default function Deliveries() {
           </div>
           {row.farm_group_name && (
             <div className="flex items-center gap-1 mt-0.5">
-              <Users className="w-3 h-3 text-blue-500 flex-shrink-0" />
+              <Users className="w-3 h-3 text-blue-500 shrink-0" />
               <span className="text-xs text-blue-600">{row.farm_group_name}</span>
             </div>
           )}
@@ -1353,7 +1353,7 @@ export default function Deliveries() {
             <button
               key={day.date}
               onClick={() => setScheduleDate(isActive ? '' : day.date)}
-              className={`flex-shrink-0 px-4 py-3 rounded-xl border text-center min-w-[100px] transition-all ${
+              className={`shrink-0 px-4 py-3 rounded-xl border text-center min-w-[100px] transition-all ${
                 isActive
                   ? 'border-crx-green bg-crx-green-tint shadow-sm'
                   : isToday

@@ -409,7 +409,7 @@ function SummarySection({
                 </td>
                 <td className="px-3 py-2">
                   <span className="inline-flex items-center gap-1.5 font-medium text-nav-dark">
-                    <FileText className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />
+                    <FileText className="w-3.5 h-3.5 text-crx-green shrink-0" />
                     {r.invoice_number}
                   </span>
                 </td>

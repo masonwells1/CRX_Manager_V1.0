@@ -930,7 +930,7 @@ export default function CommissionPayments() {
       <Modal open={showVoid} onClose={() => setShowVoid(false)} title="Void Commission Payment">
         <div className="space-y-4">
           <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
-            <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <RotateCcw className="w-5 h-5 text-red-600 shrink-0" />
             <p className="text-sm text-red-800">
               You are about to void payment <strong>{voidTarget?.payment_number}</strong> ({fmt(voidTarget?.total_amount || 0)}).
               Its {voidTarget?.item_count ?? 'unverified number of'} linked commission(s) will be reset to <strong>pending</strong> and can be re-paid later &mdash;
