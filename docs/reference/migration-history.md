@@ -4,14 +4,17 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Live capture — 2026-10-02 20:16 UTC (15:16 Chicago), right after the field-season applies. THIS IS
+**Live capture — 2026-10-03 03:19 UTC (2026-10-02 22:19 Chicago), after PR #800's apply. THIS IS
 THE CURRENT BOUNDARY AND THE ONLY CAPTURE IN THIS SECTION.** Read-only reads on project
 `rhyzpcqhnizqbxphqdkr`:
 
-- **Ledger:** **1017 rows**, live `max(version)` **`20261002201609`**, effective ordering high-water
-  **`20260914101300_finish_generic_field_invoice_cutover`**, computed row by row (the 14-digit stamp in
-  each row's `name`, falling back to its `version` only when the name has none). Any new candidate
-  must sort above `20260914101300`.
+- **Ledger:** **1018 rows / 1011 distinct names**, live `max(version)` **`20261002230949`**,
+  effective ordering high-water **`20260921180000_soft_delete_customer_document_rpc`** (row 936),
+  computed row by row (the 14-digit stamp in each row's `name`, falling back to its `version` only
+  when the name has none). Any new candidate must sort above `20260921180000`. The previous capture
+  (2026-10-02 20:16 UTC, right after the field-season applies) read 1017 rows, `max(version)`
+  `20261002201609`, high-water `20260914101300_finish_generic_field_invoice_cutover`; the
+  field-season items below come from that capture.
 - **Field-season migrations,** applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Nothing is waiting on `main`.
 - **Post-apply checks (read-only):**
   - `public.preview_field_app_invoice_split(jsonb,jsonb,uuid,uuid,date)` is the new wrapper, body md5
@@ -33,7 +36,8 @@ THE CURRENT BOUNDARY AND THE ONLY CAPTURE IN THIS SECTION.** Read-only reads on 
 Re-read the high-water read-only immediately before each apply, because another lane can move it,
 and refresh the applied-migration snapshot the ordering guard reads
 (`node scripts/refresh-applied-migrations.mjs`). `.claude/schema-registry.json` was last regenerated
-on 2026-09-26 (through `20260914100700`); refresh it. Older boundary captures were removed from this
+from live on 2026-10-03 03:19 UTC (PR #873, through `20260921180000`); refresh it after the next live
+apply. Older boundary captures were removed from this
 section on 2026-10-02 because they read as competing "latest" evidence; they remain in git history
 and in the table rows below.
 
@@ -93,7 +97,7 @@ The executable pending-set guard, not the stamp, decides what may apply, and it 
 immediately before any owner-authorized apply. The 2026-09-20 registry refresh (PR #745) brought the
 committed snapshot level with live at the high-water of that day, `20260911120000`, so the guard
 stopped naming already-applied migrations as blockers. Live has moved on since — the boundary
-block above records `20260914101300` as the effective high-water after the 2026-10-02 field-season applies — so
+block above records `20260921180000` as the effective high-water after PR #800's 2026-10-02 apply — so
 that sentence describes the refresh, NOT the current match. Re-read the live ledger before applying.
 
 **APPLY-WINDOW RULE: `20260914101000` and `20260914101100` must go in ONE approved window, and
