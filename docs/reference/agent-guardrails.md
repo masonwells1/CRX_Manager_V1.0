@@ -261,8 +261,11 @@ runner imports it. `isKnownSweepQuery` allows a query only if all of these hold:
 
 Anything else, such as an appended statement, a changed token or a different name, falls through to
 the unchanged classifier and is refused as before. The contract keys are not bound to the
-predicate's allowlist entries. They only parameterise a fixed read-only `pg_catalog` lookup, and a
-packet with missing or extra contracts already fails `--adjudicate`.
+predicate's allowlist entries. They only parameterise a fixed read-only `pg_catalog` lookup. In
+`--adjudicate`, a packet carrying a contract its predicate's allowlist never requests, or repeating
+one, is rejected. A missing contract is not rejected by itself: any returned violation whose
+allowlist entry needs that contract stays flagged. A packet with no violations and no contracts
+adjudicates as PASS.
 
 For ad-hoc SQL, the workarounds that preserve row selection are display/alias-only: give function FROM-items
 a bare alias (`unnest(x) WITH ORDINALITY AS named` yields `named.named`), alias the recursive CTE's
