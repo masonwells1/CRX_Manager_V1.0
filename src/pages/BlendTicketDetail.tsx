@@ -1096,12 +1096,12 @@ export function BlendTicketDetail() {
       {duplicateWarning && (
         <div className="flex items-center justify-between gap-2 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg px-4 py-3 text-sm">
           <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <AlertCircle className="h-4 w-4 shrink-0" />
             {duplicateWarning.message}
           </div>
           <button
             onClick={() => navigate(`/blend-tickets/${duplicateWarning.dupeId}`)}
-            className="text-yellow-700 hover:text-yellow-900 underline font-medium flex-shrink-0 text-xs"
+            className="text-yellow-700 hover:text-yellow-900 underline font-medium shrink-0 text-xs"
           >
             View {duplicateWarning.dupeNumber}
           </button>
@@ -1723,10 +1723,10 @@ export function BlendTicketDetail() {
         {suggestedOrder && !orderActionBlockReason && (
           <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm mb-4">
             <div className="flex items-center gap-2">
-              <ShoppingCart className="h-4 w-4 flex-shrink-0" />
+              <ShoppingCart className="h-4 w-4 shrink-0" />
               <span>May match <strong>Order {suggestedOrder.order_number}</strong> ({suggestedOrder.matchCount} matching product{suggestedOrder.matchCount !== 1 ? 's' : ''})</span>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <Button
                 size="sm"
                 variant="secondary"

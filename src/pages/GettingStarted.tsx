@@ -50,7 +50,7 @@ function StepperRow({ steps }: { steps: Step[] }) {
             </span>
           </div>
           {i < steps.length - 1 && (
-            <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0 mt-[-1.5rem]" />
+            <ChevronRight className="w-5 h-5 text-gray-300 shrink-0 mt-[-1.5rem]" />
           )}
         </div>
       ))}
@@ -101,7 +101,7 @@ function GuideSection({ icon, title, subtitle, children, defaultOpen = false }: 
         className="w-full flex items-center justify-between p-5 text-left hover:bg-gray-50 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-crx-green/10 flex items-center justify-center text-crx-green flex-shrink-0">
+          <div className="w-10 h-10 rounded-lg bg-crx-green/10 flex items-center justify-center text-crx-green shrink-0">
             {icon}
           </div>
           <div>
@@ -124,7 +124,7 @@ function GuideSection({ icon, title, subtitle, children, defaultOpen = false }: 
 function GuideStep({ num, title, children }: { num: number; title: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3">
-      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-crx-green text-white text-xs font-bold flex items-center justify-center mt-0.5">
+      <div className="shrink-0 w-7 h-7 rounded-full bg-crx-green text-white text-xs font-bold flex items-center justify-center mt-0.5">
         {num}
       </div>
       <div>
@@ -139,7 +139,7 @@ function GuideStep({ num, title, children }: { num: number; title: string; child
 function Tip({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
-      <Lightbulb className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+      <Lightbulb className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
       <span className="text-amber-800">{children}</span>
     </div>
   );
@@ -220,7 +220,7 @@ function FirstCycleTracker() {
                     </span>
                     <span className="text-[11px] text-gray-400">{counts[i]} so far</span>
                   </div>
-                  {i < steps.length - 1 && <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0 mt-3" />}
+                  {i < steps.length - 1 && <ChevronRight className="w-4 h-4 text-gray-300 shrink-0 mt-3" />}
                 </div>
               );
             })}
@@ -587,30 +587,30 @@ export default function GettingStarted() {
           {!isDriver && (
             <>
               <li className="flex gap-2">
-                <span className="text-red-500 font-bold flex-shrink-0">✕</span>
+                <span className="text-red-500 font-bold shrink-0">✕</span>
                 <span><strong>Forgetting to post invoices.</strong> Draft invoices don&apos;t affect AR balances. If a customer says they don&apos;t owe anything, check if the invoice is still in &quot;Draft&quot; status.</span>
               </li>
               <li className="flex gap-2">
-                <span className="text-red-500 font-bold flex-shrink-0">✕</span>
+                <span className="text-red-500 font-bold shrink-0">✕</span>
                 <span><strong>Over-promising inventory.</strong> Always check &quot;Net Free&quot; (not just &quot;Available&quot;) before quoting. Available includes prebooked quantities that are already spoken for.</span>
               </li>
               <li className="flex gap-2">
-                <span className="text-red-500 font-bold flex-shrink-0">✕</span>
+                <span className="text-red-500 font-bold shrink-0">✕</span>
                 <span><strong>Not using Planned Programs.</strong> If a customer is likely to buy, mark the quote as planned. Otherwise, another quote could promise the same inventory.</span>
               </li>
             </>
           )}
           <li className="flex gap-2">
-            <span className="text-red-500 font-bold flex-shrink-0">✕</span>
+            <span className="text-red-500 font-bold shrink-0">✕</span>
             <span><strong>Skipping the signature on delivery.</strong> Completing without a name in the &quot;Signed By&quot; field means no proof of delivery. Always get it.</span>
           </li>
           <li className="flex gap-2">
-            <span className="text-red-500 font-bold flex-shrink-0">✕</span>
+            <span className="text-red-500 font-bold shrink-0">✕</span>
             <span><strong>Not taking delivery photos.</strong> Photos are your proof that the right products were dropped at the right location. Take at least one per stop.</span>
           </li>
           {!isDriver && (
             <li className="flex gap-2">
-              <span className="text-red-500 font-bold flex-shrink-0">✕</span>
+              <span className="text-red-500 font-bold shrink-0">✕</span>
               <span><strong>Editing product prices in the middle of a season.</strong> Existing quotes and orders keep their original prices — only new quotes pick up the change. This is by design.</span>
             </li>
           )}
@@ -626,27 +626,27 @@ export default function GettingStarted() {
         >
           <ul className="space-y-2">
             <li className="flex gap-2">
-              <ArrowDown className="w-4 h-4 text-crx-green flex-shrink-0 mt-1" />
+              <ArrowDown className="w-4 h-4 text-crx-green shrink-0 mt-1" />
               <span><strong>Bulk operations:</strong> Most list pages support multi-select. Check the boxes on the left, then use the bulk action bar (Export CSV, Download PDF, Delete, etc.).</span>
             </li>
             <li className="flex gap-2">
-              <ArrowDown className="w-4 h-4 text-crx-green flex-shrink-0 mt-1" />
+              <ArrowDown className="w-4 h-4 text-crx-green shrink-0 mt-1" />
               <span><strong>Quick search:</strong> Every data table has a search bar. Type a PO number, customer name, or product to filter instantly.</span>
             </li>
             <li className="flex gap-2">
-              <ArrowDown className="w-4 h-4 text-crx-green flex-shrink-0 mt-1" />
+              <ArrowDown className="w-4 h-4 text-crx-green shrink-0 mt-1" />
               <span><strong>Inline editing:</strong> On the Products and Inventory pages, click any editable cell to change values directly in the table — no need to open a detail page.</span>
             </li>
             <li className="flex gap-2">
-              <ArrowDown className="w-4 h-4 text-crx-green flex-shrink-0 mt-1" />
+              <ArrowDown className="w-4 h-4 text-crx-green shrink-0 mt-1" />
               <span><strong>PDF imports:</strong> On the Supplier POs page, use &quot;Import from PDF&quot; to upload supplier invoices. OCR extracts product names, quantities, and costs automatically.</span>
             </li>
             <li className="flex gap-2">
-              <ArrowDown className="w-4 h-4 text-crx-green flex-shrink-0 mt-1" />
+              <ArrowDown className="w-4 h-4 text-crx-green shrink-0 mt-1" />
               <span><strong>Quote versioning:</strong> Before making major changes to a quote, use the version history panel to take a snapshot. You can compare versions side-by-side and restore any previous version.</span>
             </li>
             <li className="flex gap-2">
-              <ArrowDown className="w-4 h-4 text-crx-green flex-shrink-0 mt-1" />
+              <ArrowDown className="w-4 h-4 text-crx-green shrink-0 mt-1" />
               <span><strong>Seasonal rollover:</strong> At season end, use the &quot;Roll Over&quot; button in the Quote Builder to copy a quote into the next season with updated dates.</span>
             </li>
           </ul>

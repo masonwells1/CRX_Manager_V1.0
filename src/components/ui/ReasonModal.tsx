@@ -113,7 +113,7 @@ export default function ReasonModal({
     >
       <div className="space-y-4">
         <div className={`flex items-start gap-3 p-3 ${styles.bg} rounded-lg`}>
-          <Icon className={`w-5 h-5 ${styles.icon} flex-shrink-0 mt-0.5`} />
+          <Icon className={`w-5 h-5 ${styles.icon} shrink-0 mt-0.5`} />
           <p className={`text-sm ${styles.text}`}>{message}</p>
         </div>
 

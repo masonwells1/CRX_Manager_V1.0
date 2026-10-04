@@ -1517,7 +1517,7 @@ export default function CustomerDetail() {
                       >
                         <td className="px-5 py-3">
                           <div className="flex items-center gap-2">
-                            <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
+                            <MapPin className="w-4 h-4 text-crx-green shrink-0" />
                             <span className="font-medium text-nav-dark">{f.field_name}</span>
                           </div>
                         </td>
@@ -1761,7 +1761,7 @@ export default function CustomerDetail() {
                         >
                           <td className="px-5 py-3">
                             <div className="flex items-center gap-2">
-                              <Truck className="w-4 h-4 text-crx-green flex-shrink-0" />
+                              <Truck className="w-4 h-4 text-crx-green shrink-0" />
                               <span className="font-medium text-nav-dark">{d.delivery_number}</span>
                             </div>
                           </td>

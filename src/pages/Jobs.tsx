@@ -2004,7 +2004,7 @@ export default function Jobs() {
           never shown. Be honest about it when the cap is hit. */}
       {atFetchCap && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <Info className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
             Showing the most recent {JOBS_FETCH_LIMIT} jobs — older jobs aren&apos;t searched.
             Narrow by date or customer to include them.
