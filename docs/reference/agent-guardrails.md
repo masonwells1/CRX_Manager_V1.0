@@ -249,6 +249,24 @@ or edited until its fingerprint is authorised. To authorise one, run
 and never changes the guard, and applying that block to `.claude/hooks/live-testdata-lib.mjs` is an
 approval-gated hook edit (see `scripts/db-invariant-sweeps/README.md`, "How to add a predicate").
 
+Since PR #881 the guard also allows the **wrapped** form `npm run db-sweeps` prints (the predicate
+inside the `buildSweepQuery` envelope that also reads the reviewed function contracts, which
+`--adjudicate` requires). The envelope template lives in the hook lib (`renderSweepQuery`), and the
+runner imports it. `isKnownSweepQuery` allows a query only if all of these hold:
+
+- the inner text is a fingerprinted predicate;
+- the envelope name is that predicate's own file name;
+- every contract key is a `public.`/`auth.` identity signature with no `'` or `\`;
+- rebuilding the envelope from those parts reproduces the query byte for byte.
+
+Anything else, such as an appended statement, a changed token or a different name, falls through to
+the unchanged classifier and is refused as before. The contract keys are not bound to the
+predicate's allowlist entries. They only parameterise a fixed read-only `pg_catalog` lookup. In
+`--adjudicate`, a packet carrying a contract its predicate's allowlist never requests, or repeating
+one, is rejected. A missing contract is not rejected by itself: any returned violation whose
+allowlist entry needs that contract stays flagged. A packet with no violations and no contracts
+adjudicates as PASS.
+
 For ad-hoc SQL, the workarounds that preserve row selection are display/alias-only: give function FROM-items
 a bare alias (`unnest(x) WITH ORDINALITY AS named` yields `named.named`), alias the recursive CTE's
 columns in its anchor SELECT instead of in a column list, order character classes so `(` never
