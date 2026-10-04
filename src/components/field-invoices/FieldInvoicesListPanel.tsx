@@ -343,7 +343,7 @@ export default function FieldInvoicesListPanel() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-crx-green flex-shrink-0" />
+          <FileText className="w-4 h-4 text-crx-green shrink-0" />
           <span className="font-medium text-nav-dark">{row.invoice_number}</span>
         </div>
       ),
@@ -667,7 +667,7 @@ export default function FieldInvoicesListPanel() {
                 <p className="mt-1 text-xs text-secondary">#{row.invoice_number} · {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}</p>
                 <div className="mt-2">{statusBadge(row.status)}</div>
               </div>
-              <div className="flex-shrink-0 text-right">
+              <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <p className={row.balance_cents > 0 ? 'mt-1 text-xs font-semibold text-red-600' : 'mt-1 text-xs text-crx-green'}>
                   {fmt(row.balance_cents)} due

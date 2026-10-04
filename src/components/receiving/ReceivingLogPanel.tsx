@@ -436,7 +436,7 @@ export default function ReceivingLogPanel() {
       {/* Damaged This Week alert */}
       {summary && summary.damaged_this_week > 0 && (
         <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 shrink-0" />
           <span>
             <strong>{summary.damaged_this_week}</strong> item{summary.damaged_this_week !== 1 ? 's' : ''} received
             with issues this week

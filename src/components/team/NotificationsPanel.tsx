@@ -231,7 +231,7 @@ export default function NotificationsPanel() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           {!notification.is_read && (
-                            <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0" />
+                            <div className="w-2 h-2 bg-blue-500 rounded-full shrink-0" />
                           )}
                           <p className="text-sm font-medium text-nav-dark">
                             {notification.title}
@@ -244,7 +244,7 @@ export default function NotificationsPanel() {
                           {formatTime(notification.created_at)}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                         {!notification.is_read && (
                           <button
                             onClick={(e) => {

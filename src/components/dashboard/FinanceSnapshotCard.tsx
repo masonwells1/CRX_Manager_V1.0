@@ -89,7 +89,7 @@ export default function FinanceSnapshotCard() {
           onClick={() => navigate('/ar-aging')}
           className="mt-3 w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-100 text-sm text-red-700 hover:bg-red-100 transition-colors"
         >
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 shrink-0" />
           <span className="flex-1 text-left">
             {overCredit} customer{overCredit !== 1 ? 's are' : ' is'} over their credit limit
           </span>
