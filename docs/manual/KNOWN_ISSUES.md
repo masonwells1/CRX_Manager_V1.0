@@ -196,6 +196,12 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
       customer picker 1,000 customers; Sales Reports has the same 500-product and 1,000-customer pickers.
       Past those counts a record cannot be selected in the direct picker (Year-End "Generate All" finds
       customers separately, and Sales Reports can still include linked farms through `get_customer_farm_group`).
+  - Record pickers inside detail and editor pages (checked 2026-10-04): Customer Detail's parent-customer
+    selector, Invoice Detail's customer selector and Order Detail's share editor each load 500 customers; the
+    split field-invoice editor (`FieldAppSplitInvoiceEditor.tsx`) loads 1,000 fields, 1,000 products and the
+    200 most recent completed jobs. Past those counts a record silently cannot be chosen there.
+  - The picker entries above are examples, not a complete inventory: other selectors also call `.limit(`, so
+    search `src/` for `.limit(` before relying on this list.
   - Orders and Invoices show a warning toast and Jobs shows a banner when capped. Deliveries and
     Application Records stop silently, and the other pages were not checked for a warning.
   - On a capped query, records past the cap are missing from that page and its browser-side filters.
