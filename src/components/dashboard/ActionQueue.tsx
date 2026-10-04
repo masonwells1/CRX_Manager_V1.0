@@ -306,14 +306,14 @@ export default function ActionQueue() {
                         </button>
                         <button
                           onClick={() => navigate(cat.entityPath + item.id)}
-                          className={`flex-shrink-0 p-1 rounded ${cat.iconColor} opacity-0 group-hover:opacity-100 transition-opacity`}
+                          className={`shrink-0 p-1 rounded ${cat.iconColor} opacity-0 group-hover:opacity-100 transition-opacity`}
                           aria-label={'Open ' + item.primary_text}
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); openTaskForItem(cat, item); }}
-                          className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-crx-green hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="shrink-0 p-1 rounded text-gray-400 hover:text-crx-green hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
                           aria-label={'Create task for ' + item.primary_text}
                           title="Create task"
                         >
@@ -321,7 +321,7 @@ export default function ActionQueue() {
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); dismissItem(item.id); }}
-                          className="flex-shrink-0 text-xs px-1.5 py-0.5 rounded text-gray-400 hover:text-gray-600 hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="shrink-0 text-xs px-1.5 py-0.5 rounded text-gray-400 hover:text-gray-600 hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
                           aria-label="Dismiss for today"
                         >
                           Dismiss

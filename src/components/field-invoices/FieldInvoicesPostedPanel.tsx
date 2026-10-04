@@ -477,7 +477,7 @@ export default function FieldInvoicesPostedPanel() {
 
       {/* Posted-records warning banner (always on) */}
       <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
         <p>
           Posted records are from the most recent month roll. Modifying a posted invoice will cause the
           previous batch totals to update, and any applicable reports will need to be reprinted.
@@ -487,7 +487,7 @@ export default function FieldInvoicesPostedPanel() {
       {/* Dynamic month-batch span warning (only when the shown set crosses batches) */}
       {crossesBatches && (
         <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <p>
             The invoices shown span more than one month-end batch. A bulk action here would affect
             multiple batch totals — narrow the scope to a single batch (below) to act on one batch at a time.
@@ -603,7 +603,7 @@ export default function FieldInvoicesPostedPanel() {
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
               </div>
-              <div className="flex-shrink-0 text-right">
+              <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <p className={row.balance_cents > 0 ? 'mt-1 text-xs font-semibold text-red-600' : 'mt-1 text-xs text-crx-green'}>
                   {fmt(row.balance_cents)} due
@@ -649,7 +649,7 @@ export default function FieldInvoicesPostedPanel() {
                     <td className="px-3 py-2 text-gray-700">{row.job_number || '—'}</td>
                     <td className="px-3 py-2">
                       <span className="inline-flex items-center gap-1.5 font-medium text-nav-dark">
-                        <FileText className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />
+                        <FileText className="w-3.5 h-3.5 text-crx-green shrink-0" />
                         {row.invoice_number}
                       </span>
                     </td>
