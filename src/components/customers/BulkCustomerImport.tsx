@@ -366,7 +366,7 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
               type="file"
               accept=".csv,.pdf,.jpg,.jpeg,.png,.webp,image/*"
               onChange={handleFileChange}
-              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green hover:file:bg-crx-green hover:file:text-white transition-colors cursor-pointer"
+              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green file:hover:bg-crx-green file:hover:text-white transition-colors cursor-pointer"
             />
             {file && (
               <div className="mt-2 flex items-center gap-2 text-xs text-secondary">

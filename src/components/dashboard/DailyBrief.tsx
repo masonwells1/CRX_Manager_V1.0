@@ -69,7 +69,7 @@ export default function DailyBrief({ deliveriesToday, deliveryUnassigned, active
   return (
     <Card>
       <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-lg bg-crx-green-tint flex items-center justify-center flex-shrink-0">
+        <div className="w-10 h-10 rounded-lg bg-crx-green-tint flex items-center justify-center shrink-0">
           <Sunrise className="w-5 h-5 text-crx-green" />
         </div>
         <div className="text-sm text-nav-dark space-y-1.5">

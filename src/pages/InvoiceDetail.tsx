@@ -1966,7 +1966,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   isAdmin && (
                     <button
                       onClick={() => { reverseWoIdem.resetKey(); setReverseWoTarget(wo); setShowReverseWoModal(true); }}
-                      className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium flex-shrink-0"
+                      className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium shrink-0"
                     >
                       <RotateCcw className="w-3 h-3" />
                       Reverse

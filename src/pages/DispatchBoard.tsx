@@ -576,7 +576,7 @@ export default function DispatchBoard() {
     <div className="-m-4 sm:-m-6 lg:-m-8 min-h-[calc(100vh-4rem)] bg-slate-950 text-slate-100">
       <div className="flex flex-col lg:flex-row min-h-[calc(100vh-4rem)]">
         {/* LEFT RAIL — nav groups (criterion #2) */}
-        <nav className="lg:w-60 flex-shrink-0 bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-800 p-3 lg:p-4">
+        <nav className="lg:w-60 shrink-0 bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-800 p-3 lg:p-4">
           <div className="flex items-center gap-2 px-2 pb-3 mb-2 border-b border-slate-800">
             <Truck className="w-6 h-6 text-crx-green" />
             <span className="text-base font-semibold tracking-wide">Dispatch</span>
@@ -614,7 +614,7 @@ export default function DispatchBoard() {
         <div className="flex-1 min-w-0 flex flex-col">
           {/* Toolbar: section title + search + OPTIONS menu */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800 bg-slate-900/60">
-            <h1 className="text-lg font-semibold flex items-center gap-2 flex-shrink-0">
+            <h1 className="text-lg font-semibold flex items-center gap-2 shrink-0">
               {section === 'map' && <><MapIcon className="w-5 h-5 text-crx-green" /> Job Map</>}
               {section === 'list' && <><ListIcon className="w-5 h-5 text-crx-green" /> Job List</>}
               {section === 'dispatch' && <><Send className="w-5 h-5 text-crx-green" /> Dispatch Jobs</>}
@@ -825,7 +825,7 @@ export default function DispatchBoard() {
                       <button
                         onClick={() => setWizardOpen(true)}
                         disabled={dispatchableLocations.length === 0}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-crx-green text-sm font-semibold text-white hover:bg-crx-green/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] flex-shrink-0"
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-crx-green text-sm font-semibold text-white hover:bg-crx-green/90 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] shrink-0"
                       >
                         <Send className="w-4 h-4" /> Start Dispatch
                       </button>
@@ -905,7 +905,7 @@ export default function DispatchBoard() {
                               <p className="mt-1 text-sm text-slate-200 font-medium truncate">{job.customer_name}</p>
                               {job.field_names && <p className="text-xs text-slate-500 truncate">{job.field_names}</p>}
                             </div>
-                            <div className="text-right flex-shrink-0">
+                            <div className="text-right shrink-0">
                               <p className="text-lg font-bold text-white tabular-nums">
                                 {formatAppliedOfTotal(job.applied_acres, job.total_acres)}
                               </p>
@@ -917,7 +917,7 @@ export default function DispatchBoard() {
                           {(job.status === 'scheduled' || job.status === 'in_progress') && (job.chemicals?.length ?? 0) > 0 && (
                             <div className="mt-3 flex items-start gap-2 text-sm">
                               <span
-                                className={`mt-1 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                                className={`mt-1 inline-block w-2.5 h-2.5 rounded-full shrink-0 ${
                                   job.stock_status === 'short' ? 'bg-red-500'
                                   : job.stock_status === 'low' ? 'bg-amber-400'
                                   : job.stock_status === 'ok' ? 'bg-crx-green'
@@ -1450,7 +1450,7 @@ function DispatchedList({ applicators, crews, performedBy, canDispatch, isAdmin,
                     <MapPin className="w-3.5 h-3.5" /> {row.field_name || 'Field'}
                   </p>
                 </div>
-                <div className="text-right flex-shrink-0">
+                <div className="text-right shrink-0">
                   {/* applied-of-total acres for job progress + this location's acres */}
                   <p className="text-lg font-bold text-white tabular-nums">
                     {formatAppliedOfTotal(row.job_applied_acres, row.job_total_acres)}

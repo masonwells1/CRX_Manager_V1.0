@@ -297,7 +297,7 @@ export default function Fields() {
           ) : (row as FieldWithCustomer & { _isChild?: boolean })._isChild ? (
             <span className="w-5 ml-2 border-l-2 border-gray-200 h-4" />
           ) : (
-            <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
+            <MapPin className="w-4 h-4 text-crx-green shrink-0" />
           )}
           <span className="font-medium text-nav-dark">{row.field_name}</span>
           {(row as FieldWithCustomer & { _isParent?: boolean })._isParent && row.child_count != null && row.child_count > 0 && (
