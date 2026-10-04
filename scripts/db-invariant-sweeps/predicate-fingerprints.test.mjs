@@ -15,7 +15,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   KNOWN_SWEEP_PREDICATES,
-  KNOWN_SWEEP_PREDICATE_SHA256,
   classifySql,
   isKnownSweepPredicate,
   isKnownSweepQuery,
@@ -47,20 +46,20 @@ const diskNames = onDisk.map((p) => p.file);
 //    #648 round 4). So this compares the files on disk against the guard's own
 //    embedded set, and against the exact text the generator would emit.
 assert.deepEqual(
-  [...KNOWN_SWEEP_PREDICATE_SHA256].sort(),
+  [...KNOWN_SWEEP_PREDICATES.keys()].sort(),
   onDisk.map((p) => p.sha256).sort(),
   "the guard's embedded fingerprints are not exactly the hashes of the .sql files on disk — run node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs and apply the block it prints",
 );
 pass++;
 eq(
-  KNOWN_SWEEP_PREDICATE_SHA256.size,
+  KNOWN_SWEEP_PREDICATES.size,
   onDisk.length,
   "the guard authorises exactly as many hashes as there are predicate files — no stale or extra entry",
 );
 for (const p of onDisk) {
   ok(
-    KNOWN_SWEEP_PREDICATE_SHA256.has(p.sha256),
-    `${p.file} does not match its recorded fingerprint — the SQL changed, so re-review it and regenerate`,
+    KNOWN_SWEEP_PREDICATES.get(p.sha256) === p.file,
+    `${p.file} does not match its recorded fingerprint (or is recorded under another file name) — the SQL changed, so re-review it and regenerate`,
   );
 }
 // The generated region must be exactly what the generator produces from the
@@ -543,13 +542,23 @@ eq(normalizePredicateSql, guardNormalizePredicateSql, "the generator uses the gu
     const { p } = noKeys;
     const build = (keys) => buildSweepQuery({ name: nameOf(p), sql: p.text }, [{ reviewed_contracts: Object.fromEntries(keys.map((k) => [k, "0".repeat(32)])) }]);
     ok(isKnownSweepQuery(build(["auth.uid()", "public.is_admin()"])), "sanity: plain identity keys are recognised");
+    // Valid identity signatures the runner can legitimately print: a schema-
+    // qualified argument type and a quoted identifier. Neither can leave a
+    // single-quoted literal, so both must be recognised (Luna review).
+    ok(isKnownSweepQuery(build(["public.reprice(p_amount extensions.money_amount)"])), "a schema-qualified argument type is recognised");
+    ok(isKnownSweepQuery(build(["public.\"Odd\"(\"Arg\" text, p_ids uuid[])"])), "quoted identifiers and array types are recognised");
     for (const key of [
       "public.untrusted('); DELETE FROM profiles; --)",
       "public.f(x text) '",
       "public.f(x\\' text)",
       "public.f(x text)\n; DELETE FROM customers; --",
-      "public.F()",
-      "public.f(\"x\" text)",
+      // A backslash alone is the load-bearing case: the rebuild doubles a quote
+      // but not a backslash, so with standard_conforming_strings off `x\'`
+      // would end the literal. Only the charset rule refuses this one.
+      "public.f(x\\)",
+      "public.f(x\ttext)",
+      "public.f(x text)\u0000",
+      "public.f(x text)é",
       "private.f()",
       "public.f()) OR true OR p.proname = any(array['x']",
       "public.f",
@@ -588,6 +597,62 @@ eq(normalizePredicateSql, guardNormalizePredicateSql, "the generator uses the gu
   const small = time(200000);
   const large = time(800000);
   ok(large < Math.max(small, 0.01) * 8, `wrapped-query recognition stays near-linear: 200k took ${small.toFixed(3)}ms, 800k took ${large.toFixed(3)}ms`);
+}
+
+// 14. No predicate has a line break INSIDE a string literal, quoted identifier
+//     or dollar-quoted body.
+//
+//     Both allowances fold CRLF and lone CR to LF before fingerprinting. That is
+//     only harmless while every line break in a predicate sits in whitespace or
+//     ends a `--` comment (PostgreSQL ends a comment at CR as well as LF). A
+//     line break inside a literal is part of the value, so folding it would let
+//     a CR-variant of the text share the fingerprint while reading a different
+//     value. The guard comment states the 29 have none; this enforces it, so a
+//     predicate that adds one fails here instead of silently widening what the
+//     fingerprint covers (Luna review of this change). The walker mirrors the
+//     guard's own quote-aware scanner; it only has to be right for these files.
+{
+  const quotedSpans = (sql) => {
+    const spans = [];
+    let i = 0;
+    const n = sql.length;
+    while (i < n) {
+      const two = sql.slice(i, i + 2);
+      if (two === "--") { while (i < n && sql[i] !== "\n" && sql[i] !== "\r") i++; continue; }
+      if (two === "/*") {
+        let depth = 1; i += 2;
+        while (i < n && depth > 0) {
+          if (sql.slice(i, i + 2) === "/*") { depth++; i += 2; } else if (sql.slice(i, i + 2) === "*/") { depth--; i += 2; } else i++;
+        }
+        continue;
+      }
+      const ch = sql[i];
+      if (ch === "'" || ch === '"') {
+        const escape = ch === "'" && /[Ee]/.test(sql[i - 1] ?? "") && !/[A-Za-z0-9_$]/.test(sql[i - 2] ?? "");
+        let j = i + 1;
+        while (j < n) {
+          if (escape && sql[j] === "\\") { j += 2; continue; }
+          if (sql[j] === ch && sql[j + 1] === ch) { j += 2; continue; }
+          if (sql[j] === ch) { j++; break; }
+          j++;
+        }
+        spans.push(sql.slice(i, j)); i = j; continue;
+      }
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i, i + 66))?.[0];
+      if (tag) {
+        const close = sql.indexOf(tag, i + tag.length);
+        const end = close === -1 ? n : close + tag.length;
+        spans.push(sql.slice(i, end)); i = end; continue;
+      }
+      i++;
+    }
+    return spans;
+  };
+  ok(quotedSpans("SELECT 'a\nb' -- x'\n, \"c\" , $q$d\ne$q$").filter((s) => /[\r\n]/.test(s)).length === 2, "sanity: the span walker finds multi-line literals and dollar bodies, and skips comments");
+  for (const p of onDisk) {
+    const broken = quotedSpans(normalizePredicateSql(p.text)).filter((s) => /[\r\n]/.test(s));
+    eq(broken.length, 0, `${p.file} has no line break inside a literal, quoted identifier or dollar-quoted body${broken.length ? `: ${JSON.stringify(broken[0].slice(0, 80))}` : ""}`);
+  }
 }
 
 console.log(`predicate-fingerprints: ${pass} assertions passed (${diskNames.length} predicates)`);

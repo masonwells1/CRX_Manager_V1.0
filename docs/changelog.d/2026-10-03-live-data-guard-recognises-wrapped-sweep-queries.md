@@ -16,8 +16,15 @@ adjudicable packets.
   those parts reproduces the query byte for byte (after the existing line-ending/BOM/trailing-space
   normalisation). Anything else falls through to the unchanged classifier.
 - The generated fingerprint block is now a `Map` of fingerprint to file name
-  (`KNOWN_SWEEP_PREDICATES`); `KNOWN_SWEEP_PREDICATE_SHA256` is derived from it. The generator and
-  its "overridden" check compare hash and file together.
+  (`KNOWN_SWEEP_PREDICATES`), and it is the ONLY list: `KNOWN_SWEEP_PREDICATE_SHA256` is removed, so
+  both allowances and the generator's "overridden" check (hash and file together) read the same
+  collection. A derived Set the generator did not watch was caught by Luna round 1.
+- Contract keys accept any printable ASCII except `'` and `\` (schema-qualified argument types and
+  quoted identifiers are valid identity signatures). The backslash exclusion is the load-bearing one:
+  the rebuild doubles a quote but not a backslash.
+- New test: no fingerprinted predicate has a line break inside a literal, quoted identifier or
+  dollar-quoted body, which is what keeps the existing CRLF folding harmless (it then only touches
+  whitespace and comment ends).
 
 Proof observed:
 

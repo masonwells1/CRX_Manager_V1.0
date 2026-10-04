@@ -465,7 +465,9 @@ export const KNOWN_SWEEP_PREDICATES = new Map([
   ["dbaa1cfe6d3d81ca66c8f44ac9085d8b9c47e507733cd708c4de2ead823b53c1", "ungated-secdef-mutators.sql"],
 ]);
 // <<< END GENERATED PREDICATE FINGERPRINTS
-export const KNOWN_SWEEP_PREDICATE_SHA256 = new Set(KNOWN_SWEEP_PREDICATES.keys());
+// The Map above is the ONLY list: both allowances read it, and the generator's
+// "overridden" check compares it to the files. A second derived collection would
+// be a list the generator does not watch (Luna review of this change).
 
 function sha256Hex(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
@@ -474,8 +476,8 @@ function sha256Hex(text) {
 export function isKnownSweepPredicate(query) {
   const text = normalizePredicateSql(query || "");
   if (!text) return false;
-  if (!KNOWN_SWEEP_PREDICATE_SHA256.size) return false;
-  return KNOWN_SWEEP_PREDICATE_SHA256.has(sha256Hex(text));
+  if (!KNOWN_SWEEP_PREDICATES.size) return false;
+  return KNOWN_SWEEP_PREDICATES.has(sha256Hex(text));
 }
 
 // ── The sweep runner's WRAPPED queries, recognised by reconstruction ─────────
@@ -499,10 +501,11 @@ export function isKnownSweepPredicate(query) {
 // must hold, or the query falls through to the ordinary classifier untouched:
 //   - the inner text is one of the fingerprinted predicates above, and the name
 //     is that predicate's own file name (the runner's `basename(file, '.sql')`);
-//   - every function key is a plain `public.`/`auth.` identity signature made
-//     of identifier characters, spaces, commas, parentheses and brackets — no
-//     quote or backslash, so a key cannot leave its string literal however
-//     standard_conforming_strings is set;
+//   - every function key is a `public.`/`auth.` identity signature of printable
+//     ASCII with no single quote and no backslash, so a key cannot leave its
+//     string literal however standard_conforming_strings is set (schema-
+//     qualified argument types and quoted identifiers stay allowed: a `.` or a
+//     `"` inside a single-quoted literal is inert);
 //   - rebuilding the envelope from those three parts reproduces the query
 //     byte for byte (after the same line-ending/BOM/trailing-whitespace
 //     normalisation the bare predicates get).
@@ -519,7 +522,8 @@ const SWEEP_CONTRACTS_OPEN = "(SELECT COALESCE(json_agg(c), '[]'::json) FROM (";
 const SWEEP_CONTRACTS_CLOSE = ") AS c)";
 const CONTRACT_KEYS_OPEN = "= ANY(ARRAY[";
 const CONTRACT_KEYS_CLOSE = "]::text[])\nORDER BY function_key";
-const CONTRACT_KEY_RE = /^(?:public|auth)\.[a-z_][a-z0-9_]*\([a-z0-9_ ,[\]]*\)$/;
+// Printable ASCII (0x20-0x7E) minus `'` (0x27) and `\` (0x5C).
+const CONTRACT_KEY_RE = /^(?:public|auth)\.[\x20-\x26\x28-\x5b\x5d-\x7e]*\)$/;
 
 /** Full definition includes body/defaults/volatility/security/search_path; pin owner and ACL too. */
 export function functionContractSql(functionKeys) {
