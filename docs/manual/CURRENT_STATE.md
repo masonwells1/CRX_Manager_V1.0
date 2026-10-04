@@ -389,8 +389,8 @@ The three headline items:
 
 No longer in flight: the customer-document byte boundary is complete (Edge Function v1 live
 2026-09-22, frontend merged in PR #764 on 2026-09-23 UTC, migration `20260914100700` applied
-2026-09-26). The one open follow-up, letting sales reps remove a document, is parked in open
-PR #800.
+2026-09-26). Its follow-up, letting sales reps remove a document, also shipped (PR #800 and
+PR #875) and was verified on the live site 2026-10-04.
 
 ## 5. Environment facts
 
