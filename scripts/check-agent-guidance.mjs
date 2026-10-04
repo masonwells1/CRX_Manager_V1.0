@@ -134,6 +134,11 @@ record(
     && /never ask Mason to comment, label, or click for CodeRabbit/i.test(protectedDelivery),
   "agents request a skipped CodeRabbit review themselves and never ask Mason to",
 );
+record(
+  /Post it to Mason, then proceed without waiting for his confirmation/i.test(shipWorkflow)
+    && !/Claude's checkpoint/i.test(shipWorkflow),
+  "ship workflow plans then proceeds for Claude and Codex alike",
+);
 record(/Deliver what was asked at the scope intended[\s\S]*rather than quietly narrowing, widening, or transforming it/i.test(agents), "shared contract prevents silent scope changes");
 record(/Before presenting findings as current, confirm the checkout is not behind `origin\/main`/i.test(agents), "reviews and audits require a current checkout");
 record(/simplest complete implementation/i.test(agents), "AGENTS.md requires simple, complete implementations");
