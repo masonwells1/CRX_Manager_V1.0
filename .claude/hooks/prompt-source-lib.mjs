@@ -430,14 +430,13 @@ export function hasAuthoredText(prompt) {
 }
 
 // ── withoutSubagentReports(prompt) ───────────────────────────────────────
-// For the intent REMINDER hooks (dangerous-phrase-warning, ship-intent,
-// autopilot-intent, codex-gauntlet, agent-pair-review, codex-to-claude-handoff).
+// For the intent REMINDER hook (ship-intent).
 // It removes only agent-message blocks (by the line structure above, closed or
 // truncated) and the peer preamble line — not code, blockquotes or
 // cross-session messages, which authoredByMason() strips for the hold latch.
-// The reminders must keep reading those: Mason's own `git push --force` in
-// backticks is exactly what the danger warning is for, and a sibling session's
-// request is still something this session may act on. A subagent's hand-back
+// The reminder must keep reading those: Mason's own words in backticks are
+// still his, and a sibling session's request is still something this session
+// may act on. A subagent's hand-back
 // is neither — it is this session's own child reporting.
 export function withoutSubagentReports(prompt) {
   const text = String(prompt || "");

@@ -3448,7 +3448,79 @@ const GATED_VERB_RE = /(?:^|[^\w-])(?:merge|push|api|alias)(?:$|[^\w-])/i;
 const POWERSHELL_ASSIGNED_RE = /^\$\{?[A-Za-z_][\w:]*\}?$/;
 const POWERSHELL_ASSIGN_OP_RE = /^[+\-*/%]?=$/;
 const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
-function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE) {
+//
+// Two readings used to refuse ordinary commands (Mason's 2026-10-02 cleanup,
+// fixed 2026-10-04). The cmd reading, where `'` is not a quote, split awk's
+// `'{a+=$1; d+=$2}'` and offered `$1…` as a program; and a raw word split cut
+// `x=$(echo "$f")` at its space and offered `"$f")` as one. So single-quoted
+// text is blanked first (POSIX shells and PowerShell expand nothing there, and
+// cmd never expands `$`), and each `$( … )` is read as one word whose inside
+// is checked on its own, so a program computed in there is still found.
+function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE, depth = 0) {
+  const split = depth < NESTED_MAX_DEPTH ? splitSubstitutions(blankSingleQuoted(String(text || ""))) : null;
+  if (!split) return programWordBuiltAtRuntime(text, runtimeText);
+  if (split.inners.some((inner) => programBuiltAtRuntime(inner, runtimeText, depth + 1))) return true;
+  return programWordBuiltAtRuntime(split.outer, runtimeText);
+}
+
+// Empties every single-quoted span, keeping the quotes so word boundaries stay.
+// A `'` inside double quotes is an ordinary character, and both escape
+// characters (POSIX `\`, PowerShell `` ` ``) keep what they escape, so an
+// escaped `"` cannot end a double-quoted string early and expose its text.
+function blankSingleQuoted(text) {
+  let out = "";
+  let quote = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote === "'") {
+      if (char === "'") { quote = ""; out += char; }
+      continue;
+    }
+    if ((char === "\\" || char === "`") && index + 1 < text.length) {
+      out += char + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === '"') quote = quote === '"' ? "" : '"';
+    else if (char === "'" && !quote) quote = "'";
+    out += char;
+  }
+  return out;
+}
+
+// Replaces each outermost `$( … )` with `$()` and returns the inside texts.
+// Returns null when a substitution never closes, so the caller keeps the old
+// reading of the whole text.
+function splitSubstitutions(text) {
+  let outer = "";
+  const inners = [];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\\" || text[index] === "`") {
+      outer += text.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (text[index] !== "$" || text[index + 1] !== "(") { outer += text[index]; continue; }
+    let depth = 0;
+    let quote = "";
+    let end = -1;
+    for (let at = index + 1; at < text.length; at += 1) {
+      const char = text[at];
+      if (quote) { if (char === quote) quote = ""; else if (char === "\\") at += 1; continue; }
+      if (char === "'" || char === '"') { quote = char; continue; }
+      if (char === "\\") { at += 1; continue; }
+      if (char === "(") depth += 1;
+      else if (char === ")" && --depth === 0) { end = at; break; }
+    }
+    if (end < 0) return null;
+    inners.push(text.slice(index + 2, end));
+    outer += "$()";
+    index = end;
+  }
+  return { outer, inners };
+}
+
+function programWordBuiltAtRuntime(text, runtimeText) {
   for (const segment of splitCommandSegments(text)) {
     let words = splitShellWordsRaw(segment);
     if (POWERSHELL_ASSIGNED_RE.test(words[0] ?? "") && POWERSHELL_ASSIGN_OP_RE.test(words[1] ?? "")) {

@@ -6,19 +6,16 @@ import { PUSH_POLICY } from "./prompt-source-lib.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The gauntlet and ship-intent reminders both embed PUSH_POLICY, and one prompt
-// often trips both ("review this code, then ship it"). State it once per turn.
+// If a second module ever embeds PUSH_POLICY again, state it once per turn.
 export const PROMPT_DEDUPE_BLOCKS = [
   { text: PUSH_POLICY, replacement: "LANDING POLICY: as stated above (unchanged)." },
 ];
 
-// Mason, 2026-10-02: five reminder modules were unwired here
+// Mason, 2026-10-02: five reminder modules were unwired here and later deleted
 // (dangerous-phrase-warning, codex-gauntlet-reminder, agent-pair-review-reminder,
 // codex-to-claude-handoff-reminder, autopilot-intent-reminder). They duplicated
 // the user-level risky-phrase nudge or the ship reminder, and fired on agent
-// reports as often as on Mason's words. Without autopilot-intent-reminder the
-// OVERNIGHT-INTENT flag is never written, so the overnight handshake no longer
-// blocks work.
+// reports as often as on Mason's words. The overnight handshake they fed is gone.
 export const SHARED_PROMPT_MODULES = [
   "./ship-intent-reminder.mjs",
   "./hold-latch-prompt.mjs",

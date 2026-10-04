@@ -298,6 +298,12 @@ const SQL_BUILTIN_FNS = new Set([
   "pg_get_indexdef", "pg_get_viewdef", "pg_get_expr", "pg_relation_size",
   "pg_total_relation_size", "pg_table_size", "pg_indexes_size", "pg_database_size",
   "format_type", "to_regclass", "to_regproc", "to_regtype",
+  // catalog reads that were refused as RPCs in real sessions (2026-10-04 count)
+  "pg_get_userbyid", "pg_get_triggerdef", "pg_get_function_identity_arguments",
+  "pg_get_function_arguments", "pg_get_function_result", "pg_get_ruledef",
+  "to_regprocedure", "to_regnamespace", "to_regrole", "aclexplode", "oidvectortypes",
+  "pg_function_is_visible", "pg_table_is_visible",
+  "uid", // auth.uid(): the caller's id, a read
   "has_table_privilege", "has_column_privilege", "has_function_privilege",
   "has_schema_privilege", "has_database_privilege", "pg_has_role",
   "gen_random_uuid", "uuid_generate_v4", "exists", "currval", "lastval",
@@ -323,6 +329,9 @@ export function findNonReadFunctionCall(sqlText) {
   while ((m = re.exec(text)) !== null) {
     const name = m[1].toLowerCase();
     if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
+    // `AS t(a, b)` names an alias's columns and `::numeric(10,2)` is a type;
+    // neither is a call.
+    if (/(?:\bas|::)\s*$/i.test(text.slice(0, m.index))) continue;
     if (READONLY_FN_NAMES.has(name)) continue;
     if (READONLY_FN_PREFIX_RE.test(name)) continue;
     // pg_catalog/information_schema internals are reads

@@ -20,9 +20,9 @@
 // FAIL-SAFE: the flag is OFF by default, and ANY error here → emit nothing (defer
 // to the normal permission flow / prompt). It never auto-allows on uncertainty.
 
-import { readFileSync, existsSync, unlinkSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { autopilotDecision, flagActive, intentFresh, overnightGateDecision } from "./autopilot-lib.mjs";
+import { autopilotDecision, flagActive } from "./autopilot-lib.mjs";
 
 function nothing() { process.exit(0); }               // defer to normal flow
 function allow() {
@@ -34,45 +34,19 @@ function deny(name) {
   process.exit(0);
 }
 
-function denyUnarmed(name) {
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `OVERNIGHT HANDSHAKE: Mason asked for a hands-free run but autopilot is NOT armed, so "${name}" is paused. Arm it FIRST (node .claude/hooks/autopilot-arm.mjs --hours N), confirm to Mason in one plain-English line, then continue. If this is NOT actually a hands-free run — the latch fires on a prompt heuristic, so a prompt that merely DISCUSSES autopilot trips it — then do NOT arm autopilot to get unblocked. There is deliberately no shell escape: the latch expires by itself 45 minutes after it was written, and Mason can delete the flag file himself (his shell is not gated by these hooks; in a worktree it lives at <worktree>/.claude/session-state/OVERNIGHT-INTENT.flag, not the main checkout's). Reads still work while you wait — use them, and tell Mason plainly that you are paused and why. Reassurance without arming is the exact repeated failure this blocks.` } }));
-  process.exit(0);
-}
-
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const stateDir = path.join(projectDir, ".claude", "session-state");
 const flagPath = path.join(stateDir, "AUTOPILOT.on");
-const intentPath = path.join(stateDir, "OVERNIGHT-INTENT.flag");
 
 let armed = false;
 if (existsSync(flagPath)) {
   try { armed = flagActive(readFileSync(flagPath, "utf8"), Date.now()).active; } catch { armed = false; }
 }
 
-if (!armed) {
-  // Handshake: overnight intent recorded but autopilot never armed → force the arm
-  // before any building/mutating call proceeds. (Fail-open on any error.)
-  try {
-    if (existsSync(intentPath) && intentFresh(readFileSync(intentPath, "utf8"), Date.now())) {
-      // Pass the TRUSTED project root and the call's cwd so the arm allowance can
-      // be bound to the real script rather than to its spelling (Codex HIGH,
-      // 2026-09-02): a relative path resolves against the shell's directory, so
-      // matching the text alone would run a planted file during the pause.
-      const gate = overnightGateDecision(payload?.tool_name, payload?.tool_input, {
-        projectDir,
-        cwd: payload?.cwd,
-      });
-      if (gate === "deny-until-armed") denyUnarmed(payload?.tool_name || "(tool)");
-    }
-  } catch { /* fail open */ }
-  nothing();   // no active autopilot → normal permission flow
-}
-
-// Armed: the intent is satisfied — clear the handshake flag (best effort).
-try { if (existsSync(intentPath)) unlinkSync(intentPath); } catch { /* ignore */ }
+if (!armed) nothing();   // no active autopilot → normal permission flow
 
 const decision = autopilotDecision(payload?.tool_name, payload?.tool_input);
 if (decision === "deny") deny(payload?.tool_name || "(tool)");

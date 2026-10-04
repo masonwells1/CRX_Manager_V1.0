@@ -98,6 +98,16 @@ eq(classifySql("DELETE FROM customers WHERE id = 5").kind, "real-delete", "non-f
 eq(classifySql("SELECT setval('invoice_number_seq', 1, false)").kind, "sequence-mutation", "setval via SELECT blocked (PR #352)");
 eq(classifySql("SELECT cancel_order(42)").kind, "rpc-via-select", "mutating RPC via SELECT blocked (PR #352)");
 ok(!classifySql("SELECT currval('invoice_number_seq')").block, "currval read allowed");
+// Catalog reads refused as RPCs in real sessions (2026-10-04).
+ok(!classifySql("SELECT pg_get_userbyid(p.proowner), pg_get_function_identity_arguments(p.oid) FROM pg_proc p").block,
+  "catalog owner/signature reads allowed");
+ok(!classifySql("SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t").block, "trigger definition read allowed");
+ok(!classifySql("SELECT (aclexplode(p.proacl)).grantee FROM pg_proc p WHERE p.oid = to_regprocedure('public.get_balance(uuid)')").block,
+  "ACL and regprocedure reads allowed");
+ok(!classifySql("SELECT * FROM unnest(ARRAY[1,2]) AS t(x)").block, "a column-alias list is not a call");
+ok(!classifySql("SELECT total::numeric(12,2) FROM orders").block, "a typmod cast is not a call");
+eq(classifySql("SELECT * FROM unnest(ARRAY[1,2]) AS t(x), cancel_order(42)").kind, "rpc-via-select",
+  "an RPC after an alias list is still caught");
 ok(!classifySql("SELECT * FROM orders WHERE status = 'cancelled'").block, "plain filtered select allowed");
 eq(classifySql("INSERT INTO orders (x) VALUES (1)").kind, "real-insert", "kind reported");
 
