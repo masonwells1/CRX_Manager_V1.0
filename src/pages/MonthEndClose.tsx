@@ -575,9 +575,9 @@ export default function MonthEndClose() {
             {checklist.map((item, i) => (
               <div key={i} className="flex items-start gap-3">
                 {item.done ? (
-                  <CheckCircle className="w-5 h-5 text-crx-green flex-shrink-0 mt-0.5" />
+                  <CheckCircle className="w-5 h-5 text-crx-green shrink-0 mt-0.5" />
                 ) : (
-                  <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                 )}
                 <div className="flex-1">
                   <p className={`text-sm font-medium ${item.done ? 'text-nav-dark' : 'text-amber-700'}`}>

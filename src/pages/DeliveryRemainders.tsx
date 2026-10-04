@@ -147,7 +147,7 @@ export default function DeliveryRemainders() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
-          <Package className="w-4 h-4 text-secondary flex-shrink-0" />
+          <Package className="w-4 h-4 text-secondary shrink-0" />
           <span>{row.product_name}</span>
         </div>
       ),

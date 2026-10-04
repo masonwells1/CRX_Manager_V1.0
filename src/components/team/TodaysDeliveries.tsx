@@ -141,7 +141,7 @@ export default function TodaysDeliveries() {
           to="/deliveries"
           className="flex items-center gap-2 px-3 py-2 mb-4 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors"
         >
-          <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           {data.unassigned_count} {data.unassigned_count === 1 ? 'delivery' : 'deliveries'} today {data.unassigned_count === 1 ? 'has' : 'have'} no driver assigned
         </Link>
       )}
