@@ -26,8 +26,8 @@ assert.match(startup, /do not re-read AGENTS\.md or CLAUDE\.md/);
 assert.doesNotMatch(startup, /Silently read AGENTS\.md/);
 assert.match(startup, /Load only the workflow and reference documents/);
 assert.match(startup, /Mason cannot read code or safely review a diff/);
-assert.match(startup, /Before multi-file work.*get his approval after a short plan/);
-assert.match(startup, /continue routine implementation without repeated pauses/);
+assert.match(startup, /Post a short plan, then continue routine implementation without waiting for approval or repeated pauses/);
+assert.doesNotMatch(startup, /get his approval after a short plan/);
 assert.match(startup, /Every hard-gated live action listed in AGENTS\.md/);
 assert.match(startup, /each destructive migration.*current approval immediately beforehand/);
 // Mason's autonomous-landing rule (2026-09-26) — the conditions travel with it.

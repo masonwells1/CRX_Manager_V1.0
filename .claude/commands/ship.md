@@ -27,7 +27,7 @@ If on `main`, create one: `git checkout -b ship/<short-slug>`. Tell Mason the br
 **For substantial work, plan before coding** — this is where Mason (a non-coder) has the most power, because he can read English even though he can't read code:
 1. Read the live schema / existing code for the area (don't trust memory).
 2. Write a short plain-English plan: what you'll build, the assumptions you're making, and the 2–4 files you'll touch.
-3. Show it to Mason and let him confirm or correct **before** you write code. A wrong understanding caught here costs one message; caught after coding costs a whole rebuild. (Skip the confirmation only for genuinely mechanical multi-file changes.) This confirmation is Claude's checkpoint; Codex posts the short plan and proceeds without waiting (`AGENTS.md` › Operating Contract).
+3. Post it to Mason, then proceed without waiting for his confirmation (Mason, 2026-10-03; Claude and Codex alike, `AGENTS.md` › Operating Contract). The plan is his chance to say "stop" and redirect; if he does, stop at once. Hard-gated actions still need his explicit approval.
 
 ## Step 1 — Implement the job to completion
 
