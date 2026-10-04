@@ -336,7 +336,7 @@ const emptyMorningSummary: MorningSummaryData = {
 function AllClear({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 py-3 text-sm text-gray-500">
-      <CheckCircle className="w-4 h-4 text-crx-green flex-shrink-0" />
+      <CheckCircle className="w-4 h-4 text-crx-green shrink-0" />
       <span>{label}</span>
     </div>
   );
@@ -368,7 +368,7 @@ function TileHeader({
       {onLink && (
         <button
           onClick={onLink}
-          className="flex min-h-[44px] flex-shrink-0 items-center gap-1 text-sm text-crx-green hover:underline sm:min-h-0"
+          className="flex min-h-[44px] shrink-0 items-center gap-1 text-sm text-crx-green hover:underline sm:min-h-0"
         >
           {linkLabel ?? 'View all'} <ChevronRight className="w-4 h-4" />
         </button>
@@ -1106,7 +1106,7 @@ export default function OfficeCockpit() {
       {/* All-clear banner when nothing is wrong */}
       {totalExceptions === 0 && (
         <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-4">
-          <CheckCircle className="w-6 h-6 text-crx-green flex-shrink-0" />
+          <CheckCircle className="w-6 h-6 text-crx-green shrink-0" />
           <div>
             <p className="font-semibold text-emerald-800">All clear!</p>
             <p className="text-sm text-emerald-600">No exceptions found across any category.</p>
@@ -1144,7 +1144,7 @@ export default function OfficeCockpit() {
                       <span className="ml-2 text-gray-400">{row.total_acres} ac</span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+                  <div className="flex items-center gap-1 text-gray-400 shrink-0">
                     <span>{row.job_date}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </div>
@@ -1289,7 +1289,7 @@ export default function OfficeCockpit() {
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
                     <span className="ml-2 text-gray-500">#{row.invoice_number}</span>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={row.status === 'unposted' ? 'info' : 'draft'} size="sm">
                       {row.status}
                     </Badge>
@@ -1334,7 +1334,7 @@ export default function OfficeCockpit() {
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
                     <span className="ml-2 text-gray-500">#{row.invoice_number}</span>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={row.status === 'unposted' ? 'info' : 'draft'} size="sm">
                       {row.status}
                     </Badge>
@@ -1386,7 +1386,7 @@ export default function OfficeCockpit() {
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
                     <span className="ml-2 text-gray-500">#{row.delivery_number}</span>
                   </div>
-                  <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+                  <div className="flex items-center gap-1 text-gray-400 shrink-0">
                     <span className="text-xs">
                       {row.completed_at ? new Date(row.completed_at).toLocaleDateString() : 'Completed'}
                     </span>
@@ -1441,7 +1441,7 @@ export default function OfficeCockpit() {
                     </Badge>
                     <span className="text-gray-500 truncate">{flag.message}</span>
                   </div>
-                  <ArrowRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                  <ArrowRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                 </button>
               ))}
               {data.watchdogFlags.length > 6 && (
@@ -1487,7 +1487,7 @@ export default function OfficeCockpit() {
                       <span className="ml-2 text-gray-400">{row.total_acres} ac</span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 text-gray-400 flex-shrink-0">
+                  <div className="flex items-center gap-1 text-gray-400 shrink-0">
                     <span>{row.job_date}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </div>
@@ -1532,7 +1532,7 @@ export default function OfficeCockpit() {
                     )}
                     <span className="ml-2 text-gray-500">{row.license_type}</span>
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
+                  <div className="flex items-center gap-1 shrink-0">
                     <span className={`text-xs font-medium ${row.expired ? 'text-red-600' : 'text-yellow-600'}`}>
                       {row.expired ? 'Expired' : 'Expires'} {row.expiry_date}
                     </span>
@@ -1576,7 +1576,7 @@ export default function OfficeCockpit() {
                     <span className="font-medium text-nav-dark">{row.customer_name}</span>
                     <span className="ml-2 text-gray-500">#{row.invoice_number}</span>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="text-red-600 font-medium text-xs">{formatCents(row.balance_cents)}</span>
                     <span className="text-gray-400 text-xs">due {row.due_date}</span>
                     <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
@@ -1623,7 +1623,7 @@ export default function OfficeCockpit() {
                       {row.job_count} job{row.job_count === 1 ? '' : 's'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="text-red-600 font-medium text-xs">
                       short {row.shortfall_qty.toLocaleString(undefined, { maximumFractionDigits: 1 })}{row.inventory_unit ? ` ${row.inventory_unit}` : ''}
                     </span>

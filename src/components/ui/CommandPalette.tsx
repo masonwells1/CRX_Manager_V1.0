@@ -403,7 +403,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       <div className="relative w-full max-w-lg mx-4 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden animate-in fade-in zoom-in-95">
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
-          <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
+          <Search className="w-5 h-5 text-gray-400 shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -447,7 +447,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   : 'text-gray-700 hover:bg-gray-50'
               }`}
             >
-              <span className={`flex-shrink-0 ${index === activeIndex ? 'text-crx-green' : 'text-gray-400'}`}>
+              <span className={`shrink-0 ${index === activeIndex ? 'text-crx-green' : 'text-gray-400'}`}>
                 {renderIcon(item)}
               </span>
               <span className="flex-1 min-w-0">
@@ -458,7 +458,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               </span>
               {renderBadge(item)}
               {index === activeIndex && (
-                <ArrowRight className="w-4 h-4 text-crx-green flex-shrink-0" />
+                <ArrowRight className="w-4 h-4 text-crx-green shrink-0" />
               )}
             </button>
           ))}

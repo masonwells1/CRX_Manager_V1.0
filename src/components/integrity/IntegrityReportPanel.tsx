@@ -92,9 +92,9 @@ export default function IntegrityReportPanel() {
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   {check.passed ? (
-                    <CheckCircle2 className="w-5 h-5 text-crx-green flex-shrink-0" />
+                    <CheckCircle2 className="w-5 h-5 text-crx-green shrink-0" />
                   ) : (
-                    <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
                   )}
                   <h2 className="font-medium text-gray-900">{check.name}</h2>
                   <span className="text-xs text-gray-500">
