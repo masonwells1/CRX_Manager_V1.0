@@ -702,7 +702,7 @@ export default function AppliedRecordsManager({
       </div>
       {jobSummary.isOver && (
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
             Over-applied by {jobSummary.over.toLocaleString(undefined, { maximumFractionDigits: 2 })} ac
             &mdash; applied acres ({jobSummary.applied.toLocaleString(undefined, { maximumFractionDigits: 2 })})
@@ -1157,7 +1157,7 @@ export default function AppliedRecordsManager({
             </p>
             {tachEndLow && (
               <div className="mt-1 flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
-                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                 <span>End tach is lower than beginning tach &mdash; this is usually a typo. Check the readings before saving.</span>
               </div>
             )}

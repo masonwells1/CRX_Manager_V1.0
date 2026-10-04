@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-03 — Claude plans, then proceeds; agents never ask Mason to act for CodeRabbit
+
+**Decision (Mason, in chat).** Claude drops its "post a plan and wait for Mason's OK" pause and works like Codex: post a short plain-English plan, then continue. Agents request any CodeRabbit review themselves and never ask Mason to comment, label, or click for it (FarmRx adopted the same rule in its own repository).
+**Why.** Mason wants maximum agent autonomy and no manual CodeRabbit step; he can still say "stop" at any time after seeing the plan.
+**What this forbids/implies:** the approval gates in `AGENTS.md` › Safety and Protected Delivery are unchanged, and each still needs his explicit yes in the current conversation. Source: `docs/changelog.d/2026-10-03-slim-agent-guidance.md`.
+
 ## 2026-10-02 — guards block only what cannot be undone; everything else warns. Lighter review for UI and wording changes
 
 **Decision (Mason, in chat):** Guards hard-block only irreversible or outward-facing actions: force pushes, wiping files or the database, secrets, live database changes and unreviewed migration applies, merging without the required reviews, forged review proofs, and Mason's own "stop". Every other guard warns instead of blocking or is removed. No new guard, hook or gate is built for 30 days unless something actually breaks for a customer. Separately, Mason said YES to lighter review: screen and wording changes ship on green checks plus CodeRabbit approval, while money, inventory, database and security changes keep the full Codex review (Luna rounds plus the exact-SHA Sol proof). The lighter-review rule is not implemented yet; it needs its own change to the merge gate and `.claude/commands/ship.md`.

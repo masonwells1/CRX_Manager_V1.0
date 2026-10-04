@@ -94,13 +94,13 @@ export default function MultiSelectDropdown({
                     />
                     {o.color && (
                       <span
-                        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
                         style={{ backgroundColor: o.color }}
                         aria-hidden="true"
                       />
                     )}
                     <span className="text-sm text-nav-dark flex-1">{o.label}</span>
-                    {checked && <Check className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />}
+                    {checked && <Check className="w-3.5 h-3.5 text-crx-green shrink-0" />}
                   </label>
                 );
               })}

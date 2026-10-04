@@ -645,7 +645,7 @@ export default function FieldView() {
             </div>
             <p className="mt-1 text-sm text-slate-200 font-medium truncate">{card.customer_name || 'Unknown'}</p>
             <p className="flex items-center gap-1.5 text-xs text-slate-500 truncate">
-              <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+              <MapPin className="w-3.5 h-3.5 shrink-0" />
               {/* A legacy whole-job assignment (jobs.applicator_id, no per-location
                   dispatch rows) has no locations array — "0 locations assigned to
                   you" would read as a bug, so name what it actually is. */}
@@ -654,7 +654,7 @@ export default function FieldView() {
                 : `${card.locations.length} location${card.locations.length === 1 ? '' : 's'} assigned to you`}
             </p>
           </div>
-          <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+          <div className="flex flex-col items-end gap-0.5 shrink-0">
             <span className="text-lg font-bold text-white tabular-nums leading-tight">
               {formatAppliedOfTotal(card.job_applied_acres, card.job_total_acres)}
             </span>
@@ -716,7 +716,7 @@ export default function FieldView() {
                         <li key={f.id} className="flex items-center justify-between gap-3 text-sm">
                           <span className="text-slate-100 truncate">{f.field_name || 'Field'}</span>
                           {f.acres_to_treat != null && (
-                            <span className="text-slate-500 tabular-nums flex-shrink-0">{f.acres_to_treat} ac</span>
+                            <span className="text-slate-500 tabular-nums shrink-0">{f.acres_to_treat} ac</span>
                           )}
                         </li>
                       ))}
@@ -859,8 +859,8 @@ export default function FieldView() {
       {/* Header — title + view toggle. Touch-friendly; sized for a phone width. */}
       <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur border-b border-slate-800">
         <div className="flex items-center gap-2 px-4 py-3">
-          <Truck className="w-6 h-6 text-crx-green flex-shrink-0" />
-          <h1 className="text-base font-semibold tracking-wide flex-shrink-0">My Day</h1>
+          <Truck className="w-6 h-6 text-crx-green shrink-0" />
+          <h1 className="text-base font-semibold tracking-wide shrink-0">My Day</h1>
           <div className="ml-auto inline-flex rounded-lg bg-slate-800 p-0.5">
             <button
               onClick={() => setView('list')}
@@ -899,7 +899,7 @@ export default function FieldView() {
             <button
               onClick={fetchCards}
               aria-label="Reload my jobs"
-              className="inline-flex items-center justify-center w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 flex-shrink-0"
+              className="inline-flex items-center justify-center w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 shrink-0"
             >
               <RefreshCw className="w-4 h-4" />
             </button>

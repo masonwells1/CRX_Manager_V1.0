@@ -345,7 +345,7 @@ export default function UnbilledApplicationsPanel() {
       {lastCreatedMessage && (
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-medium text-emerald-800">
-            <CheckCircle2 className="w-5 h-5 text-crx-green flex-shrink-0" />
+            <CheckCircle2 className="w-5 h-5 text-crx-green shrink-0" />
             <span>{lastCreatedMessage}</span>
           </div>
           {billNextReady && jobs.length > 0 && (
@@ -385,7 +385,7 @@ export default function UnbilledApplicationsPanel() {
               </div>
               <button
                 onClick={() => navigate(s.parentPath)}
-                className="flex min-h-[44px] flex-shrink-0 items-center gap-1 text-xs text-crx-green hover:underline"
+                className="flex min-h-[44px] shrink-0 items-center gap-1 text-xs text-crx-green hover:underline"
               >
                 View all <ArrowRight className="w-3 h-3" />
               </button>

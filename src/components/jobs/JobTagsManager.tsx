@@ -169,7 +169,7 @@ export default function JobTagsManager({ open, onClose, tags, onChanged }: JobTa
                   return (
                     <div key={tag.id} className="flex items-center gap-3 p-2.5 border border-gray-200 rounded-lg">
                       <span
-                        className="w-3 h-3 rounded-full flex-shrink-0"
+                        className="w-3 h-3 rounded-full shrink-0"
                         style={{ backgroundColor: e.color }}
                         aria-hidden="true"
                       />

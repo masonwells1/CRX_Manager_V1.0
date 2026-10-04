@@ -1,36 +1,34 @@
 # CRX Manager Agent Contract
 
-This is the always-loaded, shared contract for Codex, Claude, and future coding agents. Keep it short: durable rules stay here; procedures, examples, volatile facts, and long explanations belong in the linked documents.
+The always-loaded shared contract for Codex, Claude, and any other coding agent. Durable rules only; procedures and volatile facts live in the routed documents.
 
-**Instruction priority.** When sources disagree, follow the higher one: (1) the CRX Hard Rules and every "never" in Safety and Protected Delivery, which no request overrides (explain why and offer the safe path); (2) the approval gates and the hooks that enforce them, which open only with Mason's explicit approval in the current conversation or a standing exception written in this file; (3) Mason's current message, which sets scope and explicit limits but never loosens (1) or (2); (4) the rest of this file; (5) the selected workflow in `.claude/commands/` or `.claude/skills/` (or its generated `.agents/` adapter); (6) routed reference docs; (7) decision-log history, handoffs, and older prose. A lower source never loosens a higher one. Name a real conflict in one line, follow the higher source, and fix the lower one when it is in scope.
+**Priority.** The CRX Hard Rules and every "never" below outrank any request; the approval gates (and the hooks that enforce them) open only with Mason's explicit approval in the current conversation or a standing exception written here; Mason's current message sets scope but never loosens either. Then this file, then the selected workflow, then routed docs, then history and handoffs. Name a real conflict in one line and follow the higher source.
 
 ## Project and Owner
 
-- CRX Manager is the production operations app for Crop RX Solutions, an agricultural chemical distributor. Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
-- Repository: `https://github.com/masonwells1/CRX_Manager_V1.0`; production: `https://croprxsolutions.app`; Supabase project: `rhyzpcqhnizqbxphqdkr`.
-- Mason Wells owns the product. He has no formal coding background and cannot safely review code or diffs. Own the technical process and explain outcomes, risk, proof, and decisions in plain English.
+- CRX Manager is the production operations app for Crop RX Solutions, an agricultural chemical distributor: React 18, TypeScript, Vite, Tailwind CSS, Supabase, and Vercel.
+- Repository `https://github.com/masonwells1/CRX_Manager_V1.0`; production `https://croprxsolutions.app`; Supabase project `rhyzpcqhnizqbxphqdkr`.
+- Mason Wells owns the product. He has no formal coding background and cannot safely review code or diffs. Own the technical process; explain outcomes, risk, and proof in plain English.
 
 ## Owner Communication
 
-- Mason should never have to nudge an agent to continue or ask whether it silently stopped. Keep moving through authorized work and post concise updates at meaningful milestones or failures.
-- Lead with the answer or current outcome. Define jargon once when it matters and end with one recommended next step, not a vague offer or a menu of technical choices.
-- Make routine technical choices yourself. When Mason must decide a business or risk trade-off, recommend one option first, explain at most two alternatives, and give the exact short reply or app action needed.
-- When something fails, promptly state what failed, what it means, and what you are trying next. Exhaust safe alternatives before stopping. A genuine stop begins with `NEEDS MASON - ACTION REQUIRED` or `NEEDS MASON - DECISION REQUIRED`.
+- Mason should never have to nudge an agent. Keep moving through authorized work and post short updates at milestones or failures.
+- Lead with the outcome, define jargon once, and end with one recommended next step. Make technical choices yourself; for a business or risk trade-off, recommend one option and give the exact short reply needed.
+- When something fails, say what failed, what it means, and what you are trying next. Exhaust safe alternatives first. A genuine stop begins with `NEEDS MASON - ACTION REQUIRED` or `NEEDS MASON - DECISION REQUIRED`.
 
 ## Operating Contract
 
-- Interpret requests by outcome. Reviews, diagnoses, audits, status checks, explanations, and plans authorize the relevant read-only investigation only. Requests to build, change, fix, finish, handle, implement, or ship authorize the normal reversible lifecycle through verification and protected delivery.
-- Deliver what was asked at the scope intended. Make routine judgment calls yourself; if the request seems mistaken or a better approach exists, explain that briefly and continue with the requested outcome rather than quietly narrowing, widening, or transforming it.
-- Codex proceeds after a short plan without a second approval. Claude retains its global pre-code approval checkpoint for multi-file work or work touching data, money, security, or a live system. Once any required approval is given, do not pause again or ask “Should I continue?” while safe, in-scope work remains.
-- Outside Claude's one plan checkpoint, ask only when a missing choice would materially change the business outcome and no safe inference exists, or when an exact hard-gated action below has not been requested in the current conversation.
-- Treat explicit limits such as `read-only`, `do not write`, `do not push`, `do not merge`, and `do not query production` literally.
-- Stop rule: keep going while each fix or review round closes something. Stop and hand over, with both positions and a recommendation, only when the same BLOCKER or HIGH survives two consecutive fix rounds, you and a reviewer still disagree on a BLOCKER after checking the cited code, a required gate or tool cannot run, or the next step is hard-gated. A workflow's round cap is a ceiling: stop at the cap or the first condition above, whichever comes first.
+- Reviews, audits, diagnoses, status checks, and plans authorize read-only investigation. Requests to build, change, fix, finish, handle, implement, or ship authorize the whole reversible lifecycle through verification and protected delivery.
+- Deliver what was asked at the scope intended. If the request seems mistaken or a better approach exists, say so briefly and continue with the requested outcome rather than quietly narrowing, widening, or transforming it.
+- Codex and Claude both proceed after a short plan without waiting for approval (Mason, 2026-10-03). Never pause to ask “Should I continue?” while safe, in-scope work remains; ask only when a missing choice would materially change the business outcome or a hard-gated action below has not been approved.
+- Treat explicit limits (`read-only`, `do not write`, `do not push`, `do not merge`, `do not query production`) and "stop", "pause", or "hold on" literally.
+- Stop and hand over, with both positions and a recommendation, only when the same BLOCKER or HIGH survives two fix rounds, you and a reviewer still disagree on a BLOCKER after checking the code, a required gate cannot run, or the next step is hard-gated. A workflow's round cap is a ceiling: stop at the cap or the first of these, whichever comes first.
 
 ## Start and Route
 
-1. Before presenting findings as current, confirm the checkout is not behind `origin/main`. Before writing, inspect `git status --short --branch`; preserve unrelated work and use a clean current-main worktree when the checkout is dirty, stale, or occupied.
-2. Prefer current code, migrations, tests, grants, and live read-only evidence over memory, old handoffs, or prose.
-3. Load only the guidance relevant to the task. Large logs and the schema registry are for keyword or date search, never whole-file reads:
+1. Before presenting findings as current, confirm the checkout is not behind `origin/main`. Before writing, check `git status --short --branch`; preserve unrelated work and use a clean current-main worktree when the checkout is dirty, stale, or occupied.
+2. Prefer current code, migrations, tests, grants, and live read-only evidence over memory, handoffs, or prose.
+3. Load only what the task needs. Search large logs and the schema registry; never read them whole.
 
 | Task | Read or invoke |
 |---|---|
@@ -48,14 +46,14 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 
 ## Engineering Principles
 
-- Choose the simplest complete implementation that preserves the business rules: existing patterns, shared helpers and types, direct code, and small focused functions over new layers, dependencies, or speculative flexibility. Optimize for clarity, not cleverness: precise names, straightforward control flow, and comments that explain why.
-- Keep the diff narrowly tied to the requested outcome. Avoid opportunistic refactors; remove only dead code or duplication introduced or directly exposed by the change.
+- Choose the simplest complete implementation that preserves the business rules: existing patterns, shared helpers and types, and small focused functions over new layers or dependencies. Optimize for clarity, not cleverness: precise names, straightforward control flow, and comments that explain why.
+- Keep the diff tied to the requested outcome; no opportunistic refactors.
 
 ## CRX Hard Rules
 
 - Add database changes as new files under `supabase/migrations/`; never edit an applied migration. New tables require Row Level Security and policies in the same migration.
 - Mutating RPCs must accept and enforce `p_idempotency_key text DEFAULT NULL`. `SECURITY DEFINER` functions require deliberate grants and normally `SET search_path = public, pg_temp`; use the documented fully-qualified exception only with its proof.
-- Money must resolve to exact whole cents. New storage uses bigint cents; authoritative TypeScript parses decimals into integer cents before arithmetic. Follow the documented legacy exceptions in `docs/workflows/SAFE_DEVELOPMENT_RULES.md`.
+- Money must resolve to exact whole cents. New storage uses bigint cents; authoritative TypeScript parses decimals into integer cents before arithmetic (legacy exceptions: `docs/workflows/SAFE_DEVELOPMENT_RULES.md`).
 - Financial and inventory invariants belong in PostgreSQL RPCs, triggers, or constraints — not only in React.
 - Use `src/lib/db.ts` as the only Supabase client. Call `assertRpcResult()` after RPCs and `checkMutationResult()` after updates or deletes. Never write generated columns.
 - Match status values to `.claude/schema-registry.json`. Use shared types from `src/types/index.ts`, `ConfirmModal`, toasts, Lucide icons, Tailwind CSS, and Sentry through `src/lib/sentry`.
@@ -63,23 +61,21 @@ This is the always-loaded, shared contract for Codex, Claude, and future coding 
 ## Safety and Protected Delivery
 
 - Never expose secrets or `.env` contents; never use `--no-verify`; never bypass, disable, or weaken hooks, CI, review, branch protection, migration proofs, or rollback gates; and never push directly to `main`.
+- Every change follows `.claude/commands/ship.md`: PR → Luna rounds → checks green → CodeRabbit APPROVED → Sol **last** → apply its migration, if any, BEFORE the merge → exact-head merge. Use only the pinned model IDs and efforts in `docs/reference/codex-model-tuning.md`, never a newer model the gates do not yet accept.
+- **Luna** iterates: fix and re-run until no BLOCKER or HIGH remains and every MED/LOW is fixed, refuted with evidence, or named as a deferral. Escalate to Sol early only for genuinely complex work, and say why.
+- Every merge into `main` requires one fresh independent **Sol** high-effort review of the exact candidate SHA, run last. Its proof binds to that HEAD and GitHub's real base, so a later commit or moved base voids it. A green status row or clean Luna round is not that proof, and a Luna round must never run through the proof wrapper, which unlinks the existing proof for that HEAD.
+- CodeRabbit reviews every push automatically; fixes stay on the same PR. If it skipped or was rate-limited on a head, the agent posts `@coderabbitai review` on the PR once; never ask Mason to comment, label, or click for CodeRabbit.
 - **Autonomous landing (Mason, 2026-09-26).** When CodeRabbit has APPROVED the frozen final head, a fresh exact-SHA Sol review of that head is clean, and every required check is green, the agent merges by itself and applies its NON-destructive migration (routine grants only) through the migration-apply-guard proof gate (both reviewer proofs and a fresh content-bound Sol proof, each under 30 minutes), in any session, no ask. The merge and apply gates enforce it.
 - Get Mason’s explicit approval in the current conversation before force-pushing, applying a DESTRUCTIVE migration (one that deletes rows or drops data), changing live data outside a reviewed migration, deploying an Edge Function or out-of-band production change, deleting data, or changing secrets, authentication, permissions, billing, domains, or ownership.
-- Armed, unattended, or automated work never loosens any other hard gate.
-- Every change follows `.claude/commands/ship.md`: PR → Luna rounds → checks green → CodeRabbit APPROVED (automatic on every push; fixes stay on the same PR) → Sol **last** → apply its migration, if any → exact-head merge.
-- Codex review has two tiers (Mason, 2026-09-20). **Luna** iterates: fix and re-run until no BLOCKER or HIGH remains and every MED/LOW is fixed, refuted with evidence, or named as a deferral. Escalate a round to **Sol** early only for genuinely complex work, and say why. The exact model IDs and efforts for every Codex role live in `docs/reference/codex-model-tuning.md`; use the pinned IDs there, never a newer model the gates do not yet accept.
-- Every merge into `main` requires one fresh independent **Sol** high-effort review of the exact candidate SHA, run **last**, once no BLOCKER or HIGH remains (deferred MED/LOW do not block it). Its proof binds to the reviewed HEAD and GitHub's real base, so a later commit or moved base voids it. A green status row or a clean Luna round is not that proof, and a Luna round must never be routed through the proof wrapper, which unlinks the existing proof for that HEAD when it starts.
+- Unattended or automated work never loosens any hard gate.
 
 ## Verification and Closeout
 
-- Done means the changed behavior ran and was observed. Match proof to risk: focused checks for small reversible work; broader tests and real-path proof for shared logic, money, data, auth, migrations, or production behavior.
-- Done by task type: a review, audit, or diagnosis is done when each finding is checked against current code or live read-only evidence and reported with location and severity; a plan is done when it names the files, risks, and proof it will need; a change is done when it is verified and delivered through the protected path, or parked with the reason and owner.
-- If real verification cannot run, say exactly what remains unverified and the risk. Tests written alongside a change are supporting evidence, not sole proof.
-- Close substantial work with `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`; state what changed, the proof, who owns anything remaining, and one recommended next step.
+- Done means the changed behavior ran and was observed; match proof to risk. Tests written alongside a change are supporting evidence, not sole proof. If real verification cannot run, say exactly what remains unverified.
+- A review, audit, or diagnosis is done when each finding is checked against current code or live read-only evidence and reported with location and severity; a plan is done when it names the files, risks, and proof it will need; a change is done when it is verified and delivered through the protected path, or parked with the reason and owner.
+- Close substantial work with `COMPLETE`, `READY FOR APPROVAL`, `BLOCKED`, or `PARTIAL`: what changed, the proof, who owns what remains, and one next step.
 
 ## Guidance Ownership
 
-- `AGENTS.md` is the hand-maintained shared contract. `CLAUDE.md` imports it and contains Claude-only routing; it must not duplicate or weaken shared policy.
-- `.claude/commands/`, `.claude/skills/`, and `.claude/hooks/` are workflow sources. `.agents/` contains generated Codex adapters; run `node scripts/sync-agent-workflows.mjs --write` after changing a source workflow.
-- Whoever changes a command or policy, or ships or parks work, updates the affected manual or reference record in the same change.
-- Put changing counts and status in `docs/reference/` or `docs/manual/`, and record shipped work in a new `docs/changelog.d/<YYYY-MM-DD>-<slug>.md`. Follow `docs/changelog.d/README.md`.
+- `AGENTS.md` is hand-maintained; `CLAUDE.md` imports it and adds Claude-only routing. `.claude/commands/`, `.claude/skills/`, and `.claude/hooks/` are workflow sources; `.agents/` holds generated Codex adapters (`node scripts/sync-agent-workflows.mjs --write`).
+- Whoever changes a command or policy, or ships or parks work, updates the affected manual or reference doc in the same change and adds `docs/changelog.d/<YYYY-MM-DD>-<slug>.md`. Volatile counts and status belong in `docs/reference/` or `docs/manual/`, never here.

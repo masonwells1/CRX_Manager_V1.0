@@ -4275,13 +4275,13 @@ export default function JobDetail() {
                   <div key={i} className={`border rounded-lg p-3 space-y-2 ${hazard || rowDefect ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
                     {rowDefect && (
                       <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
-                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                         <span><strong>This line cannot be saved</strong> because {rowDefect}.</span>
                       </div>
                     )}
                     {hazard && (
                       <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
-                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                         <span>
                           <strong>This line cannot be saved.</strong> Its quantity ({totalApplied}) is counted in{' '}
                           <strong>{hazard.quantityUnit}</strong>, but its cost and price are quoted per{' '}
@@ -4901,7 +4901,7 @@ export default function JobDetail() {
           </p>
           {status === 'scheduled' && (
             <div className="flex items-start gap-2 p-2.5 rounded-lg bg-blue-50 text-xs text-blue-800">
-              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <Check className="w-4 h-4 shrink-0 mt-0.5" />
               <span>This job hasn&apos;t been started yet &mdash; completing it will mark it started and finished in one step (for a job sprayed earlier and recorded now).</span>
             </div>
           )}
@@ -5052,7 +5052,7 @@ export default function JobDetail() {
       <Modal open={showOverrideModal} onClose={() => { if (!saving) setShowOverrideModal(false); }} title="Over-label-rate override">
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <p className="text-sm text-amber-800">
               {guardrailState.overRateCount} chemical line(s) exceed the product&rsquo;s maximum label rate
               {guardrailState.overRateProducts.length > 0 && <> (<strong>{guardrailState.overRateProducts.join(', ')}</strong>)</>}.
