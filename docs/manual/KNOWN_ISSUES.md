@@ -314,7 +314,9 @@ is required so a return can never reverse more COGS than those reports recognize
 reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
 older copy.
 
-## OPEN 2026-09-21 (database fix LIVE 2026-10-02; page change in review) — a sales rep cannot remove a customer document (admins can)
+## FIXED 2026-10-04 (verified live) — a sales rep could not remove a customer document (admins could)
+
+**Verified on croprxsolutions.app 2026-10-04.** Signed in as the test sales rep `[E2E] Test Rep`, on the fake customer `[E2E] Remove Test` assigned to that rep: a throwaway PDF was uploaded, then **Remove** showed "Document removed" and the file stayed gone after a refresh. The `customer_documents` row reads removed at 14:28 UTC by `[E2E] Test Rep`, and `activity_feed` holds the `document_removed` entry. The database fix is `20260921180000_soft_delete_customer_document_rpc` (PR #800); the page change is PR #875 (`8bf73bf4a`). Everything below is the history.
 
 Found while proving the customer-document download-link fix (now in the archive); separate from it and
 unchanged by it. `customer_documents_rep_select`
