@@ -8,6 +8,12 @@ settled calls. Newest first, roughly — a few entries from the same week sit sl
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
+## 2026-10-03 — Claude plans, then proceeds; agents never ask Mason to act for CodeRabbit
+
+**Decision (Mason, in chat).** Claude drops its "post a plan and wait for Mason's OK" pause and works like Codex: post a short plain-English plan, then continue. Agents request any CodeRabbit review themselves and never ask Mason to comment, label, or click for it (FarmRx adopted the same rule in its own repository).
+**Why.** Mason wants maximum agent autonomy and no manual CodeRabbit step; he can still say "stop" at any time after seeing the plan.
+**What this forbids/implies:** the approval gates in `AGENTS.md` › Safety and Protected Delivery are unchanged, and each still needs his explicit yes in the current conversation. Source: `docs/changelog.d/2026-10-03-slim-agent-guidance.md`.
+
 ## 2026-10-02 — CORRECTION: PRs do merge on CodeRabbit's approval under `protect-main`
 
 **This amends the 2026-09-26 "Fewer permission prompts" entry below**, which said "no PR has yet merged on such an approval." PRs had in fact been merging on that approval since 2026-09-28.

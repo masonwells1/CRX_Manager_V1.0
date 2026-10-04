@@ -20,7 +20,7 @@ These are the detailed engineering rules behind the concise contract in `AGENTS.
 
 ### 3. Plan before building
 - For substantial work, state the goal, observable completion conditions, files or systems likely to change, and one current step.
-- Mason's request to build, fix, finish, handle, implement, or ship approves ordinary reversible in-scope work. Codex continues after the plan; Claude keeps its global pre-code approval checkpoint for multi-file work or work touching data, money, security, or a live system. After any required approval, continue without repeated permission pauses.
+- Mason's request to build, fix, finish, handle, implement, or ship approves ordinary reversible in-scope work. Codex and Claude both continue after a short plan without waiting for approval (Mason, 2026-10-03), and without repeated permission pauses. Hard-gated actions in `AGENTS.md` still need his explicit approval.
 - Break large changes into small, observable steps. Ask Mason only for a material business choice or an action listed as hard-gated in `AGENTS.md`.
 
 ## Simplicity and Maintainability
