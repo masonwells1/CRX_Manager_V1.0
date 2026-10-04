@@ -11,8 +11,11 @@ Before the fix the same action was refused with "new row violates row-level secu
 (a rep removing a document of a customer not assigned to them, a deactivated rep, a stale page whose
 customer was reassigned mid-removal), the retry and replay behaviour of the idempotency key, an
 admin's removal through the new path, and removal of office- or system-uploaded documents were not
-exercised live. They are covered only by the real-schema prover
+exercised live. All but the last are covered by the real-schema prover
 (`scripts/smoke/prove-customer-document-rep-soft-delete-real-schema.mjs`) and the page's unit tests.
+Neither suite removes a document whose `source` is `office` or `system` (the prover seeds every
+row with `source = 'rep'`, `uploaded_by` an admin; the page tests use one fixture with no `source`),
+so that case remains unverified. The function itself reads neither `source` nor `uploaded_by`.
 
 `KNOWN_ISSUES.md` moves the issue to FIXED and `CURRENT_STATE.md` drops it from the open list.
 Fix: `20260921180000_soft_delete_customer_document_rpc` (PR #800) plus the page change (PR #875).
