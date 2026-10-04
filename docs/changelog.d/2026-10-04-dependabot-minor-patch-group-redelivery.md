@@ -17,6 +17,14 @@ longer a dependency after #877, so 10 bumps remain:
 | `globals` (dev) | 17.12.0 | 17.13.0 |
 | `typescript-eslint` (dev) | 8.69.0 | 8.71.0 |
 
+**Removed the `@mapbox/mapbox-gl-draw` → `nanoid ^5.1.16` override.** #360 added it to keep the draw
+path at or above 5.1.16, the fix for the non-secure generator's negative-size infinite loop.
+Draw 1.5.2 declares `nanoid ^6.0.0`, which is also outside the advisory range, and the override was
+forcing it back onto 5.x, a major version it does not support (flagged by the Codex connector on
+this PR). The draw path now resolves `nanoid@6.0.1`. Its `non-secure/index.js` keeps the guarded
+`while (i-- > 0)` loop, and it exports the `customAlphabet` that draw imports. `postcss` still
+resolves its own `nanoid@3.3.18`, unchanged.
+
 **Proof observed.**
 - On #863's head `9ca801f` (same versions, Tailwind 3): `npm ci`, build, typecheck, lint and all
   382 test files passed. A logged-in pass of 12 pages on the local dev server made about 230
