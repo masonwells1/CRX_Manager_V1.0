@@ -328,12 +328,14 @@ if (!psql) {
     console.log(`\n┌─ PREDICATE: ${p.name}  (allowlisted: ${entries.length}) ${'─'.repeat(20)}`);
     const firstHeader = p.header.split('\n').find((l) => l.trim());
     if (firstHeader) console.log(`│ ${firstHeader}`);
+    // The exception keys go in the banner, ABOVE the query: the live-data guard allows a wrapped
+    // query only when it ends exactly at `AS sweep_result;`, so nothing may follow it in the block.
+    if (entries.length) {
+      console.log(`│ candidate exception keys (NOT key-only authorization):`);
+      for (const e of entries) console.log(`│   ${e.violation_key}${e.suspect_param ? ` [suspect_param=${e.suspect_param}; reviewed contracts required]` : ''}`);
+    }
     console.log(`└${'─'.repeat(60)}`);
     console.log(buildOrExit(p, entries));
-    if (entries.length) {
-      console.log(`-- candidate exception keys for ${p.name} (NOT key-only authorization):`);
-      for (const e of entries) console.log(`--   ${e.violation_key}${e.suspect_param ? ` [suspect_param=${e.suspect_param}; reviewed contracts required]` : ''}`);
-    }
     console.log('');
   }
   console.log(
