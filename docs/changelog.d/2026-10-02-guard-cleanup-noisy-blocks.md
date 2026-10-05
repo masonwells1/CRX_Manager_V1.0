@@ -21,6 +21,7 @@ Mason's decision (DECISION_LOG, 2026-10-02): guards block only what cannot be un
 - The user-level hooks were run with real inputs: verify-before-stop was silent in CRX and blocked in a project without `stop-verify.mjs`; the memory guard allowed at 17,000 bytes, warned at 19,000 and blocked at 23,000.
 - The recorded 2026-10-02 hand-back, run through the real hook with its close tag cut off (the shape the strict fail-safe treats as truncated): main's `hold-latch-prompt.mjs` LATCHED, this branch's did not; a bare `stop` latched on both.
 - `npm run test:correction-guards`, `npm run test:agent-workflows` and `npm run check:docs` all exited 0.
+- Review follow-up: the guardrails reference now labels the old fail-closed allowlist paragraph as historical, and the two new hold-latch test helpers fail if the hook process exits non-zero.
 
 **Not verified**
 

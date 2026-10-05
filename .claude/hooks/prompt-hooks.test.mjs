@@ -823,9 +823,14 @@ rmSync(tmpProj, { recursive: true, force: true });
 {
   const dir = mkdtempSync(path.join(tmpdir(), "crx-peer-turn-"));
   const holdFile = path.join(dir, ".claude", "session-state", "hold.json");
-  const runHold = (prompt) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
-    input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-  });
+  // A crashed hook must fail here, not pass on hold state left by an earlier run.
+  const runHold = (prompt) => {
+    const r = spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+      input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    });
+    eq(r.status, 0, `hold-latch-prompt exits 0: ${JSON.stringify(prompt.slice(0, 40))}`);
+    return r;
+  };
   const PRE = "Another Claude session sent a message:\n";
   const OPEN = '<agent-message from="a1">\n[Subagent hand-back] report\n';
   runHold(`${PRE}${OPEN}  the guard honors Mason's stop and pause latch\n  stop now, do not continue`);
@@ -843,9 +848,14 @@ rmSync(tmpProj, { recursive: true, force: true });
 {
   const dir = mkdtempSync(path.join(tmpdir(), "crx-automation-"));
   const holdFile = path.join(dir, ".claude", "session-state", "hold.json");
-  const runHold = (prompt) => spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
-    input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-  });
+  // A crashed hook must fail here, not pass on hold state left by an earlier run.
+  const runHold = (prompt) => {
+    const r = spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+      input: JSON.stringify({ prompt }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+    });
+    eq(r.status, 0, `hold-latch-prompt exits 0: ${JSON.stringify(prompt.slice(0, 40))}`);
+    return r;
+  };
   const AUTOMATION = "Automation: Codex Weekly Usage Coach\nAutomation ID: codex-weekly-usage-coach\nStop any run that is over budget and pause the report.";
   eq(runHold(AUTOMATION).stdout.trim(), "", "automation prompt is silent");
   ok(!existsSync(holdFile), "automation prompt does not latch the hold");
