@@ -80,6 +80,10 @@ every finding in the roughly 100 audit and review reports still to be removed.
   preset-date drift was already tracked.
 - **Not fully re-checked:** three of the largest audits were not re-checked row by row. TODO.md names
   them so they are re-read from git history before anyone acts in those areas.
+- **Re-checked on 2026-10-05:** after Codex found four carried items the code already settled, four
+  read-only agents re-checked every carried TODO.md §5 item and the new KNOWN_ISSUES entry against current
+  code. About 15 items that were already fixed, by design or misstated were removed, and about 15 more
+  were reworded or folded into an existing tracker entry.
 
 **Pointers:** the archive READMEs (`2026-summer`, `2026-summer-closeout`, `2026-spring`,
 `2026-Q1-brainstorms`) now list only what remains. Mentions inside other historical records, the
