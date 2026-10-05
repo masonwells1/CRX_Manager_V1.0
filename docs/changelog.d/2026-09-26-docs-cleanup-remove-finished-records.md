@@ -93,6 +93,20 @@ paths that no longer existed even before this cleanup, and they were not touched
 `src/lib/money.ts`, `src/pages/FieldRoute.tsx`, `src/pages/FieldStop.tsx` and
 `tests/e2e/holds-cleanup-paths.spec.ts`.
 
+**Design docs cited by applied migrations:** applied migrations cannot be edited, and their comments
+cite five removed design docs by their original paths. Those paths had already stopped existing when
+the docs moved into `docs/archive/`, before this cleanup. Recover each one from its archive path:
+- `2026-05-04-phase-4-inventory-purchasing-audit.md` (cited by `20260507150000`):
+  `git show 4b6ff6293:docs/archive/2026-spring/2026-05-04-phase-4-inventory-purchasing-audit.md`;
+- `2026-05-09-implementation-plan.md` (cited by eight `20260510*` migrations):
+  `git show 4b6ff6293:docs/archive/2026-spring/2026-05-09-implementation-plan.md`;
+- `2026-06-18-as-applied-application-invoices-plan.md` (cited by `20260618220000` and `20260618230000`):
+  `git show 4b6ff6293:docs/archive/2026-summer-closeout/plans/2026-06-18-as-applied-application-invoices-plan.md`;
+- `2026-06-22-PHASE2-field-map-acres-design.md` (cited by `20260623120000` and `20260623130000`):
+  `git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/2026-06-22-PHASE2-field-map-acres-design.md`;
+- `credit-memo-apply-CODEX-REVIEW-2026-07-08.md` (cited by `20260711021000`):
+  `git show 4b6ff6293:docs/archive/2026-summer-closeout/audits/credit-memo-apply-CODEX-REVIEW-2026-07-08.md`.
+
 **Deliberately not touched:**
 - `docs/CHANGELOG.md` and `docs/changelog.d/`;
 - the ChemMan research and walkthrough transcripts;
