@@ -14,8 +14,8 @@ was not all re-measured.
   `20260927060531`), and the label repair `20260914100900_repair_commission_history_label_snapshots`
   (the evening of 2026-09-27 Chicago time, ledger `20260928025520`). The whole commission cohort
   `20260914100100`..`20260914100900` is now live — see the RESOLVED entry below.
-- **Nothing from the commission cohort is still parked.** Other parked files (for example PR #800's
-  customer-document fix) are named in their own entries. The four field-season migrations
+- **Nothing from the commission cohort is still parked.** Other parked files are named in their own
+  entries. The four field-season migrations
   `20260914101000`..`20260914101300` applied live on 2026-10-02.
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
@@ -204,8 +204,8 @@ unchanged; both recorder triggers enabled; 34 `revised` correction rows appended
 `commission_earned_state_ledger` (35 -> 69 rows); latest labels hold 0 `[Unknown customer]` and 0
 UUID-shaped source numbers; 35 commissions and 8 commission payments unchanged, none posted, 0
 settlement events. The whole cohort `20260914100100`..`20260914100900` is live, and it is the
-effective ordering high-water. `.claude/schema-registry.json` still records only through `100700`.
-Everything below is the pre-apply record, kept as history.
+effective ordering high-water. `.claude/schema-registry.json` then recorded only through `100700`; the
+2026-10-03 refresh (PR #873) now records the whole cohort. Everything below is the pre-apply record, kept as history.
 
 (Historical, before the 2026-09-27 evening apply.) `20260914100900` is the only cohort file not applied. The transfer intent wrapper
 `20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 under ledger version
@@ -313,34 +313,6 @@ invoice-basis P&L and monthly COGS to round each invoice line to exact whole cen
 is required so a return can never reverse more COGS than those reports recognized, but it means a
 reprinted P&L or monthly summary containing fractional-quantity lines can differ by a cent from an
 older copy.
-
-## OPEN 2026-09-21 (database fix LIVE 2026-10-02; page change in review) — a sales rep cannot remove a customer document (admins can)
-
-Found while proving the customer-document download-link fix (now in the archive); separate from it and
-unchanged by it. `customer_documents_rep_select`
-hides soft-deleted rows (`deleted_at IS NULL`). PostgreSQL applies an UPDATE's SELECT policy to the
-**new** row as well as the old one, so a rep's soft delete — which makes the row invisible to them —
-is refused with `new row violates row-level security policy for table "customer_documents"`, with or
-without `RETURNING`. Reproduced on a local copy of the live policies; admins are unaffected. No live
-document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
-`SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
-
-**Database fix APPLIED LIVE 2026-10-02** (`20260921180000_soft_delete_customer_document_rpc`, ledger version `20261002230949`; PR #800 merged as `c78b73b67`). What remains is the page change: until it ships, the live Documents tab still updates the row directly, so a rep's Remove is still refused. It is on branch `claude/customer-document-rep-remove-page-v4`, rebuilt on current `main`. The history below is the pre-apply record.
-
-**Pre-apply record (checked 2026-09-28).** Open PR #800 (it replaced the closed PR #785) carries
-the parked migration `20260921180000_soft_delete_customer_document_rpc` (on the PR branch, not on
-`main`) — a `SECURITY DEFINER` soft-delete RPC with an idempotency key, no policy change — plus its
-provers. The Documents-tab change that calls the RPC is on the separate unmerged branch
-`claude/customer-document-rep-remove-page-v3` and ships only after the apply (`CustomerDocuments.tsx`
-on `main` still updates the row directly). **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge PR #800
-or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed in the
-live ledger.** `20260914101000`..`101300` are on `main` since #850 and LIVE since 2026-10-02 (ledger versions `20261002201451`..`20261002201609`, read read-only that day), so the hold has LIFTED;
-landing this higher stamp first would strand them. Full
-order: `20260914100700`, `100800`, `100900` (all three live as of 2026-09-28), `101000`..`101300`,
-then this file. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the hold lifts it applies
-under the autonomous-landing rule (#804): CodeRabbit APPROVED on the final head, a fresh exact-SHA
-`gpt-6-sol` review clean, every required check green, and the migration-apply-guard proofs. Until then a rep's Remove on
-the live Documents tab (shipped in PR #764) is refused.
 
 ## OPEN (ACCEPTED by Mason) 2026-09-20 — `adjust_inventory` accepts an idempotency key containing ASCII control characters
 
@@ -2535,6 +2507,36 @@ date they were resolved; each keeps its original heading with the status word up
 evidence note where the status changed on 2026-09-26. Any piece of an archived entry that is still open
 is listed in "OPEN — smaller items carried out of resolved entries" near the top of this file. Moved
 here on 2026-09-26.
+
+### FIXED 2026-10-04 (verified live) — a sales rep could not remove a customer document (admins could)
+
+**Verified on croprxsolutions.app 2026-10-04.** Signed in as the test sales rep `[E2E] Test Rep`, on the fake customer `[E2E] Remove Test` assigned to that rep: a throwaway PDF was uploaded, then **Remove** showed "Document removed" and the file stayed gone after a refresh. The `customer_documents` row reads removed at 14:28 UTC by `[E2E] Test Rep`, and `activity_feed` holds the `document_removed` entry. That was one happy path; the refusal paths (unassigned customer, deactivated rep, mid-removal reassignment), key retry/replay, admin removal and office- or system-uploaded documents were not exercised live. All but the last rest on the real-schema prover and unit tests; neither suite removes a document whose `source` is `office` or `system` (the prover seeds `source = 'rep'` rows uploaded by an admin), so that case remains unverified. The function reads neither `source` nor `uploaded_by`. The database fix is `20260921180000_soft_delete_customer_document_rpc` (PR #800); the page change is PR #875 (`8bf73bf4a`). Everything below is the history.
+
+Found while proving the customer-document download-link fix (now in the archive); separate from it and
+unchanged by it. `customer_documents_rep_select`
+hides soft-deleted rows (`deleted_at IS NULL`). PostgreSQL applies an UPDATE's SELECT policy to the
+**new** row as well as the old one, so a rep's soft delete — which makes the row invisible to them —
+is refused with `new row violates row-level security policy for table "customer_documents"`, with or
+without `RETURNING`. Reproduced on a local copy of the live policies; admins are unaffected. No live
+document exists, so no one has hit it yet. Fixing it is a policy or RPC design choice (for example, a
+`SECURITY DEFINER` soft-delete RPC with an idempotency key) and belongs in its own change.
+
+**Database fix APPLIED LIVE 2026-10-02** (`20260921180000_soft_delete_customer_document_rpc`, ledger version `20261002230949`; PR #800 merged as `c78b73b67`). What remains is the page change: until it ships, the live Documents tab still updates the row directly, so a rep's Remove is still refused. It is on branch `claude/customer-document-rep-remove-page-v4`, rebuilt on current `main`. The history below is the pre-apply record.
+
+**Pre-apply record (checked 2026-09-28).** Open PR #800 (it replaced the closed PR #785) carries
+the parked migration `20260921180000_soft_delete_customer_document_rpc` (on the PR branch, not on
+`main`) — a `SECURITY DEFINER` soft-delete RPC with an idempotency key, no policy change — plus its
+provers. The Documents-tab change that calls the RPC is on the separate unmerged branch
+`claude/customer-document-rep-remove-page-v3` and ships only after the apply (`CustomerDocuments.tsx`
+on `main` still updates the row directly). **Ordering hold (Mason, 2026-09-26, relayed from the field-invoice lane): do not merge PR #800
+or apply it until `20260914101300_finish_generic_field_invoice_cutover` is live and confirmed in the
+live ledger.** `20260914101000`..`101300` are on `main` since #850 and LIVE since 2026-10-02 (ledger versions `20261002201451`..`20261002201609`, read read-only that day), so the hold has LIFTED;
+landing this higher stamp first would strand them. Full
+order: `20260914100700`, `100800`, `100900` (all three live as of 2026-09-28), `101000`..`101300`,
+then this file. **Apply authority (Mason, 2026-09-27): no separate in-chat yes.** Once the hold lifts it applies
+under the autonomous-landing rule (#804): CodeRabbit APPROVED on the final head, a fresh exact-SHA
+`gpt-6-sol` review clean, every required check green, and the migration-apply-guard proofs. Until then a rep's Remove on
+the live Documents tab (shipped in PR #764) is refused.
 
 ### RESOLVED 2026-09-26 (Edge Function v1 live 2026-09-22 UTC; page merged in PR #764 2026-09-23 UTC; migration `20260914100700` applied live 2026-09-26 as ledger `20260926163005`) — a customer-document download link could outlive the document's soft delete
 

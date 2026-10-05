@@ -1,4 +1,6 @@
 /** One matcher for linked-psql sweeps and captured Supabase MCP results. */
+import { functionContractSql, renderSweepQuery } from '../../.claude/hooks/live-testdata-lib.mjs';
+
 const ACTOR_PREDICATES = new Set(['actor-forgery', 'actor-forgery-fin-audit']);
 const DIGEST = /^[a-f0-9]{32}$/;
 
@@ -76,41 +78,13 @@ export function assertRequestedContracts(predicateName, entries, functionContrac
   }
 }
 
-/** Full definition includes body/defaults/volatility/security/search_path; pin owner and ACL too. */
-export function functionContractSql(functionKeys) {
-  const literals = [...new Set(functionKeys)].sort()
-    .map((key) => `'${key.replaceAll("'", "''")}'`).join(', ');
-  return `SELECT
-  n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS function_key,
-  pg_catalog.md5(pg_catalog.jsonb_build_object(
-    'definition', pg_catalog.pg_get_functiondef(p.oid),
-    'owner', pg_catalog.pg_get_userbyid(p.proowner),
-    'data_api_execute', pg_catalog.jsonb_build_object(
-      'anon', CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'anon')
-        THEN pg_catalog.has_function_privilege('anon', p.oid, 'EXECUTE') ELSE NULL END,
-      'authenticated', CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'authenticated')
-        THEN pg_catalog.has_function_privilege('authenticated', p.oid, 'EXECUTE') ELSE NULL END,
-      'service_role', CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'service_role')
-        THEN pg_catalog.has_function_privilege('service_role', p.oid, 'EXECUTE') ELSE NULL END
-    ),
-    'execute_acl', COALESCE((
-      SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-        'grantee', CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END,
-        'grantor', pg_catalog.pg_get_userbyid(a.grantor),
-        'grantable', a.is_grantable
-      ) ORDER BY (CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END),
-        pg_catalog.pg_get_userbyid(a.grantor), a.is_grantable)
-      FROM pg_catalog.aclexplode(COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))) AS a
-      WHERE a.privilege_type = 'EXECUTE'
-    ), '[]'::jsonb)
-  )::text) AS contract_md5
-FROM pg_catalog.pg_proc AS p
-JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
-WHERE p.prokind IN ('f', 'p') AND n.nspname IN ('public', 'auth')
-  AND (n.nspname || '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')')
-    = ANY(ARRAY[${literals}]::text[])
-ORDER BY function_key`;
-}
+/**
+ * The contract query and the sweep envelope live in the live-data guard, which recognises a wrapped
+ * sweep by rebuilding it. A copy here could drift from what the guard accepts, and a template the
+ * guard trusted from this ordinary file could be edited to widen it, so there is one definition and
+ * it sits on the approval-gated hook surface.
+ */
+export { functionContractSql };
 
 /**
  * Does this SQL still terminate a statement, ignoring comments and quoted spans?
@@ -212,11 +186,5 @@ export function buildSweepQuery(predicate, entries) {
       + 'runner expects violation_key rows.',
     );
   }
-  const contracts = keys.length === 0 ? "'[]'::json" :
-    `(SELECT COALESCE(json_agg(c), '[]'::json) FROM (${functionContractSql(keys)}) AS c)`;
-  return `SELECT json_build_object(
-  'predicate', '${predicate.name.replaceAll("'", "''")}',
-  'rows', (SELECT COALESCE(json_agg(v), '[]'::json) FROM (\n${sql}\n) AS v),
-  'function_contracts', ${contracts}
-) AS sweep_result;`;
+  return renderSweepQuery(predicate.name, sql, keys);
 }
