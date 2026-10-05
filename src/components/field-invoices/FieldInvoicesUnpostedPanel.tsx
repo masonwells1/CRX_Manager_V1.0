@@ -616,7 +616,7 @@ export default function FieldInvoicesUnpostedPanel() {
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
               </div>
-              <div className="flex-shrink-0 text-right">
+              <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
                 <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-crx-green">
                   Edit <Pencil className="h-3.5 w-3.5" />
@@ -658,7 +658,7 @@ export default function FieldInvoicesUnpostedPanel() {
                     <td className="px-3 py-2 text-gray-700">{row.job_number || '—'}</td>
                     <td className="px-3 py-2">
                       <span className="inline-flex items-center gap-1.5 font-medium text-nav-dark">
-                        <FileText className="w-3.5 h-3.5 text-crx-green flex-shrink-0" />
+                        <FileText className="w-3.5 h-3.5 text-crx-green shrink-0" />
                         {row.invoice_number}
                       </span>
                     </td>

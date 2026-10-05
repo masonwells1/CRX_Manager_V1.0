@@ -242,7 +242,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
     return (
       <div key={comment.id} className={`${isReply ? 'ml-8 mt-3' : 'mt-4'}`}>
         <div className="flex gap-3">
-          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-crx-green/10 flex items-center justify-center text-crx-green font-medium text-sm">
+          <div className="shrink-0 w-8 h-8 rounded-full bg-crx-green/10 flex items-center justify-center text-crx-green font-medium text-sm">
             {getCreatorName(comment).charAt(0).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
@@ -376,7 +376,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
 
       <div className="mb-4">
         <div className="flex gap-3">
-          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-crx-green/10 flex items-center justify-center text-crx-green font-medium text-sm">
+          <div className="shrink-0 w-8 h-8 rounded-full bg-crx-green/10 flex items-center justify-center text-crx-green font-medium text-sm">
             {profile?.full_name.charAt(0).toUpperCase()}
           </div>
           <div className="flex-1">

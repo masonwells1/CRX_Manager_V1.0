@@ -127,7 +127,18 @@ record(/cannot safely review code or diffs/i.test(agents), "AGENTS.md acknowledg
 record(/never have to nudge[\s\S]*Keep moving through authorized work/i.test(agents), "owner communication keeps authorized work moving without nudges");
 record(/what failed, what it means, and what (?:the agent is|you are) trying next/i.test(agents), "owner communication makes failures explicit");
 record(/NEEDS MASON - ACTION REQUIRED[\s\S]*NEEDS MASON - DECISION REQUIRED/i.test(agents), "owner communication makes genuine stops unmistakable");
-record(/Codex proceeds after a short plan[\s\S]*Claude retains its global pre-code approval checkpoint/i.test(agents), "tool-specific plan authority stays explicit");
+// Mason, 2026-10-03: Claude dropped its pre-code approval pause and plans-then-proceeds like Codex.
+record(/Codex and Claude both proceed after a short plan without waiting for approval/i.test(agents), "plan authority stays explicit for both agents");
+record(
+  /skipped or was rate-limited on a head, the agent posts `@coderabbitai review` on the PR once/i.test(protectedDelivery)
+    && /never ask Mason to comment, label, or click for CodeRabbit/i.test(protectedDelivery),
+  "agents request a skipped CodeRabbit review themselves and never ask Mason to",
+);
+record(
+  /Post it to Mason, then proceed without waiting for his confirmation/i.test(shipWorkflow)
+    && !/Claude's checkpoint/i.test(shipWorkflow),
+  "ship workflow plans then proceeds for Claude and Codex alike",
+);
 record(/Deliver what was asked at the scope intended[\s\S]*rather than quietly narrowing, widening, or transforming it/i.test(agents), "shared contract prevents silent scope changes");
 record(/Before presenting findings as current, confirm the checkout is not behind `origin\/main`/i.test(agents), "reviews and audits require a current checkout");
 record(/simplest complete implementation/i.test(agents), "AGENTS.md requires simple, complete implementations");
@@ -153,6 +164,18 @@ for (const [name, pattern] of autonomousLandingChecks) {
   record(pattern.test(autonomousLandingBullet), `AGENTS.md autonomous-landing rule requires ${name}`);
 }
 record(/## Safety and Protected Delivery[\s\S]*\.claude\/commands\/ship\.md/.test(agents), "AGENTS.md routes volatile delivery mechanics to the ship workflow");
+// Pinned after a 2026-10-03 slimming pass dropped these and a Luna round caught it.
+const reviewChainChecks = [
+  ["never disabling a gate", /never bypass, disable, or weaken hooks/i],
+  ["pinned reviewer models only", /never a newer model the gates do not yet accept/i],
+  ["the Luna exit bar", /no BLOCKER or HIGH remains and every MED\/LOW is fixed, refuted with evidence, or named as a deferral/i],
+  ["a fresh exact-SHA Sol review for every merge", /Every merge into `main` requires one fresh independent \*\*Sol\*\* high-effort review of the exact candidate SHA/i],
+  ["the Sol proof binding to HEAD and base", /binds to that HEAD and GitHub's real base, so a later commit or moved base voids it/i],
+  ["review fixes staying on the same PR", /fixes stay on the same PR/i],
+];
+for (const [name, pattern] of reviewChainChecks) {
+  record(pattern.test(protectedDelivery), `AGENTS.md delivery rules keep ${name}`);
+}
 record(/docs\/workflows\/SAFE_DEVELOPMENT_RULES\.md/.test(agents), "AGENTS.md routes detailed engineering rules on demand");
 record(/docs\/workflows\/AGENT_COLLABORATION\.md/.test(agents), "AGENTS.md routes collaboration details on demand");
 record(/Delegation, agent collaboration, or agent-surface changes/i.test(agents), "AGENTS.md routes delegation guidance on demand");
@@ -337,6 +360,75 @@ const mustAsk = [
 for (const permission of mustAsk) {
   record(!allow.has(permission), `${permission} is not auto-allowed`);
   record(ask.has(permission), `${permission} requires approval`);
+}
+
+// Mason's choice "A" (2026-09-26, DECISION_LOG): a file keeps its Edit/Write `ask`
+// prompt when an UNCOMMITTED local edit to it could change what reaches
+// production before any PR review sees it. That set is derived here, not listed
+// by hand, so it cannot drift: every hook that gates a tool EXECUTION (a
+// PreToolUse group whose matcher covers Bash, PowerShell, MCP or "*" — not the
+// write-time content checks, whose output still goes through PR review) in
+// either manifest, the Codex adapter every Codex hook runs through, the two
+// proof writers, the private-artifact containment check the git hooks run, and
+// every repository module any of them loads. Reviewers found each gap in turn:
+// Sol (merge guard, helper modules, containment check) and the Codex GitHub App
+// (the live-data MCP guards).
+function executionGuardRefs(manifest) {
+  const refs = new Set();
+  for (const group of manifest?.hooks?.PreToolUse || []) {
+    const matcher = String(group?.matcher ?? "*");
+    const writeOnly = matcher.split("|").every((part) => /^(Write|Edit|MultiEdit|NotebookEdit|apply_patch)$/.test(part.trim()));
+    if (writeOnly) continue;
+    for (const match of JSON.stringify(group?.hooks || []).matchAll(/(\.claude|\.codex)[\\/]{1,2}hooks[\\/]{1,2}([\w.-]+\.mjs)/g)) {
+      refs.add(`${match[1]}/hooks/${match[2]}`);
+    }
+  }
+  return refs;
+}
+const productionGateRoots = new Set([
+  ...executionGuardRefs(settings),
+  ...executionGuardRefs(codexHooks),
+  ".codex/hooks/codex-hook-adapter.mjs",
+  "scripts/write-codex-push-proof.mjs",
+  "scripts/write-apply-proofs.mjs",
+  // Writes the Claude-review proof (Sol, 2026-09-27): no merge gate consumes it
+  // today, but a proof writer is exactly the kind of file whose local edit acts
+  // before review.
+  "scripts/run-claude-review.mjs",
+  "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+]);
+record(productionGateRoots.has(".claude/hooks/pr-merge-guard.mjs") && productionGateRoots.has(".codex/hooks/production-action-guard.mjs"), "production-gate roots are derived from the hook manifests", [...productionGateRoots].join(", "));
+// Static imports, re-exports, literal dynamic imports, and literal relative
+// script paths (child scripts a gate launches).
+const GATE_IMPORT_RE = /(?:import\s[^'"]*?from\s*|export\s[^'"]*?from\s*|import\s*\(\s*|import\s*)["'](\.{1,2}\/[^"']+)["']/g;
+const GATE_SCRIPT_PATH_RE = /["'](\.{1,2}\/[^"']+\.(?:mjs|cjs|js))["']/g;
+const gateClosure = new Set();
+const gateQueue = [...productionGateRoots];
+while (gateQueue.length) {
+  const relative = gateQueue.shift();
+  if (gateClosure.has(relative)) continue;
+  gateClosure.add(relative);
+  const text = readChecked(relative);
+  for (const pattern of [GATE_IMPORT_RE, GATE_SCRIPT_PATH_RE]) {
+    for (const match of text.matchAll(pattern)) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(relative), match[1]));
+      if (!target.startsWith("..") && /\.(mjs|cjs|js)$/.test(target)) gateQueue.push(target);
+    }
+  }
+}
+const unpromptedGateFiles = [...gateClosure]
+  .filter((relative) => !ask.has(`Edit(${relative})`) || !ask.has(`Write(${relative})`))
+  .sort();
+record(
+  unpromptedGateFiles.length === 0,
+  `every production-gate file and module it loads keeps an Edit/Write ask prompt (${gateClosure.size} files)`,
+  unpromptedGateFiles.join(", "),
+);
+// package.json too (Codex GitHub App P1, PR #841): `npm run <script>` is allowed
+// without a prompt, so an uncommitted script edit could hide a `gh pr merge` from
+// the command-text merge guard, which sees only `npm run <script>`.
+for (const pattern of [".codex/hooks.json", ".github/workflows/**", ".husky/**", "package.json", ".claude/settings.json", ".claude/settings.local.json"]) {
+  record(ask.has(`Edit(${pattern})`) && ask.has(`Write(${pattern})`), `${pattern} keeps an Edit/Write ask prompt`);
 }
 
 const allHooks = Object.values(codexHooks.hooks || {})

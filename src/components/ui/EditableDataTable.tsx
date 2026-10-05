@@ -278,7 +278,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
         </div>
 
         {/* Edit mode controls */}
-        <div className="flex gap-2 items-center flex-shrink-0">
+        <div className="flex gap-2 items-center shrink-0">
           {headerActions}
           {canEdit && !editMode && (
             <Button

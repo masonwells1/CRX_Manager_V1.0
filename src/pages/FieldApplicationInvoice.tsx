@@ -3270,7 +3270,7 @@ export default function FieldApplicationInvoice() {
 
               {/* Mandatory compliance disclaimer — modeled, not measured. */}
               <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                 <p className="text-xs text-amber-800">{WEATHER_DISCLAIMER}</p>
               </div>
 
@@ -3676,7 +3676,7 @@ export default function FieldApplicationInvoice() {
       <Modal open={showVoidModal} onClose={() => { if (!voiding) setShowVoidModal(false); }} title={invoiceGroupId && voidTargets.length > 1 ? 'Void Invoice Group' : 'Void Invoice'}>
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg">
-            <Ban className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <Ban className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
             <p className="text-sm text-red-800">
               {invoiceGroupId && voidTargets.length > 1
                 ? `Void all ${voidTargets.length} invoice(s) in this split group? `
@@ -3732,7 +3732,7 @@ export default function FieldApplicationInvoice() {
       <Modal open={showOverrideModal} onClose={() => { if (!saving) setShowOverrideModal(false); }} title="Over-label-rate override">
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <p className="text-sm text-amber-800">
               {guardrailState.overRateCount} chemical line(s) exceed the product&rsquo;s maximum label rate
               {guardrailState.overRateProducts.length > 0 && <> (<strong>{guardrailState.overRateProducts.join(', ')}</strong>)</>}.

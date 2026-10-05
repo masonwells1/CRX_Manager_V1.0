@@ -1,12 +1,31 @@
 # Decision Log
 
-Last verified: 2026-09-30 (nested-command entries condensed; owner Windows Hello approval entry added)
+Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-03 — Claude plans, then proceeds; agents never ask Mason to act for CodeRabbit
+
+**Decision (Mason, in chat).** Claude drops its "post a plan and wait for Mason's OK" pause and works like Codex: post a short plain-English plan, then continue. Agents request any CodeRabbit review themselves and never ask Mason to comment, label, or click for it (FarmRx adopted the same rule in its own repository).
+**Why.** Mason wants maximum agent autonomy and no manual CodeRabbit step; he can still say "stop" at any time after seeing the plan.
+**What this forbids/implies:** the approval gates in `AGENTS.md` › Safety and Protected Delivery are unchanged, and each still needs his explicit yes in the current conversation. Source: `docs/changelog.d/2026-10-03-slim-agent-guidance.md`.
+
+## 2026-10-02 — CORRECTION: PRs do merge on CodeRabbit's approval under `protect-main`
+
+**This amends the 2026-09-26 "Fewer permission prompts" entry below**, which said "no PR has yet merged on such an approval." PRs had in fact been merging on that approval since 2026-09-28.
+**What is true.** All 13 PRs merged between the ruleset's last update (2026-09-27 13:05Z) and #841's merge (2026-10-02 17:39Z), #830 first and #841 last, merged with CodeRabbit's APPROVED review on their exact merged heads, checked 2026-10-02 from each PR's reviews. The full list is in `docs/changelog.d/2026-10-02-coderabbit-approval-merges-recorded.md`. A push after an approval still dismisses it, as that entry says.
+**What this forbids/implies:** no rule changes. Read that entry's approval observation through this correction.
+
+## 2026-10-01 — Mason accepts the owner-approval "self-verifier" residual and hand-merges PR #857
+
+**Source:** Mason, "I'll merge 857" (2026-10-01); he merged #857 himself (`653addd6b`). Detail in `docs/changelog.d/2026-10-01-owner-approval-hand-merge-and-install-preflight.md`.
+**Decision.** Sol's second #857 finding (the approval verifier is code in the same checkout, so a local edit could disable it) is the 2026-09-29 residual. Mason accepted it for the #857 merge only; it remains a known, open weakness of the route, and reviewers stay free to raise it and anything else.
+**Why.** On one PC any process running as Mason can edit any local check and read the Supabase token directly, so this cannot be closed locally. What stands in the way is policy: agents must not edit guard files or call the database API outside the gated doors. Hooks and permission prompts only narrow the supported agent tool paths (native edits to guard files ask Mason; they are not denied), and a same-user process outside those paths is not stopped.
+**Closing it** needs parked-migration applies in a GitHub Actions workflow on protected `main` (token as a repository secret): a separate project that needs Mason's go.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
 
@@ -88,6 +107,12 @@ paste migration SQL into the Supabase Dashboard.
 **Decision.** Guard logic bugs are fixed; script files, run-time program names outside `$`/backtick syntax, and the
 Codex guard not re-checking decoded payloads are accepted residuals. The push-parser timeout is tracked separately.
 **Why.** Parsing cannot see a script's contents or a name assembled at run time.
+
+## 2026-09-26 — Fewer permission prompts; CodeRabbit reviews every PR automatically; GitHub requires its approval again
+
+**Source:** Mason, 2026-09-26 ("give permissions more freely to both codex and claude … i want [CodeRabbit] used alot more often"; plan "yes", "A" twice), "Post" (2026-09-27) and "No prompt" (2026-09-28); PR #841, replacing #822. Evidence, item-by-item detail and residuals: `docs/reference/agent-guardrails.md`, "Fewer prompts, automatic CodeRabbit, fail-closed merge guard".
+**Decision.** (1) Claude's `ask` tier keeps only what Mason can judge plus every production-gate file (`scripts/check-agent-guidance.mjs` derives that set and fails CI on a gap); `gh pr merge` moves to `allow`. (2) CodeRabbit reviews every non-draft PR on every push; for a skipped head an agent posts `@coderabbitai review` once (reverses the 2026-09-07 "never post" rule; supersedes "automatic reviews disabled" in the 2026-08-28, 2026-08-30 and autonomous-landing entries). (3) `protect-main` requires one approval of the latest push, stale approvals dismissed, no bypass actors, so admins are bound too (supersedes the 2026-09-02 removal); only CodeRabbit can give it and only Mason changes the ruleset. Observed once: CodeRabbit APPROVED #841's head `18cf44114` (2026-09-30) and GitHub briefly read `APPROVED`; the next push dismissed it, as the rule requires, so no PR has yet merged on such an approval. The local merge guard separately requires that approval on the exact head. (4) Codex hooks were re-trusted; re-check trust after any `.codex/hooks.json` change. (5) The merge guard runs under a fail-closed launcher: a crash, timeout, non-verdict output or unreadable call denies anything that could merge.
+**Why.** 186 of Mason's 209 prompts in two weeks were routine guard edits, all approved; CodeRabbit capacity grew; a GitHub-enforced approval keeps an unreviewed PR out even if a local gate weakens. Cost accepted: if CodeRabbit is down, nothing merges.
 
 ## 2026-09-26 — autonomous landing: agents merge and apply non-destructive migrations on their own once the final reviews are clean
 
