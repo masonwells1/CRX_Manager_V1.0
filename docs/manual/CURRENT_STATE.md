@@ -1,18 +1,18 @@
 # CRX Manager — Current State
 
 **Last verified:** 2026-10-02 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr` after the four field-season applies: 1017 rows / 1010
-distinct names, `max(version)` `20261002201609`; the 2026-09-27 evening read had 1013 rows,
-`max(version)` `20260928025520`). Every
+query against project `rhyzpcqhnizqbxphqdkr` after PR #800's apply, 2026-10-03 03:19 UTC: 1018 rows /
+1011 distinct names, `max(version)` `20261002230949`; the read right after the four field-season
+applies had 1017 rows, `max(version)` `20261002201609`). Every
 other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
 ## Current state at a glance (2026-10-02)
 
-- **Effective ordering high-water: `20260914101300_finish_generic_field_invoice_cutover`**
-  (ledger version `20261002201609`, UTC; applied live 2026-10-02). It replaced
-  `20260914100900_repair_commission_history_label_snapshots` (ledger `20260928025520`). The effective ordering high-water is the
+- **Effective ordering high-water: `20260921180000_soft_delete_customer_document_rpc`**
+  (ledger version `20261002230949`, UTC; applied live 2026-10-02 from PR #800). It replaced
+  `20260914101300_finish_generic_field_invoice_cutover` (ledger `20261002201609`). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -40,9 +40,9 @@ ships or quarterly, whichever comes first.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
-- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-09-26 by
-  merged PR #820 (`migrations_high_water` `20260926163005`), so it records `20260914100100` through
-  `100700` but **not** `20260914100800` through `20260914101300`. Refresh it before relying on it for ordering.
+- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-02 by
+  PR #873 (`migrations_high_water` `20261002230949`), so it records every applied name through
+  `20260921180000_soft_delete_customer_document_rpc`. Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration

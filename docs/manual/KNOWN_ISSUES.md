@@ -204,8 +204,8 @@ unchanged; both recorder triggers enabled; 34 `revised` correction rows appended
 `commission_earned_state_ledger` (35 -> 69 rows); latest labels hold 0 `[Unknown customer]` and 0
 UUID-shaped source numbers; 35 commissions and 8 commission payments unchanged, none posted, 0
 settlement events. The whole cohort `20260914100100`..`20260914100900` is live, and it is the
-effective ordering high-water. `.claude/schema-registry.json` still records only through `100700`.
-Everything below is the pre-apply record, kept as history.
+effective ordering high-water. `.claude/schema-registry.json` then recorded only through `100700`; the
+2026-10-03 refresh (PR #873) now records the whole cohort. Everything below is the pre-apply record, kept as history.
 
 (Historical, before the 2026-09-27 evening apply.) `20260914100900` is the only cohort file not applied. The transfer intent wrapper
 `20260914100800_bind_transfer_invoice_intent` applied live on 2026-09-27 under ledger version
