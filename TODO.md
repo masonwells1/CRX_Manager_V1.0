@@ -430,8 +430,6 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     and `NewOrder.tsx` duplicates it again.
   - No Integrity Report check compares `customers.prepay_balance_cents` with the sum of the customer's
     prepay credits.
-  - `complete_job` deducts inventory and only warns on a shortfall, while `complete_delivery` blocks.
-    Decide which is intended.
   - Order and quote CSV imports split on bare commas, so a quoted value that contains a comma lands in the
     wrong column. Reuse the customer import's quoted-CSV parser.
   - Blend-ticket OCR auto-approves at a fixed 70% in `process-blend-ticket`, ignoring the thresholds
@@ -450,8 +448,6 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     `CURRENT_DATE`, which is UTC, and the payment screen never sends a date. A payment recorded in the
     last hours of the Central business day can therefore be checked against the wrong accounting period.
     Pass a Chicago date, or set the database timezone (high).
-  - **Edits after completion:** admins can still edit `delivery_items` directly after a delivery is in
-    progress or completed, which can desync the inventory ledger (high).
   - **Invoice source rule:** no database constraint enforces that an invoice comes from an order or a
     blend ticket (or a documented exception such as a misc charge or a field-app invoice). Only app code
     and RPCs enforce it (high).
