@@ -22,8 +22,9 @@ remaining CodeRabbit usage cap, and part 2 had to stay under CodeRabbit's 150-fi
 - `tests/e2e/MEGA-TEST-REPORT.md`.
 
 **The removed text is still in git history.** Any file can be recovered with
-`git show <commit>:<path>`. Only a force-push can purge it from history, and that is Mason's
-decision. This change does not do it.
+`git show <commit>:<path>`. Rewriting history and force-pushing would remove the files only from the
+rewritten refs; copies can remain in forks, clones, pull requests and cached GitHub views. That is
+Mason's decision, and this change does not do it.
 
 **How each file was cleared:** a four-agent inventory proposed candidates and checked every
 reference from code, hooks, commands, skills and applied migrations. Six more agents then read

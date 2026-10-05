@@ -359,8 +359,9 @@ and missing from every other tracker. Sources are recoverable with `git show 4b6
   quote). No check catches a job reservation left active on a cancelled, finished or deleted job (add a
   read-only sweep that should always count 0). Ticked "loads done" on a loader worksheet survive a change
   to the job's acres or the tank layout, so a crew can see stale progress.
-- **Field-app parity leftovers (June 2026 parity loop)**: confirm one real job-attachment upload and delete
-  works in production; decide whether you want a fuel-surcharge rate (built, off by default) and whether
+- **Field-app parity leftovers (June 2026 parity loop)**: confirm that a job-attachment upload and delete
+  works in production, using a disposable `[E2E]` job (never an existing customer job), deleting only the
+  test attachment, and only with Mason's explicit approval in the current conversation; decide whether you want a fuel-surcharge rate (built, off by default) and whether
   projected use should count only remaining field acres. On the Dispatch board, the retry key is lost after
   a reload and failed applicator/recipe loads are not reported.
 - **Cosmetic**: pop-up and toast open/close animations never run, because their Tailwind animation plugin
