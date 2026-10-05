@@ -49,9 +49,9 @@ ships or quarterly, whichever comes first.
   `20260914100700` (which removes every browser Storage policy on the bucket) applied 2026-09-26.
   Its preflight refuses to run if the bucket holds any object, so no stored document could be served
   by a link minted under the old policies. It does not rule out a signed upload token minted just
-  before the apply, which would stay valid until it expired. Still open: sales reps cannot remove a document from the live page yet. The database fix,
-  `20260921180000_soft_delete_customer_document_rpc`, applied live 2026-10-02 (PR #800); the page
-  change that calls it ships separately. Details in `KNOWN_ISSUES.md`.
+  before the apply, which would stay valid until it expired. Sales reps can remove documents on their own customers: the database fix
+  `20260921180000_soft_delete_customer_document_rpc` applied live 2026-10-02 (PR #800), the page
+  change shipped in PR #875, and a test rep's Remove was verified on the live site 2026-10-04.
 - **Open pull requests:** run `gh pr list --state open` — any list written here goes stale within
   hours. #800 (above) merged 2026-10-02 after its migration applied live.
 
@@ -389,8 +389,8 @@ The three headline items:
 
 No longer in flight: the customer-document byte boundary is complete (Edge Function v1 live
 2026-09-22, frontend merged in PR #764 on 2026-09-23 UTC, migration `20260914100700` applied
-2026-09-26). The one open follow-up, letting sales reps remove a document, is parked in open
-PR #800.
+2026-09-26). Its follow-up, letting sales reps remove a document, also shipped (PR #800 and
+PR #875) and was verified on the live site 2026-10-04.
 
 ## 5. Environment facts
 
