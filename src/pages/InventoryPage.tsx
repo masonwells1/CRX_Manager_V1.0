@@ -1423,7 +1423,7 @@ export default function InventoryPage() {
                           onClick={() => navigate(`/purchase-orders/new?product=${item.product_id}`)}
                           title="Create a purchase order for this product"
                           aria-label={`Reorder ${item.product_name}`}
-                          className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-crx-green px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-crx-green/90 sm:col-span-4 md:min-h-0 md:flex-shrink-0"
+                          className="col-span-2 inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-crx-green px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-crx-green/90 sm:col-span-4 md:min-h-0 md:shrink-0"
                         >
                           <ShoppingCart className="w-3.5 h-3.5" />
                           Reorder

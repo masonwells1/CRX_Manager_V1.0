@@ -70,7 +70,7 @@ export default function BulkDeleteConfirmModal({
     >
       <div className="space-y-4">
         <div className={`flex items-center gap-3 p-3 ${colors.bg} rounded-lg`}>
-          <Icon className={`w-5 h-5 ${colors.icon} flex-shrink-0`} />
+          <Icon className={`w-5 h-5 ${colors.icon} shrink-0`} />
           <p className={`text-sm ${colors.text}`}>
             You are about to {actionWord} <strong>{count}</strong> {label}. This action will be
             recorded in the audit log.
