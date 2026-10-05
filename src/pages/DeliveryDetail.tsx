@@ -1297,7 +1297,7 @@ export default function DeliveryDetail() {
                   </Badge>
                 )}
               </h2>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 {delivery.priority && delivery.priority !== 'normal' && (
                   <Badge variant={PRIORITY_BADGE[delivery.priority] || 'default'} size="sm">
                     {PRIORITY_LABELS[delivery.priority]}
@@ -1370,7 +1370,7 @@ export default function DeliveryDetail() {
           {rupWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div className="text-sm text-amber-800">
                   {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
                 </div>
@@ -1382,7 +1382,7 @@ export default function DeliveryDetail() {
           {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
                   <div className="text-sm text-amber-700 mt-1">
@@ -1593,7 +1593,7 @@ export default function DeliveryDetail() {
               )}
               {!isOnline && (
                 <div className="flex items-center gap-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
-                  <WifiOff className="h-4 w-4 flex-shrink-0" />
+                  <WifiOff className="h-4 w-4 shrink-0" />
                   <span>You are offline. Delivery will be saved locally and synced when you reconnect.</span>
                 </div>
               )}
@@ -1965,7 +1965,7 @@ export default function DeliveryDetail() {
               <h4 className="text-sm font-medium text-secondary mb-2">Delivery Items</h4>
               {delivery.status !== 'scheduled' && (
                 <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700 mb-3 flex items-start gap-2">
-                  <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <Lock className="w-4 h-4 mt-0.5 shrink-0" />
                   <div>
                     <p className="font-medium">Items are locked while delivery is in progress</p>
                     <p className="text-xs mt-1">Adjust quantities during completion if needed.</p>
@@ -1974,7 +1974,7 @@ export default function DeliveryDetail() {
               )}
               {delivery.status === 'scheduled' && (
                 <div className="p-3 bg-green-50 rounded-lg border border-green-200 text-sm text-green-700 mb-3 flex items-start gap-2">
-                  <Pencil className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <Pencil className="w-4 h-4 mt-0.5 shrink-0" />
                   <div>
                     <p className="font-medium">You can add, remove, or adjust items</p>
                     <p className="text-xs mt-1">Removed items will stay on the order for a future delivery.</p>
@@ -2095,7 +2095,7 @@ export default function DeliveryDetail() {
       {delivery.status === 'cancelled' && delivery.cancel_reason && (
         <Card>
           <div className="flex items-start gap-3">
-            <Ban className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+            <Ban className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-semibold text-red-700">Cancelled</h3>
               <p className="text-sm text-secondary mt-1">{delivery.cancel_reason}</p>
@@ -2134,7 +2134,7 @@ export default function DeliveryDetail() {
       {delivery.status === 'completed' && delivery.issue_type && delivery.issue_type !== 'none' && (
         <Card>
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+            <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
             <div>
               <h3 className="text-sm font-semibold text-amber-700">
                 Issue Reported: {ISSUE_TYPE_LABELS[delivery.issue_type] || delivery.issue_type}
@@ -2169,7 +2169,7 @@ export default function DeliveryDetail() {
       {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
               <div className="text-sm text-amber-700 mt-1">
@@ -2535,7 +2535,7 @@ export default function DeliveryDetail() {
       <Modal open={voidOpen} onClose={() => setVoidOpen(false)} title="Void Completed Delivery">
         <div className="space-y-4">
           <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
-            <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <RotateCcw className="w-5 h-5 text-red-600 shrink-0" />
             <p className="text-sm text-red-800">
               You are about to void delivery <strong>{delivery?.delivery_number}</strong>. This will:
               <ul className="mt-1 list-disc list-inside space-y-0.5">
@@ -2576,7 +2576,7 @@ export default function DeliveryDetail() {
       <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel Delivery">
         <div className="space-y-4">
           <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
-            <Ban className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <Ban className="w-5 h-5 text-red-600 shrink-0" />
             <p className="text-sm text-red-800">
               You are about to cancel delivery <strong>{delivery.delivery_number}</strong>.
               The assigned driver will be notified.

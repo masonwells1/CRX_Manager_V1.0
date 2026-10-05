@@ -2,50 +2,30 @@
 
 # Claude Code Routing
 
-`AGENTS.md` is the canonical shared contract. This file contains only Claude-specific routing and must not duplicate or weaken shared policy.
+`AGENTS.md` is the canonical shared contract. This file holds only Claude-specific routing and never weakens shared policy.
 
-## Load Guidance on Demand
+- Follow the `AGENTS.md` routing table; load nothing extra at session start. For architecture, difficult debugging, tracing, structural audits, and PR impact, invoke `graphify` before broad searching. It narrows source reads and never replaces source or live verification; documentation is outside its code-only corpus, so inspect docs directly.
+- Search `.claude/schema-registry.json` by table or column (too large to read whole); refresh it after schema changes.
+- Read `docs/reference/claude-model-tuning.md` only when choosing models or effort, delegating, or writing reviewer prompts.
+- Cloud sessions may lack `node_modules`, `gh`, Codex, Graphify, or the Supabase MCP: say early which gates cannot run, finish what can, and deliver a draft PR. Never report an unrun gate as passed.
+- `docs/manual/` is the synthesis layer: onboarding, architecture, decisions, known issues, current state, and Mason's owner playbook.
 
-- Follow the task-routing table in `AGENTS.md`; do not load every workflow or reference file at session start.
-- For the architecture, difficult-debugging, tracing, structural-audit, and PR-impact tasks named in `AGENTS.md`, invoke the `graphify` skill before broad `Read`/`Glob`/`Grep` exploration. Graphify narrows source reads; it never replaces source or live verification. Documentation is outside its code-only corpus, so use focused document inspection for documentation tasks.
-- Use `.claude/schema-registry.json` for schema-aware work (search it by table or column; it is too large to read whole) and refresh it after approved schema changes.
-- Read `docs/reference/claude-model-tuning.md` only when choosing Claude models or effort, delegating work, or writing reviewer prompts. For Codex model choice, read `docs/reference/codex-model-tuning.md`.
-- Cloud sessions (claude.ai/code) may lack `node_modules`, `gh`, the Codex CLI, Graphify, and the Supabase MCP. State early which gates cannot run there, finish what can be verified, and deliver as a draft PR whose missing gates run on Mason's machine; never report an unrun gate as passed.
-- The synthesis layer is `docs/manual/`: onboarding, architecture, settled decisions, known issues, current state, and Mason’s plain-English owner playbook.
+## Workflows
 
-## Claude Workflows
-
-Mason can ask in plain English; route the request without requiring him to remember workflow names.
+Route Mason's plain-English requests; he should not need workflow names.
 
 | Need | Workflow |
 |---|---|
 | Read-only second-model review | `codex-review` from Claude; `claude-review` from Codex |
 | Claude + Codex reconciliation | `agent-pair-review` |
-| Durable handoff | `codex-to-claude-handoff` |
-| Agent/tooling health | `agent-health` |
-| PR review comment | `agent-pr-comment` |
 | Adversarial review | `codex-gauntlet` or `codex-review` |
+| Durable handoff | `codex-to-claude-handoff` |
+| PR review comment | `agent-pr-comment` (dry-run by default) |
+| Agent/tooling health | `agent-health` |
 | Pre-ship verification and delivery | `preflight` or `ship` |
 | Migration work | `migration-review`, `create-migration`, or `explain-migration` |
 
-Direct reviews are read-only and PR comments default to dry-run. Production authority and hard gates come from `AGENTS.md` and the selected workflow.
+## Hooks and Maintenance
 
-## Hooks and Generated Surfaces
-
-- `.claude/settings.json` is Claude’s permission and hook manifest. `.claude/hooks/` is the source of truth for shared guard logic; `.codex/hooks.json` invokes those files through the portable adapter.
-- Hook and reviewer behavior is documented in `docs/reference/agent-guardrails.md`. Never copy shared hook implementations into `.codex/`.
-- Claude/Codex hook differences must be declared in `scripts/agent-manifest-parity.mjs`; otherwise wire the guard on both sides.
-
-## Maintenance
-
-After changing Claude commands, skills, hooks, permissions, agents, or helpers:
-
-```bash
-git status --short --branch
-# The next command updates tracked adapters; inspect the status above first.
-node scripts/sync-agent-workflows.mjs --write
-npm run test:agent-workflows
-npm run agent-health
-```
-
-Do not generate `AGENTS.md` from this file. `scripts/regenerate-agents-md.mjs` only validates compatibility.
+- `.claude/settings.json` is the permission and hook manifest; `.claude/hooks/` is the source of truth for guard logic, which `.codex/hooks.json` runs through the portable adapter; never copy hook implementations into `.codex/`. Behavior: `docs/reference/agent-guardrails.md`. Declare any Claude/Codex hook difference in `scripts/agent-manifest-parity.mjs`.
+- After changing Claude commands, skills, hooks, permissions, agents, or helpers, run `node scripts/sync-agent-workflows.mjs --write`, `npm run test:agent-workflows`, and `npm run agent-health`.

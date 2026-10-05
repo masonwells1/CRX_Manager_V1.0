@@ -159,7 +159,7 @@ export default function JobTagsBulkModal({
                       : 'border-gray-200 hover:bg-gray-50'
                   }`}
                 >
-                  <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: tag.color }} aria-hidden="true" />
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: tag.color }} aria-hidden="true" />
                   <span className="text-sm text-nav-dark font-medium flex-1">{tag.name}</span>
                   <span className="text-xs text-secondary">{hint}</span>
                   <span className="w-20 text-right text-xs font-semibold">

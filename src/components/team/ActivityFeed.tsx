@@ -221,7 +221,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
         <div className="space-y-4">
           {activities.map((activity) => (
             <div key={activity.id} className="flex gap-3">
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+              <div className="shrink-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
                 {getActionIcon(activity.action_type)}
               </div>
               <div className="flex-1 min-w-0">

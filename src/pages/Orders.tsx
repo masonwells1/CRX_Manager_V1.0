@@ -526,7 +526,7 @@ export default function Orders() {
             </div>
             {row.farm_group_name && (
               <div className="flex items-center gap-1 mt-0.5">
-                <Users className="w-3 h-3 text-blue-500 flex-shrink-0" />
+                <Users className="w-3 h-3 text-blue-500 shrink-0" />
                 <span className="text-xs text-blue-600">{row.farm_group_name}</span>
               </div>
             )}

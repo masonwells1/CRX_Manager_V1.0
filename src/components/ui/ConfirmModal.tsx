@@ -69,7 +69,7 @@ export default function ConfirmModal({
     >
       <div className="space-y-4">
         <div className={`flex items-center gap-3 p-3 ${styles.bg} rounded-lg`}>
-          <Icon className={`w-5 h-5 ${styles.icon} flex-shrink-0`} />
+          <Icon className={`w-5 h-5 ${styles.icon} shrink-0`} />
           <p className={`text-sm ${styles.text}`}>{message}</p>
         </div>
       </div>

@@ -618,7 +618,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
                       <X className="h-4 w-4" />
                     </button>
                   )}
-                  <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-xs px-2 py-1 rounded">
+                  <div className="absolute bottom-2 left-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
                     {(image.file.size / 1024).toFixed(0)} KB
                   </div>
                 </div>
@@ -644,7 +644,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
         {error && (
           <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{error}</span>
           </div>
         )}
@@ -678,7 +678,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex gap-2">
-            <ImageIcon className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <ImageIcon className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
             <div className="text-sm text-blue-800">
               <p className="font-medium mb-1">Images will be processed in the background</p>
               <p>After upload, OCR will automatically extract product information. You'll receive a notification when processing is complete.</p>
