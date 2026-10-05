@@ -436,8 +436,10 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     setting the app shows.
   - Email and notification "don't resend" keys include the current time, so a double-click or retry can
     send twice.
-  - `require_admin()` and `require_admin_or_sales_rep()` exist only in the live database (no migration
-    defines them), so a from-scratch rebuild would fail.
+  - `require_admin()` and `require_admin_or_sales_rep()` exist only in the live database: no migration
+    defines them, so their history cannot be audited from `supabase/migrations/`. A rebuild is not affected,
+    because the supported from-zero restore is the baseline (`supabase/baselines/README.md`), which
+    includes both.
   - Smaller items: `restore_quote_version` returns a generic "duplicate" on a retry instead of the
     original result; `update_order_items` checks an order status (`pending`) that never existed;
     `create_planned_holds` uses its own idempotency check instead of the shared helpers; some idempotency
@@ -448,9 +450,6 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
     `CURRENT_DATE`, which is UTC, and the payment screen never sends a date. A payment recorded in the
     last hours of the Central business day can therefore be checked against the wrong accounting period.
     Pass a Chicago date, or set the database timezone (high).
-  - **Invoice source rule:** no database constraint enforces that an invoice comes from an order or a
-    blend ticket (or a documented exception such as a misc charge or a field-app invoice). Only app code
-    and RPCs enforce it (high).
   - **Concurrency:** `generate_ticket_number`, the `allocate_payment` allocation-set version and
     `check_period_open` take no lock. Orders have no `row_version` stale-write guard, unlike quotes and
     customers.
