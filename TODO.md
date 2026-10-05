@@ -505,7 +505,7 @@ were still open in code on 2026-10-02 and in no tracker. Sources are recoverable
 - **Navigation**:
   - The command palette searches only 5 record types.
   - Browser tab titles don't name the record.
-  - The customer page has no Invoices tab or at-a-glance overview.
+  - The customer page has no Invoices tab (its summary bar already gives the at-a-glance overview).
   - There's no Notifications sidebar link.
   - Clicking a field on a customer opens the boundary editor, not the field history.
   - Customer notes appear only on the Info tab.
