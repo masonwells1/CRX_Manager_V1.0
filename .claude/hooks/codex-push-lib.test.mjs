@@ -3498,16 +3498,12 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ]) {
     assert.equal(expandNestedCommands(command).computed, false, `an assignment or an unrelated variable program is not: ${command}`);
   }
-  // 2026-10-04 (Mason's 2026-10-02 cleanup): real read-only commands both
-  // guards refused. awk's `$1` inside single quotes, read the cmd way, and a
-  // `$( … )` assignment cut at its space each looked like a run-time program.
-  for (const command of [
-    `p=$(gh pr checks 856 2>/dev/null | awk -F'\\t' '$2=="pending" && $1!~/CodeRabbit/' | wc -l); echo $p`,
+  // 2026-10-04 (Mason's 2026-10-02 cleanup): a real read-only loop both guards
+  // refused, because a `$( … )` assignment cut at its space looked like a
+  // run-time program.
+  assert.equal(expandNestedCommands(
     `while IFS= read -r f; do safe=$(echo "$f" | tr '/' '_'); git show 4b6ff6293:"$f" > "/tmp/x/$safe"; done < list.txt`,
-    `cd C:/repo && git diff --numstat -- src 2>/dev/null | awk '{a+=$1; d+=$2; n++} END {print n" files"}'`,
-  ]) {
-    assert.equal(expandNestedCommands(command).computed, false, `a read-only command is not a run-time program: ${command}`);
-  }
+  ).computed, false, "a read-only loop with a $( ) assignment is not a run-time program");
   // ...while a program computed INSIDE a substitution is now found (it was not).
   for (const command of [
     "x=$($P pr merge 1 --admin)",
@@ -3525,6 +3521,12 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "cat <<'EOF'\nit's\nEOF\n$P pr merge 1 --admin\necho 'x'",
     "# it's done\n$P pr merge 1 --admin\necho 'x'",
     "$s = @'\nx'\n'@; & $p pr merge 1 --admin; echo 'y'",
+    // Luna round 2, PR #882: shapes that defeated quote blanking.
+    `x="$(echo "'")"; $P pr merge 1 --admin; y="$(echo "'")"`,
+    `x="$(echo "'")"; $P push origin HEAD:main; y="$(echo "'")"`,
+    "$p='gh'; echo ‘x'; & $p pr merge 1 --admin; echo 'y’",
+    "$p='gh'; echo “'”; & $p pr merge 1 --admin; echo “'”",
+    "$p='gh'; $x=@\"\n\"\n\"@; echo 'a\"'; & $p pr merge 1 --admin; echo '\"b'",
   ]) {
     assert.equal(expandNestedCommands(command).computed, true, `a run-time program name is refused: ${command}`);
   }

@@ -3449,48 +3449,19 @@ const POWERSHELL_ASSIGNED_RE = /^\$\{?[A-Za-z_][\w:]*\}?$/;
 const POWERSHELL_ASSIGN_OP_RE = /^[+\-*/%]?=$/;
 const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
 //
-// Two readings used to refuse ordinary commands (Mason's 2026-10-02 cleanup,
-// fixed 2026-10-04). The cmd reading, where `'` is not a quote, split awk's
-// `'{a+=$1; d+=$2}'` and offered `$1…` as a program; and a raw word split cut
-// `x=$(echo "$f")` at its space and offered `"$f")` as one. So single-quoted
-// text is blanked first (POSIX shells and PowerShell expand nothing there, and
-// cmd never expands `$`), and each `$( … )` is read as one word whose inside
-// is checked on its own, so a program computed in there is still found.
-// Shells disagree on where a quote ends once a backtick (Bash substitution,
-// PowerShell escape), a backslash before a quote (an escape in Bash, a plain
-// character in PowerShell), ANSI-C `$'…'`, or a quote spanning a line (heredoc,
-// here-string, a `#` comment's apostrophe) is involved. Blanking could then hide
-// a real program, so those texts keep the old, stricter reading (Luna, PR #882).
-// A backslash before anything else (awk's `-F'\t'`) changes no quote.
-const AMBIGUOUS_QUOTING_RE = /`|\\['"]|\$'/;
+// A raw word split cut `x=$(echo "$f")` at its space and offered `"$f")` as a
+// program, refusing an ordinary read loop (Mason's 2026-10-02 cleanup, fixed
+// 2026-10-04). So each `$( … )` is read as one word whose inside is checked on
+// its own: the text is regrouped, never hidden, and a program computed in there
+// is still found. Blanking single-quoted text first was tried and dropped after
+// two Luna rounds on PR #882: shells disagree on where a quote ends (backticks,
+// `$'…'`, here-strings, curly quotes, quotes nested in `"$( )"`), so blanking hid
+// real programs. awk's `'{print $2}'` is therefore still refused, as before.
 function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE, depth = 0) {
-  const raw = String(text || "");
-  const blanked = depth < NESTED_MAX_DEPTH && !AMBIGUOUS_QUOTING_RE.test(raw) ? blankSingleQuoted(raw) : null;
-  const split = blanked === null ? null : splitSubstitutions(blanked);
+  const split = depth < NESTED_MAX_DEPTH ? splitSubstitutions(String(text || "")) : null;
   if (!split) return programWordBuiltAtRuntime(text, runtimeText);
   if (split.inners.some((inner) => programBuiltAtRuntime(inner, runtimeText, depth + 1))) return true;
   return programWordBuiltAtRuntime(split.outer, runtimeText);
-}
-
-// Empties every single-quoted span, keeping the quotes so word boundaries stay.
-// A `'` inside double quotes is an ordinary character. The caller has already
-// refused texts with escape characters. Returns null when a single-quoted span
-// crosses a line break or never closes, because the shells disagree there.
-function blankSingleQuoted(text) {
-  let out = "";
-  let quote = "";
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (quote === "'") {
-      if (char === "'") { quote = ""; out += char; }
-      else if (char === "\n" || char === "\r") return null;
-      continue;
-    }
-    if (char === '"') quote = quote === '"' ? "" : '"';
-    else if (char === "'" && !quote) quote = "'";
-    out += char;
-  }
-  return quote === "'" ? null : out;
 }
 
 // Replaces each outermost `$( … )` with `$()` and returns the inside texts.
