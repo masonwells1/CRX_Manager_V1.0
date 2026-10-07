@@ -104,7 +104,9 @@ ok(!classifySql("SELECT pg_get_userbyid(p.proowner), pg_get_function_identity_ar
 ok(!classifySql("SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t").block, "trigger definition read allowed");
 ok(!classifySql("SELECT (aclexplode(p.proacl)).grantee FROM pg_proc p WHERE p.oid = to_regprocedure('public.get_balance(uuid)')").block,
   "ACL and regprocedure reads allowed");
-ok(!classifySql("SELECT auth.uid()").block, "auth.uid() is a read");
+ok(!classifySql("SELECT auth.uid()").block && !classifySql('SELECT "auth".uid()').block, "auth.uid() is a read");
+ok(['SELECT "evil.auth".uid()', 'SELECT "x auth".uid()', "SELECT evil.auth.uid()", "SELECT uid()"]
+  .every((sql) => classifySql(sql).block), "a uid() whose schema is not exactly auth is blocked (Luna round 3, PR #882)");
 ok(classifySql("SELECT public.uid()").block && classifySql("SELECT evil.uid()").block,
   "a uid() outside the auth schema is not vouched for (Luna, PR #882)");
 ok(!classifySql("SELECT * FROM unnest(ARRAY[1,2]) AS t(x)").block, "a column-alias list is not a call");

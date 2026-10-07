@@ -329,7 +329,8 @@ export function findNonReadFunctionCall(sqlText) {
     const name = m[1].toLowerCase();
     if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
     // auth.uid() is the caller's id, a read; a `uid` in any other schema is not vouched for.
-    if (name === "uid" && /\bauth"?\s*\.\s*$/i.test(text.slice(0, m.index))) continue;
+    // The schema must be exactly `auth` or `"auth"`, not `"evil.auth"` or `x.auth` (Luna, PR #882).
+    if (name === "uid" && /(?:^|[^\w."])(?:auth|"auth")\s*\.\s*$/i.test(text.slice(0, m.index))) continue;
     // `AS t(a, b)` names an alias's columns and `::numeric(10,2)` is a type;
     // neither is a call.
     if (/(?:\bas|::)\s*$/i.test(text.slice(0, m.index))) continue;
