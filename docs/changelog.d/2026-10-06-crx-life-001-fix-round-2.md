@@ -27,6 +27,10 @@ or HIGH. Fixed:
   can let the wrong person read an order invoice. Codex Luna round 2's one MED was the salesperson half; it is deferred
   here by name.
 
+**PR #885 review (first automated review):** asked that CRX-LIFE-001 stay open until the live apply
+is verified. Done: the entry is back in the OPEN part of `KNOWN_ISSUES.md` as "fix pending apply";
+a follow-up after the merge verifies the live state and archives it.
+
 **Owner decision (Mason, 2026-10-06, in chat): "Land it then lock down rep scoping next."** Codex
 Luna round 3 rated both pre-existing gaps (customer scope and salesperson on the order-invoice RPCs)
 HIGH; they are deferred by that decision and are the next change, recorded in `DECISION_LOG.md` and

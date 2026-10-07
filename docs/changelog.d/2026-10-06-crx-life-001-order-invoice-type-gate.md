@@ -83,7 +83,8 @@ refuse, neither writes).
 before the PR merges and the PR records `Applied live:`. The post-apply smoke chains and invariant
 sweeps run then.
 
-Docs: `KNOWN_ISSUES.md` (CRX-LIFE-001 to the archive as FIXED; ledger stamp re-verified),
+Docs: `KNOWN_ISSUES.md` (CRX-LIFE-001 kept OPEN as "fix pending apply" until a follow-up verifies
+the live state, as the PR #885 review asked; ledger stamp re-verified),
 `CURRENT_STATE.md`, `migration-history.md` (row 937), `rpc-functions.md`, `database-schema.md`,
 `QUOTE_TO_DELIVERY.md` (field-invoice entry points, now three), `.gitattributes` (LF pin for the new
 migration, whose postflight pins an LF body md5).

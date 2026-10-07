@@ -80,7 +80,7 @@ Do not read `refuse_generic_field_invoice_creation` or `finish_generic_field_inv
 claim about every creation path. The order-pipeline RPCs `create_invoice_from_order` and
 `create_split_invoices_from_order` accepted a caller-supplied `p_invoice_type` and would create a
 `field_application` invoice for an admin or sales rep. That was pre-existing, was NOT touched by
-these four files, and was tracked as **CRX-LIFE-001**; row 937 (`20261006200000`) closes it.
+these four files, and was tracked as **CRX-LIFE-001**; row 937 (`20261006200000`, PR #885) closes it once applied.
 
 **ORDERING IS STRICT. None of these files carries an `ordering-guard: ahead-of-pending` marker.**
 An earlier revision of this paragraph said they did; the three markers were REMOVED on 2026-09-20.
