@@ -142,7 +142,9 @@ corrupt AR, commissions, field reporting and the field-app lifecycle assumptions
 `20260620210000_field_app_invoice_type_lock_trigger` does **not** cover this. It fires only on
 `UPDATE` across the `field_application` boundary, never on `INSERT`.
 
-**Exposure is not yet measured.** No live read has been taken of how many `field_application`
+*(The rest of this paragraph is the 2026-09-20 snapshot, superseded by the status at the top of
+this entry: exposure was measured 2026-10-06 — zero order-backed field invoices — and Mason gave
+the go-ahead that day.)* **Exposure is not yet measured.** No live read has been taken of how many `field_application`
 invoices carry an `order_id`, so the blast radius is unknown; that read needs Mason's approval at
 the time. **Fix shape:** a new migration refusing `field_application` in both order RPCs, plus an
 INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
