@@ -31,6 +31,11 @@ or HIGH. Fixed:
 is verified. Done: the entry is back in the OPEN part of `KNOWN_ISSUES.md` as "fix pending apply";
 a follow-up after the merge verifies the live state and archives it.
 
+**PR #885 Codex GitHub review (P2), deferred by name:** a refused `field_application` split on an
+allocated order draws one invoice number before the CHECK rejects it (only a non-app caller sends
+that type). The split wrapper's type allow-list goes into the rep-scoping change, which re-emits that
+wrapper anyway; recorded in `KNOWN_ISSUES.md`.
+
 **Owner decision (Mason, 2026-10-06, in chat): "Land it then lock down rep scoping next."** Codex
 Luna round 3 rated both pre-existing gaps (customer scope and salesperson on the order-invoice RPCs)
 HIGH; they are deferred by that decision and are the next change, recorded in `DECISION_LOG.md` and

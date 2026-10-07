@@ -333,7 +333,11 @@ archive. They are listed here so the open part of this file shows them. None was
   reps bill only their own customers and only under their own name; admins unrestricted. Fix in a
   separate reviewed migration: refuse a non-admin caller whose customer is not assigned to them or
   whose non-null `p_salesman_id` differs from `auth.uid()`, minding `complete_delivery`'s call into
-  the split RPC. (See CRX-LIFE-001.)
+  the split RPC. That change re-emits the split wrapper, so it also adds the CRX-LIFE-001 type
+  allow-list there, before any claim or insert: today a refused `field_application` split on an
+  allocated order fails on the table CHECK only after its first INSERT has drawn an invoice number
+  from the sequence, so each such refused call (never sent by the app) leaves a numbering gap
+  (Codex GitHub review on PR #885). (See CRX-LIFE-001.)
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,
