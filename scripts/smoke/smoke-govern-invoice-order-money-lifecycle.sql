@@ -2,6 +2,10 @@
 -- 20260721010000_govern_invoice_order_money_lifecycle.
 -- Exercises the partially delivered short-close, invoice recovery, retry binding,
 -- terminal-order guards, and direct invoice-table DML revocation in one statement.
+-- On live, a run consumes invoice numbers (INV- and CS- sequences) that the rollback
+-- does not return, leaving gaps in the customer-visible series, and briefly holds the
+-- invoice-number lock; prefer the disposable container
+-- (scripts/smoke/prove-order-invoice-type-gate-real-schema.mjs) or run it off-hours.
 DO $smoke$
 DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -70,6 +74,12 @@ DECLARE
   v_expected_review jsonb;
   v_actual_review jsonb;
   v_repeat_review jsonb;
+  v_pricing jsonb;
+  -- Business dates are Chicago dates; current_date is UTC, which is already tomorrow between
+  -- 00:00 UTC and Chicago midnight, and the date guards (commission payments, finance
+  -- charges) refuse a date after the Chicago business date.
+  v_today date := (now() AT TIME ZONE 'America/Chicago')::date;
+  v_write_off_date date;
   v_can_bypass_triggers boolean := COALESCE((
     SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user
   ), false);
@@ -93,6 +103,8 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  -- The disposable-database image's auth.uid() reads only request.jwt.claim.sub.
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   INSERT INTO public.customers (farm_name)
   VALUES ('[E2E] Lifecycle Farm ' || v_suffix)
@@ -107,6 +119,38 @@ BEGIN
   INSERT INTO public.products (product_name, unit_size)
   VALUES ('[E2E] Lifecycle Other Product ' || v_suffix, 'GL')
   RETURNING id INTO v_other_product;
+  -- Order lines need a positive cost basis (COST_BASIS_REQUIRED), and a product
+  -- is born pricing-free, so price both shells through the governed
+  -- preview/apply path the app uses (the smoke-return-credit-chain.sql pattern).
+  -- A one-cent cost keeps every line below, including the 0.02 tiny-profit
+  -- line, at or above cost. Without this the chain aborted at its first order
+  -- line (found 2026-10-06).
+  v_pricing := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(
+      jsonb_build_object('product_id', v_product, 'row_version', 1, 'pricing_mode', 'price_driven',
+        'new_cost', '0.01', 'tier1_price', '10.00', 'tier2_price', '10.00', 'tier3_price', '10.00'),
+      jsonb_build_object('product_id', v_other_product, 'row_version', 1, 'pricing_mode', 'price_driven',
+        'new_cost', '0.01', 'tier1_price', '10.00', 'tier2_price', '10.00', 'tier3_price', '10.00')
+    ),
+    v_admin,
+    'e2e-life-pricing-preview-' || v_suffix
+  );
+  IF v_pricing->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_pricing->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_pricing;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_pricing->>'change_set_id')::uuid,
+    v_pricing->>'request_fingerprint',
+    v_admin,
+    'e2e-life-pricing-apply-' || v_suffix
+  );
+  IF (SELECT count(*) FROM public.products
+       WHERE id IN (v_product, v_other_product) AND current_cost = 0.01) <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price both products';
+  END IF;
 
   INSERT INTO public.inventory (
     product_id, location, quantity_available, quantity_prebooked, unit_size
@@ -121,7 +165,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
-    'E2E-LIFE-SWAP-' || v_suffix, v_customer, current_date, 'confirmed', false
+    'E2E-LIFE-SWAP-' || v_suffix, v_customer, v_today, 'confirmed', false
   ) RETURNING id INTO v_swap_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -135,7 +179,7 @@ BEGIN
     delivery_number, order_id, customer_id, scheduled_date, status, created_by
   ) VALUES (
     'E2E-LIFE-SWAP-D-' || v_suffix, v_swap_order, v_customer,
-    current_date, 'scheduled', v_admin
+    v_today, 'scheduled', v_admin
   ) RETURNING id INTO v_swap_delivery;
   INSERT INTO public.delivery_items (
     delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
@@ -194,7 +238,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
-    'E2E-LIFE-INVOICED-' || v_suffix, v_customer, current_date, 'confirmed', false
+    'E2E-LIFE-INVOICED-' || v_suffix, v_customer, v_today, 'confirmed', false
   ) RETURNING id INTO v_invoiced_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -212,7 +256,7 @@ BEGIN
     delivery_number, order_id, customer_id, scheduled_date, status, created_by
   ) VALUES (
     'E2E-LIFE-INVOICED-D-' || v_suffix, v_invoiced_order, v_customer,
-    current_date, 'scheduled', v_admin
+    v_today, 'scheduled', v_admin
   ) RETURNING id INTO v_invoiced_delivery;
   INSERT INTO public.delivery_items (
     delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
@@ -260,7 +304,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
-    'E2E-LIFE-' || v_suffix, v_customer, current_date,
+    'E2E-LIFE-' || v_suffix, v_customer, v_today,
     'partially_fulfilled', false
   ) RETURNING id INTO v_order;
 
@@ -277,7 +321,7 @@ BEGIN
     delivery_number, order_id, customer_id, scheduled_date,
     status, completed_at, signed_by, created_by
   ) VALUES (
-    'E2E-LIFE-D-' || v_suffix, v_order, v_customer, current_date,
+    'E2E-LIFE-D-' || v_suffix, v_order, v_customer, v_today,
     'scheduled', NULL, NULL, v_admin
   ) RETURNING id INTO v_delivery;
 
@@ -302,12 +346,14 @@ BEGIN
      SET quantity_prebooked = 6
    WHERE product_id = v_product AND location = 'Main Warehouse';
 
+  -- recipient_user_id: commissions must resolve to an active user
+  -- (trg_commissions_recipient_resolved, 20260722134252); the [E2E] labels stay.
   INSERT INTO public.commissions (
-    order_id, customer_id, recipient, split_percentage,
+    order_id, customer_id, recipient, recipient_user_id, split_percentage,
     commission_amount, order_profit, order_date, status
   ) VALUES
-    (v_order, v_customer, '[E2E] lifecycle rep A', 33.33, 13.33, 40, current_date, 'pending'),
-    (v_order, v_customer, '[E2E] lifecycle rep B', 66.67, 26.67, 40, current_date, 'pending');
+    (v_order, v_customer, '[E2E] lifecycle rep A', v_admin, 33.33, 13.33, 40, v_today, 'pending'),
+    (v_order, v_customer, '[E2E] lifecycle rep B', v_admin, 66.67, 26.67, 40, v_today, 'pending');
 
   v_result := public.cancel_order(
     v_order, v_admin, 'e2e-life-cancel-' || v_suffix
@@ -371,7 +417,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
-    'E2E-LIFE-TINY-' || v_suffix, v_customer, current_date,
+    'E2E-LIFE-TINY-' || v_suffix, v_customer, v_today,
     'partially_fulfilled', false
   ) RETURNING id INTO v_tiny_order;
   INSERT INTO public.order_items (
@@ -386,7 +432,7 @@ BEGIN
     delivery_number, order_id, customer_id, scheduled_date, status, created_by
   ) VALUES (
     'E2E-LIFE-TINY-D-' || v_suffix, v_tiny_order, v_customer,
-    current_date, 'scheduled', v_admin
+    v_today, 'scheduled', v_admin
   ) RETURNING id INTO v_tiny_delivery;
   INSERT INTO public.delivery_items (
     delivery_id, order_item_id, product_id, quantity,
@@ -396,14 +442,16 @@ BEGIN
   UPDATE public.deliveries
      SET status = 'completed', completed_at = now(), signed_by = '[E2E] Tiny Receiver'
    WHERE id = v_tiny_delivery;
+  -- recipient_user_id: commissions must resolve to an active user
+  -- (trg_commissions_recipient_resolved, 20260722134252); the [E2E] labels stay.
   INSERT INTO public.commissions (
-    order_id, customer_id, recipient, split_percentage,
+    order_id, customer_id, recipient, recipient_user_id, split_percentage,
     commission_amount, order_profit, order_date, status
   ) VALUES
-    (v_tiny_order, v_customer, '[E2E] tiny A', 25, 0.01, 0.04, current_date, 'pending'),
-    (v_tiny_order, v_customer, '[E2E] tiny B', 25, 0.01, 0.04, current_date, 'pending'),
-    (v_tiny_order, v_customer, '[E2E] tiny C', 25, 0.01, 0.04, current_date, 'pending'),
-    (v_tiny_order, v_customer, '[E2E] tiny D', 25, 0.01, 0.04, current_date, 'pending');
+    (v_tiny_order, v_customer, '[E2E] tiny A', v_admin, 25, 0.01, 0.04, v_today, 'pending'),
+    (v_tiny_order, v_customer, '[E2E] tiny B', v_admin, 25, 0.01, 0.04, v_today, 'pending'),
+    (v_tiny_order, v_customer, '[E2E] tiny C', v_admin, 25, 0.01, 0.04, v_today, 'pending'),
+    (v_tiny_order, v_customer, '[E2E] tiny D', v_admin, 25, 0.01, 0.04, v_today, 'pending');
   PERFORM public.cancel_order(
     v_tiny_order, v_admin, 'e2e-life-tiny-close-' || v_suffix
   );
@@ -421,7 +469,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
-    'E2E-LIFE-BOUND-' || v_suffix, v_customer, current_date,
+    'E2E-LIFE-BOUND-' || v_suffix, v_customer, v_today,
     'confirmed', false
   ) RETURNING id INTO v_bound_order;
   INSERT INTO public.order_items (
@@ -460,7 +508,7 @@ BEGIN
     invoice_date, due_date, total_amount_cents, created_by
   ) VALUES (
     'E2E-LIFE-BOUND-OTHER-' || v_suffix, v_customer, 'misc_charge', 'draft',
-    current_date, current_date + 30, 0, v_admin
+    v_today, v_today + 30, 0, v_admin
   ) RETURNING id INTO v_bound_other_invoice;
 
   PERFORM public.post_invoice(v_bound_invoice, 'e2e-life-post-bound-' || v_suffix);
@@ -513,7 +561,7 @@ BEGIN
     INSERT INTO public.orders (
       order_number, customer_id, order_date, status, booking_draw
     ) VALUES (
-      'E2E-LIFE-CORRUPT-' || v_suffix, v_customer, current_date,
+      'E2E-LIFE-CORRUPT-' || v_suffix, v_customer, v_today,
       'partially_fulfilled', false
     ) RETURNING id INTO v_corrupt_order;
     INSERT INTO public.order_items (
@@ -528,7 +576,7 @@ BEGIN
       delivery_number, order_id, customer_id, scheduled_date, status, created_by
     ) VALUES (
       'E2E-LIFE-CORRUPT-D-' || v_suffix, v_corrupt_order, v_customer,
-      current_date, 'scheduled', v_admin
+      v_today, 'scheduled', v_admin
     ) RETURNING id INTO v_corrupt_delivery;
     INSERT INTO public.delivery_items (
       delivery_id, order_item_id, product_id, quantity,
@@ -555,7 +603,7 @@ BEGIN
   -- line still reconciles exactly, so only the explicit lineage guard catches it.
   BEGIN
     INSERT INTO public.orders (order_number, customer_id, order_date, status)
-    VALUES ('E2E-LIFE-LINE-A-' || v_suffix, v_customer, current_date, 'partially_fulfilled')
+    VALUES ('E2E-LIFE-LINE-A-' || v_suffix, v_customer, v_today, 'partially_fulfilled')
     RETURNING id INTO v_corrupt_order;
     INSERT INTO public.order_items (
       order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -566,7 +614,7 @@ BEGIN
       2, 20, 8, 40, 1, 1
     ) RETURNING id INTO v_corrupt_item;
     INSERT INTO public.orders (order_number, customer_id, order_date, status)
-    VALUES ('E2E-LIFE-LINE-B-' || v_suffix, v_customer, current_date, 'confirmed')
+    VALUES ('E2E-LIFE-LINE-B-' || v_suffix, v_customer, v_today, 'confirmed')
     RETURNING id INTO v_foreign_order;
     INSERT INTO public.order_items (
       order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -580,7 +628,7 @@ BEGIN
       delivery_number, order_id, customer_id, scheduled_date, status, created_by
     ) VALUES (
       'E2E-LIFE-LINE-D-' || v_suffix, v_corrupt_order, v_customer,
-      current_date, 'scheduled', v_admin
+      v_today, 'scheduled', v_admin
     ) RETURNING id INTO v_corrupt_delivery;
     INSERT INTO public.delivery_items (
       delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
@@ -637,7 +685,7 @@ BEGIN
   -- rejected by the short-close helper before it changes any money or stock.
   BEGIN
     INSERT INTO public.orders (order_number, customer_id, order_date, status)
-    VALUES ('E2E-LIFE-CUSTOMER-' || v_suffix, v_customer, current_date, 'partially_fulfilled')
+    VALUES ('E2E-LIFE-CUSTOMER-' || v_suffix, v_customer, v_today, 'partially_fulfilled')
     RETURNING id INTO v_corrupt_order;
     INSERT INTO public.order_items (
       order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -652,7 +700,7 @@ BEGIN
       delivery_number, order_id, customer_id, scheduled_date, status, created_by
     ) VALUES (
       'E2E-LIFE-CUSTOMER-D-' || v_suffix, v_corrupt_order, v_other_customer,
-      current_date, 'scheduled', v_admin
+      v_today, 'scheduled', v_admin
     ) RETURNING id INTO v_corrupt_delivery;
     INSERT INTO public.delivery_items (
       delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
@@ -680,7 +728,7 @@ BEGIN
     INSERT INTO public.orders (
       order_number, customer_id, order_date, status, booking_draw, quote_id
     ) VALUES (
-      'E2E-LIFE-NOQUOTE-' || v_suffix, v_customer, current_date,
+      'E2E-LIFE-NOQUOTE-' || v_suffix, v_customer, v_today,
       'partially_fulfilled', true, NULL
     ) RETURNING id INTO v_corrupt_order;
     INSERT INTO public.order_items (
@@ -695,7 +743,7 @@ BEGIN
       delivery_number, order_id, customer_id, scheduled_date, status, created_by
     ) VALUES (
       'E2E-LIFE-NOQUOTE-D-' || v_suffix, v_corrupt_order, v_customer,
-      current_date, 'scheduled', v_admin
+      v_today, 'scheduled', v_admin
     ) RETURNING id INTO v_corrupt_delivery;
     INSERT INTO public.delivery_items (
       delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
@@ -717,7 +765,7 @@ BEGIN
   END;
 
   INSERT INTO public.orders (order_number, customer_id, order_date, status)
-  VALUES ('E2E-LIFE-OTHER-' || v_suffix, v_customer, current_date, 'confirmed')
+  VALUES ('E2E-LIFE-OTHER-' || v_suffix, v_customer, v_today, 'confirmed')
   RETURNING id INTO v_other_order;
   BEGIN
     UPDATE public.orders SET status = 'cancelled' WHERE id = v_other_order;
@@ -759,7 +807,7 @@ BEGIN
     status, invoice_date, due_date, total_amount_cents, created_by
   ) VALUES (
     'E2E-LIFE-SURVIVE-' || v_suffix, v_customer, v_other_order,
-    'chemical_sale', 'draft', current_date, current_date + 30, 0, v_admin
+    'chemical_sale', 'draft', v_today, v_today + 30, 0, v_admin
   ) RETURNING id INTO v_surviving_invoice;
   INSERT INTO public.invoice_items (
     invoice_id, product_id, description, quantity,
@@ -768,7 +816,8 @@ BEGIN
     v_surviving_invoice, v_product, '[E2E] surviving line', 1,
     1000, 1000, 600
   ) RETURNING id INTO v_terminal_invoice_item;
-  UPDATE public.invoices SET status = 'posted' WHERE id = v_surviving_invoice;
+  -- A financial status needs posted_at (invoices_financial_status_requires_posted_at).
+  UPDATE public.invoices SET status = 'posted', posted_at = now(), posted_by = v_admin WHERE id = v_surviving_invoice;
 
   -- The untouched path still delegates to the mature full-cancel behavior.
   v_result := public.cancel_order(
@@ -789,7 +838,7 @@ BEGIN
      SET due_date = due_date + 1
    WHERE id = v_surviving_invoice;
   IF (SELECT due_date FROM public.invoices WHERE id = v_surviving_invoice)
-       IS DISTINCT FROM current_date + 31 THEN
+       IS DISTINCT FROM v_today + 31 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: safe accounting update on surviving posted invoice was blocked';
   END IF;
 
@@ -798,7 +847,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw
   ) VALUES (
-    'E2E-LIFE-PAID-' || v_suffix, v_customer, current_date,
+    'E2E-LIFE-PAID-' || v_suffix, v_customer, v_today,
     'partially_fulfilled', false
   ) RETURNING id INTO v_blocked_order;
   INSERT INTO public.order_items (
@@ -813,7 +862,7 @@ BEGIN
     delivery_number, order_id, customer_id, scheduled_date, status, created_by
   ) VALUES (
     'E2E-LIFE-BLOCK-D-' || v_suffix, v_blocked_order, v_customer,
-    current_date, 'scheduled', v_admin
+    v_today, 'scheduled', v_admin
   ) RETURNING id INTO v_other_delivery;
   INSERT INTO public.delivery_items (
     delivery_id, order_item_id, product_id, quantity,
@@ -834,12 +883,14 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong partial delivered-order cancellation error: %', v_err;
     END IF;
   END;
+  -- recipient_user_id: commissions must resolve to an active user
+  -- (trg_commissions_recipient_resolved, 20260722134252); the [E2E] labels stay.
   INSERT INTO public.commissions (
-    order_id, customer_id, recipient, split_percentage,
+    order_id, customer_id, recipient, recipient_user_id, split_percentage,
     commission_amount, order_profit, order_date, status
   ) VALUES (
-    v_blocked_order, v_customer, '[E2E] paid lifecycle rep', 100,
-    8, 8, current_date, 'paid'
+    v_blocked_order, v_customer, '[E2E] paid lifecycle rep', v_admin, 100,
+    8, 8, v_today, 'paid'
   ) RETURNING id INTO v_commission;
   BEGIN
     PERFORM public.cancel_order(
@@ -866,9 +917,9 @@ BEGIN
      SET status = 'pending'
    WHERE id = v_commission;
   INSERT INTO public.commission_payments (
-    payment_number, recipient_id, total_amount, status, created_by
+    payment_number, recipient_id, total_amount, status, created_by, payment_date
   ) VALUES (
-    'E2E-LIFE-CP-' || v_suffix, v_admin, 8, 'unposted', v_admin
+    'E2E-LIFE-CP-' || v_suffix, v_admin, 8, 'unposted', v_admin, v_today
   ) RETURNING id INTO v_commission_payment;
   INSERT INTO public.commission_payment_items (
     commission_payment_id, commission_id, amount
@@ -904,7 +955,7 @@ BEGIN
     order_number, customer_id, quote_id, order_date, status, booking_draw
   ) VALUES (
     'E2E-LIFE-DRAW-O-' || v_suffix, v_customer, v_draw_quote,
-    current_date, 'partially_fulfilled', true
+    v_today, 'partially_fulfilled', true
   ) RETURNING id INTO v_draw_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -918,7 +969,7 @@ BEGIN
     delivery_number, order_id, customer_id, scheduled_date, status, created_by
   ) VALUES (
     'E2E-LIFE-DRAW-D-' || v_suffix, v_draw_order, v_customer,
-    current_date, 'scheduled', v_admin
+    v_today, 'scheduled', v_admin
   ) RETURNING id INTO v_draw_delivery;
   INSERT INTO public.delivery_items (
     delivery_id, order_item_id, product_id, quantity,
@@ -1004,7 +1055,7 @@ BEGIN
   INSERT INTO public.orders (
     order_number, customer_id, order_date, status, booking_draw, deleted_at
   ) VALUES (
-    'E2E-LIFE-DELETED-' || v_suffix, v_customer, current_date,
+    'E2E-LIFE-DELETED-' || v_suffix, v_customer, v_today,
     'fulfilled', false, now()
   ) RETURNING id INTO v_deleted_order;
   INSERT INTO public.order_items (
@@ -1020,7 +1071,7 @@ BEGIN
     status, completed_at, signed_by, created_by
   ) VALUES (
     'E2E-LIFE-DELETED-D-' || v_suffix, v_deleted_order, v_customer,
-    current_date, 'scheduled', NULL, NULL, v_admin
+    v_today, 'scheduled', NULL, NULL, v_admin
   ) RETURNING id INTO v_deleted_delivery;
   INSERT INTO public.delivery_items (
     delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
@@ -1185,10 +1236,12 @@ BEGIN
     v_invoice_id, v_customer, 250,
     '[E2E] reversed lifecycle write-off',
     v_admin, v_admin, now(), '[E2E] reversed for proof', v_admin
-  );
+  ) RETURNING created_at::date INTO v_write_off_date;
+  -- Query the window that holds the row's own date: the review filters
+  -- write-offs on created_at::date, which is the session date, not v_today.
   SELECT count(*) INTO v_count
     FROM public.get_customer_transaction_review(
-      v_customer, current_date, current_date
+      v_customer, v_write_off_date, v_write_off_date
     )
    WHERE transaction_type = 'Write-Off';
   IF v_count <> 0 THEN
@@ -1209,25 +1262,25 @@ BEGIN
     total_amount_cents, created_by
   ) VALUES (
     'E2E-LIFE-REV-A-' || v_suffix, v_review_customer, 'chemical_sale',
-    current_date, 100, v_admin
+    v_today, 100, v_admin
   ) RETURNING id INTO v_review_invoice_a;
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, invoice_date,
     total_amount_cents, created_by
   ) VALUES (
     'E2E-LIFE-REV-B-' || v_suffix, v_review_customer, 'chemical_sale',
-    current_date, 200, v_admin
+    v_today, 200, v_admin
   ) RETURNING id INTO v_review_invoice_b;
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, invoice_date,
     total_amount_cents, created_by
   ) VALUES (
     'E2E-LIFE-REV-C-' || v_suffix, v_review_customer, 'chemical_sale',
-    current_date, 300, v_admin
+    v_today, 300, v_admin
   ) RETURNING id INTO v_review_invoice_c;
 
   UPDATE public.invoices
-     SET status = 'posted'
+     SET status = 'posted', posted_at = now(), posted_by = v_admin
    WHERE id IN (v_review_invoice_a, v_review_invoice_b, v_review_invoice_c);
 
   v_result := public.allocate_payment(
@@ -1236,7 +1289,7 @@ BEGIN
     p_payment_method := 'check',
     p_reference_number := v_review_ref,
     p_check_number := NULL,
-    p_payment_date := current_date,
+    p_payment_date := v_today,
     p_notes := '[E2E] deterministic transaction review set A',
     p_allocations := jsonb_build_array(
       jsonb_build_object('invoice_id', v_review_invoice_a, 'amount_cents', 100),
@@ -1253,7 +1306,7 @@ BEGIN
     p_payment_method := 'check',
     p_reference_number := v_review_ref,
     p_check_number := NULL,
-    p_payment_date := current_date,
+    p_payment_date := v_today,
     p_notes := '[E2E] deterministic transaction review set B',
     p_allocations := jsonb_build_array(
       jsonb_build_object('invoice_id', v_review_invoice_c, 'amount_cents', 300)
@@ -1288,7 +1341,7 @@ BEGIN
          )
     INTO v_actual_review
     FROM public.get_customer_transaction_review(
-      v_review_customer, current_date, current_date
+      v_review_customer, v_today, v_today
     ) actual
    WHERE actual.transaction_type = 'Payment'
      AND actual.reference_number = v_review_ref;
@@ -1301,7 +1354,7 @@ BEGIN
          )
     INTO v_repeat_review
     FROM public.get_customer_transaction_review(
-      v_review_customer, current_date, current_date
+      v_review_customer, v_today, v_today
     ) repeated
    WHERE repeated.transaction_type = 'Payment'
      AND repeated.reference_number = v_review_ref;
@@ -1312,7 +1365,7 @@ BEGIN
          MIN(r.running_balance_cents)
     INTO v_review_payment_count, v_review_debits, v_review_credits, v_review_min_balance
     FROM public.get_customer_transaction_review(
-      v_review_customer, current_date, current_date
+      v_review_customer, v_today, v_today
     ) r;
 
   IF v_expected_review IS DISTINCT FROM v_actual_review
@@ -1429,7 +1482,7 @@ BEGIN
       status, invoice_date, total_amount_cents, created_by
     ) VALUES (
       'E2E-LIFE-TERM-' || v_suffix, v_customer, v_other_order,
-      'chemical_sale', 'draft', current_date, 0, v_admin
+      'chemical_sale', 'draft', v_today, 0, v_admin
     );
     RAISE EXCEPTION 'SMOKE_FAIL: invoice attached to terminal order';
   EXCEPTION WHEN OTHERS THEN
@@ -1477,7 +1530,7 @@ BEGIN
       invoice_date, total_amount_cents, created_by
     ) VALUES (
       'E2E-LIFE-DML-' || v_suffix, v_customer,
-      'misc_charge', 'draft', current_date, 0, v_admin
+      'misc_charge', 'draft', v_today, 0, v_admin
     );
     RESET ROLE;
     RAISE EXCEPTION 'SMOKE_FAIL: authenticated direct invoice insert succeeded';
@@ -1497,7 +1550,7 @@ BEGIN
       invoice_date, total_amount_cents, created_by
     ) VALUES (
       'E2E-LIFE-SERVICE-DML-' || v_suffix, v_customer,
-      'misc_charge', 'draft', current_date, 0, v_admin
+      'misc_charge', 'draft', v_today, 0, v_admin
     );
     RESET ROLE;
     RAISE EXCEPTION 'SMOKE_FAIL: service-role direct invoice insert succeeded';
