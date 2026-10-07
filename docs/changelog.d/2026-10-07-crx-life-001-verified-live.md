@@ -14,8 +14,13 @@ md5(prosrc) `a1a91643bd8866823ae359f7e0ec290e`, SECURITY DEFINER, `search_path=p
 `invoices` unchanged (13 rows, 0 order-backed `field_application`); the split wrapper and the three
 private implementations unchanged. Ledger: 1019 rows / 1012 names, high-water `20261006200000`.
 
-**Post-apply invariant sweeps:** run started 2026-10-07 ~11:47 UTC; result recorded in a follow-up
-commit on this branch.
+**Post-apply invariant sweeps — INCOMPLETE (28 of 29):** 28 predicates ran read-only after the apply
+and all PASS with no unallowlisted violation; their packets are JSON-identical to the pre-apply run
+(same rows, same 42 function-contract md5s; no predicate pins `create_invoice_from_order`). The 29th,
+`quote-versions-rpc-owned`, was declined at the permission prompt in both the pre- and post-apply
+runs, so the full-set adjudicator refuses the capture (exit 2) and this gate is NOT passed. It is a
+read-only predicate; it needs Mason's approval at the prompt, then its packet is added and the full
+adjudication re-run. Until then this ship step stays open.
 
 **Not run on live:** the registered smoke chains. Each consumes customer-visible invoice numbers on live,
 and running them needs Mason's REAL-DATA-OK, which was not given. The container prover
