@@ -101,10 +101,13 @@ immediately below). Neither the migration filename
    prompt in the pre- and post-apply runs, so the full-set adjudicator refuses the capture (exit 2).
    The 28 that ran pass and are identical to the pre-apply run. Needs Mason to approve that one
    read-only query at the prompt; then add its packet and re-run the full `--adjudicate`.
-2. The registered smoke chains have not run on live: they consume customer-visible invoice numbers
-   and need Mason's REAL-DATA-OK. The container prover (`npm run proof:order-invoice-type-gate`) ran
-   them all, before and after the fix. Mason decides whether to run them live or accept the
-   container proof; this entry moves to the archive when both items are settled.
+2. The registered smoke chains covering `create_invoice_from_order` and
+   `create_split_invoices_from_order` have not run on live. `.claude/commands/ship.md` (Step 5 item 4)
+   makes that live run a hard post-apply gate; the container prover
+   (`npm run proof:order-invoice-type-gate`) is supporting evidence, not a substitute. Running them
+   needs Mason's REAL-DATA-OK (the live-data guard), and each run consumes customer-visible invoice
+   numbers that the rollback does not return.
+   This entry moves to the archive only after both gates pass.
 
 **Verified live 2026-10-07.** `20261006200000_refuse_field_invoice_through_order_rpcs` applied live
 2026-10-07 11:45:56 UTC from PR #885 (ledger version `20261007114554`; merged as `342135561`). Read-only

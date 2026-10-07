@@ -22,10 +22,11 @@ runs, so the full-set adjudicator refuses the capture (exit 2) and this gate is 
 read-only predicate; it needs Mason's approval at the prompt, then its packet is added and the full
 adjudication re-run. Until then this ship step stays open.
 
-**Not run on live:** the registered smoke chains. Each consumes customer-visible invoice numbers on live,
-and running them needs Mason's REAL-DATA-OK, which was not given. The container prover
-(`npm run proof:order-invoice-type-gate`) is the behavioral proof: bug reproduced before, refused after,
-both layers mutation-tested, all covering chains passing.
+**Not run on live — an OPEN ship.md gate:** the registered smoke chains. Each consumes customer-visible
+invoice numbers on live, and running them needs Mason's REAL-DATA-OK, which was not given. The container
+prover (`npm run proof:order-invoice-type-gate`: bug reproduced before, refused after, both layers
+mutation-tested, all covering chains passing) is supporting evidence, not a substitute for that gate;
+CRX-LIFE-001 stays open until the chains pass on live.
 
 **Process notes:** the overnight autopilot arming expired while the dependency fix (#884) waited on its
 review, which parked the apply as designed until Mason re-armed it in chat. Vercel never built a preview
