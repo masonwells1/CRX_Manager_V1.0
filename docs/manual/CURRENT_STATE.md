@@ -1,21 +1,18 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-06 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-07 UTC: 1018 rows / 1011 distinct names,
-`max(version)` `20261002230949`, unchanged since PR #800's apply was read on 2026-10-03 03:19 UTC;
-the read right after the four field-season applies had 1017 rows, `max(version)` `20261002201609`).
+**Last verified:** 2026-10-07 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-07 11:47 UTC, after PR #885's apply: 1019 rows /
+1012 distinct names, `max(version)` `20261007114554`; the read before it, unchanged since PR #800's
+apply, had 1018 rows, `max(version)` `20261002230949`).
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-02)
+## Current state at a glance (2026-10-07)
 
-- **Effective ordering high-water: `20260921180000_soft_delete_customer_document_rpc`**
-  (ledger version `20261002230949`, UTC; applied live 2026-10-02 from PR #800). It replaced
-  `20260914101300_finish_generic_field_invoice_cutover` (ledger `20261002201609`). **Next:**
-  `20261006200000_refuse_field_invoice_through_order_rpcs` (CRX-LIFE-001) applies live before its
-  PR merges, so once that PR is on `main` it is the high-water; its ledger version is the PR's
-  `Applied live:` line. The effective ordering high-water is the
+- **Effective ordering high-water: `20261006200000_refuse_field_invoice_through_order_rpcs`**
+  (ledger version `20261007114554`, UTC; applied live 2026-10-07 from PR #885, CRX-LIFE-001). It
+  replaced `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`, PR #800). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -35,7 +32,9 @@ ships or quarterly, whichever comes first.
   `20260914101100_preserve_unchanged_source_invoice_dates` (`20261002201523`),
   `20260914101200_refuse_generic_field_invoice_creation` (`20261002201542`), and
   `20260914101300_finish_generic_field_invoice_cutover` (`20261002201609`); the last four applied
-  from PR #871's checkout.
+  from PR #871's checkout. Then `20260921180000_soft_delete_customer_document_rpc`
+  (`20261002230949`, PR #800) and `20261006200000_refuse_field_invoice_through_order_rpcs`
+  (`20261007114554`, PR #885).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
