@@ -79,7 +79,7 @@
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
 ## Billing / Invoices
-- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/unposted/posted/paid/overdue/voided/cancelled, balance_cents bigint [GENERATED, CHECK >= 0 added 2026-05-13 audit #19], due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
+- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/unposted/posted/paid/overdue/voided/cancelled, balance_cents bigint [GENERATED, CHECK >= 0 added 2026-05-13 audit #19], due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation]; CHECK `invoices_field_application_has_no_order` [2026-10-06, CRX-LIFE-001]: a `field_application` invoice never carries an `order_id`)
 - `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, quoted_price_cents, price_source)
 - `allocation_sets` - Payment-to-invoice allocation groups (entity_type: order/invoice/payment, entity_id, version, is_active, created_by, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items

@@ -1,10 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-02 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr` after PR #800's apply, 2026-10-03 03:19 UTC: 1018 rows /
-1011 distinct names, `max(version)` `20261002230949`; the read right after the four field-season
-applies had 1017 rows, `max(version)` `20261002201609`). Every
-other section keeps its own date; nothing below was re-certified by that read.
+**Last verified:** 2026-10-06 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-07 UTC: 1018 rows / 1011 distinct names,
+`max(version)` `20261002230949`, unchanged since PR #800's apply was read on 2026-10-03 03:19 UTC;
+the read right after the four field-season applies had 1017 rows, `max(version)` `20261002201609`).
+Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
@@ -12,7 +12,10 @@ ships or quarterly, whichever comes first.
 
 - **Effective ordering high-water: `20260921180000_soft_delete_customer_document_rpc`**
   (ledger version `20261002230949`, UTC; applied live 2026-10-02 from PR #800). It replaced
-  `20260914101300_finish_generic_field_invoice_cutover` (ledger `20261002201609`). The effective ordering high-water is the
+  `20260914101300_finish_generic_field_invoice_cutover` (ledger `20261002201609`). **Next:**
+  `20261006200000_refuse_field_invoice_through_order_rpcs` (CRX-LIFE-001) applies live before its
+  PR merges, so once that PR is on `main` it is the high-water; its ledger version is the PR's
+  `Applied live:` line. The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
