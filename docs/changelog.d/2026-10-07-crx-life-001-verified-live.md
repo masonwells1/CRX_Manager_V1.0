@@ -1,4 +1,4 @@
-## 2026-10-07 - CRX-LIFE-001 verified live: order invoices can no longer be field-application invoices
+## 2026-10-07 - CRX-LIFE-001 fix live and verified by catalog: order invoices can no longer be field-application invoices
 
 `20261006200000_refuse_field_invoice_through_order_rpcs` applied live at 2026-10-07 11:45:56 UTC from
 PR #885's frozen head `0149b2b15` (ledger version `20261007114554`; the name keeps the authored
@@ -32,7 +32,9 @@ review, which parked the apply as designed until Mason re-armed it in chat. Verc
 for #885's final merge-from-main commit, so the required `Vercel` status was missing; a preview build of
 that exact commit was requested through the Vercel API (no code change), after which the PR read CLEAN.
 
-Docs: `KNOWN_ISSUES.md` moves CRX-LIFE-001 to the archive as FIXED (verified live); migration-history
+Docs: `KNOWN_ISSUES.md` keeps CRX-LIFE-001 OPEN as "fix LIVE; two post-apply gates await Mason" (the
+29th sweep predicate and the live smoke chains), per the Codex GitHub review on PR #887 — it moves to the
+archive when both are settled; migration-history
 row 937 and the boundary capture, and `CURRENT_STATE.md`, record the apply.
 
 **Schema registry refreshed from live (real `--from-introspection` run, all six queries, 2026-10-07

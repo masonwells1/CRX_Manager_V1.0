@@ -2,8 +2,8 @@
 
 **Last verified: 2026-10-07 (America/Chicago) against the live migration ledger** (read-only, after
 PR #885's apply; the counts and high-water live only in `docs/reference/migration-history.md`). That
-read re-certified only the applied-migration list in this header and the CRX-LIFE-001 entry (now in
-the archive, verified live). Every other entry's status (open, or
+read re-certified only the applied-migration list in this header and the CRX-LIFE-001 entry (fix live; two
+post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
 date and was not all re-measured.
@@ -88,11 +88,85 @@ constitute a current defect list or clearance of the remaining P2 inventory.
 `public.save_invoice(jsonb,jsonb,text)` and nothing else. Both pin, fence and replace that one
 function by name and OID. "Generic field-invoice creation is refused" is therefore true of
 `save_invoice` and **NOT, by itself, true of the database as a whole**: the order-pipeline RPCs were
-a separate creation path, tracked as CRX-LIFE-001 and closed by
-`20261006200000_refuse_field_invoice_through_order_rpcs` (PR #885, live 2026-10-07; see its archive
-entry). Neither the migration filename
+a separate creation path, tracked as CRX-LIFE-001 and fixed live by
+`20261006200000_refuse_field_invoice_through_order_rpcs` (PR #885, live 2026-10-07; see the entry
+immediately below). Neither the migration filename
 `20260914101200_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
 `finish_generic_field_invoice_cutover` should be read as a claim about any other entry point.
+
+## OPEN 2026-09-20 (fix LIVE 2026-10-07; two post-apply gates await Mason) — CRX-LIFE-001: a sales rep could create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
+
+**Still open, owner Mason (both are ship.md post-apply gates; the fix itself is live):**
+1. `quote-versions-rpc-owned`, the 29th invariant sweep predicate, was declined at the permission
+   prompt in the pre- and post-apply runs, so the full-set adjudicator refuses the capture (exit 2).
+   The 28 that ran pass and are identical to the pre-apply run. Needs Mason to approve that one
+   read-only query at the prompt; then add its packet and re-run the full `--adjudicate`.
+2. The registered smoke chains have not run on live: they consume customer-visible invoice numbers
+   and need Mason's REAL-DATA-OK. The container prover (`npm run proof:order-invoice-type-gate`) ran
+   them all, before and after the fix. Mason decides whether to run them live or accept the
+   container proof; this entry moves to the archive when both items are settled.
+
+**Verified live 2026-10-07.** `20261006200000_refuse_field_invoice_through_order_rpcs` applied live
+2026-10-07 11:45:56 UTC from PR #885 (ledger version `20261007114554`; merged as `342135561`). Read-only
+post-apply check: one `create_invoice_from_order(uuid,uuid,text,text)` overload with the reviewed body
+(md5 `a1a91643bd8866823ae359f7e0ec290e`), SECURITY DEFINER, unchanged owner, `search_path` and ACL (anon
+cannot execute); `invoices_field_application_has_no_order` present and validated; `invoices` unchanged
+(13 rows, 0 order-backed `field_application`); the split wrapper and private implementations unchanged.
+Not run on live: the registered smoke chains (they consume customer-visible invoice numbers and need
+Mason's REAL-DATA-OK); the container prover is the behavioral proof. Details: migration-history row
+937 and `docs/changelog.d/2026-10-07-crx-life-001-verified-live.md`. Two layers: `create_invoice_from_order` accepts only `chemical_sale` or
+`misc_charge` and refuses anything else with `ORDER_INVOICE_TYPE_NOT_ALLOWED` (SQLSTATE 23514)
+before any lock or write; and the new table CHECK `invoices_field_application_has_no_order` refuses
+any `field_application` invoice that carries an `order_id`, from every writer, which is what stops
+the split engine's direct INSERT (`create_split_invoices_from_order` was deliberately not
+re-emitted). `credit_memo` is refused by the order RPC too: credit memos come only from
+`issue_return_credit`. **Exposure, measured read-only 2026-10-06 (Chicago):** 13 invoices live,
+one `field_application` and it has no order, so no record was ever created through this hole and
+nothing needed repair; the migration's preflight re-checks that at apply time. Proof:
+`scripts/smoke/prove-order-invoice-type-gate-real-schema.mjs` (bug reproduced before, refused
+after, both layers mutation-tested), the new registered chain `smoke-order-invoice-type-gate.sql`
+and the extended `smoke-backfill-refuse-split-billing.sql`. Found on the way and repaired in the
+same change: that chain and `smoke-govern-invoice-order-money-lifecycle.sql` aborted on
+`COST_BASIS_REQUIRED` at their first line (they inserted pricing-free products; the lifecycle chain
+also had stale commission, posting and business-date fixtures), and
+`smoke-money-lifecycle-idempotency-required.sql` failed between 00:00 UTC and Chicago midnight
+(`FUTURE_FINANCE_CHARGE_DATE`). Details in `docs/changelog.d/2026-10-06-crx-life-001-*.md`. Also
+found and recorded as open (not fixed here): the order-invoice RPCs check neither the rep's
+customer assignment nor the salesperson they are told to record. The original entry follows.
+
+**Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
+`main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of
+the season-guard candidate on 2026-09-20 and is recorded here because that PR's cutover phases make
+a scoped claim that could otherwise be misread as covering it (see the scope note above).
+
+`create_invoice_from_order(uuid, uuid, text, text)` and `create_split_invoices_from_order(...)` both
+accept a caller-supplied `p_invoice_type text DEFAULT 'chemical_sale'` and insert it into `invoices`
+**unchanged**, with no allow-list and no rejection of `field_application`:
+
+- `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql:108` and `:122`
+- `supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql:157` and `:426`
+- `supabase/migrations/20260719044912_trust_only_post_revoke_split_provenance.sql:382`
+
+Both retain `GRANT EXECUTE` to `authenticated`, and their internal role checks admit **admins and
+sales reps** — ordinary application actors, not database owners. So an authenticated sales rep can
+pass `p_invoice_type => 'field_application'` and produce an order-backed field-application invoice
+with no field, grower-share, job, blend-ticket or season workflow behind it. That breaks the
+documented invariant that field-application invoices never pass through the order pipeline, and can
+corrupt AR, commissions, field reporting and the field-app lifecycle assumptions.
+
+`20260620210000_field_app_invoice_type_lock_trigger` does **not** cover this. It fires only on
+`UPDATE` across the `field_application` boundary, never on `INSERT`.
+
+*(The rest of this paragraph is the 2026-09-20 snapshot, superseded by the status at the top of
+this entry: exposure was measured 2026-10-06 — zero order-backed field invoices — and Mason gave
+the go-ahead that day.)* **Exposure is not yet measured.** No live read has been taken of how many `field_application`
+invoices carry an `order_id`, so the blast radius is unknown; that read needs Mason's approval at
+the time. **Fix shape:** a new migration refusing `field_application` in both order RPCs, plus an
+INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
+reviewed change with its own container proof — not as an add-on to the season guards. Awaiting
+Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped season closure first
+with this gap documented. (The original September 30 target was superseded by his 2026-09-28
+decision to land the four field-season migrations after 2026-10-01; see the entry above.)
 
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 
@@ -2540,70 +2614,6 @@ date they were resolved; each keeps its original heading with the status word up
 evidence note where the status changed on 2026-09-26. Any piece of an archived entry that is still open
 is listed in "OPEN — smaller items carried out of resolved entries" near the top of this file. Moved
 here on 2026-09-26.
-
-### FIXED 2026-10-07 (verified live; opened 2026-09-20) — CRX-LIFE-001: a sales rep could create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
-
-**Verified live 2026-10-07.** `20261006200000_refuse_field_invoice_through_order_rpcs` applied live
-2026-10-07 11:45:56 UTC from PR #885 (ledger version `20261007114554`; merged as `342135561`). Read-only
-post-apply check: one `create_invoice_from_order(uuid,uuid,text,text)` overload with the reviewed body
-(md5 `a1a91643bd8866823ae359f7e0ec290e`), SECURITY DEFINER, unchanged owner, `search_path` and ACL (anon
-cannot execute); `invoices_field_application_has_no_order` present and validated; `invoices` unchanged
-(13 rows, 0 order-backed `field_application`); the split wrapper and private implementations unchanged.
-Not run on live: the registered smoke chains (they consume customer-visible invoice numbers and need
-Mason's REAL-DATA-OK); the container prover is the behavioral proof. Details: migration-history row
-937 and `docs/changelog.d/2026-10-07-crx-life-001-verified-live.md`. Two layers: `create_invoice_from_order` accepts only `chemical_sale` or
-`misc_charge` and refuses anything else with `ORDER_INVOICE_TYPE_NOT_ALLOWED` (SQLSTATE 23514)
-before any lock or write; and the new table CHECK `invoices_field_application_has_no_order` refuses
-any `field_application` invoice that carries an `order_id`, from every writer, which is what stops
-the split engine's direct INSERT (`create_split_invoices_from_order` was deliberately not
-re-emitted). `credit_memo` is refused by the order RPC too: credit memos come only from
-`issue_return_credit`. **Exposure, measured read-only 2026-10-06 (Chicago):** 13 invoices live,
-one `field_application` and it has no order, so no record was ever created through this hole and
-nothing needed repair; the migration's preflight re-checks that at apply time. Proof:
-`scripts/smoke/prove-order-invoice-type-gate-real-schema.mjs` (bug reproduced before, refused
-after, both layers mutation-tested), the new registered chain `smoke-order-invoice-type-gate.sql`
-and the extended `smoke-backfill-refuse-split-billing.sql`. Found on the way and repaired in the
-same change: that chain and `smoke-govern-invoice-order-money-lifecycle.sql` aborted on
-`COST_BASIS_REQUIRED` at their first line (they inserted pricing-free products; the lifecycle chain
-also had stale commission, posting and business-date fixtures), and
-`smoke-money-lifecycle-idempotency-required.sql` failed between 00:00 UTC and Chicago midnight
-(`FUTURE_FINANCE_CHARGE_DATE`). Details in `docs/changelog.d/2026-10-06-crx-life-001-*.md`. Also
-found and recorded as open (not fixed here): the order-invoice RPCs check neither the rep's
-customer assignment nor the salesperson they are told to record. The original entry follows.
-
-**Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
-`main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of
-the season-guard candidate on 2026-09-20 and is recorded here because that PR's cutover phases make
-a scoped claim that could otherwise be misread as covering it (see the scope note above).
-
-`create_invoice_from_order(uuid, uuid, text, text)` and `create_split_invoices_from_order(...)` both
-accept a caller-supplied `p_invoice_type text DEFAULT 'chemical_sale'` and insert it into `invoices`
-**unchanged**, with no allow-list and no rejection of `field_application`:
-
-- `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql:108` and `:122`
-- `supabase/migrations/20260827041400_align_return_credit_order_invoice_gates.sql:157` and `:426`
-- `supabase/migrations/20260719044912_trust_only_post_revoke_split_provenance.sql:382`
-
-Both retain `GRANT EXECUTE` to `authenticated`, and their internal role checks admit **admins and
-sales reps** — ordinary application actors, not database owners. So an authenticated sales rep can
-pass `p_invoice_type => 'field_application'` and produce an order-backed field-application invoice
-with no field, grower-share, job, blend-ticket or season workflow behind it. That breaks the
-documented invariant that field-application invoices never pass through the order pipeline, and can
-corrupt AR, commissions, field reporting and the field-app lifecycle assumptions.
-
-`20260620210000_field_app_invoice_type_lock_trigger` does **not** cover this. It fires only on
-`UPDATE` across the `field_application` boundary, never on `INSERT`.
-
-*(The rest of this paragraph is the 2026-09-20 snapshot, superseded by the status at the top of
-this entry: exposure was measured 2026-10-06 — zero order-backed field invoices — and Mason gave
-the go-ahead that day.)* **Exposure is not yet measured.** No live read has been taken of how many `field_application`
-invoices carry an `order_id`, so the blast radius is unknown; that read needs Mason's approval at
-the time. **Fix shape:** a new migration refusing `field_application` in both order RPCs, plus an
-INSERT-side type/provenance check. That is money-path work on the AR surface and belongs in its own
-reviewed change with its own container proof — not as an add-on to the season guards. Awaiting
-Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped season closure first
-with this gap documented. (The original September 30 target was superseded by his 2026-09-28
-decision to land the four field-season migrations after 2026-10-01; see the entry above.)
 
 ### FIXED 2026-10-04 (verified live) — a sales rep could not remove a customer document (admins could)
 
