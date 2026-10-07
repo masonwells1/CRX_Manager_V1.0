@@ -277,10 +277,13 @@ If you change one stage, check everything downstream:
 
 ## Field Application Workflow (Phase 1, 2026-04-29)
 
-Field application invoices are a parallel branch — they don't go through the quote → order → delivery pipeline. There are two entry points:
+Field application invoices are a parallel branch — they don't go through the quote → order → delivery pipeline. There are three entry points:
 
-1. **Direct field app invoice** — `/invoices/field-app/new` calls `save_field_app_invoice()`
+1. **Direct field app invoice** — `/invoices/field-app/new` calls `save_field_app_invoice()` (`save_field_app_split_invoice()` for split billing)
 2. **Blend ticket** — once approved, `create_invoice_from_blend_ticket()` produces invoice(s)
+3. **Job transfer** — `transfer_job_to_invoice()` bills a completed job
+
+None of them sets `order_id`, and the database enforces that: the `invoices_field_application_has_no_order` CHECK refuses an order-backed field invoice from any writer, and `create_invoice_from_order` accepts only `chemical_sale` or `misc_charge` (CRX-LIFE-001, `20261006200000`).
 
 ### Multi-customer fields → grouped split invoices
 

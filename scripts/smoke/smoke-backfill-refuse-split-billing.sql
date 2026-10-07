@@ -85,6 +85,9 @@ DECLARE
   v_delete_b uuid;
   v_deleted_count integer;
   v_err      text;
+  v_state    text;
+  v_constraint text;
+  v_invoice_count integer;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
   WHERE role = 'admin' AND is_active = true ORDER BY created_at LIMIT 1;
@@ -127,8 +130,22 @@ BEGIN
   -- [E2E] marker satisfies the live-testdata guard; terminal rollback removes it.
   INSERT INTO public.customers (farm_name)
   VALUES ('[E2E] H5 Farm ' || v_suffix) RETURNING id INTO v_customer;
-  INSERT INTO public.products (product_name)
-  VALUES ('[E2E] H5 Herbicide ' || v_suffix) RETURNING id INTO v_product;
+  -- Borrow a priced product (the smoke-save-job-parity.sql pattern): order lines
+  -- need a positive cost basis (COST_BASIS_REQUIRED), and a new product cannot be
+  -- born with pricing (require_governed_product_pricing). The pricing-free shell
+  -- this chain used to insert made it abort on its first quote line (found
+  -- 2026-10-06). Cost <= 10 keeps the price-10 quote lines at or above cost.
+  SELECT id INTO v_product
+    FROM public.products
+   WHERE current_cost IS NOT NULL
+     AND current_cost > 0
+     AND current_cost = round(current_cost, 2)
+     AND current_cost <= 6
+   ORDER BY current_cost, id
+   LIMIT 1;
+  IF v_product IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: a product with a whole-cent cost between 0.01 and 6.00 is required';
+  END IF;
   INSERT INTO public.quotes (quote_number, customer_id, created_by, status, commission_split)
   VALUES ('E2E-H5-Q-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
   RETURNING id INTO v_quote;
@@ -377,6 +394,30 @@ BEGIN
          pricing_pending = false
    WHERE id = v_oitem;
   PERFORM set_config('app.admin_override', 'false', true);
+
+  -- CRX-LIFE-001 (20261006200000): the split engine inserts its per-customer
+  -- invoices directly, so the invoices CHECK is what refuses a field_application
+  -- split; nothing it wrote (invoices, claim, provenance) survives. FAIL-FIRST:
+  -- before that migration this call creates order-backed field invoices.
+  SELECT count(*) INTO v_invoice_count FROM public.invoices WHERE order_id = v_order;
+  BEGIN
+    PERFORM public.create_split_invoices_from_order(
+      v_order, v_admin, 'field_application', 'e2e-h5-field-type-split-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: create_split_invoices_from_order created field_application invoices from an order';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT, v_state = RETURNED_SQLSTATE,
+                            v_constraint = CONSTRAINT_NAME;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_state <> '23514' OR v_constraint IS DISTINCT FROM 'invoices_field_application_has_no_order' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
+        v_state, v_constraint, v_err;
+    END IF;
+  END;
+  IF (SELECT count(*) FROM public.invoices WHERE order_id = v_order) <> v_invoice_count
+     OR EXISTS (SELECT 1 FROM public.split_invoice_creation_claims WHERE order_id = v_order) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a refused field_application split left an invoice or creation claim behind';
+  END IF;
 
   SELECT public.create_split_invoices_from_order(
     v_order, v_admin, 'chemical_sale', 'e2e-h5-governed-split-' || v_suffix
