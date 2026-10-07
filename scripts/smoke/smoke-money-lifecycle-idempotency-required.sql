@@ -10,6 +10,9 @@ DECLARE
   v_result jsonb;
   v_replay jsonb;
   v_key text := 'smoke-required-idem-' || gen_random_uuid()::text;
+  -- Finance charges refuse a date after the Chicago business date, and current_date is UTC:
+  -- between 00:00 UTC and Chicago midnight it is tomorrow (FUTURE_FINANCE_CHARGE_DATE).
+  v_business_date date := (now() AT TIME ZONE 'America/Chicago')::date;
   v_batch_key text := 'smoke-required-batch-' || gen_random_uuid()::text;
   v_missing_invoice uuid := gen_random_uuid();
   v_message text;
@@ -123,14 +126,14 @@ BEGIN
   END;
 
   BEGIN
-    PERFORM public.generate_finance_charges(current_date, v_admin, ARRAY[]::uuid[], NULL);
+    PERFORM public.generate_finance_charges(v_business_date, v_admin, ARRAY[]::uuid[], NULL);
     RAISE EXCEPTION 'SMOKE_FAIL: generate_finance_charges accepted a NULL key';
   EXCEPTION WHEN SQLSTATE '22023' THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
     IF v_message <> 'IDEMPOTENCY_KEY_REQUIRED: generate_finance_charges' THEN RAISE; END IF;
   END;
   BEGIN
-    PERFORM public.generate_finance_charges(current_date, v_admin, ARRAY[]::uuid[], '   ');
+    PERFORM public.generate_finance_charges(v_business_date, v_admin, ARRAY[]::uuid[], '   ');
     RAISE EXCEPTION 'SMOKE_FAIL: generate_finance_charges accepted a blank key';
   EXCEPTION WHEN SQLSTATE '22023' THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
@@ -159,7 +162,7 @@ BEGIN
 
   BEGIN
     PERFORM public.generate_finance_charges(
-      current_date, gen_random_uuid(), ARRAY[]::uuid[], v_key || '-actor-finance'
+      v_business_date, gen_random_uuid(), ARRAY[]::uuid[], v_key || '-actor-finance'
     );
     RAISE EXCEPTION 'SMOKE_FAIL: generate_finance_charges accepted a forged actor';
   EXCEPTION WHEN OTHERS THEN
@@ -168,10 +171,10 @@ BEGIN
   END;
 
   v_result := public.generate_finance_charges(
-    current_date, v_admin, ARRAY[]::uuid[], v_key
+    v_business_date, v_admin, ARRAY[]::uuid[], v_key
   );
   v_replay := public.generate_finance_charges(
-    current_date, v_admin, ARRAY[]::uuid[], v_key
+    v_business_date, v_admin, ARRAY[]::uuid[], v_key
   );
   IF v_result IS DISTINCT FROM v_replay THEN
     RAISE EXCEPTION 'SMOKE_FAIL: valid required key did not replay exactly';
