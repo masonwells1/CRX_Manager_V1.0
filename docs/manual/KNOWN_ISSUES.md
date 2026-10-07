@@ -1,10 +1,9 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-06 (America/Chicago) against the live migration ledger** (read-only; the
-counts and high-water live only in `docs/reference/migration-history.md`; the CRX-LIFE-001 entry
-was re-measured the same evening, and `20261006200000` is applied before its PR merges — see that
-PR's `Applied live:` line). That read re-certified only the applied-migration list in this header
-and the CRX-LIFE-001 entry. Every other entry's status (open, or
+**Last verified: 2026-10-07 (America/Chicago) against the live migration ledger** (read-only, after
+PR #885's apply; the counts and high-water live only in `docs/reference/migration-history.md`). That
+read re-certified only the applied-migration list in this header and the CRX-LIFE-001 entry (fix live; two
+post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
 date and was not all re-measured.
@@ -19,7 +18,8 @@ date and was not all re-measured.
 - **Nothing from the commission cohort is still parked.** Other parked files are named in their own
   entries. The four field-season migrations
   `20260914101000`..`20260914101300` applied live on 2026-10-02, followed the same day by
-  `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`).
+  `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`), and on 2026-10-07 by
+  `20261006200000_refuse_field_invoice_through_order_rpcs` (ledger `20261007114554`, CRX-LIFE-001).
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -88,18 +88,36 @@ constitute a current defect list or clearance of the remaining P2 inventory.
 `public.save_invoice(jsonb,jsonb,text)` and nothing else. Both pin, fence and replace that one
 function by name and OID. "Generic field-invoice creation is refused" is therefore true of
 `save_invoice` and **NOT, by itself, true of the database as a whole**: the order-pipeline RPCs were
-a separate creation path, tracked as CRX-LIFE-001, whose fix
-`20261006200000_refuse_field_invoice_through_order_rpcs` (PR #885) is pending apply (see the entry
+a separate creation path, tracked as CRX-LIFE-001 and fixed live by
+`20261006200000_refuse_field_invoice_through_order_rpcs` (PR #885, live 2026-10-07; see the entry
 immediately below). Neither the migration filename
 `20260914101200_refuse_generic_field_invoice_creation.sql` nor the phase-2 name
 `finish_generic_field_invoice_cutover` should be read as a claim about any other entry point.
 
-## OPEN 2026-09-20 (fix pending apply, PR #885) — CRX-LIFE-001: a sales rep can create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
+## OPEN 2026-09-20 (fix LIVE 2026-10-07; two post-apply gates await Mason) — CRX-LIFE-001: a sales rep could create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
 
-**Status 2026-10-06: fix in PR #885, `20261006200000_refuse_field_invoice_through_order_rpcs`, NOT yet
-applied.** Under the landing rule it applies live before that PR merges and the PR records
-`Applied live:` with the ledger version; this entry stays OPEN until a follow-up verifies the live
-state and moves it to the archive. Once applied, two layers: `create_invoice_from_order` accepts only `chemical_sale` or
+**Still open, owner Mason (both are ship.md post-apply gates; the fix itself is live):**
+1. `quote-versions-rpc-owned`, the 29th invariant sweep predicate, was declined at the permission
+   prompt in the pre- and post-apply runs, so the full-set adjudicator refuses the capture (exit 2).
+   The 28 that ran pass and are identical to the pre-apply run. Needs Mason to approve that one
+   read-only query at the prompt; then add its packet and re-run the full `--adjudicate`.
+2. The registered smoke chains covering `create_invoice_from_order` and
+   `create_split_invoices_from_order` have not run on live. `.claude/commands/ship.md` (Step 5 item 4)
+   makes that live run a hard post-apply gate; the container prover
+   (`npm run proof:order-invoice-type-gate`) is supporting evidence, not a substitute. Running them
+   needs Mason's REAL-DATA-OK (the live-data guard), and each run consumes customer-visible invoice
+   numbers that the rollback does not return.
+   This entry moves to the archive only after both gates pass.
+
+**Verified live 2026-10-07.** `20261006200000_refuse_field_invoice_through_order_rpcs` applied live
+2026-10-07 11:45:56 UTC from PR #885 (ledger version `20261007114554`; merged as `342135561`). Read-only
+post-apply check: one `create_invoice_from_order(uuid,uuid,text,text)` overload with the reviewed body
+(md5 `a1a91643bd8866823ae359f7e0ec290e`), SECURITY DEFINER, unchanged owner, `search_path` and ACL (anon
+cannot execute); `invoices_field_application_has_no_order` present and validated; `invoices` unchanged
+(13 rows, 0 order-backed `field_application`); the split wrapper and private implementations unchanged.
+Not run on live: the registered smoke chains (they consume customer-visible invoice numbers and need
+Mason's REAL-DATA-OK); the container prover is the behavioral proof. Details: migration-history row
+937 and `docs/changelog.d/2026-10-07-crx-life-001-verified-live.md`. Two layers: `create_invoice_from_order` accepts only `chemical_sale` or
 `misc_charge` and refuses anything else with `ORDER_INVOICE_TYPE_NOT_ALLOWED` (SQLSTATE 23514)
 before any lock or write; and the new table CHECK `invoices_field_application_has_no_order` refuses
 any `field_application` invoice that carries an `order_id`, from every writer, which is what stops
