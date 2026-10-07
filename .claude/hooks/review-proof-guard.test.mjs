@@ -691,6 +691,10 @@ for (const command of [
   "nice -n 10 cp /tmp/x .claude/hooks/sql-safety.mjs", "sudo -- rm -f .husky/pre-push", "env -i PATH=/bin rm .husky/pre-push",
   "npm exec rimraf .husky/pre-push", "git checkout-index --force -- .husky/pre-push",
   "find .husky -name pre-push -delete", "find .claude/hooks -name x.mjs -exec rm {} ;",
+  // Deliberate exception (CodeRabbit, PR #874): ANY find action that runs a
+  // program denies, even a read-only one, because the program can be anything
+  // (`-exec sh -c …`). `grep -r` covers the read.
+  "find .github/workflows -name '*.yml' -exec grep -l on: {} +",
   // Valueless wrapper options must not swallow the real command (CodeRabbit).
   "sudo -n rm -f .husky/pre-push", "env -i rm -f .husky/pre-push", "xargs -0 -r rm -f .husky/pre-push",
   "sudo -n -u root rm -f .husky/pre-push",
