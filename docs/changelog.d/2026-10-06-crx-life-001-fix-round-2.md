@@ -26,3 +26,9 @@ or HIGH. Fixed:
   names is themselves. `invoices.salesman_id` and `created_by` are read-access keys, so either gap
   can let the wrong person read an order invoice. Codex Luna round 2's one MED was the salesperson half; it is deferred
   here by name.
+
+**Owner decision (Mason, 2026-10-06, in chat): "Land it then lock down rep scoping next."** Codex
+Luna round 3 rated both pre-existing gaps (customer scope and salesperson on the order-invoice RPCs)
+HIGH; they are deferred by that decision and are the next change, recorded in `DECISION_LOG.md` and
+`KNOWN_ISSUES.md`. Luna round 3's LOW (the one-transaction guard cannot stop a client that keeps
+going after errors) is accepted as documented: every sanctioned apply path stops on the first error.

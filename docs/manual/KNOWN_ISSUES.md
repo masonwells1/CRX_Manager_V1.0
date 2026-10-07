@@ -271,9 +271,11 @@ archive. They are listed here so the open part of this file shows them. None was
     field-billing child tables, plus `get_customer_balance_listing` and `get_field_profitability`),
     so naming another profile grants that profile read access to the invoice. Sales reports and
     commissions read `orders.salesman_id`, not this column. The app sends the signed-in profile's id.
-  Suggested fix (a separate reviewed migration; whether a rep may ever invoice for a colleague is
-  Mason's business rule): refuse a non-admin caller whose customer is not assigned to them or whose
-  non-null `p_salesman_id` differs from `auth.uid()`. (Archive: CRX-LIFE-001.)
+  **Mason, 2026-10-06: the next change after CRX-LIFE-001** (`DECISION_LOG.md`). Intended rule:
+  reps bill only their own customers and only under their own name; admins unrestricted. Fix in a
+  separate reviewed migration: refuse a non-admin caller whose customer is not assigned to them or
+  whose non-null `p_salesman_id` differs from `auth.uid()`, minding `complete_delivery`'s call into
+  the split RPC. (Archive: CRX-LIFE-001.)
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,
