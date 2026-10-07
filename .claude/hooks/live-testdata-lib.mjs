@@ -303,7 +303,6 @@ const SQL_BUILTIN_FNS = new Set([
   "pg_get_function_arguments", "pg_get_function_result", "pg_get_ruledef",
   "to_regprocedure", "to_regnamespace", "to_regrole", "aclexplode", "oidvectortypes",
   "pg_function_is_visible", "pg_table_is_visible",
-  "uid", // auth.uid(): the caller's id, a read
   "has_table_privilege", "has_column_privilege", "has_function_privilege",
   "has_schema_privilege", "has_database_privilege", "pg_has_role",
   "gen_random_uuid", "uuid_generate_v4", "exists", "currval", "lastval",
@@ -329,6 +328,8 @@ export function findNonReadFunctionCall(sqlText) {
   while ((m = re.exec(text)) !== null) {
     const name = m[1].toLowerCase();
     if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
+    // auth.uid() is the caller's id, a read; a `uid` in any other schema is not vouched for.
+    if (name === "uid" && /\bauth"?\s*\.\s*$/i.test(text.slice(0, m.index))) continue;
     // `AS t(a, b)` names an alias's columns and `::numeric(10,2)` is a type;
     // neither is a call.
     if (/(?:\bas|::)\s*$/i.test(text.slice(0, m.index))) continue;

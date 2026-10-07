@@ -3456,17 +3456,26 @@ const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
 // text is blanked first (POSIX shells and PowerShell expand nothing there, and
 // cmd never expands `$`), and each `$( … )` is read as one word whose inside
 // is checked on its own, so a program computed in there is still found.
+// Shells disagree on where a quote ends once a backtick (Bash substitution,
+// PowerShell escape), a backslash before a quote (an escape in Bash, a plain
+// character in PowerShell), ANSI-C `$'…'`, or a quote spanning a line (heredoc,
+// here-string, a `#` comment's apostrophe) is involved. Blanking could then hide
+// a real program, so those texts keep the old, stricter reading (Luna, PR #882).
+// A backslash before anything else (awk's `-F'\t'`) changes no quote.
+const AMBIGUOUS_QUOTING_RE = /`|\\['"]|\$'/;
 function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE, depth = 0) {
-  const split = depth < NESTED_MAX_DEPTH ? splitSubstitutions(blankSingleQuoted(String(text || ""))) : null;
+  const raw = String(text || "");
+  const blanked = depth < NESTED_MAX_DEPTH && !AMBIGUOUS_QUOTING_RE.test(raw) ? blankSingleQuoted(raw) : null;
+  const split = blanked === null ? null : splitSubstitutions(blanked);
   if (!split) return programWordBuiltAtRuntime(text, runtimeText);
   if (split.inners.some((inner) => programBuiltAtRuntime(inner, runtimeText, depth + 1))) return true;
   return programWordBuiltAtRuntime(split.outer, runtimeText);
 }
 
 // Empties every single-quoted span, keeping the quotes so word boundaries stay.
-// A `'` inside double quotes is an ordinary character, and both escape
-// characters (POSIX `\`, PowerShell `` ` ``) keep what they escape, so an
-// escaped `"` cannot end a double-quoted string early and expose its text.
+// A `'` inside double quotes is an ordinary character. The caller has already
+// refused texts with escape characters. Returns null when a single-quoted span
+// crosses a line break or never closes, because the shells disagree there.
 function blankSingleQuoted(text) {
   let out = "";
   let quote = "";
@@ -3474,18 +3483,14 @@ function blankSingleQuoted(text) {
     const char = text[index];
     if (quote === "'") {
       if (char === "'") { quote = ""; out += char; }
-      continue;
-    }
-    if ((char === "\\" || char === "`") && index + 1 < text.length) {
-      out += char + text[index + 1];
-      index += 1;
+      else if (char === "\n" || char === "\r") return null;
       continue;
     }
     if (char === '"') quote = quote === '"' ? "" : '"';
     else if (char === "'" && !quote) quote = "'";
     out += char;
   }
-  return out;
+  return quote === "'" ? null : out;
 }
 
 // Replaces each outermost `$( … )` with `$()` and returns the inside texts.

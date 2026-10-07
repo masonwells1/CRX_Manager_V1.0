@@ -3516,6 +3516,15 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     "echo 'it''s' && $P pr merge 1 --admin",
     `echo "a'b"; $P pr merge 1 --admin`,
     "x=$(echo unterminated; $P pr merge 1 --admin",
+    // Luna, PR #882: quoting the shells read differently keeps the strict reading.
+    ": `\"'\"`; $P pr merge 1 --admin; : \"'\"",
+    ": `\"'\"`; $P push origin HEAD:main; : \"'\"",
+    "echo \\'x'; & $p pr merge 1 --admin; echo 'y'",
+    "P=gh; x=$'x\\' inert' ; $P pr merge 1 --admin",
+    "x=$'\\''; $P push origin HEAD:main; y=''",
+    "cat <<'EOF'\nit's\nEOF\n$P pr merge 1 --admin\necho 'x'",
+    "# it's done\n$P pr merge 1 --admin\necho 'x'",
+    "$s = @'\nx'\n'@; & $p pr merge 1 --admin; echo 'y'",
   ]) {
     assert.equal(expandNestedCommands(command).computed, true, `a run-time program name is refused: ${command}`);
   }
