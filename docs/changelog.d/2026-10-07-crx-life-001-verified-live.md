@@ -33,6 +33,11 @@ for #885's final merge-from-main commit, so the required `Vercel` status was mis
 that exact commit was requested through the Vercel API (no code change), after which the PR read CLEAN.
 
 Docs: `KNOWN_ISSUES.md` moves CRX-LIFE-001 to the archive as FIXED (verified live); migration-history
-row 937 and the boundary capture, and `CURRENT_STATE.md`, record the apply. The schema registry was not
-regenerated: the migration adds a CHECK constraint (no status enum, generated column or table), so
-ship.md does not require it; the next registry refresh will pick it up.
+row 937 and the boundary capture, and `CURRENT_STATE.md`, record the apply.
+
+**Schema registry refreshed from live (real `--from-introspection` run, all six queries, 2026-10-07
+~12:25 UTC),** as `DATABASE_CHANGE_CHECKLIST.md` requires after every live schema change (raised by the
+Codex GitHub review on PR #887). The only changes: `generated_at` 2026-10-07, `migrations_high_water`
+`20261007114554`, the applied name `20261006200000_refuse_field_invoice_through_order_rpcs` (1012 names),
+and `invoices_field_application_has_no_order` in `skipped_constraints` (not an IN-list, so the hooks do
+not validate it). Every other section is unchanged. No `REGISTRY-STALE.flag` existed in any worktree.

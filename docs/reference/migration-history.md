@@ -41,8 +41,8 @@ BOUNDARY AND THE ONLY CAPTURE IN THIS SECTION.** Read-only reads on project `rhy
 Re-read the high-water read-only immediately before each apply, because another lane can move it,
 and refresh the applied-migration snapshot the ordering guard reads
 (`node scripts/refresh-applied-migrations.mjs`). `.claude/schema-registry.json` was last regenerated
-from live on 2026-10-03 03:19 UTC (PR #873, through `20260921180000`); refresh it after the next live
-apply. Older boundary captures were removed from this
+from live on 2026-10-07 ~12:25 UTC (PR #887, through `20261006200000`, `migrations_high_water`
+`20261007114554`); refresh it after the next live apply. Older boundary captures were removed from this
 section on 2026-10-02 because they read as competing "latest" evidence; they remain in git history
 and in the table rows below.
 
