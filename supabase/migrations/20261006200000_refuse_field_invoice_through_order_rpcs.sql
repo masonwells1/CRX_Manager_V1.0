@@ -14,17 +14,21 @@
 --      every SECURITY DEFINER writer, including the split RPC's direct INSERT and any
 --      future path. Every live field-invoice creator (save_field_app_invoice,
 --      save_field_app_split_invoice, transfer_job_to_invoice, create_invoice_from_blend_ticket)
---      leaves order_id NULL. Live 2026-10-07: 13 invoices, 0 field_application rows with an
---      order_id, so the constraint is added VALID; the preflight re-checks that at apply time.
+--      leaves order_id NULL. Live, read-only, 2026-10-06 (America/Chicago): 13 invoices, 0
+--      field_application rows with an order_id, so the constraint is added VALID; the
+--      preflight re-checks that at apply time.
 --   2. create_invoice_from_order refuses any type other than chemical_sale or misc_charge
 --      with ORDER_INVOICE_TYPE_NOT_ALLOWED, before any lock or idempotency lookup.
 --      misc_charge stays allowed: save_invoice already retypes order invoices between the
 --      two, and the e2e seed and the govern smoke chain use it. credit_memo is refused too:
 --      credit memos come only from issue_return_credit, and no caller sends it here.
 --
--- The split RPC is deliberately NOT re-emitted. Its field_application INSERT now fails on
--- the CHECK (SQLSTATE 23514) and its claim/lock work rolls back with it; a credit_memo
--- split can never produce a row (positive totals vs invoices_credit_memo_total_nonpositive).
+-- The split RPC is deliberately NOT re-emitted. On an allocated order its field_application
+-- INSERT now fails on the CHECK (SQLSTATE 23514) and its claim/lock work rolls back with
+-- it; on an order without allocations it delegates to create_invoice_from_order, which
+-- refuses the type by name (also 23514). A split that writes no invoice (every customer
+-- nets to zero) writes no field invoice either. A credit_memo split can never produce a
+-- row (positive totals vs invoices_credit_memo_total_nonpositive).
 -- Re-copying its 5k-character idempotency body would add risk without adding protection.
 --
 -- No rows are changed. No GRANT or REVOKE: CREATE OR REPLACE keeps the live OID, owner
@@ -40,6 +44,15 @@ SELECT pg_current_xact_id()::text AS transaction_id,
 DO $preflight$
 DECLARE v_oid oid := to_regprocedure('public.create_invoice_from_order(uuid,uuid,text,text)');
 BEGIN
+  -- Under autocommit the ON COMMIT DROP marker is already gone here: refuse before any change.
+  -- Two IFs, not one OR: the second reads the marker table, which must exist to be planned.
+  IF to_regclass('pg_temp.crx_life_001_order_invoice_type_tx') IS NULL THEN
+    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: apply this file as one transaction; nothing was changed';
+  END IF;
+  IF (SELECT transaction_id FROM pg_temp.crx_life_001_order_invoice_type_tx)
+       IS DISTINCT FROM pg_current_xact_id()::text THEN
+    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: apply this file as one transaction; nothing was changed';
+  END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'create_invoice_from_order') <> 1
      OR (SELECT p.proowner = 'postgres'::regrole AND p.prosecdef AND p.provolatile = 'v'
@@ -102,9 +115,11 @@ $function$;
 DO $postflight$
 DECLARE v_oid oid := to_regprocedure('public.create_invoice_from_order(uuid,uuid,text,text)');
 BEGIN
-  IF to_regclass('pg_temp.crx_life_001_order_invoice_type_tx') IS NULL
-     OR (SELECT transaction_id FROM pg_temp.crx_life_001_order_invoice_type_tx)
-          IS DISTINCT FROM pg_current_xact_id()::text THEN
+  IF to_regclass('pg_temp.crx_life_001_order_invoice_type_tx') IS NULL THEN
+    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: apply this file as one transaction';
+  END IF;
+  IF (SELECT transaction_id FROM pg_temp.crx_life_001_order_invoice_type_tx)
+       IS DISTINCT FROM pg_current_xact_id()::text THEN
     RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: apply this file as one transaction';
   END IF;
   IF v_oid IS DISTINCT FROM (SELECT function_oid FROM pg_temp.crx_life_001_order_invoice_type_tx) THEN

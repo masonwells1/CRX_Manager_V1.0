@@ -255,13 +255,14 @@ Each of these was recorded inside an entry that is otherwise fixed or closed and
 archive. They are listed here so the open part of this file shows them. None was re-measured on
 2026-09-26 unless it says so.
 
-- **Stale registered smoke chain (measured 2026-10-06 in a container replay of `main`).**
-  `scripts/smoke/smoke-govern-invoice-order-money-lifecycle.sql` aborts at its first order line with
-  `COST_BASIS_REQUIRED` because it inserts pricing-free products, so it currently proves nothing.
-  `smoke-money-lifecycle-idempotency-required.sql` fails with `FUTURE_FINANCE_CHARGE_DATE` when run
-  between 00:00 UTC and Chicago midnight. Repair is a test-fixture change: borrow a priced product,
-  as `smoke-save-job-parity.sql` and, since CRX-LIFE-001, `smoke-backfill-refuse-split-billing.sql` do.
-  (Archive: CRX-LIFE-001.)
+- **Order-invoice salesperson is caller-chosen (found 2026-10-06 while fixing CRX-LIFE-001;
+  pre-existing).** `create_invoice_from_order` and `create_split_invoices_from_order` store
+  `COALESCE(p_salesman_id, orders.salesman_id)` as the invoice's `salesman_id`, and nothing checks
+  that a sales rep may only name themselves, or that the value is a sales profile at all. A rep can
+  therefore credit an order invoice to another person. Whether commissions or sales reports read
+  `invoices.salesman_id` was not measured. The app sends the signed-in profile's id. Suggested fix
+  (a separate reviewed migration): refuse a non-admin caller whose non-null `p_salesman_id` differs
+  from `auth.uid()`. (Archive: CRX-LIFE-001.)
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,
@@ -2522,9 +2523,9 @@ evidence note where the status changed on 2026-09-26. Any piece of an archived e
 is listed in "OPEN — smaller items carried out of resolved entries" near the top of this file. Moved
 here on 2026-09-26.
 
-### FIXED 2026-10-06 (opened 2026-09-20) — CRX-LIFE-001: a sales rep could create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
+### FIXED by `20261006200000` (applied live before its PR merged; the apply date is the PR's `Applied live:` line; opened 2026-09-20, fix authored 2026-10-06) — CRX-LIFE-001: a sales rep could create a `field_application` invoice through the order pipeline, bypassing the entire field-application workflow
 
-**Fixed 2026-10-06 by `20261006200000_refuse_field_invoice_through_order_rpcs`**, which the
+**Closed by `20261006200000_refuse_field_invoice_through_order_rpcs`** (authored 2026-10-06), which the
 landing rule applies live before its PR merges (the PR carries the `Applied live:` line with the
 ledger version). Two layers: `create_invoice_from_order` now accepts only `chemical_sale` or
 `misc_charge` and refuses anything else with `ORDER_INVOICE_TYPE_NOT_ALLOWED` (SQLSTATE 23514)
@@ -2537,10 +2538,13 @@ one `field_application` and it has no order, so no record was ever created throu
 nothing needed repair; the migration's preflight re-checks that at apply time. Proof:
 `scripts/smoke/prove-order-invoice-type-gate-real-schema.mjs` (bug reproduced before, refused
 after, both layers mutation-tested), the new registered chain `smoke-order-invoice-type-gate.sql`
-and the extended `smoke-backfill-refuse-split-billing.sql`. Found on the way, NOT fixed here: the
-registered `smoke-govern-invoice-order-money-lifecycle.sql` aborts on `COST_BASIS_REQUIRED` at its
-first order line (it inserts pricing-free products), so it currently checks nothing; repairing it is
-a separate test-fixture change. The original entry follows.
+and the extended `smoke-backfill-refuse-split-billing.sql`. Found on the way and repaired in the
+same change: that chain and `smoke-govern-invoice-order-money-lifecycle.sql` aborted on
+`COST_BASIS_REQUIRED` at their first line (they inserted pricing-free products; the lifecycle chain
+also had stale commission, posting and business-date fixtures), and
+`smoke-money-lifecycle-idempotency-required.sql` failed between 00:00 UTC and Chicago midnight
+(`FUTURE_FINANCE_CHARGE_DATE`). Details in `docs/changelog.d/2026-10-06-crx-life-001-*.md`. The
+original entry follows.
 
 **Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
 `main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of

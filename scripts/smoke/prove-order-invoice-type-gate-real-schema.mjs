@@ -47,6 +47,9 @@ const CHAINS = {
   order: path.join(ROOT, 'scripts', 'smoke', 'smoke-order-invoice-type-gate.sql'),
   split: path.join(ROOT, 'scripts', 'smoke', 'smoke-backfill-refuse-split-billing.sql'),
   fieldApp: path.join(ROOT, 'scripts', 'smoke', 'smoke-field-app-split-penny-exact.sql'),
+  // The other two registered chains that cover create_invoice_from_order.
+  lifecycle: path.join(ROOT, 'scripts', 'smoke', 'smoke-govern-invoice-order-money-lifecycle.sql'),
+  keys: path.join(ROOT, 'scripts', 'smoke', 'smoke-money-lifecycle-idempotency-required.sql'),
 };
 // md5(replace(prosrc, chr(13), '')) read from live (project rhyzpcqhnizqbxphqdkr)
 // on 2026-10-07. Live stores the idem impl's body with CRLF line endings (raw
@@ -285,8 +288,18 @@ async function main() {
   expectChainFail(CHAINS.split, 'split-before.sql', /SMOKE_FAIL: create_split_invoices_from_order created field_application invoices from an order/, 'BEFORE');
   console.log('[prover] BEFORE: a sales rep turned an order into a field_application invoice; both registered chains fail first on it');
 
-  // 2. PREFLIGHT: an order-backed field invoice in the same transaction blocks the apply.
+  // 2a. AUTOCOMMIT: run statement by statement (psql -f without -1), the file refuses
+  // before any change, because the ON COMMIT DROP marker is gone by its preflight.
   stageText('candidate.sql', lf(CANDIDATE));
+  const looseRun = docker([...psqlArgs(), '-f', '/tmp/candidate.sql'], { allowFailure: true });
+  const loose = `${looseRun.stdout}\n${looseRun.stderr}`;
+  assert.notEqual(looseRun.status, 0, 'the candidate applied without a transaction');
+  assert.match(loose, /CRX_LIFE_001_NOT_IN_TRANSACTION/, `wrong autocommit refusal:\n${loose}`);
+  assert.equal(checkInstalled(), '0', 'an autocommit run left the CHECK behind');
+  assert.equal(bodyMd5(WRAPPER), LIVE_BODY_MD5[WRAPPER], 'an autocommit run changed the wrapper');
+  console.log('[prover] AUTOCOMMIT: applied outside one transaction, the file refuses before changing anything');
+
+  // 2b. PREFLIGHT: an order-backed field invoice in the same transaction blocks the apply.
   const blocked = docker([...psqlArgs()], {
     input: `BEGIN;\n${asUser(REP)}\nSELECT public.create_invoice_from_order('${ORDER}'::uuid, NULL, 'field_application', 'prover-preflight-1');\nRESET ROLE;\n\\i /tmp/candidate.sql\nCOMMIT;\n`,
     allowFailure: true,
@@ -348,8 +361,10 @@ SELECT invoice_type FROM public.invoices WHERE id = :'invoice_id';`);
   // 5. Registered chains.
   expectChainPass(CHAINS.order, 'order-after.sql');
   expectChainPass(CHAINS.split, 'split-after.sql');
+  expectChainPass(CHAINS.lifecycle, 'lifecycle-after.sql');
+  expectChainPass(CHAINS.keys, 'keys-after.sql');
   expectChainPass(CHAINS.fieldApp, 'field-app-after.sql');
-  console.log('[prover] registered chains pass and roll back: the order-invoice type gate (incl. the unchanged key requirement), split billing, and the real field-invoice creator (save_field_app_invoice)');
+  console.log('[prover] all four registered chains covering create_invoice_from_order pass and roll back (type gate, split billing, order lifecycle, required keys), plus the real field-invoice creator (save_field_app_invoice)');
 
   // 6. Re-apply fails closed on its own pins.
   const reapplied = apply('candidate.sql', true);
@@ -373,11 +388,17 @@ SELECT invoice_type FROM public.invoices WHERE id = :'invoice_id';`);
   assert.equal(apply('old-wrapper.sql').status, 0);
   assert.equal(bodyMd5(WRAPPER), LIVE_BODY_MD5[WRAPPER], 'the old wrapper was not restored for the mutation');
   expectChainFail(CHAINS.order, 'order-mutant-wrapper.sql', /SMOKE_FAIL: wrong rep order-invoice type refusal for field_application/, 'MUTATION (old wrapper)');
+  // With the original wrapper back, the wrapper pin passes, so a re-apply reaches and
+  // trips the next preflight branch: the CHECK already exists.
+  const checkExists = apply('candidate.sql', true);
+  assert.notEqual(checkExists.status, 0, 'the candidate re-applied over an existing CHECK');
+  assert.match(checkExists.output, /PREFLIGHT_FIELD_INVOICE_ORDER_CHECK_EXISTS/, `wrong existing-CHECK refusal:\n${checkExists.output}`);
+  assert.equal(bodyMd5(WRAPPER), LIVE_BODY_MD5[WRAPPER], 'a refused re-apply changed the wrapper');
   stageText('new-wrapper.sql', newWrapper);
   assert.equal(apply('new-wrapper.sql').status, 0);
   assert.equal(bodyMd5(WRAPPER), NEW_WRAPPER_MD5, 'the reviewed wrapper was not restored after the mutation');
   expectChainPass(CHAINS.order, 'order-restored.sql');
-  console.log('[prover] MUTATION: with the old wrapper the order chain fails - it tests the type gate, not just the CHECK');
+  console.log('[prover] MUTATION: with the old wrapper the order chain fails - it tests the type gate, not just the CHECK; a re-apply then trips the existing-CHECK preflight');
 
   console.log('ORDER_INVOICE_TYPE_GATE_PROOF_PASS before=bug_reproduced preflight=blocks fix=refused allowed=chemical_sale,misc_charge check=enforced chains=pass mutation=detected');
 }

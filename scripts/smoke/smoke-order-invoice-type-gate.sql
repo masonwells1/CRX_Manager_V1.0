@@ -9,9 +9,8 @@
 -- replay) and misc_charge paths still work. The split engine's field_application refusal is
 -- in smoke-backfill-refuse-split-billing.sql, which already builds an allocated order.
 --
--- Fixtures: [E2E]-marked customer and orders; an existing priced product is borrowed (order
--- lines need a cost basis, and product prices may only be written through the governed
--- pricing path). One DO block, terminal exception -> nothing commits.
+-- Fixtures: an [E2E]-marked product priced through the governed preview/apply path, and a
+-- customer and orders assigned to the rep. One DO block, terminal exception -> nothing commits.
 DO $smoke$
 DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -29,6 +28,7 @@ DECLARE
   v_err text;
   v_state text;
   v_constraint text;
+  v_pricing jsonb;
 BEGIN
   SELECT id INTO v_admin
     FROM public.profiles
@@ -48,42 +48,63 @@ BEGIN
     INSERT INTO public.profiles (id, email, full_name, role, is_active)
     VALUES (v_rep, 'smoke-rep-' || v_suffix || '@example.invalid', '[SMOKE] Sales Rep', 'sales_rep', true);
   END IF;
-  SELECT id INTO v_product
-    FROM public.products
-   WHERE current_cost > 0
-     AND current_cost = round(current_cost, 2)
-     AND current_cost < 1000
-   ORDER BY created_at
-   LIMIT 1;
-  IF v_product IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: a product with a positive whole-cent cost is required'; END IF;
-
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
-  INSERT INTO public.customers (farm_name)
-  VALUES ('[E2E] Order Type Farm ' || v_suffix) RETURNING id INTO v_customer;
-  INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw)
-  VALUES ('E2E-ORDER-TYPE-' || v_suffix, v_customer, current_date, 'confirmed', false)
+  -- Order lines need a positive cost basis (COST_BASIS_REQUIRED), and a product
+  -- is born pricing-free, so price a fresh shell through the governed
+  -- preview/apply path the app uses (the smoke-return-credit-chain.sql pattern).
+  INSERT INTO public.products (product_name, unit_size)
+  VALUES ('[E2E] Order Type Product ' || v_suffix, 'GL') RETURNING id INTO v_product;
+  v_pricing := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'row_version', 1, 'pricing_mode', 'price_driven',
+      'new_cost', '5.00', 'tier1_price', '10.00', 'tier2_price', '10.00', 'tier3_price', '10.00'
+    )),
+    v_admin,
+    'e2e-order-type-pricing-preview-' || v_suffix
+  );
+  IF v_pricing->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_pricing->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_pricing;
+  END IF;
+  PERFORM public.apply_product_pricing_change_set(
+    (v_pricing->>'change_set_id')::uuid,
+    v_pricing->>'request_fingerprint',
+    v_admin,
+    'e2e-order-type-pricing-apply-' || v_suffix
+  );
+  IF (SELECT current_cost FROM public.products WHERE id = v_product) IS DISTINCT FROM 5.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply did not price the product';
+  END IF;
+
+  -- The rep's own customer and orders, the way a rep invoices in the app.
+  INSERT INTO public.customers (farm_name, assigned_sales_rep)
+  VALUES ('[E2E] Order Type Farm ' || v_suffix, v_rep) RETURNING id INTO v_customer;
+  INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw, salesman_id)
+  VALUES ('E2E-ORDER-TYPE-' || v_suffix, v_customer, current_date, 'confirmed', false, v_rep)
   RETURNING id INTO v_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
     total_units_needed, total_price, profit, net_margin,
     quantity_delivered, quantity_remaining
   ) VALUES (
-    v_order, v_product, '[E2E] order type line', 1000, 999,
-    1, 1000, 1, 0.1, 0, 1
+    v_order, v_product, '[E2E] order type line', 10, 5,
+    1, 10, 5, 50, 0, 1
   );
-  INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw)
-  VALUES ('E2E-ORDER-TYPE-MISC-' || v_suffix, v_customer, current_date, 'confirmed', false)
+  INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw, salesman_id)
+  VALUES ('E2E-ORDER-TYPE-MISC-' || v_suffix, v_customer, current_date, 'confirmed', false, v_rep)
   RETURNING id INTO v_misc_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
     total_units_needed, total_price, profit, net_margin,
     quantity_delivered, quantity_remaining
   ) VALUES (
-    v_misc_order, v_product, '[E2E] order type misc line', 1000, 999,
-    1, 1000, 1, 0.1, 0, 1
+    v_misc_order, v_product, '[E2E] order type misc line', 10, 5,
+    1, 10, 5, 50, 0, 1
   );
 
   PERFORM set_config('request.jwt.claims',
