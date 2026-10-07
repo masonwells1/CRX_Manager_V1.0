@@ -29,20 +29,22 @@ changed, no GRANT or REVOKE):
 migrations, then checks that the five order-path function bodies match live (by md5 with carriage
 returns removed; live stores the idem impl's body with CRLF). It reproduces the bug before the fix
 (a sales rep's order becomes a `field_application` invoice, and the split engine makes order-backed
-field invoices too), shows the file refuses to run outside one transaction and that its preflight
+field invoices too), shows the file stops when run outside one transaction by a client that stops
+on the first error (as every sanctioned apply path does) and that its preflight
 blocks the apply while such a row exists, applies the fix, and proves: the rep's
 `field_application`, `credit_memo` and NULL-typed calls and an admin's `field_application` call are
 refused with nothing written; the rep's `chemical_sale`, the app's default-typed call and an
 admin's `misc_charge` still work; the owner cannot insert an order-backed field invoice but can
 insert an orderless one; anon still cannot execute; a second apply fails closed on its own pins
 (wrapper drift, and with the old wrapper back, the existing CHECK). Mutations: without the CHECK the
-split and direct-insert steps fail; with the old wrapper the type-gate chain fails. All four
-registered chains covering `create_invoice_from_order` pass after the fix, and so does the real
-field-invoice creator chain (`smoke-field-app-split-penny-exact.sql`).
+split and direct-insert steps fail; with the old wrapper the type-gate chain fails. The three
+registered chains covering `create_invoice_from_order` and the split-billing chain covering
+`create_split_invoices_from_order` pass after the fix, and so does the chain for one real
+field-invoice creator, `save_field_app_invoice` (`smoke-field-app-split-penny-exact.sql`).
 
 **Smoke chains:** new registered chain `scripts/smoke/smoke-order-invoice-type-gate.sql` (spec
 `order_invoice_type_gate`, fail-first, the rep's own customer and orders), and a new refusal step in
-`smoke-backfill-refuse-split-billing.sql`. Three existing chains covering `create_invoice_from_order`
+`smoke-backfill-refuse-split-billing.sql`. Three existing chains (two covering `create_invoice_from_order`, the split-billing one covering `create_split_invoices_from_order`)
 were broken against the current schema and are repaired here, because the ship rule requires every
 covering chain to pass after the apply:
 - `smoke-backfill-refuse-split-billing.sql` and `smoke-govern-invoice-order-money-lifecycle.sql`
@@ -63,7 +65,7 @@ covering chain to pass after the apply:
   with `FUTURE_FINANCE_CHARGE_DATE` between 00:00 UTC and Chicago midnight. It now passes the Chicago
   business date.
 
-**Reviews (fix round 1, on commit `08cac5de4`):** `rls-security-reviewer`, `migration-drift-reviewer`,
+**Reviews (review round 1, on commit `08cac5de4`):** `rls-security-reviewer`, `migration-drift-reviewer`,
 `typescript-types-drift-reviewer`, `compliance-reviewer` and two adversarial reviewers (business logic;
 tests and docs), each finding checked by independent skeptics: no BLOCKER or HIGH. Fixed: the two
 MEDs (repair every covering chain, above; the archive heading no longer dates the fix before its

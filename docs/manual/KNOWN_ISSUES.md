@@ -1,9 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-06 (America/Chicago) against the live migration ledger** (read-only,
-2026-10-07 UTC: 1018 rows, unchanged since PR #800's apply of `20260921180000` on 2026-10-02; the
-CRX-LIFE-001 entry was re-measured the same evening). That read re-certified only the ledger facts
-in this header and the CRX-LIFE-001 entry. Every other entry's status (open, or
+**Last verified: 2026-10-06 (America/Chicago) against the live migration ledger** (read-only; the
+counts and high-water live only in `docs/reference/migration-history.md`; the CRX-LIFE-001 entry
+was re-measured the same evening, and `20261006200000` is applied before its PR merges — see that
+PR's `Applied live:` line). That read re-certified only the applied-migration list in this header
+and the CRX-LIFE-001 entry. Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
 date and was not all re-measured.
@@ -255,14 +256,24 @@ Each of these was recorded inside an entry that is otherwise fixed or closed and
 archive. They are listed here so the open part of this file shows them. None was re-measured on
 2026-09-26 unless it says so.
 
-- **Order-invoice salesperson is caller-chosen (found 2026-10-06 while fixing CRX-LIFE-001;
-  pre-existing).** `create_invoice_from_order` and `create_split_invoices_from_order` store
-  `COALESCE(p_salesman_id, orders.salesman_id)` as the invoice's `salesman_id`, and nothing checks
-  that a sales rep may only name themselves, or that the value is a sales profile at all. A rep can
-  therefore credit an order invoice to another person. Whether commissions or sales reports read
-  `invoices.salesman_id` was not measured. The app sends the signed-in profile's id. Suggested fix
-  (a separate reviewed migration): refuse a non-admin caller whose non-null `p_salesman_id` differs
-  from `auth.uid()`. (Archive: CRX-LIFE-001.)
+- **Order-invoice RPCs are not scoped to the rep (found 2026-10-06 while fixing CRX-LIFE-001;
+  pre-existing; read from the live catalog, not exercised live).** Two related gaps in
+  `create_invoice_from_order` and `create_split_invoices_from_order`, whose only gate is
+  `is_admin() OR is_sales_rep()`:
+  - **Customer scope.** They never check that the order's customer is assigned to the calling rep,
+    so any active rep holding an order's id can create a draft invoice on another rep's customer
+    and then read it (`created_by` = the rep). `save_invoice` refuses the same case
+    (`CUSTOMER_SCOPE_DENIED`); the CRX-LIFE-001 container run showed a rep invoicing an unassigned
+    customer's order.
+  - **Salesperson.** They store `COALESCE(p_salesman_id, orders.salesman_id)` as the invoice's
+    `salesman_id` with no check that a rep may only name themselves. `invoices.salesman_id` is a
+    read-access key (the `invoices` SELECT policy and the policies on its line, share and
+    field-billing child tables, plus `get_customer_balance_listing` and `get_field_profitability`),
+    so naming another profile grants that profile read access to the invoice. Sales reports and
+    commissions read `orders.salesman_id`, not this column. The app sends the signed-in profile's id.
+  Suggested fix (a separate reviewed migration; whether a rep may ever invoice for a colleague is
+  Mason's business rule): refuse a non-admin caller whose customer is not assigned to them or whose
+  non-null `p_salesman_id` differs from `auth.uid()`. (Archive: CRX-LIFE-001.)
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,
@@ -2543,8 +2554,9 @@ same change: that chain and `smoke-govern-invoice-order-money-lifecycle.sql` abo
 `COST_BASIS_REQUIRED` at their first line (they inserted pricing-free products; the lifecycle chain
 also had stale commission, posting and business-date fixtures), and
 `smoke-money-lifecycle-idempotency-required.sql` failed between 00:00 UTC and Chicago midnight
-(`FUTURE_FINANCE_CHARGE_DATE`). Details in `docs/changelog.d/2026-10-06-crx-life-001-*.md`. The
-original entry follows.
+(`FUTURE_FINANCE_CHARGE_DATE`). Details in `docs/changelog.d/2026-10-06-crx-life-001-*.md`. Also
+found and recorded as open (not fixed here): the order-invoice RPCs check neither the rep's
+customer assignment nor the salesperson they are told to record. The original entry follows.
 
 **Not a regression, and not introduced by the field-invoice season work.** This is pre-existing on
 `main` and reachable in production today. It was found by an exact-head `gpt-5.6-sol`/high review of

@@ -211,7 +211,7 @@
     },
     "order_invoice_type_gate": {
       "chain": "smoke-order-invoice-type-gate.sql",
-      "description": "CRX-LIFE-001 (20261006200000): create_invoice_from_order accepts only chemical_sale or misc_charge. A sales rep's field_application, credit_memo and NULL-typed calls and an admin's field_application call are ORDER_INVOICE_TYPE_NOT_ALLOWED (23514) with nothing written; a reused key cannot replay past the gate; the rep's chemical_sale invoice and its exact replay and an admin's misc_charge still work; and the invoices_field_application_has_no_order CHECK refuses an order-backed field_application row from the owner. Fail-first against the pre-fix wrapper. Borrows one priced product; [E2E] fixtures and terminal rollback. Companion container proof: prove-order-invoice-type-gate-real-schema.mjs.",
+      "description": "CRX-LIFE-001 (20261006200000): create_invoice_from_order accepts only chemical_sale or misc_charge. A sales rep's field_application, credit_memo and NULL-typed calls and an admin's field_application call are ORDER_INVOICE_TYPE_NOT_ALLOWED (23514) with nothing written; a reused key cannot replay past the gate; the rep's chemical_sale invoice and its exact replay and an admin's misc_charge still work; and the invoices_field_application_has_no_order CHECK refuses an order-backed field_application row from the owner. Fail-first against the pre-fix wrapper. Prices its own [E2E] product through the governed pricing RPCs and invoices the rep's own customer; terminal rollback. Companion container proof: prove-order-invoice-type-gate-real-schema.mjs.",
       "covers": [
         "create_invoice_from_order"
       ],

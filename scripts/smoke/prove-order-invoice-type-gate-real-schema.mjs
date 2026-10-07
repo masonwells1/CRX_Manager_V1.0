@@ -9,12 +9,14 @@
  * post-baseline migration before the candidate, and then, as the
  * `authenticated` role exactly like a browser session through PostgREST:
  *   0. FIDELITY: the replayed order-path function bodies hash to the values
- *      read from live on 2026-10-07, so this is the code production runs;
+ *      read from live on 2026-10-07 UTC (2026-10-06 Chicago), so this is the code production runs;
  *   1. THE BUG, BEFORE: a sales rep turns an order into a field_application
  *      invoice through create_invoice_from_order, and both registered chains
  *      fail first with their CRX-LIFE-001 SMOKE_FAIL (the split engine makes
  *      order-backed field invoices too);
- *   2. PREFLIGHT: with such a row present in the same transaction the
+ *   2. AUTOCOMMIT: run statement by statement with ON_ERROR_STOP (psql -f, no
+ *      -1), the file stops at its preflight before changing anything;
+ *      PREFLIGHT: with such a row present in the same transaction the
  *      candidate refuses to apply and changes nothing;
  *   3. the candidate applies;
  *   4. THE FIX: the rep's field_application, credit_memo and NULL-typed calls
@@ -23,11 +25,13 @@
  *      misc_charge still work; the table refuses an order-backed
  *      field_application row from the owner and still accepts an orderless
  *      one; anon still cannot execute and the ACL is unchanged;
- *   5. the registered chains pass and roll back, including a real field-invoice
- *      creator (save_field_app_invoice) as a positive control;
+ *   5. the registered chains covering create_invoice_from_order and the
+ *      split-billing chain pass and roll back, as does a real field-invoice
+ *      creator's chain (save_field_app_invoice) as a positive control;
  *   6. re-applying fails closed on its own pins and changes nothing;
  *   7. MUTATION: without the CHECK the split chain fails; with the old wrapper
- *      body the order chain fails - so each chain really tests its layer.
+ *      body the order chain fails - so each chain really tests its layer - and
+ *      a re-apply over the old wrapper trips the existing-CHECK preflight.
  */
 import assert from 'node:assert/strict';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -52,7 +56,7 @@ const CHAINS = {
   keys: path.join(ROOT, 'scripts', 'smoke', 'smoke-money-lifecycle-idempotency-required.sql'),
 };
 // md5(replace(prosrc, chr(13), '')) read from live (project rhyzpcqhnizqbxphqdkr)
-// on 2026-10-07. Live stores the idem impl's body with CRLF line endings (raw
+// on 2026-10-07 UTC (2026-10-06 Chicago). Live stores the idem impl's body with CRLF line endings (raw
 // md5 7cbf7aef577c10b16c45070da68edb33) and replay stores LF, so fidelity is
 // compared with carriage returns removed; the other four bodies have none, so
 // for them this IS the raw md5 (the wrapper's raw pin in the candidate holds).
@@ -228,8 +232,8 @@ function seed() {
     -- Order lines need a priced product (COST_BASIS_REQUIRED), and prices may only
     -- be written through the governed pricing path. This schema-only container has
     -- no catalog, so seed one priced product with that trigger briefly disabled
-    -- (the same seeding prove-quote-customer-row-version-real-schema.mjs uses); the
-    -- split chain borrows it too. This never touches a live database.
+    -- (the same seeding prove-quote-customer-row-version-real-schema.mjs uses) for the
+    -- prover's own probes; the chains price their own products. Never touches live.
     ALTER TABLE public.products DISABLE TRIGGER trigger_y_require_governed_product_pricing;
     INSERT INTO public.products (id, product_name, unit_size, current_cost, tier1_price)
     VALUES ('${PRODUCT}', '[PROVER] Order Type Product', 'GL', 6.00, 10.00);
@@ -297,7 +301,7 @@ async function main() {
   assert.match(loose, /CRX_LIFE_001_NOT_IN_TRANSACTION/, `wrong autocommit refusal:\n${loose}`);
   assert.equal(checkInstalled(), '0', 'an autocommit run left the CHECK behind');
   assert.equal(bodyMd5(WRAPPER), LIVE_BODY_MD5[WRAPPER], 'an autocommit run changed the wrapper');
-  console.log('[prover] AUTOCOMMIT: applied outside one transaction, the file refuses before changing anything');
+  console.log('[prover] AUTOCOMMIT: applied outside one transaction by a client that stops on the first error, the file stops before changing anything');
 
   // 2b. PREFLIGHT: an order-backed field invoice in the same transaction blocks the apply.
   const blocked = docker([...psqlArgs()], {
@@ -364,7 +368,7 @@ SELECT invoice_type FROM public.invoices WHERE id = :'invoice_id';`);
   expectChainPass(CHAINS.lifecycle, 'lifecycle-after.sql');
   expectChainPass(CHAINS.keys, 'keys-after.sql');
   expectChainPass(CHAINS.fieldApp, 'field-app-after.sql');
-  console.log('[prover] all four registered chains covering create_invoice_from_order pass and roll back (type gate, split billing, order lifecycle, required keys), plus the real field-invoice creator (save_field_app_invoice)');
+  console.log('[prover] the three registered chains covering create_invoice_from_order (type gate, order lifecycle, required keys) and the split-billing chain pass and roll back, plus the real field-invoice creator (save_field_app_invoice)');
 
   // 6. Re-apply fails closed on its own pins.
   const reapplied = apply('candidate.sql', true);

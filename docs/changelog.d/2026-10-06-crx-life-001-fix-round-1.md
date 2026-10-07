@@ -8,7 +8,7 @@ the full record is in `2026-10-06-crx-life-001-order-invoice-type-gate.md` under
   preflight, when it is not run as one transaction (the marker check is split into two IFs, because
   a combined condition fails to plan when the marker table is missing - the prover caught that).
   The wrapper body is unchanged (md5 still `a1a91643bd8866823ae359f7e0ec290e`).
-- Three registered chains covering `create_invoice_from_order` were broken against the current
+- Three registered chains (two covering `create_invoice_from_order`, one covering `create_split_invoices_from_order`) were broken against the current
   schema and are repaired, because the ship rule requires every covering chain to pass after the
   apply: `smoke-govern-invoice-order-money-lifecycle.sql` and `smoke-backfill-refuse-split-billing.sql`
   now price their fresh products through the governed pricing RPCs, and

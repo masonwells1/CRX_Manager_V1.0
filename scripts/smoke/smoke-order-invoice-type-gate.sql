@@ -29,6 +29,7 @@ DECLARE
   v_state text;
   v_constraint text;
   v_pricing jsonb;
+  v_today date := (now() AT TIME ZONE 'America/Chicago')::date;  -- the business date
 BEGIN
   SELECT id INTO v_admin
     FROM public.profiles
@@ -85,7 +86,7 @@ BEGIN
   INSERT INTO public.customers (farm_name, assigned_sales_rep)
   VALUES ('[E2E] Order Type Farm ' || v_suffix, v_rep) RETURNING id INTO v_customer;
   INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw, salesman_id)
-  VALUES ('E2E-ORDER-TYPE-' || v_suffix, v_customer, current_date, 'confirmed', false, v_rep)
+  VALUES ('E2E-ORDER-TYPE-' || v_suffix, v_customer, v_today, 'confirmed', false, v_rep)
   RETURNING id INTO v_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -96,7 +97,7 @@ BEGIN
     1, 10, 5, 50, 0, 1
   );
   INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw, salesman_id)
-  VALUES ('E2E-ORDER-TYPE-MISC-' || v_suffix, v_customer, current_date, 'confirmed', false, v_rep)
+  VALUES ('E2E-ORDER-TYPE-MISC-' || v_suffix, v_customer, v_today, 'confirmed', false, v_rep)
   RETURNING id INTO v_misc_order;
   INSERT INTO public.order_items (
     order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -208,7 +209,7 @@ BEGIN
       invoice_date, due_date, total_amount_cents, created_by
     ) VALUES (
       'E2E-ORDER-TYPE-DIRECT-' || v_suffix, v_order, v_customer,
-      'field_application', 'draft', current_date, current_date + 30, 0, v_admin
+      'field_application', 'draft', v_today, v_today + 30, 0, v_admin
     );
     RAISE EXCEPTION 'SMOKE_FAIL: invoices accepted an order-backed field_application row';
   EXCEPTION WHEN OTHERS THEN

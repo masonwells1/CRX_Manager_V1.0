@@ -25,8 +25,9 @@
 --
 -- The split RPC is deliberately NOT re-emitted. On an allocated order its field_application
 -- INSERT now fails on the CHECK (SQLSTATE 23514) and its claim/lock work rolls back with
--- it; on an order without allocations it delegates to create_invoice_from_order, which
--- refuses the type by name (also 23514). A split that writes no invoice (every customer
+-- it. On an order without allocations its fallback passes a NULL key to the public
+-- create_invoice_from_order, which refuses EVERY type with IDEMPOTENCY_KEY_REQUIRED (22023,
+-- pre-existing: that fallback has been unreachable since 20260721145936). A split that writes no invoice (every customer
 -- nets to zero) writes no field invoice either. A credit_memo split can never produce a
 -- row (positive totals vs invoices_credit_memo_total_nonpositive).
 -- Re-copying its 5k-character idempotency body would add risk without adding protection.
@@ -44,14 +45,15 @@ SELECT pg_current_xact_id()::text AS transaction_id,
 DO $preflight$
 DECLARE v_oid oid := to_regprocedure('public.create_invoice_from_order(uuid,uuid,text,text)');
 BEGIN
-  -- Under autocommit the ON COMMIT DROP marker is already gone here: refuse before any change.
+  -- Under autocommit the ON COMMIT DROP marker is already gone here: refuse before any change
+  -- (a client that stops on the first error, as every sanctioned apply path does, then stops).
   -- Two IFs, not one OR: the second reads the marker table, which must exist to be planned.
   IF to_regclass('pg_temp.crx_life_001_order_invoice_type_tx') IS NULL THEN
-    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: apply this file as one transaction; nothing was changed';
+    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: stop: apply this file as one transaction (scripts/apply-migration-file.mjs, or psql -1 -v ON_ERROR_STOP=1)';
   END IF;
   IF (SELECT transaction_id FROM pg_temp.crx_life_001_order_invoice_type_tx)
        IS DISTINCT FROM pg_current_xact_id()::text THEN
-    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: apply this file as one transaction; nothing was changed';
+    RAISE EXCEPTION 'CRX_LIFE_001_NOT_IN_TRANSACTION: stop: apply this file as one transaction (scripts/apply-migration-file.mjs, or psql -1 -v ON_ERROR_STOP=1)';
   END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'create_invoice_from_order') <> 1

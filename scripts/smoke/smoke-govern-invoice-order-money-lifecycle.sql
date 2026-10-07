@@ -2,6 +2,10 @@
 -- 20260721010000_govern_invoice_order_money_lifecycle.
 -- Exercises the partially delivered short-close, invoice recovery, retry binding,
 -- terminal-order guards, and direct invoice-table DML revocation in one statement.
+-- On live, a run consumes invoice numbers (INV- and CS- sequences) that the rollback
+-- does not return, leaving gaps in the customer-visible series, and briefly holds the
+-- invoice-number lock; prefer the disposable container
+-- (scripts/smoke/prove-order-invoice-type-gate-real-schema.mjs) or run it off-hours.
 DO $smoke$
 DECLARE
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -75,6 +79,7 @@ DECLARE
   -- 00:00 UTC and Chicago midnight, and the date guards (commission payments, finance
   -- charges) refuse a date after the Chicago business date.
   v_today date := (now() AT TIME ZONE 'America/Chicago')::date;
+  v_write_off_date date;
   v_can_bypass_triggers boolean := COALESCE((
     SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user
   ), false);
@@ -1231,10 +1236,12 @@ BEGIN
     v_invoice_id, v_customer, 250,
     '[E2E] reversed lifecycle write-off',
     v_admin, v_admin, now(), '[E2E] reversed for proof', v_admin
-  );
+  ) RETURNING created_at::date INTO v_write_off_date;
+  -- Query the window that holds the row's own date: the review filters
+  -- write-offs on created_at::date, which is the session date, not v_today.
   SELECT count(*) INTO v_count
     FROM public.get_customer_transaction_review(
-      v_customer, v_today, v_today
+      v_customer, v_write_off_date, v_write_off_date
     )
    WHERE transaction_type = 'Write-Off';
   IF v_count <> 0 THEN
