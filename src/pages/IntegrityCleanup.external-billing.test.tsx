@@ -1,6 +1,6 @@
 /**
  * IntegrityCleanup.external-billing.test.tsx — a completed delivery recorded in
- * delivery_external_billings was billed outside CRX (e.g. QuickBooks), so the
+ * delivery_external_billings was billed outside CRX (e.g. in Chem Man), so the
  * "Completed deliveries without invoices" list must not offer to invoice it
  * again. If that record cannot be read, the list is hidden instead of shown.
  */

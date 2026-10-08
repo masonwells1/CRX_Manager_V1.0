@@ -130,7 +130,24 @@ export interface InventoryRow {
   quantity_available: number;
 }
 
+/**
+ * Historical `adjusted` ledger rows that recorded a quantity_prebooked-only
+ * correction (before the `prebook_reconciliation` type existed). They never
+ * changed quantity_available, so the ledger recompute must skip them — see
+ * docs/workflows/INVENTORY_RULES.md "Caveats for anyone recomputing stock".
+ * The ledger is append-only and these are all of them (2026-03-13/14:
+ * migration 20260331900000's four rows plus the Trivapro swap fix).
+ */
+export const PREBOOK_ONLY_ADJUSTMENT_TX_IDS: ReadonlySet<string> = new Set([
+  '14880dd6-9324-4a6e-a1fb-f951b87ad090', // Ammonium Sulfate - 51# Bag, +2200
+  '23a36a20-db16-42a1-8346-ba9bd97894eb', // Gen Valor SX - 5#, +185
+  'd6b92523-5bc2-43d5-a566-2b8399596a9b', // Roundup 5.4# Generic - Bulk, +265
+  '86fc5133-776e-463c-ac6b-f67bbf1f76ae', // NIS 90 - 2.5 Gal, +35
+  '386a1ce0-1cf7-422e-86f9-55cd105cc93f', // Trivapro - Bulk, +161
+]);
+
 export interface InventoryTransactionRow {
+  id?: string;
   product_id: string;
   transaction_type:
     | 'received'
@@ -160,6 +177,7 @@ export function checkInventoryLedger(
   const expectedByProduct = new Map<string, number>();
 
   for (const tx of transactions) {
+    if (tx.id && PREBOOK_ONLY_ADJUSTMENT_TX_IDS.has(tx.id)) continue;
     const current = expectedByProduct.get(tx.product_id) ?? 0;
     let delta: number;
 
@@ -727,7 +745,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .not('quantity_available', 'is', null),
       supabase
         .from('inventory_transactions')
-        .select('product_id, transaction_type, quantity'),
+        .select('id, product_id, transaction_type, quantity'),
     ]);
 
     if (invRes.error) throw new Error(`Inventory query failed: ${invRes.error.message}`);

@@ -119,6 +119,21 @@ describe('checkOrderTotals', () => {
 // ── Check 2: Inventory Ledger ───────────────────────────────────
 
 describe('checkInventoryLedger', () => {
+  it('skips the historical prebooked-only adjusted rows when recomputing stock', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Ammonium Sulfate', quantity_available: 100 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      // Recorded a quantity_prebooked fix as 'adjusted'; on-hand never moved.
+      { id: '14880dd6-9324-4a6e-a1fb-f951b87ad090', product_id: 'p1', transaction_type: 'adjusted', quantity: 2200 },
+    ];
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+    // Any other adjusted row still counts.
+    const other = [{ ...transactions[1], id: 'some-other-row' }];
+    expect(checkInventoryLedger(inventory, [transactions[0], ...other])).toHaveLength(1);
+  });
+
   it('returns empty when inventory matches transactions', () => {
     const inventory: InventoryRow[] = [
       { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 50 },
@@ -728,7 +743,7 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
       { order_id: 'o1', product_id: 'p1', quantity: 4, invoice_type: 'chemical_sale', invoice_status: 'draft' },
     ];
     const external = new Set(['d1']);
-    // d1 was billed in QuickBooks; d2 is billed in CRX — only d2 must match.
+    // d1 was billed in Chem Man; d2 is billed in CRX — only d2 must match.
     expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, external)).toEqual([]);
     expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, external)).toEqual([]);
     // Without the record, d1 is still flagged as unbilled.

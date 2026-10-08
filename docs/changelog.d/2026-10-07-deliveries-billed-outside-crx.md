@@ -4,7 +4,7 @@ Resolves the failing checks in the 2026-10-01 monthly integrity report (PR #861)
 
 - New migration `20261007150000_record_deliveries_billed_outside_crx.sql` (NOT APPLIED):
   admin-read-only table `delivery_external_billings` for completed deliveries invoiced outside
-  CRX (QuickBooks, spring 2026), a guard that only accepts completed, not-yet-invoiced order
+  CRX (in Chem Man, CRX's predecessor, spring 2026), a guard that only accepts completed, not-yet-invoiced order
   deliveries, and an invoices trigger that refuses to invoice a recorded delivery
   (`DELIVERY_BILLED_OUTSIDE_CRX`). Creates no invoices, revenue or AR. Marking the specific
   deliveries is a separate owner-approved data migration.

@@ -1,8 +1,8 @@
 -- STATUS: NOT APPLIED.
--- Record completed deliveries that were billed OUTSIDE CRX (e.g. in QuickBooks, before CRX
+-- Record completed deliveries that were billed OUTSIDE CRX (e.g. in Chem Man, before CRX
 -- invoicing was in use), so the books and the integrity checks stop treating them as unbilled.
 --
--- Why: spring 2026 deliveries were completed in CRX but invoiced in QuickBooks. CRX still sees
+-- Why: spring 2026 deliveries were completed in CRX but invoiced in Chem Man, CRX's predecessor. CRX still sees
 -- them as "completed with no invoice", so:
 --   * the monthly integrity report's Delivery-Invoice Quantity check (src/lib/reconciliation.ts,
 --     checkDeliveryInvoiceQuantityParity) fails on every one of them, and
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS public.delivery_external_billings (
 );
 
 COMMENT ON TABLE public.delivery_external_billings IS
-  'Completed deliveries that were billed outside CRX (e.g. QuickBooks). Excluded from the delivery-invoice integrity check and the unbilled-delivery cleanup list; CRX refuses to invoice them. Written only by reviewed migrations.';
+  'Completed deliveries that were billed outside CRX (e.g. in Chem Man). Excluded from the delivery-invoice integrity check and the unbilled-delivery cleanup list; CRX refuses to invoice them. Written only by reviewed migrations.';
 
 ALTER TABLE public.delivery_external_billings OWNER TO postgres;
 ALTER TABLE public.delivery_external_billings ENABLE ROW LEVEL SECURITY;

@@ -601,7 +601,7 @@ export default function OfficeCockpit() {
     const deliveryOrderIds = [...new Set(completedDeliveryCandidates.map((row) => row.order_id))];
     let deliveryInvoiceError: { message?: string } | null = null;
     let activeDeliveryInvoices: DeliveryInvoiceCoverage[] = [];
-    // Deliveries billed outside CRX (e.g. QuickBooks) are not "delivered, not invoiced".
+    // Deliveries billed outside CRX (e.g. in Chem Man) are not "delivered, not invoiced".
     // delivery_external_billings is admin-readable only; other roles read no rows.
     let billedOutsideCrx = new Set<string>();
 

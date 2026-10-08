@@ -298,7 +298,7 @@ export default function IntegrityCleanupPanel() {
           // complete_delivery auto-invoice guard.
           //
           // A delivery recorded in delivery_external_billings was billed outside CRX
-          // (e.g. QuickBooks); offering "Create draft invoice" on it would bill the
+          // (e.g. in Chem Man); offering "Create draft invoice" on it would bill the
           // customer twice, so it is not listed. If that list cannot be read, hide
           // the section rather than risk showing those rows.
           const [{ data: invoiceRows, error: coverageError }, externalBillingRes] = await Promise.all([
