@@ -584,9 +584,15 @@ ok(
   const exemptionCall = at("solExemptionOnGitHub(");
   ok(exemptionCall > 0, "gateRequest() asks the documentation-only exemption");
   ok(
-    /solExemptionOnGitHub\(\{\s*baseSha,\s*headSha,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\)/.test(gateRequestSource),
-    "the exemption's GitHub comparison spends the shared hard-gate budget (a hook killed mid-call ALLOWS)",
+    /const exemption = solExemptionOnGitHub\(\{\s*baseSha,\s*headSha,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\);/.test(gateRequestSource),
+    "the exemption's GitHub comparison spends the shared hard-gate budget (a hook killed mid-call ALLOWS), and its answer is what is tested",
   );
+  // The allow must be decided by THAT answer and nothing else (Luna, round 2):
+  // no second assignment, no hand-built verdict, no other reading of `.exempt`.
+  eq((guardSource.match(/\bexemption\s*=/g) || []).length, 1, "`exemption` is assigned exactly once, from the module's answer");
+  ok(!/exempt\s*:\s*true/.test(guardSource), "the guard never builds an exempt verdict of its own");
+  eq((guardSource.match(/\.exempt\b/g) || []).length, 1, "`.exempt` is read in exactly one place: the allow decision");
+  ok(!/\bexemption\.exempt\s*(?:\|\||\?\?|=)|!\s*!?\s*exemption\.exempt\s*\|\|/.test(guardSource), "the allow decision is not widened with an `||` fallback");
   for (const [gate, needle] of [
     ["the CHANGES_REQUESTED objection", "if (pullRequestReviewBlocked(pr))"],
     ["the --match-head-commit pin", "if (String(request.matchHeadCommit"],

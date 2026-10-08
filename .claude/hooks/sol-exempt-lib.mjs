@@ -163,8 +163,8 @@ export const SOL_EXEMPT_COMPARE_JQ =
 // documentation, and GitHub's comparison does not say which one a path is.
 const PLAIN_FILE_MODE = 0o100644;
 
-// One GraphQL query listing, at the exact head, every folder that holds a file
-// the pull request adds or keeps. Paths travel as variables, never as query text.
+// One GraphQL query listing every folder that holds a changed file, at the commit
+// where that file exists. Paths travel as variables, never as query text.
 export function solExemptTreeQuery(folderCount) {
   const variables = Array.from({ length: folderCount }, (_, i) => `$e${i}: String!`).join(", ");
   const fields = Array.from({ length: folderCount }, (_, i) =>
@@ -172,28 +172,38 @@ export function solExemptTreeQuery(folderCount) {
   return `query($owner: String!, $name: String!, ${variables}) { repository(owner: $owner, name: $name) { ${fields} } }`;
 }
 
-// null when every surviving file is a plain file at `headSha`, otherwise why not.
-function treeProblem({ files, headSha, repoPath, gh }) {
-  const present = files.filter((entry) => String(entry.status).toLowerCase() !== "removed").map((entry) => entry.filename);
-  if (present.length === 0) return null; // every change deletes a documentation file
-  const folders = [...new Set(present.map((file) => file.slice(0, file.lastIndexOf("/"))))];
+// null when every changed file is a plain file where it exists, otherwise why
+// not. A file the pull request adds or keeps is read at the head; a deleted file,
+// and the old name of a rename or copy, at the base, so deleting or moving a
+// symlink or submodule needs Sol too.
+function treeProblem({ files, baseSha, headSha, repoPath, gh }) {
+  const lookups = [];
+  for (const entry of files) {
+    const removed = String(entry.status).toLowerCase() === "removed";
+    lookups.push({ commit: removed ? baseSha : headSha, file: entry.filename });
+    if (typeof entry.previous_filename === "string" && entry.previous_filename) {
+      lookups.push({ commit: baseSha, file: entry.previous_filename });
+    }
+  }
+  const folderOf = ({ commit, file }) => `${commit}:${file.slice(0, file.lastIndexOf("/"))}`;
+  const expressions = [...new Set(lookups.map(folderOf))];
   const [, owner, name] = repoPath.split("/");
-  const args = ["api", "graphql", "-f", `query=${solExemptTreeQuery(folders.length)}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
-  folders.forEach((folder, i) => args.push("-f", `e${i}=${headSha}:${folder}`));
+  const args = ["api", "graphql", "-f", `query=${solExemptTreeQuery(expressions.length)}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
+  expressions.forEach((expression, i) => args.push("-f", `e${i}=${expression}`));
   let repository;
   try {
     repository = JSON.parse(String(gh(args)))?.data?.repository;
   } catch (error) {
     return `GitHub could not confirm what kind of files changed (${String(error?.message || error).split(/\r?\n/)[0].slice(0, 160)})`;
   }
-  for (const file of present) {
-    const folder = file.slice(0, file.lastIndexOf("/"));
-    const entries = repository?.[`d${folders.indexOf(folder)}`]?.entries;
-    const leaf = file.slice(file.lastIndexOf("/") + 1);
+  for (const lookup of lookups) {
+    const entries = repository?.[`d${expressions.indexOf(folderOf(lookup))}`]?.entries;
+    const leaf = lookup.file.slice(lookup.file.lastIndexOf("/") + 1);
+    const where = lookup.commit === headSha ? "the head" : "the base";
     const entry = Array.isArray(entries) ? entries.find((candidate) => candidate?.name === leaf) : undefined;
-    if (!entry) return `GitHub did not show ${file} at head ${headSha.slice(0, 12)}`;
+    if (!entry) return `GitHub did not show ${lookup.file} at ${where} (${lookup.commit.slice(0, 12)})`;
     if (entry.type !== "blob" || entry.mode !== PLAIN_FILE_MODE) {
-      return `${file} is not a plain file at the head (git type ${entry.type}, mode ${Number(entry.mode).toString(8)})`;
+      return `${lookup.file} is not a plain file at ${where} (git type ${entry.type}, mode ${Number(entry.mode).toString(8)})`;
     }
   }
   return null;
@@ -203,12 +213,14 @@ function treeProblem({ files, headSha, repoPath, gh }) {
 // pull request's own diff, and whether each file is a plain file at that head.
 // `gh(args)` runs the GitHub CLI and returns stdout; each guard passes its
 // budgeted runner. Never throws: any failure is "Sol required".
-export function solExemptionOnGitHub({ baseSha, headSha, repo, gh }) {
+export function solExemptionOnGitHub({ baseSha: rawBase, headSha: rawHead, repo, gh }) {
   const repoPath = ghApiRepoPath(repo);
   if (!repoPath) return { exempt: false, reason: "the pull request's repository could not be read" };
-  if (!SHA_RE.test(String(baseSha || "")) || !SHA_RE.test(String(headSha || ""))) {
+  if (!SHA_RE.test(String(rawBase || "")) || !SHA_RE.test(String(rawHead || ""))) {
     return { exempt: false, reason: "the base or head is not a full commit id" };
   }
+  const baseSha = String(rawBase).toLowerCase();
+  const headSha = String(rawHead).toLowerCase();
   let answer;
   try {
     answer = JSON.parse(String(gh(["api", `${repoPath}/compare/${baseSha}...${headSha}`, "--jq", SOL_EXEMPT_COMPARE_JQ])));
@@ -232,7 +244,7 @@ export function solExemptionOnGitHub({ baseSha, headSha, repo, gh }) {
   try {
     const verdict = classifySolExemption(answer.files);
     if (!verdict.exempt) return verdict;
-    const problem = treeProblem({ files: answer.files, headSha, repoPath, gh });
+    const problem = treeProblem({ files: answer.files, baseSha, headSha, repoPath, gh });
     return problem ? { exempt: false, reason: problem } : verdict;
   } catch (error) {
     return { exempt: false, reason: `GitHub's file list could not be classified (${String(error?.message || error).slice(0, 160)})` };
