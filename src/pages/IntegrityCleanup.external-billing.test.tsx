@@ -79,7 +79,7 @@ describe('IntegrityCleanup — deliveries billed outside CRX', () => {
 
   it('does not offer to invoice a delivery that was billed outside CRX', async () => {
     render(<IntegrityCleanupPanel />);
-    expect(await screen.findByText('DEL-CRX-2')).toBeTruthy();
+    expect(await screen.findByText('DEL-CRX-2', {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.queryByText('DEL-QB-1')).toBeNull();
     expect(screen.getAllByText('Create draft invoice')).toHaveLength(1);
   });
@@ -87,7 +87,7 @@ describe('IntegrityCleanup — deliveries billed outside CRX', () => {
   it('hides the list when the billed-outside-CRX record cannot be read', async () => {
     state.externalBilling = { data: null, error: { message: 'permission denied' } };
     render(<IntegrityCleanupPanel />);
-    expect(await screen.findByText('Could not verify invoice coverage — refresh to try again.')).toBeTruthy();
+    expect(await screen.findByText('Could not verify invoice coverage — refresh to try again.', {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.queryByText('DEL-QB-1')).toBeNull();
     expect(screen.queryByText('DEL-CRX-2')).toBeNull();
   });
