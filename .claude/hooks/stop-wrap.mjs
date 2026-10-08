@@ -664,21 +664,30 @@ try {
     // Only commits still reachable from HEAD or a branch/remote/tag count: an
     // amended, reset or rebased-away commit stays in the reflog, and counting
     // it let a ledger edit that was amended OUT still satisfy the check (Codex
-    // P2, PR #827 round 6). Checked per commit, with no date bound, for the
-    // same backdating reason as above.
-    const isReachable = (sha) => {
-      try {
-        execFileSync("git", ["merge-base", "--is-ancestor", sha, "HEAD"], {
-          timeout: 5000, stdio: "ignore", cwd: projectDir,
-        });
-        return true;
-      } catch {
-        return runGit(["for-each-ref", "--count=1", "--contains", sha, "--format=%(refname)",
-          "refs/heads", "refs/remotes", "refs/tags"]).trim() !== "";
-      }
-    };
-    const isMerge = (sha) => runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).length > 2;
-    const authoredShas = [...authored].filter(isReachable);
+    // P2, PR #827 round 6). Checked with no date bound, for the same
+    // backdating reason as above.
+    // Each question below is ONE git process for every commit, fed on stdin: a
+    // rebase replays hundreds of commits, and one process per commit took 23 s
+    // for 300 commits, past this hook's 15 s Stop deadline, so the harness
+    // killed it before any check ran (Codex P2, PR #827). The commits go on
+    // stdin and the exclusions on the command line, because a git older than
+    // 2.42 reads stdin revisions as plain positives and rejects `--not` there.
+    // stdin must be an explicit pipe: runGit's default "ignore" silently drops `input`.
+    const shaInput = (shas) => ({
+      input: shas.map((s) => `${s}\n`).join(""), stdio: ["pipe", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
+    });
+    const authoredList = [...authored];
+    // Listed = reachable from a session commit but from none of HEAD, a branch,
+    // a remote or a tag; every session commit NOT listed is still reachable.
+    const unreachable = new Set(authoredList.length === 0 ? [] :
+      runGit(["rev-list", "--not", "HEAD", "--branches", "--remotes", "--tags", "--stdin"], shaInput(authoredList))
+        .split("\n").map((s) => s.trim()).filter(Boolean));
+    const authoredShas = authoredList.filter((sha) => !unreachable.has(sha));
+    const parentCount = new Map(authoredShas.length === 0 ? [] :
+      runGit(["rev-list", "--no-walk", "--parents", "--stdin"], shaInput(authoredShas))
+        .split("\n").map((s) => s.trim().split(/\s+/)).filter((p) => p[0])
+        .map((p) => [p[0], p.length - 1]));
+    const isMerge = (sha) => (parentCount.get(sha) ?? 0) > 1;
     const nonMergeShas = authoredShas.filter((sha) => !isMerge(sha));
     // A merge itself counts only for what the resolver AUTHORED (2026-09-26;
     // Codex P2s, PRs #824/#827). Merging main authors nothing, and
@@ -707,8 +716,9 @@ try {
       const toPosixPath = (s) => s.split(BACKSLASH).join("/").trim();
       // Same session scope as above: a ledger file that only arrived by merging
       // main records main's work, not this session's.
-      const fromLog = nonMergeShas
-        .flatMap((sha) => runGit(["diff-tree", "--no-commit-id", "-r", "--root", "--name-status", "-M", sha]).split("\n"))
+      const fromLog = (nonMergeShas.length === 0 ? "" :
+        runGit(["diff-tree", "--stdin", "--no-commit-id", "-r", "--root", "--name-status", "-M"], shaInput(nonMergeShas)))
+        .split("\n")
         .map(s => s.trim()).filter(Boolean)
         .map((s) => {
           const parts = s.split("\t");

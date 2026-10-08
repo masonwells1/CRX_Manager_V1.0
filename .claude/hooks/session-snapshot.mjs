@@ -3,7 +3,7 @@
 // session-scoped changes from pre-existing WIP.
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -39,13 +39,18 @@ try {
 // (`rebase --committer-date-is-author-date`), or the reflog's length, which
 // expiry changes (Codex P2s, PR #827). The line format must match the one
 // stop-wrap.mjs reads. An empty file means the reflog was empty.
+// A resumed or cleared session reuses its ID, so delete the previous anchor
+// first: if the read or write below fails, a leftover anchor would pull the
+// earlier run's commits into this one instead of falling back (Codex P2, PR #827).
+const anchorPath = path.join(dir, `session-${sessionId}.reflog`);
+try { rmSync(anchorPath, { force: true }); } catch { /* ignore */ }
 try {
   const newest = execFileSync("git", ["reflog", "show", "-n", "1", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"], {
     encoding: "utf8",
     timeout: 5000,
     stdio: ["ignore", "pipe", "ignore"],
   }).split("\n")[0] ?? "";
-  writeFileSync(path.join(dir, `session-${sessionId}.reflog`), newest, "utf8");
+  writeFileSync(anchorPath, newest, "utf8");
 } catch { /* no HEAD yet — stop-wrap falls back to timestamps */ }
 
 process.exit(0);

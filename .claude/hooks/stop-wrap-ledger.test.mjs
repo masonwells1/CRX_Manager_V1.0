@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -504,6 +504,41 @@ try {
   const largeReflog = runStopWrap(s1s, tmp);
   assert.match(largeReflog.stdout, LEDGER_WARNING,
     "a session commit must still warn when the reflog is larger than 1 MiB");
+  pass++;
+
+  // ── Session 1t (Codex P2, PR #827): hundreds of session commits, as a large
+  //    rebase replays, must finish well inside the 15 s Stop-hook deadline ──
+  // One git process per commit took 23 s for 300 commits; the harness kills
+  // the hook at 15 s, before any of its checks reach Mason.
+  const s1t = "ledger-test-many-commits";
+  snapshots.push(startSession(s1t));
+  for (let i = 0; i < 300; i++) git(["commit", "-q", "--allow-empty", "-m", `replayed ${i}`], tmp);
+  const manyStart = Date.now();
+  const manyCommits = runStopWrap(s1t, tmp);
+  const manyMs = Date.now() - manyStart;
+  assert.match(manyCommits.stdout, LEDGER_WARNING,
+    "300 unrecorded session commits must still get the warning");
+  assert.ok(manyMs < 10000, `stop-wrap must stay well inside its 15 s deadline with 300 commits (took ${manyMs} ms)`);
+  pass++;
+
+  // ── Session 1u (Codex P2, PR #827): a resumed session reuses its ID; when the
+  //    anchor cannot be recorded, the previous run's anchor must not survive ──
+  const s1u = "ledger-test-stale-anchor";
+  const staleBase = startSession(s1u);
+  snapshots.push(staleBase);
+  assert.ok(existsSync(`${staleBase}.reflog`), "setup: the first run records an anchor");
+  const noHead = mkdtempSync(path.join(os.tmpdir(), "crx-stopwrap-nohead-"));
+  try {
+    git(["init", "-q"], noHead);
+    const resumed = spawnSync(process.execPath, [sessionSnapshotPath], {
+      encoding: "utf8", cwd: noHead, input: JSON.stringify({ session_id: s1u }), env: cleanEnv,
+    });
+    assert.equal(resumed.status, 0, `session-snapshot exits 0: ${resumed.stderr}`);
+    assert.ok(!existsSync(`${staleBase}.reflog`),
+      "a resume that cannot read HEAD's reflog must delete the earlier anchor, not keep it");
+  } finally {
+    rmSync(noHead, { recursive: true, force: true });
+  }
   pass++;
 
   // ── Session 2: a real commit without any ledger → still warns ──

@@ -79,11 +79,19 @@ rare cases are accepted rather than chased further:
 - Two reflog entries that are byte-identical (same commit, same second, same action)
   make the session anchor ambiguous. The newest match wins, which can undercount
   session entries.
+- Copying an existing changelog.d entry to a new name, while keeping the original,
+  reads as an added file, so the copy counts as a new record. Rename detection does not
+  see copies. Plain commits had the same gap before this change (Codex P2, PR #827).
+- On a git older than 2.38, without `merge-tree --write-tree`, a conflict resolved by
+  taking one side matches a parent, so the combined-diff fallback misses it and the
+  reminder can be skipped (Luna, 2026-10-07).
+- If the session anchor expires before the hook runs, the timestamp fallback can miss a
+  commit that a rebase backdated during the session (Luna, 2026-10-07).
 
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real SessionStart and Stop hooks in a temp git repo with twenty cases:
+  It runs the real SessionStart and Stop hooks in a temp git repo with twenty-two cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -108,6 +116,11 @@ rare cases are accepted rather than chased further:
     reflog read had used `execFileSync`'s 1 MiB default buffer, so a long-lived
     checkout overflowed it, the read returned nothing and the check passed silently
     (CodeRabbit, PR #827). The read now allows 64 MiB;
+  - 300 unrecorded session commits, as a large rebase replays, still warn, and the hook
+    finishes in under 10 seconds (Codex P2, PR #827). Reachability, merge status and
+    changed files are now each read in one git call for all session commits;
+  - a resumed session whose new anchor cannot be recorded does not keep the previous
+    anchor (Codex P2, PR #827);
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -130,7 +143,10 @@ rare cases are accepted rather than chased further:
     Codex reproduced the foreign-worktree variant against the reflog lookup; the
     rebuild covers both.
   - With the default 1 MiB buffer on the reflog read, the large-reflog case fails.
-- With the final version, all twenty cases pass. `npm run test:correction-guards`,
+  - With one git call per commit, the 300-commit case fails: 26.9 seconds on Windows.
+    The batched version took 0.18 seconds on the same input.
+  - Without deleting the old anchor first, the resumed-session case fails.
+- With the final version, all twenty-two cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.
 
 ### Not verified
