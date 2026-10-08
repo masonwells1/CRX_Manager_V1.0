@@ -1653,27 +1653,41 @@ try {
       reviews: [{ author: { login: "coderabbitai" }, state: "APPROVED", commit: { oid: docs.sha }, submittedAt: "2026-10-07T12:00:00Z" }],
     };
     const compareOf = (files, overrides = {}) => ({
-      status: "ahead", ahead_by: 1, behind_by: 0, merge_base: docs.base,
+      status: "ahead", ahead_by: 1, behind_by: 0, merge_base: docs.base, head: docs.sha,
       files: files.map((filename) => ({ filename, previous_filename: null, status: "modified" })),
       ...overrides,
     });
-    // Answers the PR view with `pr` and the compare call with `compare`, and
-    // records every gh call so the test can see the comparison was asked for.
-    const ghFor = (pr, compare, calls = []) => (args) => {
+    // Answers the PR view with `pr`, the compare call with `compare`, and the
+    // GraphQL file-kind lookup with every compared file as a plain file (mode
+    // 100644) unless `kinds` says otherwise. Records every gh call so the test
+    // can see the comparison was asked for.
+    const ghFor = (pr, compare, calls = [], kinds = {}) => (args) => {
       calls.push(args);
       if (args[0] === "api" && /\/compare\//.test(String(args[1]))) {
         if (compare instanceof Error) throw compare;
         return JSON.stringify(compare);
       }
+      if (args[0] === "api" && args[1] === "graphql") {
+        const files = (compare?.files || []).map((entry) => entry.filename);
+        const repository = {};
+        args.forEach((arg, i) => {
+          const match = args[i - 1] === "-f" && /^e(\d+)=([^:]+):(.*)$/.exec(String(arg));
+          if (!match || match[2] !== docs.sha) return;
+          repository[`d${match[1]}`] = { entries: files
+            .filter((file) => file.slice(0, file.lastIndexOf("/")) === match[3])
+            .map((file) => ({ name: file.slice(file.lastIndexOf("/") + 1), mode: 0o100644, type: "blob", ...kinds[file] })) };
+        });
+        return JSON.stringify({ data: { repository } });
+      }
       return JSON.stringify(pr);
     };
-    const mergeDocs = ({ pr = docsPr, compare = compareOf(["docs/plans/2026-10-07-note.md"]), pin = docsPin, calls } = {}) =>
+    const mergeDocs = ({ pr = docsPr, compare = compareOf(["docs/plans/2026-10-07-note.md"]), pin = docsPin, calls, kinds } = {}) =>
       evaluateProductionAction({
         toolName: "PowerShell",
         toolInput: { command: `gh pr merge 870 --squash${pin}` },
         repoDir: docs.repo,
         nowMs: now,
-        runGh: ghFor(pr, compare, calls),
+        runGh: ghFor(pr, compare, calls, kinds),
       });
 
     const calls = [];
@@ -1707,6 +1721,12 @@ try {
     assert.equal(renamed.blocked, true, "a file renamed from a hook into docs needs Sol");
     assert.equal(mergeDocs({ compare: new Error("HTTP 502: Bad Gateway") }).blocked, true,
       "an unreadable diff (GitHub call failed) needs Sol");
+    assert.equal(mergeDocs({ kinds: { "docs/plans/2026-10-07-note.md": { mode: 0o120000 } } }).blocked, true,
+      "a symlink named like a docs file needs Sol");
+    assert.equal(mergeDocs({ kinds: { "docs/plans/2026-10-07-note.md": { mode: 0o160000, type: "commit" } } }).blocked, true,
+      "a submodule named like a docs file needs Sol");
+    assert.equal(mergeDocs({ compare: compareOf(["docs/plans/2026-10-07-note.md"], { head: docs.base }) }).blocked, true,
+      "a comparison that does not end at the PR's head needs Sol");
     assert.equal(mergeDocs({ compare: compareOf(Array.from({ length: 300 }, (_, i) => `docs/changelog.d/e-${i}.md`)) }).blocked, true,
       "a possibly truncated file list needs Sol");
     assert.equal(mergeDocs({ compare: compareOf(["docs/plans/2026-10-07-note.md"], { behind_by: 2, status: "diverged" }) }).blocked, true,

@@ -114,6 +114,8 @@ export function solExemptPathProblem(file) {
   return null;
 }
 
+export const SOL_EXEMPT_STATUSES = Object.freeze(["added", "modified", "removed", "renamed", "copied"]);
+
 // Classify GitHub compare `files` entries. Every name an entry carries is checked:
 // a rename or copy is exempt only when BOTH its new and its old name are, so moving
 // a file across the boundary in either direction needs Sol.
@@ -127,6 +129,12 @@ export function classifySolExemption(files) {
     if (entry === null || typeof entry !== "object") return { exempt: false, reason: "a changed-file entry is unreadable" };
     const names = [entry.filename];
     const status = String(entry.status || "").toLowerCase();
+    // Only the statuses a plain text edit produces. GitHub's `changed` means the
+    // file's KIND changed (a file became a symlink, say); a missing or unknown
+    // status is not something this check understands.
+    if (!SOL_EXEMPT_STATUSES.includes(status)) {
+      return { exempt: false, reason: `${entry.filename || "a file"} has change status "${entry.status}", which is not a plain edit` };
+    }
     if (status === "renamed" || status === "copied" || (entry.previous_filename !== undefined && entry.previous_filename !== null)) {
       if (typeof entry.previous_filename !== "string" || !entry.previous_filename) {
         return { exempt: false, reason: `${entry.filename || "a file"} was ${status || "moved"} but GitHub did not say from where` };
@@ -142,14 +150,59 @@ export function classifySolExemption(files) {
 }
 
 // Projection of GitHub's compare answer: patches can run to megabytes, and only
-// these fields decide the exemption.
+// these fields decide the exemption. `head` is the newest commit in the
+// comparison (GitHub keeps the newest last even when it shortens the list), so
+// the answer can be bound to the head that was asked about.
 export const SOL_EXEMPT_COMPARE_JQ =
   "{status: .status, ahead_by: .ahead_by, behind_by: .behind_by, merge_base: .merge_base_commit.sha, " +
+  "head: (if (.commits | type) == \"array\" and (.commits | length) > 0 then .commits[-1].sha else null end), " +
   "files: (if (.files | type) == \"array\" then [.files[] | {filename, previous_filename, status}] else null end)}";
 
-// Asks GitHub which files `baseSha...headSha` changes and whether that is exactly
-// the pull request's own diff. `gh(args)` runs the GitHub CLI and returns stdout;
-// each guard passes its budgeted runner. Never throws: any failure is "Sol required".
+// A plain, non-executable file in git (mode 100644). A symlink is 120000, a
+// submodule 160000 (type "commit"), an executable 100755: none of them is
+// documentation, and GitHub's comparison does not say which one a path is.
+const PLAIN_FILE_MODE = 0o100644;
+
+// One GraphQL query listing, at the exact head, every folder that holds a file
+// the pull request adds or keeps. Paths travel as variables, never as query text.
+export function solExemptTreeQuery(folderCount) {
+  const variables = Array.from({ length: folderCount }, (_, i) => `$e${i}: String!`).join(", ");
+  const fields = Array.from({ length: folderCount }, (_, i) =>
+    `d${i}: object(expression: $e${i}) { ... on Tree { entries { name mode type } } }`).join(" ");
+  return `query($owner: String!, $name: String!, ${variables}) { repository(owner: $owner, name: $name) { ${fields} } }`;
+}
+
+// null when every surviving file is a plain file at `headSha`, otherwise why not.
+function treeProblem({ files, headSha, repoPath, gh }) {
+  const present = files.filter((entry) => String(entry.status).toLowerCase() !== "removed").map((entry) => entry.filename);
+  if (present.length === 0) return null; // every change deletes a documentation file
+  const folders = [...new Set(present.map((file) => file.slice(0, file.lastIndexOf("/"))))];
+  const [, owner, name] = repoPath.split("/");
+  const args = ["api", "graphql", "-f", `query=${solExemptTreeQuery(folders.length)}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
+  folders.forEach((folder, i) => args.push("-f", `e${i}=${headSha}:${folder}`));
+  let repository;
+  try {
+    repository = JSON.parse(String(gh(args)))?.data?.repository;
+  } catch (error) {
+    return `GitHub could not confirm what kind of files changed (${String(error?.message || error).split(/\r?\n/)[0].slice(0, 160)})`;
+  }
+  for (const file of present) {
+    const folder = file.slice(0, file.lastIndexOf("/"));
+    const entries = repository?.[`d${folders.indexOf(folder)}`]?.entries;
+    const leaf = file.slice(file.lastIndexOf("/") + 1);
+    const entry = Array.isArray(entries) ? entries.find((candidate) => candidate?.name === leaf) : undefined;
+    if (!entry) return `GitHub did not show ${file} at head ${headSha.slice(0, 12)}`;
+    if (entry.type !== "blob" || entry.mode !== PLAIN_FILE_MODE) {
+      return `${file} is not a plain file at the head (git type ${entry.type}, mode ${Number(entry.mode).toString(8)})`;
+    }
+  }
+  return null;
+}
+
+// Asks GitHub which files `baseSha...headSha` changes, whether that is exactly the
+// pull request's own diff, and whether each file is a plain file at that head.
+// `gh(args)` runs the GitHub CLI and returns stdout; each guard passes its
+// budgeted runner. Never throws: any failure is "Sol required".
 export function solExemptionOnGitHub({ baseSha, headSha, repo, gh }) {
   const repoPath = ghApiRepoPath(repo);
   if (!repoPath) return { exempt: false, reason: "the pull request's repository could not be read" };
@@ -173,8 +226,14 @@ export function solExemptionOnGitHub({ baseSha, headSha, repo, gh }) {
   if (String(answer.merge_base || "").toLowerCase() !== String(baseSha).toLowerCase()) {
     return { exempt: false, reason: "GitHub's comparison does not start at the pull request's base" };
   }
+  if (String(answer.head || "").toLowerCase() !== String(headSha).toLowerCase()) {
+    return { exempt: false, reason: "GitHub's comparison does not end at the pull request's head" };
+  }
   try {
-    return classifySolExemption(answer.files);
+    const verdict = classifySolExemption(answer.files);
+    if (!verdict.exempt) return verdict;
+    const problem = treeProblem({ files: answer.files, headSha, repoPath, gh });
+    return problem ? { exempt: false, reason: problem } : verdict;
   } catch (error) {
     return { exempt: false, reason: `GitHub's file list could not be classified (${String(error?.message || error).slice(0, 160)})` };
   }

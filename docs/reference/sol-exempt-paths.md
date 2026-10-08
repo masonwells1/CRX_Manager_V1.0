@@ -18,13 +18,20 @@ change both in one pull request. That pull request touches `.claude/`, so it nee
 The guard asks GitHub's compare API for the files `base...head` changes, where `base`
 is the commit GitHub will merge onto. The exemption applies only when:
 
-1. GitHub's answer is readable and is exactly the base-to-head diff (the head is ahead
-   of the base, not behind it, and the comparison starts at the base);
+1. GitHub's answer is readable and is exactly the base-to-head diff. The head is ahead
+   of the base, not behind it; the comparison starts at the base; and its newest commit
+   is the head;
 2. the list holds at least one file and fewer than 250. GitHub stops listing at 300
    without saying so, so a longer list may be incomplete;
-3. every changed file, and the old name of every renamed or copied file, is a plainly
-   named `.md` file under an eligible folder; and
-4. none of those names matches a never-eligible path or name.
+3. every change is a plain `added`, `modified`, `removed`, `renamed` or `copied`. GitHub's
+   `changed` means a file's kind changed;
+4. every changed file, and the old name of every renamed or copied file, is a plainly
+   named `.md` file under an eligible folder;
+5. none of those names matches a never-eligible path or name; and
+6. a second GitHub lookup at the exact head (GraphQL, one query) confirms that every
+   file the pull request adds or keeps is a plain file (git mode `100644`). A symlink, a
+   submodule or an executable named `notes.md` is not documentation, and the
+   comparison alone cannot tell them apart.
 
 Anything else, including a failed GitHub call, means the Sol review is required.
 

@@ -18,12 +18,14 @@
 > merges into `main` without the Sol proof. Every other point (1) requirement still applies: CodeRabbit APPROVED on
 > the exact head, every check green, the `--match-head-commit` pin, no `--auto`, the head containing its base. Both
 > `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` ask `.claude/hooks/sol-exempt-lib.mjs`, and only
-> when no valid proof was found. It reads GitHub's compare API for `baseRefOid...headRefOid` through the same
-> budgeted `gh`. It is an allow-list: only `.md` files under eight `docs/` folders qualify, minus the rule-defining
-> documents, any nested `CLAUDE.md`/`AGENTS.md` and package files, matched without regard to case. Any uncertainty
-> means Sol is required: a failed or unexpected GitHub answer, a comparison that is not exactly base..head, 250 or
-> more files (GitHub silently stops listing at 300), an empty list, a rename or copy whose old name is not exempt, or
-> an unusual path spelling. The module is in the Codex guard's protected-file list and the `.claude/settings.json`
+> when no valid proof was found. It reads GitHub's compare API for `baseRefOid...headRefOid`, then one GraphQL
+> lookup at that head confirming each surviving file is a plain file (mode `100644`, not a symlink, submodule or
+> executable). Both go through the same budgeted `gh`. It is an allow-list: only `.md` files under eight `docs/`
+> folders qualify, minus the rule-defining documents, any nested `CLAUDE.md`/`AGENTS.md` and package files, matched
+> without regard to case. Any uncertainty means Sol is required: a failed or unexpected GitHub answer, a comparison
+> that is not exactly base..head (or does not end at the head), 250 or more files (GitHub silently stops listing at
+> 300), an empty list, a change status other than a plain edit, a rename or copy whose old name is not exempt, or an
+> unusual path spelling. The module is in the Codex guard's protected-file list and the `.claude/settings.json`
 > `ask` tier. `sol-exempt-lib.test.mjs` checks it against the readable list and requires every loosened mutant in its list to fail. A change to
 > the rule touches `.claude/`, so it always needs Sol.
 >

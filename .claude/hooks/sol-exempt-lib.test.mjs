@@ -117,12 +117,41 @@ const NOT_ON_ALLOW_LIST = [
 ];
 
 function compareAnswer(overrides = {}) {
-  return { status: "ahead", ahead_by: 2, behind_by: 0, merge_base: BASE, files: DOCS_ONLY, ...overrides };
+  return { status: "ahead", ahead_by: 2, behind_by: 0, merge_base: BASE, head: HEAD, files: DOCS_ONLY, ...overrides };
 }
-function fakeGh(answer, calls = []) {
+// Git's view of a path at a commit. PLAIN is mode 100644, a regular file.
+const PLAIN = { mode: 0o100644, type: "blob" };
+const SYMLINK = { mode: 0o120000, type: "blob" };
+const SUBMODULE = { mode: 0o160000, type: "commit" };
+const EXECUTABLE = { mode: 0o100755, type: "blob" };
+const FOLDER = { mode: 0o040000, type: "tree" };
+const MISSING = "missing";
+// Answers the GraphQL tree lookup the way GitHub does: for each requested
+// `<sha>:<folder>`, the entries of that folder AT THAT COMMIT. Only HEAD exists
+// here, so a lookup at any other commit finds nothing. `kinds` overrides a path.
+function treeAnswer(args, answer, kinds) {
+  const files = Array.isArray(answer?.files) ? answer.files.map((f) => f?.filename).filter((f) => typeof f === "string") : [];
+  const repository = {};
+  args.forEach((arg, i) => {
+    const match = args[i - 1] === "-f" && /^e(\d+)=([^:]+):(.*)$/.exec(String(arg));
+    if (!match) return;
+    const [, index, sha, folder] = match;
+    repository[`d${index}`] = sha.toLowerCase() !== HEAD ? null : {
+      entries: files
+        .filter((file) => file.slice(0, file.lastIndexOf("/")) === folder && kinds[file] !== MISSING)
+        .map((file) => ({ name: file.slice(file.lastIndexOf("/") + 1), ...(kinds[file] || PLAIN) })),
+    };
+  });
+  return { data: { repository } };
+}
+function fakeGh(answer, calls = [], kinds = {}) {
   return (args) => {
     calls.push(args);
     if (answer instanceof Error) throw answer;
+    if (args[1] === "graphql") {
+      if (kinds instanceof Error) throw kinds;
+      return JSON.stringify(treeAnswer(args, answer, kinds));
+    }
     return typeof answer === "string" ? answer : JSON.stringify(answer);
   };
 }
@@ -183,8 +212,8 @@ function contractFailures(lib) {
   check(!exempt(many(300)), "GitHub's 300-file cap needs Sol");
 
   // the GitHub comparison
-  const viaGitHub = (answer, extra = {}) => {
-    try { return lib.solExemptionOnGitHub({ baseSha: BASE, headSha: HEAD, gh: fakeGh(answer), ...extra }).exempt === true; } catch (error) {
+  const viaGitHub = (answer, extra = {}, kinds = {}) => {
+    try { return lib.solExemptionOnGitHub({ baseSha: BASE, headSha: HEAD, gh: fakeGh(answer, [], kinds), ...extra }).exempt === true; } catch (error) {
       failures.push(`solExemptionOnGitHub threw: ${error?.message || error}`);
       return true;
     }
@@ -216,10 +245,47 @@ function contractFailures(lib) {
   check(!viaGitHub(compareAnswer(), { repo: "a/b/c/d" }), "an unreadable repository needs Sol");
   check(viaGitHub(compareAnswer(), { baseSha: BASE.toUpperCase() }), "commit ids compare without regard to case");
 
+  // the answer is bound to the head that was asked about (Luna, round 1)
+  check(!viaGitHub(compareAnswer({ head: "c".repeat(40) })), "a comparison ending at another commit needs Sol");
+  check(!viaGitHub(compareAnswer({ head: null })), "a comparison with no newest commit needs Sol");
+
+  // only the statuses a plain edit produces (Luna, round 1)
+  for (const status of [undefined, "", "changed", "unchanged", "typechange", "RENAMED-ish"]) {
+    check(!exempt([modified("docs/plans/a.md"), { filename: "docs/plans/b.md", previous_filename: null, status }]),
+      `a change with status ${JSON.stringify(status)} needs Sol`);
+  }
+  check(exempt([{ filename: "docs/plans/a.md", previous_filename: null, status: "ADDED" }]), "status is read without regard to case");
+
+  // every surviving file must be a plain file at the head (Luna, round 1): GitHub's
+  // comparison does not say whether a path is a symlink or a submodule
+  const NOTE = "docs/plans/2026-10-02-sol-skip-for-low-risk-changes.md";
+  check(!viaGitHub(compareAnswer(), {}, { [NOTE]: SYMLINK }), "a symlink named like a docs file needs Sol");
+  check(!viaGitHub(compareAnswer(), {}, { [NOTE]: SUBMODULE }), "a submodule named like a docs file needs Sol");
+  check(!viaGitHub(compareAnswer(), {}, { [NOTE]: EXECUTABLE }), "an executable docs file needs Sol");
+  check(!viaGitHub(compareAnswer(), {}, { [NOTE]: FOLDER }), "a folder named like a docs file needs Sol");
+  check(!viaGitHub(compareAnswer(), {}, { [NOTE]: { mode: "33188", type: "blob" } }), "a mode that is not the number 100644 needs Sol");
+  check(!viaGitHub(compareAnswer(), {}, { [NOTE]: MISSING }), "a changed file GitHub cannot show at the head needs Sol");
+  check(!viaGitHub(compareAnswer(), {}, new Error("GraphQL: rate limited")), "a failed file-kind lookup needs Sol");
+  check(!viaGitHub(compareAnswer({ files: [{ filename: NOTE, previous_filename: "docs/plans/old.md", status: "renamed" }] }), {}, { [NOTE]: SYMLINK }),
+    "a renamed file is checked at its new name too");
+  const kindCalls = [];
+  lib.solExemptionOnGitHub({ baseSha: BASE, headSha: HEAD, repo: "masonwells1/CRX_Manager_V1.0", gh: fakeGh(compareAnswer(), kindCalls) });
+  const kindCall = kindCalls.find((args) => args[1] === "graphql") || [];
+  const folderArgs = kindCall.filter((arg) => /^e\d+=/.test(String(arg)));
+  check(folderArgs.length > 0 && folderArgs.every((arg) => String(arg).includes(`=${HEAD}:docs/`)),
+    "the file-kind lookup reads every folder at the exact head");
+  check(folderArgs.includes(`e${folderArgs.findIndex((arg) => arg.endsWith(":docs/plans"))}=${HEAD}:docs/plans`),
+    "including the folder of each changed file");
+  check(kindCall.includes("owner=masonwells1") && kindCall.includes("name=CRX_Manager_V1.0"), "in the pull request's repository");
+  const removalCalls = [];
+  check(lib.solExemptionOnGitHub({ baseSha: BASE, headSha: HEAD, gh: fakeGh(compareAnswer({ files: [{ filename: "docs/plans/old.md", previous_filename: null, status: "removed" }] }), removalCalls) }).exempt === true,
+    "a pull request that only deletes documentation is exempt");
+  check(!removalCalls.some((args) => args[1] === "graphql"), "and needs no file-kind lookup");
+
   // what the guard asks GitHub
   const calls = [];
   lib.solExemptionOnGitHub({ baseSha: BASE, headSha: HEAD, repo: "masonwells1/CRX_Manager_V1.0", gh: fakeGh(compareAnswer(), calls) });
-  check(calls.length === 1, "one GitHub call");
+  check(calls.length === 2 && calls[1]?.[1] === "graphql", "two GitHub calls: the comparison, then the file-kind lookup");
   check(calls[0]?.[0] === "api" && calls[0]?.[1] === `repos/masonwells1/CRX_Manager_V1.0/compare/${BASE}...${HEAD}`,
     "it asks GitHub's compare API for base...head of the pull request's repository");
   check(calls[0]?.[2] === "--jq" && /\.files/.test(String(calls[0]?.[3])) && /merge_base_commit\.sha/.test(String(calls[0]?.[3])),
@@ -310,6 +376,17 @@ const MUTANTS = [
   ["empty comparison accepted", "answer.ahead_by < 1", "false"],
   ["merge base unchecked", `if (String(answer.merge_base || "").toLowerCase() !== String(baseSha).toLowerCase()) {`, "if (false) {"],
   ["GitHub failure read as exempt", "return { exempt: false, reason: `GitHub's file list could not be read", "return { exempt: true, reason: `GitHub's file list could not be read"],
+  // Luna round 1: status, head binding and file kind.
+  ["change status unchecked", "if (!SOL_EXEMPT_STATUSES.includes(status)) {", "if (false) {"],
+  ["typechange status accepted", `["added", "modified", "removed", "renamed", "copied"]`, `["added", "modified", "removed", "renamed", "copied", "changed"]`],
+  ["comparison not bound to the head", `if (String(answer.head || "").toLowerCase() !== String(headSha).toLowerCase()) {`, "if (false) {"],
+  ["file-kind lookup skipped", "const problem = treeProblem({ files: answer.files, headSha, repoPath, gh });", "const problem = null;"],
+  ["file kind unchecked", `if (entry.type !== "blob" || entry.mode !== PLAIN_FILE_MODE) {`, "if (false) {"],
+  ["symlinks accepted (type checked, mode not)", `entry.type !== "blob" || entry.mode !== PLAIN_FILE_MODE`, `entry.type !== "blob"`],
+  ["executables accepted", "const PLAIN_FILE_MODE = 0o100644;", "const PLAIN_FILE_MODE = 0o100755;"],
+  ["file missing at the head accepted", "if (!entry) return", "if (!entry) continue; if (false) return"],
+  ["failed file-kind lookup read as fine", "return `GitHub could not confirm what kind", "return null; void `GitHub could not confirm what kind"],
+  ["file kinds read at the wrong commit", "`e${i}=${headSha}:${folder}`", "`e${i}=HEAD:${folder}`"],
   ["base commit id unchecked", `if (!SHA_RE.test(String(baseSha || "")) || !SHA_RE.test(String(headSha || ""))) {`, "if (false) {"],
 ];
 const mutantDir = mkdtempSync(path.join(tmpdir(), "sol-exempt-mutants-"));

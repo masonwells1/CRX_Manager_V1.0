@@ -15,6 +15,10 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
 - **Allow-list, fail closed.** Only `.md` files under eight `docs/` folders qualify. Sol is still
   required for a failed or odd GitHub answer, a comparison that is not exactly base..head, 250 or
   more files, an empty list, a rename or copy from a non-exempt name, and odd path spellings.
+- **Plain files only (Luna round 1).** GitHub's comparison names files but not their kind. So a
+  second lookup at the exact head (one GraphQL query) checks that every added or kept file is a
+  plain file. A symlink, submodule or executable named `x.md` needs Sol. The comparison must also
+  end at the head, and each change status must be a plain edit.
 - **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
   scripts and draft `.sql`). `claude-model-tuning.md`, `sol-exempt-paths.md` and
   `migration-history.md` stay excluded. A nested `CLAUDE.md`/`AGENTS.md` (both agents load these
@@ -27,17 +31,19 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
 
 ### Proof observed
 
-- `node .claude/hooks/sol-exempt-lib.test.mjs` passes 131 assertions. A docs-only pull request is
+- `node .claude/hooks/sol-exempt-lib.test.mjs` passes 161 assertions. A docs-only pull request is
   exempt. Adding any never-eligible file brings Sol back, including a hook, a migration, a `src/`
   file, `package.json`, a `docs/workflows/` file and a nested `CLAUDE.md`. So do renames, unreadable
-  answers and truncated lists. The readable doc and the module list exactly the same paths. Each of
-  34 deliberately loosened copies of the module (wider allow-list, dropped never entry, any file
-  type, case-sensitive matching, ignored old names, no truncation limit, unchecked comparison) fails
-  the contract.
+  answers, truncated lists, symlinks, submodules, executables, odd statuses and a comparison for
+  another head. The readable doc and the module list exactly the same paths. Each of 44
+  deliberately loosened copies of the module fails the contract: a wider allow-list, a dropped
+  never entry, any file type, case-sensitive matching, ignored old names, no truncation limit, and
+  unchecked comparison, status, file kind or head.
 - `production-action-guard.test.mjs` drives the Codex guard on a real temporary repository. A
   merge-ready docs-only PR with no proof is allowed. A hook, migration, `src/`, `package.json`,
-  `docs/workflows/`, `AGENTS.md` or nested `CLAUDE.md` file, a rename from a hook, a failed compare
-  call, a 300-file list or a behind head each bring Sol back. A missing CodeRabbit approval, a red
+  `docs/workflows/`, `AGENTS.md` or nested `CLAUDE.md` file, a rename from a hook, a symlink or
+  submodule named like a docs file, a failed compare call, a 300-file list, a comparison for another
+  head or a behind head each bring Sol back. A missing CodeRabbit approval, a red
   check, a missing pin, `--auto` or a head without its base are still refused by their own gates.
   Changing the wiring to "always exempt" or "never exempt" makes it fail (checked by hand).
 - **Real guard, real PRs (decision only, no merge).** The actual `pr-merge-guard.mjs` on PR #874
