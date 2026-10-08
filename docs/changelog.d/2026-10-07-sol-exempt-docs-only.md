@@ -27,8 +27,7 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
   rule-defining.
 - **Luna's base-move finding refuted with live evidence.** It said the base could move after the
   check. `main`'s branch protection has `strict: true` (up-to-date branches required), read
-  2026-10-08. A pull request whose base moved is therefore out of date, and GitHub refuses the merge.
-- **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
+  2026-10-08. A pull request whose base moved is therefore out of date, and GitHub refuses the merge.- **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
   scripts and draft `.sql`). `claude-model-tuning.md`, `sol-exempt-paths.md` and
   `migration-history.md` stay excluded. A nested `CLAUDE.md`/`AGENTS.md` (both agents load these
   as folder instructions) or a package file needs Sol in any folder. Matching ignores case.

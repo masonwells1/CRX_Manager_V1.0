@@ -1727,6 +1727,34 @@ try {
       "a submodule named like a docs file needs Sol");
     assert.equal(mergeDocs({ compare: compareOf(["docs/plans/2026-10-07-note.md"], { head: docs.base }) }).blocked, true,
       "a comparison that does not end at the PR's head needs Sol");
+
+    // The hook's time limit runs out INSIDE the exemption (Luna, round 3): the
+    // comparison is slow, so the file-kind lookup after it must not start. A hook
+    // killed mid-call would ALLOW, so the budget refuses the call and the merge is
+    // denied for time instead.
+    {
+      let fakeNow = 1_000_000;
+      const slowCompare = ghFor(docsPr, compareOf(["docs/plans/2026-10-07-note.md"]));
+      const ghCalls = [];
+      const verdict = evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: `gh pr merge 870 --squash${docsPin}` },
+        repoDir: docs.repo,
+        nowMs: now,
+        clock: () => fakeNow,
+        hardGateDeadlineMs: fakeNow + 60_000,
+        runGh: (args, cwd) => {
+          ghCalls.push(args);
+          const answer = slowCompare(args, cwd);
+          if (/\/compare\//.test(String(args[1]))) fakeNow += 58_000; // GitHub took 58s
+          return answer;
+        },
+      });
+      assert.ok(ghCalls.some((args) => /\/compare\//.test(String(args[1]))), "the exemption's comparison ran");
+      assert.ok(!ghCalls.some((args) => args[1] === "graphql"), "the file-kind lookup was refused: it could not finish before the deadline");
+      assert.equal(verdict.blocked, true, "a deadline reached inside the exemption denies the merge");
+      assert.match(verdict.reason, /time limit/, "with the time-limit denial, not an allow");
+    }
     assert.equal(mergeDocs({ compare: compareOf(Array.from({ length: 300 }, (_, i) => `docs/changelog.d/e-${i}.md`)) }).blocked, true,
       "a possibly truncated file list needs Sol");
     assert.equal(mergeDocs({ compare: compareOf(["docs/plans/2026-10-07-note.md"], { behind_by: 2, status: "diverged" }) }).blocked, true,
