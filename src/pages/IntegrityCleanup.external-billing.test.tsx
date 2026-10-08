@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 const state = vi.hoisted(() => ({
-  externalBilling: { data: [{ delivery_id: 'd1' }], error: null } as { data: unknown; error: unknown },
+  externalBilling: { data: new Set(['d1']), error: null } as { data: Set<string> | null; error: unknown },
 }));
 
 const DELIVERIES = [
@@ -39,8 +39,8 @@ vi.mock('../lib/db', () => {
         chainable(() => (table === 'deliveries' ? { data: DELIVERIES, error: null } : { data: [], error: null }))),
     },
     supabaseUntyped: {
-      from: vi.fn((table: string) =>
-        chainable(() => (table === 'delivery_external_billings' ? state.externalBilling : { data: [], error: null }))),
+      from: vi.fn(() =>
+        chainable(() => ({ data: [], error: null }))),
     },
     assertRpcResult: vi.fn((d: unknown) => d),
     checkMutationResult: vi.fn(),
@@ -51,6 +51,10 @@ vi.mock('../lib/db', () => {
 vi.mock('../lib/deliveryInvoiceCoverage', () => ({
   fetchActiveInvoiceCoveragePages: vi.fn(async () => ({ data: [], error: null })),
   activeInvoiceCoversDelivery: vi.fn(() => false),
+}));
+
+vi.mock('../lib/deliveryExternalBilling', () => ({
+  fetchBilledOutsideCrxDeliveryIds: vi.fn(async () => state.externalBilling),
 }));
 
 vi.mock('../lib/deliverySplitBilling', () => ({
@@ -74,7 +78,7 @@ import IntegrityCleanupPanel from '../components/integrity/IntegrityCleanupPanel
 
 describe('IntegrityCleanup — deliveries billed outside CRX', () => {
   beforeEach(() => {
-    state.externalBilling = { data: [{ delivery_id: 'd1' }], error: null };
+    state.externalBilling = { data: new Set(['d1']), error: null };
   });
 
   it('does not offer to invoice a delivery that was billed outside CRX', async () => {

@@ -58,9 +58,11 @@ describe('sanitizeError', () => {
 
   it('explains a refused change to a deleted order', () => {
     expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so its status cannot change (restore it first)'))
-      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed');
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
+    expect(sanitizeError('ORDER_DELETED_DELIVERIES_LOCKED: order ORD-1 is deleted, so its deliveries cannot change'))
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
     expect(sanitizeError('ORDER_DELETED_LINES_LOCKED: order ORD-1 is deleted'))
-      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed');
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
   });
 
   it('does not swallow a longer token that merely starts the same way', () => {

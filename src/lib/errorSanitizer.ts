@@ -156,8 +156,8 @@ export function sanitizeError(error: unknown): string {
     return 'No invoice was created. This delivery (or a delivery on this order) was already billed '
       + 'outside CRX, so CRX will not bill it again';
   }
-  if (/^ORDER_DELETED_(STATUS|LINES)_LOCKED(?::|$)/.test(message)) {
-    return 'Nothing was changed. This order has been deleted, so it cannot be changed';
+  if (/^ORDER_DELETED_(STATUS|LINES|DELIVERIES)_LOCKED(?::|$)/.test(message)) {
+    return 'Nothing was changed. This order has been deleted, so it cannot be changed or restored';
   }
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {

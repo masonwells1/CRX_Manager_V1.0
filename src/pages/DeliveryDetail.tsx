@@ -325,11 +325,13 @@ export default function DeliveryDetail() {
               .maybeSingle(),
           ]);
           if (externalBillingRes.error) {
+            // Fail OPEN like the split-billing read above: keep the button; the server's
+            // DELIVERY_BILLED_OUTSIDE_CRX guard still refuses, in plain English.
             Sentry.captureException(externalBillingRes.error, {
               extra: { context: 'load_delivery_external_billing', deliveryId: del.id },
             });
-            setBilledOutsideCrxReason(null);
-          } else {
+          } else if (signatureRouteIdRef.current === id) {
+            // Publish only if this response still belongs to the delivery on screen.
             setBilledOutsideCrxReason((externalBillingRes.data as { reason: string } | null)?.reason ?? null);
           }
           if (splitRes.error) {

@@ -62,6 +62,11 @@ leave these open:
   undelivered lines still reserving stock, and three of their deliveries are stuck `scheduled` /
   `in_progress` since April (DEL-00075, DEL-00077, DEL-00082). Whether that product is still owed is
   a business call; the data is internally consistent.
+- **Soft-deleted orders are frozen** (`20261007150050`): they cannot be un-deleted, their status,
+  lines and deliveries cannot change, and no delivery can be scheduled on them. So a completed
+  delivery on a deleted order (e.g. ORD-2026-0342, ORD-2026-0345) can no longer be cancelled or
+  voided — doing so would put reservations and stock back for an order that no longer exists. If one
+  ever genuinely needs undoing, do it through a reviewed migration.
 - **The never-posted draft CS-2026-0055** (ORD-2026-0186's May delivery DEL-00074) is left as is; its
   order's other delivery was recorded as billed in Chem Man.
 

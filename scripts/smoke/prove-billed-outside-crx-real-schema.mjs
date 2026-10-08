@@ -220,7 +220,11 @@ function seed() {
       ('ORD-2026-0185', '${CUSTOMER}', '2026-03-13', 'confirmed', false, '${REP}', '2026-04-28T15:00:00Z'),
       ('ORD-2026-0187', '${CUSTOMER}', '2026-03-13', 'confirmed', false, '${REP}', '2026-03-27T15:00:00Z'),
       ('ORD-2026-0345', '${CUSTOMER}', '2026-03-19', 'partially_fulfilled', false, '${REP}', '2026-04-28T15:00:00Z'),
-      ('PROVER-LIVE-OPEN', '${CUSTOMER}', current_date, 'confirmed', false, '${REP}', NULL);`);
+      ('PROVER-LIVE-OPEN', '${CUSTOMER}', current_date, 'confirmed', false, '${REP}', NULL);
+    -- The deleted test order still has a completed delivery (as live ORD-2026-0345 does).
+    INSERT INTO public.deliveries (delivery_number, order_id, customer_id, created_by, status, completed_at, signed_by)
+      SELECT 'PROVER-0345-D1', o.id, '${CUSTOMER}', '${MASON}', 'completed', '2026-03-20T15:00:00Z', '[PROVER]'
+        FROM public.orders o WHERE o.order_number = 'ORD-2026-0345';`);
   const line = (orderNumber, n, q) => `INSERT INTO public.order_items (order_id, product_id, product_name, price_per_unit, cost_per_unit,
       total_units_needed, total_price, profit, net_margin, quantity_delivered, quantity_remaining)
     SELECT o.id, '6f100000-0000-4000-8000-${String(n).padStart(12, '0')}', '[PROVER] line', 10, 6, ${q}, ${q} * 10, ${q} * 4, 40, 0, ${q}
@@ -340,9 +344,17 @@ ${lf(LOCK)}`);
   const deletedLines = "(SELECT id FROM public.orders WHERE order_number = 'ORD-2026-0181')";
   expectRefused(probe(`UPDATE public.order_items SET quantity_remaining = 0 WHERE order_id = ${deletedLines};`), /ORDER_DELETED_LINES_LOCKED/, 'edit a deleted order line');
   expectRefused(probe(`DELETE FROM public.order_items WHERE order_id = ${deletedLines};`), /ORDER_DELETED_LINES_LOCKED/, 'remove a deleted order line');
+  expectRefused(probe("UPDATE public.orders SET deleted_at = NULL WHERE order_number = 'ORD-2026-0181';"), /ORDER_DELETED_STATUS_LOCKED/, 'un-delete a deleted order');
+  expectRefused(probe("SELECT set_config('app.admin_override', 'true', true); UPDATE public.deliveries SET status = 'voided' WHERE delivery_number = 'PROVER-0345-D1';"), /ORDER_DELETED_DELIVERIES_LOCKED/, 'void a delivery of a deleted order');
+  expectRefused(probe(`INSERT INTO public.deliveries (delivery_number, order_id, customer_id, created_by, status, scheduled_date)
+    SELECT 'PROVER-NEW-ON-DELETED', o.id, '${CUSTOMER}', '${MASON}', 'scheduled', current_date FROM public.orders o WHERE o.order_number = 'ORD-2026-0345';`), /ORDER_DELETED_DELIVERIES_LOCKED/, 'schedule a delivery on a deleted order');
+  const voidMutant = probe("SELECT set_config('app.admin_override', 'true', true); DROP TRIGGER guard_deleted_order_deliveries_locked ON public.deliveries; UPDATE public.deliveries SET status = 'voided' WHERE delivery_number = 'PROVER-0345-D1'; SELECT 'voided';");
+  assert.equal(voidMutant.last, 'voided', `MUTATION: without the delivery lock the void should go through:\n${voidMutant.error}`);
+  const otherDelivery = probe("SELECT set_config('app.admin_override', 'true', true); UPDATE public.deliveries SET status = 'voided' WHERE id = '" + P2 + "'; SELECT 'voided';");
+  assert.equal(otherDelivery.last, 'voided', `a delivery on a live order must still change status:\n${otherDelivery.error}`);
   const liveEdit = probe("UPDATE public.order_items SET quantity_remaining = quantity_remaining WHERE order_id = (SELECT id FROM public.orders WHERE order_number = 'PROVER-LIVE-OPEN'); SELECT 'updated';");
   assert.equal(liveEdit.last, 'updated', `a live order line must stay editable:\n${liveEdit.error}`);
-  console.log("[prover] LOCK FILE: refuses to strand an open delivery; deleted orders' lines are frozen, live lines are not; the release waits for it");
+  console.log("[prover] LOCK FILE: refuses to strand an open delivery; deleted orders cannot be un-deleted and their lines and deliveries are frozen (without the delivery lock a void goes through), live ones are not; the release waits for it");
 
   // 1c + 5. Release file.
   const snapshot = prebookedSnapshot();

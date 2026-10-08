@@ -15,7 +15,8 @@
  *   - Tolerance of ±1 cent for floating-point rounding
  */
 
-import { supabase, supabaseUntyped } from './db';
+import { supabase } from './db';
+import { fetchBilledOutsideCrxDeliveryIds } from './deliveryExternalBilling';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -905,10 +906,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       supabase
         .from('invoice_items')
         .select('product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)'),
-      // delivery_external_billings is admin/sales-rep readable (RLS) and not yet in the generated types.
-      supabaseUntyped
-        .from('delivery_external_billings')
-        .select('delivery_id'),
+      fetchBilledOutsideCrxDeliveryIds(),
     ]);
 
     if (deliveryItemsRes.error) throw new Error(`Delivery items query failed: ${deliveryItemsRes.error.message}`);
@@ -930,10 +928,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       product_id: r.product_id as string,
       quantity: r.quantity as number,
     }));
-    const externallyBilledDeliveryIds = new Set(
-      ((externalBillingRes.data ?? []) as Array<{ delivery_id: string }>).map((r) => r.delivery_id),
-    );
-    const disc = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, externallyBilledDeliveryIds);
+    const disc = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, externalBillingRes.data ?? new Set());
 
     checks.push({
       name: 'Delivery-Invoice Quantity Parity',

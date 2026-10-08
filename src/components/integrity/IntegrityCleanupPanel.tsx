@@ -10,6 +10,7 @@ import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '..
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../../hooks/useUnresolvedIntent';
 import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../../lib/deliverySplitBilling';
+import { fetchBilledOutsideCrxDeliveryIds } from '../../lib/deliveryExternalBilling';
 
 interface NegativeInvRow {
   id: string;
@@ -303,7 +304,7 @@ export default function IntegrityCleanupPanel() {
           // the section rather than risk showing those rows.
           const [{ data: invoiceRows, error: coverageError }, externalBillingRes] = await Promise.all([
             fetchActiveInvoiceCoveragePages(orderIds),
-            supabaseUntyped.from('delivery_external_billings').select('delivery_id'),
+            fetchBilledOutsideCrxDeliveryIds(),
           ]);
           const invoiceCoverageError = coverageError ?? externalBillingRes.error;
           if (invoiceCoverageError) {
@@ -314,9 +315,7 @@ export default function IntegrityCleanupPanel() {
             setSplitBillingOrderIds(new Set());
           } else {
             const invRows = invoiceRows || [];
-            const billedOutsideCrx = new Set(
-              ((externalBillingRes.data ?? []) as Array<{ delivery_id: string }>).map((r) => r.delivery_id),
-            );
+            const billedOutsideCrx = externalBillingRes.data ?? new Set<string>();
             const filtered = allCompleted.filter((d) => !billedOutsideCrx.has(d.id) && !invRows.some((invoice) =>
               activeInvoiceCoversDelivery(invoice, d.id, d.order_id)
             ));
