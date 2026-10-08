@@ -87,6 +87,9 @@ rare cases are accepted rather than chased further:
   reminder can be skipped (Luna, 2026-10-07).
 - If the session anchor expires before the hook runs, the timestamp fallback can miss a
   commit that a rebase backdated during the session (Luna, 2026-10-07).
+- `git rebase --rebase-merges` logs a recreated merge as `rebase (merge)`, which the
+  authoring pattern does not list, so a hand change made while recreating a merge is not
+  counted (Luna, 2026-10-07).
 
 ### Proof observed
 
