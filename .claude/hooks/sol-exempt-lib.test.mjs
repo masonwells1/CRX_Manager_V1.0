@@ -350,7 +350,9 @@ ok(realLib.SOL_EXEMPT_PREFIXES.every((prefix) => PROPOSAL_ELIGIBLE.includes(pref
   "the allow-list is no wider than the folders Mason approved");
 
 // ── 3. mutation check: every widening or loosening is caught ─────────────────
-const source = readFileSync(LIB_PATH, "utf8");
+// A Windows checkout may store the module with CRLF line endings; the mutant
+// targets are written with "\n", so compare against one line-ending form.
+const source = readFileSync(LIB_PATH, "utf8").replace(/\r\n/g, "\n");
 const pushLibUrl = pathToFileURL(path.join(__dirname, "codex-push-lib.mjs")).href;
 const MUTANTS = [
   ["allow-list widened to all of docs/", `  "docs/changelog.d/",\n`, `  "docs/",\n  "docs/changelog.d/",\n`],
