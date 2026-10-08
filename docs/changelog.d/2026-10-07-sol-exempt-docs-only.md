@@ -27,9 +27,10 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
   rule-defining.
 - **Luna's base-move finding refuted with live evidence.** It said the base could move after the
   check. `main`'s branch protection has `strict: true` (up-to-date branches required), read
-  2026-10-08. A pull request whose base moved is therefore out of date, and GitHub refuses the merge.- **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
+  2026-10-08. A pull request whose base moved is therefore out of date, and GitHub refuses the merge.
+- **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
   scripts and draft `.sql`). `claude-model-tuning.md`, `sol-exempt-paths.md` and
-  `migration-history.md` stay excluded. A nested `CLAUDE.md`/`AGENTS.md` (both agents load these
+  `migration-history.md` stay excluded. A nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` (agents load these
   as folder instructions) or a package file needs Sol in any folder. Matching ignores case.
 - **Protected.** The module joined the Codex guard's protected-file list and the
   `.claude/settings.json` `ask` tier, like the other merge-guard libraries.
@@ -39,11 +40,11 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
 
 ### Proof observed
 
-- `node .claude/hooks/sol-exempt-lib.test.mjs` passes 170 assertions. A docs-only pull request is
+- `node .claude/hooks/sol-exempt-lib.test.mjs` passes 173 assertions. A docs-only pull request is
   exempt. Adding any never-eligible file brings Sol back, including a hook, a migration, a `src/`
   file, `package.json`, a `docs/workflows/` file and a nested `CLAUDE.md`. So do renames, unreadable
   answers, truncated lists, symlinks, submodules, executables, odd statuses and a comparison for
-  another head. The readable doc and the module list exactly the same paths. Each of 47
+  another head. The readable doc and the module list exactly the same paths. Each of 48
   deliberately loosened copies of the module fails the contract: a wider allow-list, a dropped
   never entry, any file type, case-sensitive matching, ignored old names, no truncation limit, and
   unchecked comparison, status, file kind or head.

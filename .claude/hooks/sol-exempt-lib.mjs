@@ -66,12 +66,15 @@ export const SOL_NEVER_EXEMPT_PATHS = Object.freeze([
 
 // Never exempt in ANY folder, compared case-insensitively. Claude Code and Codex
 // both load a nested CLAUDE.md / AGENTS.md as instructions for that folder, so
-// `docs/plans/CLAUDE.md` is agent configuration, not documentation.
+// `docs/plans/CLAUDE.md` is agent configuration, not documentation. GEMINI.md and
+// AGENT.md are the same kind of file for other agents.
 export const SOL_NEVER_EXEMPT_NAMES = Object.freeze([
   "AGENTS.md",
   "AGENTS.override.md",
+  "AGENT.md",
   "CLAUDE.md",
   "CLAUDE.local.md",
+  "GEMINI.md",
   "package.json",
   "package-lock.json",
   "npm-shrinkwrap.json",

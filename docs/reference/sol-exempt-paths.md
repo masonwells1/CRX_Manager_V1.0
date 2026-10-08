@@ -95,13 +95,16 @@ The last three go beyond the approved proposal, and each is stricter:
 
 These names need Sol in any folder. The match ignores case. Claude Code and Codex both
 load a nested `CLAUDE.md` or `AGENTS.md` as instructions for its folder, so
-`docs/plans/CLAUDE.md` is agent configuration, not documentation.
+`docs/plans/CLAUDE.md` is agent configuration, not documentation. `GEMINI.md` and `AGENT.md` are
+the same kind of file for other agents.
 
 <!-- sol-exempt:never-names -->
 - `AGENTS.md`
 - `AGENTS.override.md`
+- `AGENT.md`
 - `CLAUDE.md`
 - `CLAUDE.local.md`
+- `GEMINI.md`
 - `package.json`
 - `package-lock.json`
 - `npm-shrinkwrap.json`

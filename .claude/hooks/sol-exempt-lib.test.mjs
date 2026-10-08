@@ -74,6 +74,8 @@ const NEVER_EXEMPT = [
   "docs/manual/AGENTS.md",
   "docs/reports/claude.local.md",
   "docs/audits/agents.override.md",
+  "docs/plans/GEMINI.md",
+  "docs/research/agent.md",
   "docs/plans/package.json",
   // case spellings Windows checks out over a never-eligible file
   "docs/reference/Agent-Guardrails.md",
@@ -365,6 +367,7 @@ const MUTANTS = [
   ["never path dropped: src/", `  "src/",\n`, ""],
   ["never name dropped: CLAUDE.md", `  "CLAUDE.md",\n`, ""],
   ["never name dropped: AGENTS.md", `  "AGENTS.md",\n`, ""],
+  ["never name dropped: GEMINI.md", `  "GEMINI.md",\n`, ""],
   ["never name dropped: package.json", `  "package.json",\n`, ""],
   ["never rules made case-sensitive", "const lower = name.toLowerCase();", "const lower = name;"],
   ["never names checked at the root only", "const base = lower.slice(lower.lastIndexOf(\"/\") + 1);", "const base = lower;"],

@@ -5,7 +5,7 @@ Luna's third review of the documentation-only Sol exemption (see
 killed mid-call says nothing, and saying nothing allows. Refuted by design: both guards make those
 calls through their budgeted `gh`. It refuses any call that could end after the deadline, and the
 guard then denies for time. The Claude guard also runs under `merge-guard-launcher.mjs`, which
-denies a merge if the guard is still running. No code changed.
+denies a merge if the guard is still running. No guard logic changed; one test was added.
 
 ### Proof observed
 
