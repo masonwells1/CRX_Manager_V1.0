@@ -559,6 +559,31 @@ try {
   }
   pass++;
 
+  // ── Session 1w (Codex P2, PR #827): a BINARY conflict resolved by keeping
+  //    the first parent still counts as a hand resolution ──
+  // A binary conflict gets no markers, so git's automatic tree already holds
+  // the first parent's blob and the committed merge differs from it in nothing.
+  const binBranch = git(["rev-parse", "--abbrev-ref", "HEAD"], tmp).trim();
+  git(["checkout", "-qb", "bin-side"], tmp);
+  writeFileSync(path.join(tmp, "image.bin"), Buffer.from([0, 1, 2, 3, 0, 7, 7]));
+  git(["add", "image.bin"], tmp);
+  git(["commit", "-qm", "side binary"], tmp, { past: true });
+  git(["checkout", "-q", binBranch], tmp);
+  writeFileSync(path.join(tmp, "image.bin"), Buffer.from([0, 1, 2, 3, 0, 8, 8, 8]));
+  git(["add", "image.bin"], tmp);
+  git(["commit", "-qm", "our binary"], tmp, { past: true });
+  const s1w = "ledger-test-binary-ours";
+  snapshots.push(startSession(s1w));
+  const binMerge = spawnSync("git", ["-C", tmp, "merge", "--no-edit", "bin-side"], { encoding: "utf8", env: cleanEnv });
+  assert.notEqual(binMerge.status, 0, "setup: the binary merge must conflict");
+  git(["checkout", "--ours", "image.bin"], tmp);
+  git(["add", "image.bin"], tmp);
+  git(["commit", "-qm", "merge bin-side, kept our binary"], tmp);
+  const binaryOurs = runStopWrap(s1w, tmp);
+  assert.match(binaryOurs.stdout, LEDGER_WARNING,
+    "a binary conflict resolved by keeping the first parent, with no ledger entry, must still warn");
+  pass++;
+
   // ── Session 2: a real commit without any ledger → still warns ──
   const s2 = "ledger-test-real-commit";
   snapshots.push(startSession(s2));

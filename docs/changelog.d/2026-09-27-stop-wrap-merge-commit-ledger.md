@@ -94,7 +94,7 @@ rare cases are accepted rather than chased further:
 ### Proof observed
 
 - New `.claude/hooks/stop-wrap-ledger.test.mjs`, wired into `npm run test:correction-guards`.
-  It runs the real SessionStart and Stop hooks in a temp git repo with twenty-three cases:
+  It runs the real SessionStart and Stop hooks in a temp git repo with twenty-four cases:
   - a clean-merge-only session gets no warning;
   - a merge with a hand-written conflict resolution still warns;
   - a merge whose resolution adds a changelog entry counts as recorded;
@@ -128,6 +128,11 @@ rare cases are accepted rather than chased further:
     the session's own repository. `session-snapshot.mjs` now picks it the way
     `stop-wrap.mjs` does: the payload's `cwd`, then `CLAUDE_PROJECT_DIR`, then the
     process directory, normalized to the worktree root (CodeRabbit, PR #827);
+  - a binary conflict resolved by keeping the first parent, with no ledger entry, still
+    warns. A binary conflict gets no conflict markers, so git's automatic tree already
+    holds the first parent's file and the committed merge differs from it in nothing;
+    every path `merge-tree` reports as conflicted now counts as hand-resolved (Codex P2,
+    PR #827);
   - an unrecorded real commit still warns.
 - Each earlier version fails the case written for the gap that replaced it:
   - With no fix, the clean-merge case fails with the exact warning from 2026-09-26.
@@ -154,7 +159,8 @@ rare cases are accepted rather than chased further:
     The batched version took 0.18 seconds on the same input.
   - Without deleting the old anchor first, the resumed-session case fails.
   - With the snapshot taken in the hook's start directory, the other-repository case fails.
-- With the final version, all twenty-three cases pass. `npm run test:correction-guards`,
+  - Without the conflicted-path list, the binary-conflict case fails.
+- With the final version, all twenty-four cases pass. `npm run test:correction-guards`,
   `npm run check-doc-drift` and `npm run test:agent-workflows` pass.
 
 ### Not verified

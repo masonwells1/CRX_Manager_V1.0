@@ -536,16 +536,20 @@ const porcelainPath = (l) => {
 // --write-tree falls back to the combined diff, which catches resolutions that
 // differ from every parent.
 const isTreeId = (s) => /^[0-9a-f]{40,64}$/.test(s);
+// Returns { tree, conflicted }: the automatic merge's tree id and the paths it
+// could not merge. `-z --name-only --no-messages` prints the tree id, then
+// each conflicted path once, all NUL-separated.
 function mergeTreeOnce(args) {
   let out = "";
   try {
-    out = execFileSync("git", ["merge-tree", "--write-tree", ...args], {
+    out = execFileSync("git", ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", ...args], {
       encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir,
     });
   } catch (err) {
     out = typeof err?.stdout === "string" && err.status === 1 ? err.stdout : "";
   }
-  return out.split("\n")[0].trim();
+  const [tree = "", ...conflicted] = out.split("\0");
+  return { tree: tree.trim(), conflicted: conflicted.filter(Boolean) };
 }
 // Git's automatic octopus result for these parents, rebuilt the way the octopus
 // strategy builds it: fold each parent into the running tree, using its merge
@@ -560,7 +564,7 @@ function automaticOctopusTree(parents) {
   for (let i = 1; i < parents.length; i++) {
     const base = runGit(["merge-base", parents[i], ...parents.slice(0, i)]).split("\n")[0].trim();
     if (!base) return "";
-    tree = mergeTreeOnce([`--merge-base=${base}`, current, parents[i]]);
+    tree = mergeTreeOnce([`--merge-base=${base}`, current, parents[i]]).tree;
     if (!isTreeId(tree)) return "";
     if (i < parents.length - 1) {
       try {
@@ -578,8 +582,9 @@ function automaticOctopusTree(parents) {
 function authoredMergeFiles(sha, automaticOctopus = false) {
   const parents = runGit(["rev-list", "--parents", "-n", "1", sha]).trim().split(/\s+/).slice(1);
   let autoTree = "";
+  let conflicted = [];
   if (parents.length === 2) {
-    autoTree = mergeTreeOnce([parents[0], parents[1]]);
+    ({ tree: autoTree, conflicted } = mergeTreeOnce([parents[0], parents[1]]));
   } else if (parents.length > 2 && !automaticOctopus) {
     // An octopus rewritten by hand (`commit --amend`) is compared against the
     // automatic octopus of the same parents, like a two-parent merge. The
@@ -597,7 +602,13 @@ function authoredMergeFiles(sha, automaticOctopus = false) {
   if (isTreeId(autoTree)) {
     // -M: a resolution that only RENAMES an existing fragment reports "R", not
     // "A", so it cannot pass as a new record (Codex P2, PR #827 round 9).
-    return parse(runGit(["diff-tree", "-r", "-M", "--name-status", autoTree, sha]), (st) => st === "A");
+    const differing = parse(runGit(["diff-tree", "-r", "-M", "--name-status", autoTree, sha]), (st) => st === "A");
+    // Every path git could not merge was resolved by hand, even when the result
+    // matches the automatic tree: a binary conflict gets no markers, so the
+    // automatic tree already holds the first parent's blob and keeping "ours"
+    // differs in nothing (Codex P2, PR #827).
+    const seen = new Set(differing.map(({ path: p }) => p));
+    return [...differing, ...conflicted.filter((p) => !seen.has(p)).map((p) => ({ path: p, status: "M" }))];
   }
   // Combined-diff fallback: one status letter per parent; all-"A" = new file.
   const combined = parse(runGit(["diff-tree", "--cc", "--no-commit-id", "--name-status", "-r", sha]), (st) => /^A+$/.test(st));
