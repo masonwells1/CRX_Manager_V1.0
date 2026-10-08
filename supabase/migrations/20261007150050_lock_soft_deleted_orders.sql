@@ -39,14 +39,19 @@
 SET LOCAL lock_timeout = '5s';
 
 DO $preflight$
+DECLARE
+  v_blocking text;
 BEGIN
   -- An open delivery on a deleted order would be stranded: completing or cancelling it moves the
   -- order's status or its lines' quantities, which the locks below refuse. Restore or clean up
   -- such an order before applying.
-  IF EXISTS (SELECT 1 FROM public.deliveries d JOIN public.orders o ON o.id = d.order_id
-              WHERE o.deleted_at IS NOT NULL AND d.deleted_at IS NULL
-                AND d.status IN ('scheduled', 'in_progress')) THEN
-    RAISE EXCEPTION 'DELETED_ORDER_LOCK_PREFLIGHT: a soft-deleted order still has an open delivery';
+  SELECT string_agg(o.order_number || '/' || d.delivery_number, ', ' ORDER BY o.order_number, d.delivery_number)
+    INTO v_blocking
+    FROM public.deliveries d JOIN public.orders o ON o.id = d.order_id
+   WHERE o.deleted_at IS NOT NULL AND d.deleted_at IS NULL
+     AND d.status IN ('scheduled', 'in_progress');
+  IF v_blocking IS NOT NULL THEN
+    RAISE EXCEPTION 'DELETED_ORDER_LOCK_PREFLIGHT: a soft-deleted order still has an open delivery: %', v_blocking;
   END IF;
 END
 $preflight$;

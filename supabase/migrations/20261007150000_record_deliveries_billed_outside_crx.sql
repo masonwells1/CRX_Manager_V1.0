@@ -24,7 +24,9 @@
 --      first — the order every invoice writer and void_delivery use — so a concurrent invoice or
 --      void cannot slip in between the check and the commit.
 --   3. guard_invoice_delivery_billed_outside_crx (BEFORE INSERT/UPDATE OF delivery_id, order_id,
---      invoice_type on invoices), refusing with DELIVERY_BILLED_OUTSIDE_CRX:
+--      invoice_type, deleted_at, status on invoices; re-checked whenever an invoice is created, changes
+--      what it bills, or becomes active again after a soft-delete or void), refusing with
+--      DELIVERY_BILLED_OUTSIDE_CRX:
 --        * an invoice for a delivery recorded here (create_invoice_for_unbilled_delivery,
 --          complete_delivery's per-delivery invoice, the Delivery page's create-invoice action);
 --        * a WHOLE-ORDER invoice (delivery_id NULL) on an order with any recorded delivery —
@@ -182,10 +184,19 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Only an ACTIVE invoice bills anything (the coverage rule: not deleted, not voided/cancelled).
+  IF NEW.deleted_at IS NOT NULL OR NEW.status IN ('voided', 'cancelled') THEN
+    RETURN NEW;
+  END IF;
+
+  -- On UPDATE, re-check when what the invoice bills changes, or when it becomes active again
+  -- (restored from soft-delete or reactivated): a delivery may have been recorded meanwhile.
   IF TG_OP = 'UPDATE'
      AND NEW.delivery_id IS NOT DISTINCT FROM OLD.delivery_id
      AND NEW.order_id IS NOT DISTINCT FROM OLD.order_id
-     AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type THEN
+     AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type
+     AND OLD.deleted_at IS NULL
+     AND OLD.status NOT IN ('voided', 'cancelled') THEN
     RETURN NEW;
   END IF;
 
@@ -217,7 +228,7 @@ REVOKE ALL ON FUNCTION public.guard_invoice_delivery_billed_outside_crx() FROM P
 
 DROP TRIGGER IF EXISTS zz_guard_invoice_delivery_billed_outside_crx ON public.invoices;
 CREATE TRIGGER zz_guard_invoice_delivery_billed_outside_crx
-  BEFORE INSERT OR UPDATE OF delivery_id, order_id, invoice_type ON public.invoices
+  BEFORE INSERT OR UPDATE OF delivery_id, order_id, invoice_type, deleted_at, status ON public.invoices
   FOR EACH ROW EXECUTE FUNCTION public.guard_invoice_delivery_billed_outside_crx();
 
 -- 4. The dashboard's "Delivered, not invoiced" list (section 9) skips deliveries billed outside

@@ -305,6 +305,11 @@ async function main() {
   expectRefused(probe(invoiceInsert(P, null, 'misc_charge')), /DELIVERY_BILLED_OUTSIDE_CRX/, 'whole-order misc charge on its order');
   assert.equal(probe(invoiceInsert(P, P2)).last, 'inserted', 'an unrecorded delivery on the same order must still be billable');
   assert.equal(probe(invoiceInsert(R, null)).last, 'inserted', 'a whole-order invoice on an unrelated order must still work');
+  // A soft-deleted invoice does not block recording its delivery; restoring it afterwards must be refused.
+  expectRefused(probe(`INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status, deleted_at)
+      VALUES ('PROVER-INV-R1', '${MASON}', '${CUSTOMER}', '${R}', '${R1}', 'chemical_sale', 'draft', now());
+    INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${R1}', '[PROVER] billed elsewhere');
+    UPDATE public.invoices SET deleted_at = NULL WHERE invoice_number = 'PROVER-INV-R1';`), /DELIVERY_BILLED_OUTSIDE_CRX: this delivery was billed outside CRX/, 'restore an invoice for a recorded delivery');
   console.log('[prover] GUARD: CRX refuses to bill a recorded delivery or its whole order; other billing still works');
 
   const dashboard = probe(`SELECT (SELECT string_agg(x->>'primary_text', ',' ORDER BY x->>'primary_text') FROM jsonb_array_elements(public.get_dashboard_action_items(500)->'unbilled_deliveries') x);`, MASON).last;

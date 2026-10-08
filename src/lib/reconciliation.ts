@@ -701,19 +701,47 @@ export function checkCustomerARConsistency(
  * Returns a structured report with pass/fail per check and
  * details on every discrepancy found.
  */
+const RECONCILIATION_PAGE_SIZE = 1000;
+
+/**
+ * Read every row of a query, page by page. One request is silently cut off at
+ * the PostgREST row cap, and a ledger recompute over a partial read reports
+ * false discrepancies (or hides real ones). Each page must be ordered on a
+ * unique column; the loop advances by the rows actually returned, so a server
+ * cap below the requested page size still reads everything.
+ */
+export async function fetchAllRows<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<{ data: T[] | null; error: { message: string } | null }> {
+  const rows: T[] = [];
+  for (let from = 0; ;) {
+    const { data, error } = await fetchPage(from, from + RECONCILIATION_PAGE_SIZE - 1);
+    if (error) return { data: null, error };
+    const page = data ?? [];
+    if (page.length === 0) break;
+    rows.push(...page);
+    from += page.length;
+  }
+  return { data: rows, error: null };
+}
+
 export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   const checks: CheckResult[] = [];
 
   // ── Check 1: Order totals ──────────────────────────────────────
   try {
     const [ordersRes, itemsRes] = await Promise.all([
-      supabase
+      fetchAllRows((from, to) => supabase
         .from('orders')
         .select('id, order_number, total_price')
-        .not('total_price', 'is', null),
-      supabase
+        .not('total_price', 'is', null)
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('order_items')
-        .select('order_id, total_price'),
+        .select('order_id, total_price')
+        .order('id')
+        .range(from, to)),
     ]);
 
     if (ordersRes.error) throw new Error(`Orders query failed: ${ordersRes.error.message}`);
@@ -742,13 +770,17 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   // ── Check 2: Inventory ledger ──────────────────────────────────
   try {
     const [invRes, txRes] = await Promise.all([
-      supabase
+      fetchAllRows((from, to) => supabase
         .from('inventory')
         .select('id, product_id, quantity_available, products(product_name)')
-        .not('quantity_available', 'is', null),
-      supabase
+        .not('quantity_available', 'is', null)
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('inventory_transactions')
-        .select('id, product_id, transaction_type, quantity'),
+        .select('id, product_id, transaction_type, quantity')
+        .order('id')
+        .range(from, to)),
     ]);
 
     if (invRes.error) throw new Error(`Inventory query failed: ${invRes.error.message}`);
@@ -900,12 +932,16 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   // ── Check 7: Delivery-Invoice Quantity Parity ───────────────────
   try {
     const [deliveryItemsRes, invoiceItemsRes, externalBillingRes] = await Promise.all([
-      supabase
+      fetchAllRows((from, to) => supabase
         .from('delivery_items')
-        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id, status, deleted_at)'),
-      supabase
+        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id, status, deleted_at)')
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('invoice_items')
-        .select('product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)'),
+        .select('product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)')
+        .order('id')
+        .range(from, to)),
       fetchBilledOutsideCrxDeliveryIds(),
     ]);
 
@@ -953,13 +989,17 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   // ── Check 8: Pre-booked Inventory ───────────────────────────────
   try {
     const [invPrebookRes, orderItemsRes] = await Promise.all([
-      supabase
+      fetchAllRows((from, to) => supabase
         .from('inventory')
-        .select('id, product_id, quantity_prebooked'),
-      supabase
+        .select('id, product_id, quantity_prebooked')
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('order_items')
         .select('product_id, quantity_remaining, orders(status, deleted_at)')
-        .gt('quantity_remaining', 0),
+        .gt('quantity_remaining', 0)
+        .order('id')
+        .range(from, to)),
     ]);
 
     if (invPrebookRes.error) throw new Error(`Inventory prebook query failed: ${invPrebookRes.error.message}`);

@@ -9,8 +9,9 @@
 -- reservation. Since 20260721014858 the trigger guard_order_delivered_activity_cancel refuses to
 -- soft-delete any order that is not cancelled/voided (ORDER_MUST_BE_TERMINAL_BEFORE_DELETE), so this
 -- cannot recur; this file only clears the leftovers. 20261007150050 (applied first, required by the
--- preflight) freezes soft-deleted orders' status and lines, so cancel_order / void_order /
--- update_order_items can never release these reservations a second time.
+-- preflight) freezes soft-deleted orders — no un-delete, no status, line or delivery change — so
+-- cancel_order / void_order / update_order_items / cancel_delivery / void_delivery
+-- can never release these reservations a second time or put them back.
 --
 -- What it releases (read-only check 2026-10-07; the preflight re-proves every number):
 --   * ORD-2026-0181, 0184, 0185 (deleted 2026-04-28) and 0187 (deleted 2026-03-27), all still
@@ -93,7 +94,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.orders'::regclass
                   AND tgname = 'guard_deleted_order_status_locked' AND tgenabled = 'O' AND NOT tgisinternal)
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.order_items'::regclass
-                  AND tgname = 'guard_deleted_order_lines_locked' AND tgenabled = 'O' AND NOT tgisinternal) THEN
+                  AND tgname = 'guard_deleted_order_lines_locked' AND tgenabled = 'O' AND NOT tgisinternal)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.deliveries'::regclass
+                  AND tgname = 'guard_deleted_order_deliveries_locked' AND tgenabled = 'O' AND NOT tgisinternal) THEN
     RAISE EXCEPTION 'RELEASE_PREFLIGHT: apply 20261007150050_lock_soft_deleted_orders first';
   END IF;
   IF (SELECT count(*) FROM crx_release_lines WHERE order_number <> 'ORD-2026-0345') <> 31

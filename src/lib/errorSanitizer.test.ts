@@ -57,7 +57,7 @@ describe('sanitizeError', () => {
   });
 
   it('explains a refused change to a deleted order', () => {
-    expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so its status cannot change (restore it first)'))
+    expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so it cannot be restored or have its status changed'))
       .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
     expect(sanitizeError('ORDER_DELETED_DELIVERIES_LOCKED: order ORD-1 is deleted, so its deliveries cannot change'))
       .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');

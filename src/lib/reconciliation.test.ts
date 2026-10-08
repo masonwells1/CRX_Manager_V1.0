@@ -11,6 +11,7 @@ import {
   checkReturnCreditLinkage,
   checkCustomerARConsistency,
   PREBOOK_ONLY_ADJUSTMENT_TX_IDS,
+  fetchAllRows,
   type OrderRow,
   type OrderItemRow,
   type InventoryRow,
@@ -119,6 +120,25 @@ describe('checkOrderTotals', () => {
 });
 
 // ── Check 2: Inventory Ledger ───────────────────────────────────
+
+describe('fetchAllRows', () => {
+  it('reads past a server row cap smaller than the page size', async () => {
+    const pages = [[1, 2], [3], []];
+    const calls: Array<[number, number]> = [];
+    const result = await fetchAllRows(async (from, to) => {
+      calls.push([from, to]);
+      return { data: pages[calls.length - 1], error: null };
+    });
+    expect(result).toEqual({ data: [1, 2, 3], error: null });
+    expect(calls).toEqual([[0, 999], [2, 1001], [3, 1002]]);
+  });
+
+  it('returns the error instead of a partial read', async () => {
+    let n = 0;
+    const result = await fetchAllRows(async () => (n++ === 0 ? { data: [1], error: null } : { data: null, error: { message: 'boom' } }));
+    expect(result).toEqual({ data: null, error: { message: 'boom' } });
+  });
+});
 
 describe('checkInventoryLedger', () => {
   it('keeps the go-live copy of the prebooked-only row list identical', () => {
