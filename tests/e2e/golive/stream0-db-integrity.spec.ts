@@ -100,7 +100,7 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
     }));
 
     const txResult = await supabaseRest(
-      page, 'GET', 'inventory_transactions?select=product_id,transaction_type,quantity&limit=10000',
+      page, 'GET', 'inventory_transactions?select=id,product_id,transaction_type,quantity&limit=10000',
     );
     const transactions = asArray<InventoryTransactionRow>(txResult, 'inventory_transactions');
 
@@ -191,29 +191,41 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
 
   test('DB7: Delivered qty matches invoiced qty per order+product', async () => {
     const diResult = await supabaseRest(
-      page, 'GET', 'delivery_items?select=delivery_id,product_id,quantity_delivered,deliveries(order_id)&limit=5000',
+      page, 'GET', 'delivery_items?select=delivery_id,product_id,quantity_delivered,deliveries(order_id,status)&limit=5000',
     );
     const deliveryItemsRaw = asArray<Record<string, unknown>>(diResult, 'delivery_items');
 
     const deliveryItems: DeliveryItemCheckRow[] = deliveryItemsRaw.map((r) => ({
       order_id: (r.deliveries as Record<string, unknown>)?.order_id as string,
+      delivery_id: r.delivery_id as string,
+      delivery_status: (r.deliveries as Record<string, unknown>)?.status as string,
       product_id: r.product_id as string,
       quantity_delivered: r.quantity_delivered as number,
     }));
 
+    // Deliveries billed outside CRX (e.g. in Chem Man) are not expected to have a CRX invoice.
+    const externalResult = await supabaseRest(
+      page, 'GET', 'delivery_external_billings?select=delivery_id&limit=5000',
+    );
+    const externallyBilled = new Set(
+      asArray<{ delivery_id: string }>(externalResult, 'delivery_external_billings').map((r) => r.delivery_id),
+    );
+
     const iiResult = await supabaseRest(
-      page, 'GET', 'invoice_items?select=product_id,quantity,invoices(order_id,invoice_type)&limit=5000',
+      page, 'GET', 'invoice_items?select=product_id,quantity,invoices(order_id,invoice_type,status,deleted_at)&limit=5000',
     );
     const invoiceItemsRaw = asArray<Record<string, unknown>>(iiResult, 'invoice_items');
 
     const invoiceItems: InvoiceItemCheckRow[] = invoiceItemsRaw.map((r) => ({
       order_id: (r.invoices as Record<string, unknown>)?.order_id as string,
       invoice_type: (r.invoices as Record<string, unknown>)?.invoice_type as string,
+      invoice_status: (r.invoices as Record<string, unknown>)?.status as string,
+      invoice_deleted_at: (r.invoices as Record<string, unknown>)?.deleted_at as string | null,
       product_id: r.product_id as string,
       quantity: r.quantity as number,
     }));
 
-    const discrepancies = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
+    const discrepancies = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, externallyBilled);
 
     // Log discrepancies as go-live awareness — mock/seed data often has
     // deliveries created without corresponding invoices (or vice versa).
@@ -235,11 +247,13 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
     const inventory = asArray<InventoryPrebookRow>(invResult, 'inventory (prebooked)');
 
     const oiResult = await supabaseRest(
-      // Terminal orders keep a non-zero quantity_remaining today (see the
+      // Same rule as src/lib/reconciliation.ts: only live open orders (confirmed or
+      // partially_fulfilled, not soft-deleted) hold reservations. Terminal orders keep a
+      // non-zero quantity_remaining today (see the
       // cancel_order finding in docs/audits/2026-08-08-foundation-ultra-review.md),
       // so an unfiltered sum reports remainders no open order is actually holding.
-      page, 'GET', 'order_items?select=product_id,quantity_remaining,orders!inner(status)'
-        + '&quantity_remaining=gt.0&orders.status=not.in.(cancelled,voided)&limit=5000',
+      page, 'GET', 'order_items?select=product_id,quantity_remaining,orders!inner(status,deleted_at)'
+        + '&quantity_remaining=gt.0&orders.status=in.(confirmed,partially_fulfilled)&orders.deleted_at=is.null&limit=5000',
     );
     const orderItems = asArray<OrderItemRemainingRow>(oiResult, 'order_items (remaining)');
 

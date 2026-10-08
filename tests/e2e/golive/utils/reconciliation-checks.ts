@@ -36,7 +36,18 @@ export interface InventoryRow {
   quantity_available: number;
 }
 
+// Mirror of src/lib/reconciliation.ts: historical prebooked-only `adjusted` rows the ledger
+// recompute must skip (docs/workflows/INVENTORY_RULES.md).
+export const PREBOOK_ONLY_ADJUSTMENT_TX_IDS: ReadonlySet<string> = new Set([
+  '14880dd6-9324-4a6e-a1fb-f951b87ad090',
+  '23a36a20-db16-42a1-8346-ba9bd97894eb',
+  'd6b92523-5bc2-43d5-a566-2b8399596a9b',
+  '86fc5133-776e-463c-ac6b-f67bbf1f76ae',
+  '386a1ce0-1cf7-422e-86f9-55cd105cc93f',
+]);
+
 export interface InventoryTransactionRow {
+  id?: string;
   product_id: string;
   transaction_type: 'received' | 'booked' | 'delivered' | 'returned' | 'adjusted' | 'transferred';
   quantity: number;
@@ -171,6 +182,7 @@ export function checkInventoryLedger(
 ): Discrepancy[] {
   const expectedByProduct = new Map<string, number>();
   for (const tx of transactions) {
+    if (tx.id && PREBOOK_ONLY_ADJUSTMENT_TX_IDS.has(tx.id)) continue;
     const current = expectedByProduct.get(tx.product_id) ?? 0;
     let delta: number;
     switch (tx.transaction_type) {
