@@ -10,6 +10,7 @@ import {
   checkPrebookedInventory,
   checkReturnCreditLinkage,
   checkCustomerARConsistency,
+  PREBOOK_ONLY_ADJUSTMENT_TX_IDS,
   type OrderRow,
   type OrderItemRow,
   type InventoryRow,
@@ -28,6 +29,7 @@ import {
 } from './reconciliation';
 import {
   checkDeliveryInvoiceQuantityParity as checkGoLiveDeliveryInvoiceQuantityParity,
+  PREBOOK_ONLY_ADJUSTMENT_TX_IDS as GOLIVE_PREBOOK_ONLY_ADJUSTMENT_TX_IDS,
 } from '../../tests/e2e/golive/utils/reconciliation-checks';
 
 // ── Check 1: Order Totals ───────────────────────────────────────
@@ -119,6 +121,11 @@ describe('checkOrderTotals', () => {
 // ── Check 2: Inventory Ledger ───────────────────────────────────
 
 describe('checkInventoryLedger', () => {
+  it('keeps the go-live copy of the prebooked-only row list identical', () => {
+    expect([...GOLIVE_PREBOOK_ONLY_ADJUSTMENT_TX_IDS].sort()).toEqual([...PREBOOK_ONLY_ADJUSTMENT_TX_IDS].sort());
+    expect(PREBOOK_ONLY_ADJUSTMENT_TX_IDS.size).toBe(5);
+  });
+
   it('skips the historical prebooked-only adjusted rows when recomputing stock', () => {
     const inventory: InventoryRow[] = [
       { id: 'inv1', product_id: 'p1', product_name: 'Ammonium Sulfate', quantity_available: 100 },
@@ -759,6 +766,14 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
     expect(result).toHaveLength(1);
     expect(result[0].expected).toBe(6);
     expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, [], new Set(['d1']))).toEqual(result);
+  });
+
+  it('ignores a soft-deleted delivery', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10, delivery_id: 'd1', delivery_status: 'completed', delivery_deleted_at: '2026-04-01T00:00:00Z' },
+    ];
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, [])).toEqual([]);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, [])).toEqual([]);
   });
 
   it('counts only completed deliveries and only active invoices', () => {

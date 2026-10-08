@@ -37,6 +37,34 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-10-07 (owner: Mason) — what the 2026-10-01 integrity-report fixes leave behind
+
+The fixes for PR #861's failing checks (`20261007150000`, `20261007150050`, `20261007150100`,
+`20261007150200`, NOT APPLIED when written; see `docs/reference/migration-history.md`) deliberately
+leave these open:
+
+- **Check 2 still flags five products until counted** (Mason chose no physical count on 2026-10-07):
+  Black Strap Molasses Sugar Tote (CRX 2,000; the March receipt-reversal bug, fixed 2026-06-10, left
+  ~1,325 on Tote that belongs on Bulk, which reads −1,325), Start Right 2.0 Tote (+530 from an
+  untracked edit made outside the app in March; cause unprovable), and 2,4D Amine 2.5 Gal and Bulk
+  and Start Right 2.5 Gal (early-March opening stock entered with no ledger row). Fixing any of them
+  needs a count; the Black Strap and Start Right Tote fixes would change live stock.
+- **Returns and voids against a delivery billed in Chem Man stay allowed** (Mason, 2026-10-07). A CRX
+  return credit for such a delivery credits a sale that CRX never billed; handle the credit in Chem
+  Man / the books instead. Voiding such a delivery restocks it, and its record stays; a voided
+  recorded delivery still blocks whole-order CRX billing of its order (fail-closed).
+- **The Order page and Orders list still offer whole-order invoicing on those 33 orders.** The server
+  refuses with `DELIVERY_BILLED_OUTSIDE_CRX`, now shown in plain English, so no double bill.
+- **Reads of `delivery_external_billings` and the integrity checks' other table reads are not
+  paginated.** Fine at today's size (53 recorded deliveries); past the PostgREST row cap the reads
+  would truncate. The server still refuses to invoice any recorded delivery.
+- **Six spring orders remain `partially_fulfilled`** (ORD-2026-0161/0162/0172/0176/0331/0343) with
+  undelivered lines still reserving stock, and three of their deliveries are stuck `scheduled` /
+  `in_progress` since April (DEL-00075, DEL-00077, DEL-00082). Whether that product is still owed is
+  a business call; the data is internally consistent.
+- **The never-posted draft CS-2026-0055** (ORD-2026-0186's May delivery DEL-00074) is left as is; its
+  order's other delivery was recorded as billed in Chem Man.
+
 ## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
 
 **Resolved 2026-10-02:** all four applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Post-apply read-only checks passed (see the top capture in `docs/reference/migration-history.md`), and the daily cross-season invoice check returned zero rows. The text below is kept as history.

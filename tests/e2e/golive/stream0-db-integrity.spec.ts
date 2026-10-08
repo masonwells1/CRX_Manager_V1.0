@@ -191,7 +191,7 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
 
   test('DB7: Delivered qty matches invoiced qty per order+product', async () => {
     const diResult = await supabaseRest(
-      page, 'GET', 'delivery_items?select=delivery_id,product_id,quantity_delivered,deliveries(order_id,status)&limit=5000',
+      page, 'GET', 'delivery_items?select=delivery_id,product_id,quantity_delivered,deliveries(order_id,status,deleted_at)&limit=5000',
     );
     const deliveryItemsRaw = asArray<Record<string, unknown>>(diResult, 'delivery_items');
 
@@ -199,6 +199,7 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
       order_id: (r.deliveries as Record<string, unknown>)?.order_id as string,
       delivery_id: r.delivery_id as string,
       delivery_status: (r.deliveries as Record<string, unknown>)?.status as string,
+      delivery_deleted_at: (r.deliveries as Record<string, unknown>)?.deleted_at as string | null,
       product_id: r.product_id as string,
       quantity_delivered: r.quantity_delivered as number,
     }));

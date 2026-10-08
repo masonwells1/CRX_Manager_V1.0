@@ -1,5 +1,6 @@
 -- STATUS: NOT APPLIED.
--- DATA migration (owner-approved in chat, 2026-10-07): record 53 completed spring 2026 deliveries on
+-- ONE-SHOT DATA migration (owner-approved in chat, 2026-10-07; registered in
+-- supabase/baselines/one-shot-migrations.json): record 53 completed spring 2026 deliveries on
 -- 33 orders as billed outside CRX. Mason confirmed they were billed in Chem Man, CRX's predecessor,
 -- before CRX invoicing was in use.
 --
@@ -14,7 +15,8 @@
 -- row at insert time: completed, not deleted, on an order, and not covered by an active CRX invoice.
 -- None of these orders has field allocations (checked 2026-10-07), so none is a split-billed order.
 --
--- Re-runnable: ON CONFLICT DO NOTHING, then the postflight asserts all 53 are recorded.
+-- Re-runnable while all 53 deliveries are still completed: ON CONFLICT DO NOTHING, then the
+-- postflight asserts all 53 are recorded (after a void, a re-run fails closed at the preflight).
 -- Rollback (new reviewed migration): DELETE FROM public.delivery_external_billings WHERE delivery_id
 -- IN (the 53 below). That only removes the records; nothing else was changed.
 -- ORDERING: strictly after 20261007150000_record_deliveries_billed_outside_crx.
@@ -84,6 +86,11 @@ BEGIN
   IF to_regclass('public.delivery_external_billings') IS NULL THEN
     RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: apply 20261007150000_record_deliveries_billed_outside_crx first';
   END IF;
+  -- The per-row safety checks live in this guard; refuse if it is not in place.
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.delivery_external_billings'::regclass
+                  AND tgname = 'trg_guard_delivery_external_billing' AND tgenabled = 'O' AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: the recording guard trigger is missing or disabled';
+  END IF;
   IF (SELECT count(*) FROM crx_chem_man_deliveries) <> 53
      OR (SELECT count(DISTINCT order_number) FROM crx_chem_man_deliveries) <> 33 THEN
     RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: expected 53 deliveries on 33 orders';
@@ -96,10 +103,23 @@ BEGIN
        WHERE d.status = 'completed' AND d.deleted_at IS NULL AND o.deleted_at IS NULL) <> 53 THEN
     RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: a listed delivery is missing, not completed, deleted, or on a different order';
   END IF;
+  -- None of these orders may be split-billed: recording a delivery of a split-billed order would
+  -- leave its remaining deliveries unbillable in CRX (see 20261007150000's header).
+  IF EXISTS (
+    SELECT 1
+      FROM crx_chem_man_deliveries c
+      JOIN public.orders o ON o.order_number = c.order_number
+     WHERE o.needs_split_billing IS TRUE
+        OR EXISTS (SELECT 1 FROM public.order_item_field_allocations a
+                     JOIN public.order_items oi ON oi.id = a.order_item_id
+                    WHERE oi.order_id = o.id)
+  ) THEN
+    RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: a listed order is split-billed; re-check before recording';
+  END IF;
   -- The recorder is Mason's admin profile.
   IF NOT EXISTS (SELECT 1 FROM public.profiles
-                  WHERE id = '22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f' AND role = 'admin') THEN
-    RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: recording profile is not an admin';
+                  WHERE id = '22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f' AND role = 'admin' AND is_active) THEN
+    RAISE EXCEPTION 'CHEM_MAN_MARK_PREFLIGHT: recording profile is not an active admin';
   END IF;
 END
 $preflight$;

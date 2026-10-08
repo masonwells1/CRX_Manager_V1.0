@@ -50,6 +50,19 @@ describe('sanitizeError', () => {
     expect(shown).toBe('No invoice was changed. The filed season of a field-application invoice cannot be changed');
   });
 
+  it('explains a refused invoice for a delivery billed outside CRX', () => {
+    const shown = sanitizeError('DELIVERY_BILLED_OUTSIDE_CRX: this delivery was billed outside CRX, so CRX will not invoice it again');
+    expect(shown).not.toContain('DELIVERY_BILLED_OUTSIDE_CRX');
+    expect(shown).toBe('No invoice was created. This delivery (or a delivery on this order) was already billed outside CRX, so CRX will not bill it again');
+  });
+
+  it('explains a refused change to a deleted order', () => {
+    expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so its status cannot change (restore it first)'))
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed');
+    expect(sanitizeError('ORDER_DELETED_LINES_LOCKED: order ORD-1 is deleted'))
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed');
+  });
+
   it('does not swallow a longer token that merely starts the same way', () => {
     expect(sanitizeError('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED_SOMETHING_ELSE'))
       .toBe('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED_SOMETHING_ELSE');

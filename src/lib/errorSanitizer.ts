@@ -150,6 +150,15 @@ export function sanitizeError(error: unknown): string {
   if (/^INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED(?::|$)/.test(message)) {
     return 'No invoice was changed. The filed season of a field-application invoice cannot be changed';
   }
+  // delivery_external_billings guard (20261007150000): the delivery, or a delivery on this order,
+  // was already billed outside CRX (e.g. in Chem Man), so a CRX invoice would bill it twice.
+  if (/^DELIVERY_BILLED_OUTSIDE_CRX(?::|$)/.test(message)) {
+    return 'No invoice was created. This delivery (or a delivery on this order) was already billed '
+      + 'outside CRX, so CRX will not bill it again';
+  }
+  if (/^ORDER_DELETED_(STATUS|LINES)_LOCKED(?::|$)/.test(message)) {
+    return 'Nothing was changed. This order has been deleted, so it cannot be changed';
+  }
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {
     if (pattern.test(message)) {

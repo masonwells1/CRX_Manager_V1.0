@@ -37,6 +37,7 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATIONS = path.join(ROOT, 'supabase', 'migrations');
 const SCHEMA = path.join(MIGRATIONS, '20261007150000_record_deliveries_billed_outside_crx.sql');
+const LOCK = path.join(MIGRATIONS, '20261007150050_lock_soft_deleted_orders.sql');
 const MARK = path.join(MIGRATIONS, '20261007150100_mark_spring_2026_deliveries_billed_in_chem_man.sql');
 const RELEASE = path.join(MIGRATIONS, '20261007150200_release_reservations_of_deleted_spring_orders.sql');
 const DASHBOARD = 'public.get_dashboard_action_items(integer)';
@@ -46,6 +47,7 @@ const PARKED = new Set(['20260914100700_customer_document_bytes_server_only.sql'
 
 const MASON = '22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f'; // the recorder both data files pin
 const REP = '6f000000-0000-4000-8000-00000000000b';
+const DRIVER = '6f000000-0000-4000-8000-00000000000d';
 const CUSTOMER = '6f000000-0000-4000-8000-0000000000c1';
 const TEST_INVENTORY = '768ff8b5-dd45-4efa-b0b5-48b2c91036f2';
 // Behaviour fixture: order P (deliveries P1, P2 completed; P3 scheduled), order Q (completed
@@ -118,12 +120,12 @@ function ready() {
   throw new Error('disposable PostgreSQL did not become ready');
 }
 function selected() {
-  const r = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], { cwd: ROOT, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs', '--include-one-shot'], { cwd: ROOT, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(r.stderr);
   const all = r.stdout.split(/\r?\n/).filter((x) => x.startsWith('supabase/migrations/')).map((x) => path.join(ROOT, x));
   const at = all.indexOf(SCHEMA);
   assert.ok(at >= 0, 'the schema candidate must be selected for post-baseline replay');
-  assert.deepEqual(all.slice(at, at + 3), [SCHEMA, MARK, RELEASE], 'the three candidates must replay consecutively, in order');
+  assert.deepEqual(all.slice(at, at + 4), [SCHEMA, LOCK, MARK, RELEASE], 'the four candidates must replay consecutively, in order');
   const before = all.slice(0, at);
   for (const name of PARKED) {
     const file = before.find((f) => path.basename(f) === name);
@@ -182,11 +184,13 @@ function seed() {
   const sql = [`
     INSERT INTO auth.users (id,email,raw_user_meta_data) VALUES
       ('${MASON}','billed-outside-prover-admin@example.invalid','{"full_name":"[PROVER] Admin","role":"admin"}'::jsonb),
-      ('${REP}','billed-outside-prover-rep@example.invalid','{"full_name":"[PROVER] Rep","role":"sales_rep"}'::jsonb)
+      ('${REP}','billed-outside-prover-rep@example.invalid','{"full_name":"[PROVER] Rep","role":"sales_rep"}'::jsonb),
+      ('${DRIVER}','billed-outside-prover-driver@example.invalid','{"full_name":"[PROVER] Driver","role":"driver"}'::jsonb)
     ON CONFLICT DO NOTHING;
     INSERT INTO public.profiles (id,email,full_name,role,is_active) VALUES
       ('${MASON}','billed-outside-prover-admin@example.invalid','[PROVER] Admin','admin',true),
-      ('${REP}','billed-outside-prover-rep@example.invalid','[PROVER] Rep','sales_rep',true)
+      ('${REP}','billed-outside-prover-rep@example.invalid','[PROVER] Rep','sales_rep',true),
+      ('${DRIVER}','billed-outside-prover-driver@example.invalid','[PROVER] Driver','driver',true)
     ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;
     INSERT INTO public.customers (id, farm_name, assigned_sales_rep, is_active) VALUES ('${CUSTOMER}', '[PROVER] Farm', '${REP}', true);
     ALTER TABLE public.products DISABLE TRIGGER trigger_y_require_governed_product_pricing;
@@ -278,7 +282,7 @@ async function main() {
   console.log('[prover] seeded 33 spring orders / 53 deliveries, the deleted-order reservations, and the behaviour fixture');
 
   // 1a + 2. Schema file.
-  stageText('schema.sql', lf(SCHEMA)); stageText('mark.sql', lf(MARK)); stageText('release.sql', lf(RELEASE));
+  stageText('schema.sql', lf(SCHEMA)); stageText('lock.sql', lf(LOCK)); stageText('mark.sql', lf(MARK)); stageText('release.sql', lf(RELEASE));
   const schemaApplied = apply('schema.sql', true);
   assert.equal(schemaApplied.status, 0, `the schema file did not apply:\n${schemaApplied.output}`);
 
@@ -288,8 +292,9 @@ async function main() {
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${P1}', 'x');`, MASON), /permission denied/, 'admin API write');
   psql(`INSERT INTO public.delivery_external_billings (delivery_id, reason, recorded_by) VALUES ('${P1}', '[PROVER] billed elsewhere', '${MASON}');`);
   assert.equal(probe('SELECT count(*) FROM public.delivery_external_billings;', MASON).last, '1', 'an admin must read the record');
-  assert.equal(probe('SELECT count(*) FROM public.delivery_external_billings;', REP).last, '0', 'a sales rep must not read the record');
-  console.log('[prover] RECORDING: only completed, uninvoiced deliveries; no API writes; admin-only reads');
+  assert.equal(probe('SELECT count(*) FROM public.delivery_external_billings;', REP).last, '1', 'a sales rep must read the record (Office Cockpit)');
+  assert.equal(probe('SELECT count(*) FROM public.delivery_external_billings;', DRIVER).last, '0', 'a driver must not read the record');
+  console.log('[prover] RECORDING: only completed, uninvoiced deliveries; no API writes; admins and sales reps read, drivers do not');
 
   expectRefused(probe(invoiceInsert(P, P1)), /DELIVERY_BILLED_OUTSIDE_CRX: this delivery was billed outside CRX/, 'invoice a recorded delivery');
   expectRefused(probe(invoiceInsert(P, null)), /DELIVERY_BILLED_OUTSIDE_CRX: this order has deliveries billed outside CRX/, 'whole-order invoice on its order');
@@ -320,6 +325,25 @@ async function main() {
   assert.equal(recordedCount(), String(Number(before) + 53), 'a re-apply changed the records');
   console.log('[prover] MARK: exactly 53 deliveries recorded; loose run refused; re-apply is a no-op');
 
+  // 4b. Deleted-order lock (schema). The release refuses until it is installed.
+  const early = apply('release.sql', true);
+  assert.notEqual(early.status, 0, 'the release applied before the deleted-order lock');
+  assert.match(early.output, /apply 20261007150050_lock_soft_deleted_orders first/, `wrong early-release refusal:\n${early.output}`);
+  stageText('lock-bad.sql', `INSERT INTO public.deliveries (delivery_number, order_id, customer_id, created_by, status, scheduled_date)
+    SELECT 'PROVER-STRANDED', o.id, '${CUSTOMER}', '${MASON}', 'scheduled', current_date FROM public.orders o WHERE o.order_number = 'ORD-2026-0181';
+${lf(LOCK)}`);
+  const stranded = apply('lock-bad.sql', true);
+  assert.notEqual(stranded.status, 0, 'the lock installed over a deleted order with an open delivery');
+  assert.match(stranded.output, /DELETED_ORDER_LOCK_PREFLIGHT: a soft-deleted order still has an open delivery/, `wrong stranded-delivery refusal:\n${stranded.output}`);
+  const locked = apply('lock.sql', true);
+  assert.equal(locked.status, 0, `the lock file did not apply:\n${locked.output}`);
+  const deletedLines = "(SELECT id FROM public.orders WHERE order_number = 'ORD-2026-0181')";
+  expectRefused(probe(`UPDATE public.order_items SET quantity_remaining = 0 WHERE order_id = ${deletedLines};`), /ORDER_DELETED_LINES_LOCKED/, 'edit a deleted order line');
+  expectRefused(probe(`DELETE FROM public.order_items WHERE order_id = ${deletedLines};`), /ORDER_DELETED_LINES_LOCKED/, 'remove a deleted order line');
+  const liveEdit = probe("UPDATE public.order_items SET quantity_remaining = quantity_remaining WHERE order_id = (SELECT id FROM public.orders WHERE order_number = 'PROVER-LIVE-OPEN'); SELECT 'updated';");
+  assert.equal(liveEdit.last, 'updated', `a live order line must stay editable:\n${liveEdit.error}`);
+  console.log("[prover] LOCK FILE: refuses to strand an open delivery; deleted orders' lines are frozen, live lines are not; the release waits for it");
+
   // 1c + 5. Release file.
   const snapshot = prebookedSnapshot();
   const looseRelease = applyLoose('release.sql');
@@ -338,7 +362,25 @@ async function main() {
   assert.match(again.output, /RELEASE_PREFLIGHT: already applied/, `wrong second-run refusal:\n${again.output}`);
   console.log('[prover] RELEASE: 28 reservations now match live open orders, on-hand untouched, 32 ledger rows; a second run is refused');
 
-  console.log('BILLED_OUTSIDE_CRX_PROOF_PASS recording=guarded guard=refuses_double_bill dashboard=excludes mutation=detected mark=53 release=reconciled rerun=safe');
+  // 6. A released deleted order can never release again through cancel_order.
+  const cancelDeleted = (extra = '') => probe(`${extra}
+    SELECT public.cancel_order((SELECT id FROM public.orders WHERE order_number = 'ORD-2026-0181'), '${MASON}', 'prover-cancel-deleted');
+    SELECT sum(quantity_prebooked) FROM public.inventory;`, MASON);
+  const afterRelease = scalar('SELECT sum(quantity_prebooked) FROM public.inventory;');
+  expectRefused(cancelDeleted(), /ORDER_DELETED_(STATUS|LINES)_LOCKED/, 'cancel a deleted order');
+  assert.equal(scalar('SELECT sum(quantity_prebooked) FROM public.inventory;'), afterRelease, 'a refused cancel changed reservations');
+  const liveCancel = probe(`SELECT public.cancel_order((SELECT id FROM public.orders WHERE order_number = 'PROVER-LIVE-OPEN'), '${MASON}', 'prover-cancel-live');
+    SELECT status FROM public.orders WHERE order_number = 'PROVER-LIVE-OPEN';`, MASON);
+  assert.equal(liveCancel.last, 'cancelled', `cancelling a live order must still work:\n${liveCancel.error}`);
+  const mutantCancel = probe(`SET LOCAL ROLE postgres; DROP TRIGGER guard_deleted_order_status_locked ON public.orders; DROP TRIGGER guard_deleted_order_lines_locked ON public.order_items; RESET ROLE;
+    ${asUser(MASON)}
+    SELECT public.cancel_order((SELECT id FROM public.orders WHERE order_number = 'ORD-2026-0181'), '${MASON}', 'prover-cancel-mutant');
+    SELECT sum(quantity_prebooked) FROM public.inventory;`);
+  assert.equal(mutantCancel.ok, true, `MUTATION: without the lock the deleted-order cancel should go through:\n${mutantCancel.error}`);
+  assert.ok(Number(mutantCancel.last) < Number(afterRelease), 'MUTATION: without the lock the cancel should release reservations again');
+  console.log('[prover] LOCK: cancelling a released deleted order is refused (reservations unchanged); live orders still cancel; without the lock it double-releases');
+
+  console.log('BILLED_OUTSIDE_CRX_PROOF_PASS recording=guarded guard=refuses_double_bill dashboard=excludes mutation=detected mark=53 release=reconciled rerun=safe deleted_order_lock=enforced');
 }
 
 try { await main(); }

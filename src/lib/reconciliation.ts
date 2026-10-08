@@ -487,6 +487,7 @@ export interface DeliveryItemCheckRow {
   quantity_delivered: number;
   delivery_id?: string;
   delivery_status?: string;
+  delivery_deleted_at?: string | null;
 }
 
 export interface InvoiceItemCheckRow {
@@ -510,6 +511,7 @@ export function checkDeliveryInvoiceQuantityParity(
   for (const di of deliveryItems) {
     if (!di.order_id || !di.product_id) continue;
     if (di.delivery_status !== undefined && di.delivery_status !== 'completed') continue;
+    if (di.delivery_deleted_at) continue;
     if (di.delivery_id && externallyBilledDeliveryIds.has(di.delivery_id)) continue;
     const key = `${di.order_id}::${di.product_id}`;
     deliveredByKey.set(key, (deliveredByKey.get(key) ?? 0) + di.quantity_delivered);
@@ -899,11 +901,11 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [deliveryItemsRes, invoiceItemsRes, externalBillingRes] = await Promise.all([
       supabase
         .from('delivery_items')
-        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id, status)'),
+        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id, status, deleted_at)'),
       supabase
         .from('invoice_items')
         .select('product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)'),
-      // delivery_external_billings is admin-only (RLS) and not yet in the generated types.
+      // delivery_external_billings is admin/sales-rep readable (RLS) and not yet in the generated types.
       supabaseUntyped
         .from('delivery_external_billings')
         .select('delivery_id'),
@@ -916,6 +918,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       order_id: (r.deliveries as Record<string, unknown>)?.order_id as string,
       delivery_id: r.delivery_id as string,
       delivery_status: (r.deliveries as Record<string, unknown>)?.status as string,
+      delivery_deleted_at: (r.deliveries as Record<string, unknown>)?.deleted_at as string | null,
       product_id: r.product_id as string,
       quantity_delivered: r.quantity_delivered as number,
     }));

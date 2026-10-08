@@ -98,6 +98,7 @@ export interface DeliveryItemCheckRow {
   quantity_delivered: number;
   delivery_id?: string;
   delivery_status?: string;
+  delivery_deleted_at?: string | null;
 }
 
 export interface InvoiceItemCheckRow {
@@ -344,6 +345,7 @@ export function checkDeliveryInvoiceQuantityParity(
   for (const di of deliveryItems) {
     if (!di.order_id || !di.product_id) continue;
     if (di.delivery_status !== undefined && di.delivery_status !== 'completed') continue;
+    if (di.delivery_deleted_at) continue;
     if (di.delivery_id && externallyBilledDeliveryIds.has(di.delivery_id)) continue;
     const key = `${di.order_id}::${di.product_id}`;
     deliveredByKey.set(key, (deliveredByKey.get(key) ?? 0) + di.quantity_delivered);

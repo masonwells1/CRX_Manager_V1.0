@@ -207,7 +207,7 @@ export default function DeliveryDetail() {
   const [orderNeedsSplitBilling, setOrderNeedsSplitBilling] = useState(false);
 
   // The reason this delivery was billed outside CRX (delivery_external_billings,
-  // admin-readable), or null. The server refuses to invoice such a delivery; on a
+  // admin/sales-rep readable), or null. The server refuses to invoice such a delivery; on a
   // read failure this stays null and that refusal still applies.
   const [billedOutsideCrxReason, setBilledOutsideCrxReason] = useState<string | null>(null);
 
@@ -243,6 +243,8 @@ export default function DeliveryDetail() {
     && billedOutsideCrxReason === null;
 
   const fetchDelivery = useCallback(async () => {
+    // Never carry the previous delivery's billed-outside-CRX badge onto this one.
+    setBilledOutsideCrxReason(null);
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*')
@@ -315,7 +317,7 @@ export default function DeliveryDetail() {
               .is('deleted_at', null)
               .order('invoice_date', { ascending: false }),
             fetchSplitBillingOrderIds([orderIdForSplitCheck]),
-            // Not yet in the generated types; admin-only under RLS (others read no row).
+            // Not yet in the generated types; admin/sales-rep readable under RLS.
             supabaseUntyped
               .from('delivery_external_billings')
               .select('reason')

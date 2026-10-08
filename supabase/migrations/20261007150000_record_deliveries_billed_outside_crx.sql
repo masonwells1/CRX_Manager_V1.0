@@ -14,7 +14,7 @@
 -- What this file does (schema and one read-only dashboard function; it marks NO deliveries — that is a separate, owner-approved
 -- data migration):
 --   1. delivery_external_billings: one row per delivery billed outside CRX, with a reason.
---      Admin read-only through RLS. No INSERT/UPDATE/DELETE grant to any API role, so a row can
+--      Read-only, for admins and sales reps (the Office Cockpit tile they share), through RLS. No INSERT/UPDATE/DELETE grant to any API role, so a row can
 --      only be written by a reviewed migration (postgres).
 --   2. guard_delivery_external_billing (BEFORE INSERT/UPDATE on the new table): a delivery can be
 --      recorded only if it is a completed, non-deleted order delivery that NO active CRX invoice
@@ -94,14 +94,14 @@ COMMENT ON TABLE public.delivery_external_billings IS
 ALTER TABLE public.delivery_external_billings OWNER TO postgres;
 ALTER TABLE public.delivery_external_billings ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS delivery_external_billings_admin_select ON public.delivery_external_billings;
-CREATE POLICY delivery_external_billings_admin_select
+DROP POLICY IF EXISTS delivery_external_billings_office_select ON public.delivery_external_billings;
+CREATE POLICY delivery_external_billings_office_select
   ON public.delivery_external_billings
   FOR SELECT TO authenticated
-  USING ((SELECT public.is_admin()));
+  USING ((SELECT public.is_admin()) OR (SELECT public.is_sales_rep()));
 
 -- Supabase default privileges grant every API role full table access; take it all back and give
--- the app read access only (RLS then limits it to admins).
+-- the app read access only (RLS then limits it to admins and sales reps).
 REVOKE ALL ON TABLE public.delivery_external_billings FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
 GRANT SELECT ON TABLE public.delivery_external_billings TO authenticated;
 
@@ -473,7 +473,7 @@ BEGIN
     RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: RLS is not enabled';
   END IF;
   IF (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.delivery_external_billings'::regclass) <> 1 THEN
-    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: expected exactly one (admin SELECT) policy';
+    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: expected exactly one (admin + sales rep SELECT) policy';
   END IF;
   IF has_table_privilege('authenticated', 'public.delivery_external_billings', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('anon', 'public.delivery_external_billings', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
@@ -481,7 +481,7 @@ BEGIN
      OR NOT has_table_privilege('authenticated', 'public.delivery_external_billings', 'SELECT')
      OR (EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_ro')
          AND has_table_privilege('metabase_ro', 'public.delivery_external_billings', 'SELECT')) THEN
-    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: table privileges are not admin-read-only';
+    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: table privileges are not read-only';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.invoices'::regclass
                   AND tgname = 'zz_guard_invoice_delivery_billed_outside_crx' AND tgenabled = 'O' AND NOT tgisinternal) THEN

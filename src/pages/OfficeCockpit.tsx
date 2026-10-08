@@ -602,7 +602,7 @@ export default function OfficeCockpit() {
     let deliveryInvoiceError: { message?: string } | null = null;
     let activeDeliveryInvoices: DeliveryInvoiceCoverage[] = [];
     // Deliveries billed outside CRX (e.g. in Chem Man) are not "delivered, not invoiced".
-    // delivery_external_billings is admin-readable only; other roles read no rows.
+    // delivery_external_billings is readable by admins and sales reps; other roles read no rows.
     let billedOutsideCrx = new Set<string>();
 
     if (deliveryOrderIds.length > 0) {
