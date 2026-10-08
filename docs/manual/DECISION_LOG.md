@@ -1,12 +1,19 @@
 # Decision Log
 
-Last verified: 2026-10-06 (CRX-LIFE-001 scope decision entry added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-07 (documentation-only Sol exemption entry added; CRX-LIFE-001 scope decision entry added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-07 — Documentation-only pull requests merge without the final Sol review
+
+**Decision (Mason, "i appve 870", 2026-10-07).** He approved PR #870's proposal (`docs/plans/2026-10-02-sol-skip-for-low-risk-changes.md`). A pull request whose every changed file is documentation, as listed in `docs/reference/sol-exempt-paths.md`, may merge into `main` without the exact-SHA Sol proof. CodeRabbit must still have APPROVED the exact head, every required check must be green, and the head must be pinned and contain its base. Code, migrations, package files, the agent safety layer (`.claude/`, `.codex/`, `.agents/`, `.husky/`, `.github/`, `.coderabbit.yaml`) and the rule-defining documents still need Sol.
+**Why.** Sol runs only where the Codex CLI is installed, so plain documentation changes stalled at the last step after every other gate had passed. CodeRabbit remains an independent reviewer of every such change.
+**How it was adopted.** An agent may not weaken a review gate, so an agent built and fully reviewed the change, including a Sol review (it touches `.claude/`, so it is not eligible for its own exemption). The rule takes effect only through **Mason's own hand-merge** of that pull request, as with #796; no agent merges it. The guard implementation is stricter than the proposal in four ways: only `.md` files qualify; `claude-model-tuning.md`, `sol-exempt-paths.md` and `migration-history.md` stay Sol-required; a nested `CLAUDE.md`/`AGENTS.md` or package file anywhere needs Sol; and the list is matched without regard to case.
+**What this forbids/implies:** the lists live in `.claude/hooks/sol-exempt-lib.mjs` (its readable copy is `docs/reference/sol-exempt-paths.md`). A new folder needs Sol until it is added there on purpose, and that change itself needs Sol. Any uncertainty in reading the diff means Sol is required. Source: `docs/changelog.d/2026-10-07-sol-exempt-docs-only.md`.
 
 ## 2026-10-06 — CRX-LIFE-001 lands as scoped; rep scoping of the order-invoice RPCs is the next change
 

@@ -10,7 +10,8 @@
 //     check is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high
 //     Codex proof is bound to that head and GitHub's real base (minted only by
 //     scripts/write-codex-push-proof.mjs — hand-writing is blocked). Every diff
-//     needs the proof now, not only risky ones;
+//     needs the proof, except a documentation-only one as defined in
+//     sol-exempt-lib.mjs (Mason, 2026-10-07);
 //   * `--auto` into main → denied, because it lands later-pushed commits after
 //     this gate has run (Codex round-4 finding);
 //   * `--admin`, CHANGES_REQUESTED, GraphQL mergePullRequest, raw REST merges and
@@ -59,6 +60,7 @@ import {
   collectCodexThreads,
   evaluateCodexBotReview,
 } from "./codex-bot-review-lib.mjs";
+import { solExemptionOnGitHub } from "./sol-exempt-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
@@ -460,8 +462,9 @@ function gateRequest(request) {
   // run is green with mergeStateStatus CLEAN, and a fresh gpt-6-sol/high Codex
   // proof is bound to that head and to GitHub's real base. Every change needs the
   // Sol proof now, not only the risky ones — that is the rule Mason confirmed,
-  // accepting the extra Codex spend. Anything short of it is denied here and
-  // stays with Mason.
+  // accepting the extra Codex spend. The one exception is a documentation-only
+  // change (Mason, 2026-10-07), checked at the end, after every other gate here.
+  // Anything short of it is denied here and stays with Mason.
 
   // `--auto` hands the landing to GitHub AFTER this gate has run, so a commit
   // pushed in the meantime would merge with no exact-head proof and no CodeRabbit
@@ -556,9 +559,26 @@ function gateRequest(request) {
     return;
   }
 
+  // ── documentation-only exemption (Mason, 2026-10-07) ───────────────────────
+  // No proof was found. A pull request whose every changed file is documentation
+  // on the allow-list in sol-exempt-lib.mjs merges without one. Asked only HERE,
+  // after CodeRabbit's exact-head approval, the green pipeline, the head pin and
+  // base containment have all passed. It spends the same budgeted gh, and any
+  // failure inside it answers "Sol required".
+  const exemption = solExemptionOnGitHub({ baseSha, headSha, repo: request.repo, gh: hardGateGh });
+  if (exemption.exempt) {
+    process.stderr.write(
+      `SOL EXEMPTION: ${exemption.reason} (docs/reference/sol-exempt-paths.md, Mason 2026-10-07), so this ` +
+      `merge needs no Sol proof. CodeRabbit APPROVED head ${String(headSha).slice(0, 12)} and every check is green.\n`,
+    );
+    advisoryQueue.push(request);
+    return;
+  }
+
   deny(
     `PR MERGE GATE: every merge into main needs a fresh gpt-6-sol/high Codex proof bound to this exact ` +
-    `head and GitHub's real base (Mason's autonomous-landing rule, 2026-09-26). None was found.\n\n` +
+    `head and GitHub's real base (Mason's autonomous-landing rule, 2026-09-26). None was found, and the ` +
+    `documentation-only exemption does not apply: ${exemption.reason}.\n\n` +
     `"Review is queued/scheduled" is NOT reviewed. Before merging:\n` +
     `  1. Check out the PR branch (\`gh pr checkout ${request.selector || "<number>"}\`) if it isn't the current branch.\n` +
     `  2. \`git fetch origin\` so local origin/main equals GitHub's real base (${baseSha.slice(0, 12)}...) — the proof is bound to the base GitHub will merge onto.\n` +

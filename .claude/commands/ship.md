@@ -120,7 +120,10 @@ xhigh — `/codex-review` Step 3A — fixing and re-running until **no BLOCKER o
 (deliberately deferred MED/LOW do not block the Sol pass). Then, for EVERY change (Mason's
 autonomous-landing rule, 2026-09-26 — before that only risky diffs needed it), spend one
 `gpt-6-sol` high-effort pass to mint the exact-SHA proof the merge guards require
-(`/codex-review` Step 3B). Do not burn Sol rounds on iteration, and never route a Luna round
+(`/codex-review` Step 3B). The one exception is a documentation-only change as defined in
+`docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07): the merge guards let it land with
+CodeRabbit APPROVED on the exact head and every check green, and no Sol proof. Any file
+outside that list, including every `.claude/` file, still needs Sol. Do not burn Sol rounds on iteration, and never route a Luna round
 through the proof wrapper — it unlinks the existing proof for that HEAD when it starts.
 
 **Sol must be the LAST review before the merge — so it does NOT run in this step.** Its proof binds

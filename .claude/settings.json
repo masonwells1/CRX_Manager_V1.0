@@ -206,6 +206,8 @@
       "Write(.claude/hooks/pr-merge-guard.mjs)",
       "Edit(.claude/hooks/review-proof-guard.mjs)",
       "Write(.claude/hooks/review-proof-guard.mjs)",
+      "Edit(.claude/hooks/sol-exempt-lib.mjs)",
+      "Write(.claude/hooks/sol-exempt-lib.mjs)",
       "Edit(.claude/hooks/unattended-autopilot.mjs)",
       "Write(.claude/hooks/unattended-autopilot.mjs)",
       "Edit(.codex/hooks/codex-hook-adapter.mjs)",
