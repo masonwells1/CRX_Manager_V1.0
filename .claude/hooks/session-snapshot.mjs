@@ -14,12 +14,31 @@ try {
 
 const sessionId = payload?.session_id || "unknown";
 
+// The same repository stop-wrap.mjs checks: payload cwd first, then
+// CLAUDE_PROJECT_DIR, then the process cwd, normalized to the worktree root.
+// A hook started from another checkout would otherwise snapshot that
+// checkout's status and reflog, and stop-wrap would compare its own
+// repository against an anchor it never contained (CodeRabbit, PR #827).
+const candidateDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+function gitToplevelOr(candidate) {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: candidate, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return top ? top : candidate;
+  } catch {
+    return candidate;
+  }
+}
+const projectDir = gitToplevelOr(candidateDir);
+
 let porcelain = "";
 try {
   porcelain = execFileSync("git", ["status", "--porcelain"], {
     encoding: "utf8",
     timeout: 5000,
     stdio: ["ignore", "pipe", "ignore"],
+    cwd: projectDir,
   });
 } catch {
   process.exit(0);
@@ -49,6 +68,7 @@ try {
     encoding: "utf8",
     timeout: 5000,
     stdio: ["ignore", "pipe", "ignore"],
+    cwd: projectDir,
   }).split("\n")[0] ?? "";
   writeFileSync(anchorPath, newest, "utf8");
 } catch { /* no HEAD yet — stop-wrap falls back to timestamps */ }

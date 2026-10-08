@@ -26,6 +26,9 @@ for (const name of [
   "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
   "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
 ]) delete cleanEnv[name];
+// The hooks pick their repository from the payload cwd, then CLAUDE_PROJECT_DIR;
+// a value inherited from the session running these tests must not redirect them.
+delete cleanEnv.CLAUDE_PROJECT_DIR;
 
 // Commits made "before the session" are backdated so `git log --since=<snapshot
 // mtime>` cannot pick them up regardless of clock granularity.
@@ -52,7 +55,7 @@ function startSession(sessionId) {
   // The real SessionStart hook writes the status snapshot and HEAD's reflog
   // position, exactly as a live session would.
   const r = spawnSync(process.execPath, [sessionSnapshotPath], {
-    encoding: "utf8", cwd: tmp, input: JSON.stringify({ session_id: sessionId }), env: cleanEnv,
+    encoding: "utf8", cwd: tmp, input: JSON.stringify({ session_id: sessionId, cwd: tmp }), env: cleanEnv,
   });
   assert.equal(r.status, 0, `session-snapshot exits 0: ${r.stderr}`);
   return path.join(snapDir, `session-${sessionId}`);
@@ -531,11 +534,26 @@ try {
   try {
     git(["init", "-q"], noHead);
     const resumed = spawnSync(process.execPath, [sessionSnapshotPath], {
-      encoding: "utf8", cwd: noHead, input: JSON.stringify({ session_id: s1u }), env: cleanEnv,
+      encoding: "utf8", cwd: noHead, input: JSON.stringify({ session_id: s1u, cwd: noHead }), env: cleanEnv,
     });
     assert.equal(resumed.status, 0, `session-snapshot exits 0: ${resumed.stderr}`);
     assert.ok(!existsSync(`${staleBase}.reflog`),
       "a resume that cannot read HEAD's reflog must delete the earlier anchor, not keep it");
+    pass++;
+
+    // ── Session 1v (CodeRabbit, PR #827): the hook process starts in another
+    //    repository; the anchor must still come from the payload's repository ──
+    const s1v = "ledger-test-foreign-cwd";
+    const foreignBase = path.join(snapDir, `session-${s1v}`);
+    snapshots.push(foreignBase);
+    const foreign = spawnSync(process.execPath, [sessionSnapshotPath], {
+      encoding: "utf8", cwd: noHead, input: JSON.stringify({ session_id: s1v, cwd: tmp }), env: cleanEnv,
+    });
+    assert.equal(foreign.status, 0, `session-snapshot exits 0: ${foreign.stderr}`);
+    const expectedAnchor = git(["reflog", "show", "-n", "1", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"], tmp)
+      .split("\n")[0];
+    assert.equal(existsSync(`${foreignBase}.reflog`) ? readFileSync(`${foreignBase}.reflog`, "utf8") : null, expectedAnchor,
+      "the anchor must be HEAD's newest reflog entry in the payload's repository, not the hook's start directory");
   } finally {
     rmSync(noHead, { recursive: true, force: true });
   }
