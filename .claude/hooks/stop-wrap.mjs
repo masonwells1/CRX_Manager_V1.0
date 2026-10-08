@@ -670,8 +670,10 @@ try {
     // rebase replays hundreds of commits, and one process per commit took 23 s
     // for 300 commits, past this hook's 15 s Stop deadline, so the harness
     // killed it before any check ran (Codex P2, PR #827). The commits go on
-    // stdin and the exclusions on the command line, because a git older than
-    // 2.42 reads stdin revisions as plain positives and rejects `--not` there.
+    // stdin and the exclusions on the command line: git reads stdin revisions
+    // as positive tips whatever `--not` precedes them in argv (checked on git
+    // 2.54: an amended-away commit is listed, its replacement is not), and a
+    // git older than 2.42 rejects `--not` inside stdin.
     // stdin must be an explicit pipe: runGit's default "ignore" silently drops `input`.
     const shaInput = (shas) => ({
       input: shas.map((s) => `${s}\n`).join(""), stdio: ["pipe", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,

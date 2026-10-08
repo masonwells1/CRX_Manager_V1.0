@@ -12,7 +12,8 @@ extends the `session-snapshot.mjs` row with the reflog anchor. The resolution ke
 
 ### Proof observed
 
-- `node .claude/hooks/stop-wrap-ledger.test.mjs`: 20 assertions pass.
+- `node .claude/hooks/stop-wrap-ledger.test.mjs`: 20 assertions pass on the merge, and 22
+  after the follow-up fix for the batched git calls and stale anchors.
 - `npm run test:correction-guards`, `npm run lint` and `npm run build` pass on the merge.
 - Throwaway repositories driven through the real `session-snapshot.mjs` and `stop-wrap.mjs`:
   a session whose only commit is a clean merge of `main` is blocked with "Commits exist this
