@@ -15,7 +15,7 @@
  *   - Tolerance of ±1 cent for floating-point rounding
  */
 
-import { supabase } from './db';
+import { supabase, supabaseUntyped } from './db';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -392,6 +392,9 @@ export function checkCommissionSplits(commissions: CommissionRow[]): Discrepancy
 /** Tolerance for quantity comparisons (e.g. liquid measure rounding) */
 const TOLERANCE_QTY = 0.01;
 
+/** Invoice statuses that have been posted to the books (Check 3 scope). */
+export const FINANCIAL_INVOICE_STATUSES: ReadonlySet<string> = new Set(['posted', 'paid', 'overdue']);
+
 /**
  * Check 6: Quote-Hold Parity
  *
@@ -452,11 +455,20 @@ export function checkQuoteHoldParity(
  * For each order+product combination, total delivered quantity should
  * approximately match total invoiced quantity. A large mismatch means
  * product was delivered but not billed (or vice versa).
+ *
+ * Only completed deliveries count as delivered (a cancelled or voided delivery
+ * shipped nothing billable), only active invoices count as billed (the same
+ * rule as src/lib/deliveryInvoiceCoverage.ts), and deliveries recorded in
+ * delivery_external_billings were billed outside CRX, so they are not expected
+ * to have a CRX invoice. Rows without a status are counted (callers that do
+ * not load it keep the original behavior).
  */
 export interface DeliveryItemCheckRow {
   order_id: string;
   product_id: string;
   quantity_delivered: number;
+  delivery_id?: string;
+  delivery_status?: string;
 }
 
 export interface InvoiceItemCheckRow {
@@ -464,16 +476,23 @@ export interface InvoiceItemCheckRow {
   product_id: string;
   quantity: number;
   invoice_type: string;
+  invoice_status?: string;
+  invoice_deleted_at?: string | null;
 }
+
+const NON_BILLING_INVOICE_STATUSES = new Set(['voided', 'cancelled']);
 
 export function checkDeliveryInvoiceQuantityParity(
   deliveryItems: DeliveryItemCheckRow[],
   invoiceItems: InvoiceItemCheckRow[],
+  externallyBilledDeliveryIds: ReadonlySet<string> = new Set(),
 ): Discrepancy[] {
   // Sum delivered quantity per order+product
   const deliveredByKey = new Map<string, number>();
   for (const di of deliveryItems) {
     if (!di.order_id || !di.product_id) continue;
+    if (di.delivery_status !== undefined && di.delivery_status !== 'completed') continue;
+    if (di.delivery_id && externallyBilledDeliveryIds.has(di.delivery_id)) continue;
     const key = `${di.order_id}::${di.product_id}`;
     deliveredByKey.set(key, (deliveredByKey.get(key) ?? 0) + di.quantity_delivered);
   }
@@ -484,6 +503,8 @@ export function checkDeliveryInvoiceQuantityParity(
     // Return credits now carry negative invoice_items for revenue/COGS reporting.
     // They are not additional billing against delivered quantity.
     if (ii.invoice_type === 'credit_memo') continue;
+    if (ii.invoice_deleted_at) continue;
+    if (ii.invoice_status !== undefined && NON_BILLING_INVOICE_STATUSES.has(ii.invoice_status)) continue;
     if (!ii.order_id || !ii.product_id) continue;
     const key = `${ii.order_id}::${ii.product_id}`;
     invoicedByKey.set(key, (invoicedByKey.get(key) ?? 0) + ii.quantity);
@@ -520,6 +541,12 @@ export function checkDeliveryInvoiceQuantityParity(
  *
  * Per product, quantity_prebooked on inventory should approximately
  * match the sum of quantity_remaining across open order items.
+ *
+ * "Open" means a live order still owed product: status confirmed or
+ * partially_fulfilled and not soft-deleted. A deleted or closed order's
+ * leftover quantity_remaining must not count — otherwise a reservation that
+ * was never released for a deleted order matches itself and the check passes.
+ * Rows without order status are counted (original behavior).
  */
 export interface InventoryPrebookRow {
   id: string;
@@ -530,7 +557,11 @@ export interface InventoryPrebookRow {
 export interface OrderItemRemainingRow {
   product_id: string;
   quantity_remaining: number;
+  order_status?: string;
+  order_deleted_at?: string | null;
 }
+
+const OPEN_ORDER_STATUSES = new Set(['confirmed', 'partially_fulfilled']);
 
 export function checkPrebookedInventory(
   inventory: InventoryPrebookRow[],
@@ -539,6 +570,8 @@ export function checkPrebookedInventory(
   // Sum quantity_remaining per product
   const remainingByProduct = new Map<string, number>();
   for (const oi of orderItems) {
+    if (oi.order_deleted_at) continue;
+    if (oi.order_status !== undefined && !OPEN_ORDER_STATUSES.has(oi.order_status)) continue;
     remainingByProduct.set(
       oi.product_id,
       (remainingByProduct.get(oi.product_id) ?? 0) + oi.quantity_remaining,
@@ -730,8 +763,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invoiceRes, allocRes] = await Promise.all([
       supabase
         .from('invoices')
-        .select('id, invoice_number, order_id, invoice_type, paid_amount_cents, prepay_applied_cents, write_off_cents, credit_applied_cents, total_amount_cents, balance_cents')
-        .eq('status', 'posted')
+        .select('id, invoice_number, order_id, invoice_type, status, paid_amount_cents, prepay_applied_cents, write_off_cents, credit_applied_cents, total_amount_cents, balance_cents')
+        .not('status', 'in', '("voided","cancelled")')
         .is('deleted_at', null),
       supabase
         .from('invoice_line_allocations')
@@ -740,16 +773,19 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
     if (invoiceRes.error) throw new Error(`Invoices query failed: ${invoiceRes.error.message}`);
     if (allocRes.error) throw new Error(`Allocations query failed: ${allocRes.error.message}`);
-    const invoices = (invoiceRes.data ?? []) as InvoiceRow[];
+    const invoices = (invoiceRes.data ?? []) as Array<InvoiceRow & { status: string }>;
     const allocations = (allocRes.data ?? []) as InvoiceLineAllocationRow[];
+    // A posted invoice moves on to 'paid' or 'overdue', so filtering on 'posted'
+    // alone skipped every invoice that had money against it.
+    const financialInvoices = invoices.filter((inv) => FINANCIAL_INVOICE_STATUSES.has(inv.status));
 
-    const payDisc = checkInvoicePayments(invoices, allocations);
+    const payDisc = checkInvoicePayments(financialInvoices, allocations);
     checks.push({
       name: 'Invoice Payments',
       description: 'Invoice paid_amount_cents matches SUM of invoice_line_allocations.amount_cents (source of truth from allocate_payment)',
       passed: payDisc.length === 0,
       discrepancies: payDisc,
-      entitiesChecked: invoices.length,
+      entitiesChecked: financialInvoices.length,
     });
 
     const balDisc = checkInvoiceBalances(invoices);
@@ -842,29 +878,41 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 7: Delivery-Invoice Quantity Parity ───────────────────
   try {
-    const [deliveryItemsRes, invoiceItemsRes] = await Promise.all([
+    const [deliveryItemsRes, invoiceItemsRes, externalBillingRes] = await Promise.all([
       supabase
         .from('delivery_items')
-        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id)'),
+        .select('delivery_id, product_id, quantity_delivered, deliveries(order_id, status)'),
       supabase
         .from('invoice_items')
-        .select('product_id, quantity, invoices(order_id, invoice_type)'),
+        .select('product_id, quantity, invoices(order_id, invoice_type, status, deleted_at)'),
+      // delivery_external_billings is admin-only (RLS) and not yet in the generated types.
+      supabaseUntyped
+        .from('delivery_external_billings')
+        .select('delivery_id'),
     ]);
 
     if (deliveryItemsRes.error) throw new Error(`Delivery items query failed: ${deliveryItemsRes.error.message}`);
     if (invoiceItemsRes.error) throw new Error(`Invoice items query failed: ${invoiceItemsRes.error.message}`);
+    if (externalBillingRes.error) throw new Error(`External billing query failed: ${externalBillingRes.error.message}`);
     const deliveryItems = (deliveryItemsRes.data ?? []).map((r: Record<string, unknown>) => ({
       order_id: (r.deliveries as Record<string, unknown>)?.order_id as string,
+      delivery_id: r.delivery_id as string,
+      delivery_status: (r.deliveries as Record<string, unknown>)?.status as string,
       product_id: r.product_id as string,
       quantity_delivered: r.quantity_delivered as number,
     }));
     const invoiceItems = (invoiceItemsRes.data ?? []).map((r: Record<string, unknown>) => ({
       order_id: (r.invoices as Record<string, unknown>)?.order_id as string,
       invoice_type: (r.invoices as Record<string, unknown>)?.invoice_type as string,
+      invoice_status: (r.invoices as Record<string, unknown>)?.status as string,
+      invoice_deleted_at: (r.invoices as Record<string, unknown>)?.deleted_at as string | null,
       product_id: r.product_id as string,
       quantity: r.quantity as number,
     }));
-    const disc = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
+    const externallyBilledDeliveryIds = new Set(
+      ((externalBillingRes.data ?? []) as Array<{ delivery_id: string }>).map((r) => r.delivery_id),
+    );
+    const disc = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, externallyBilledDeliveryIds);
 
     checks.push({
       name: 'Delivery-Invoice Quantity Parity',
@@ -894,14 +942,19 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('id, product_id, quantity_prebooked'),
       supabase
         .from('order_items')
-        .select('product_id, quantity_remaining')
+        .select('product_id, quantity_remaining, orders(status, deleted_at)')
         .gt('quantity_remaining', 0),
     ]);
 
     if (invPrebookRes.error) throw new Error(`Inventory prebook query failed: ${invPrebookRes.error.message}`);
     if (orderItemsRes.error) throw new Error(`Order items remaining query failed: ${orderItemsRes.error.message}`);
     const inventoryPrebook = (invPrebookRes.data ?? []) as InventoryPrebookRow[];
-    const orderItemsRemaining = (orderItemsRes.data ?? []) as OrderItemRemainingRow[];
+    const orderItemsRemaining: OrderItemRemainingRow[] = (orderItemsRes.data ?? []).map((r: Record<string, unknown>) => ({
+      product_id: r.product_id as string,
+      quantity_remaining: r.quantity_remaining as number,
+      order_status: (r.orders as Record<string, unknown>)?.status as string,
+      order_deleted_at: (r.orders as Record<string, unknown>)?.deleted_at as string | null,
+    }));
     const disc = checkPrebookedInventory(inventoryPrebook, orderItemsRemaining);
 
     checks.push({
