@@ -43,6 +43,7 @@
 - `delivery_items` - Items on delivery (order_item_id, product_id, quantity, quantity_delivered, unit_size, notes, tote_number). There is no `is_non_returnable` column here; that flag is on `receiving_records`.
 - `delivery_photos` - Driver-uploaded delivery photos (delivery_id, storage_path, image_url, uploaded_by)
 - `delivery_remainders` - Partial delivery remainder items (original_delivery_id, order_id, order_item_id, customer_id, product_id, quantity_remaining, followup_delivery_id, status: pending/scheduled/fulfilled/cancelled)
+- `delivery_external_billings` - Completed deliveries billed outside CRX, e.g. in Chem Man before CRX invoicing (delivery_id PK, reason, recorded_by, created_at, updated_at). Written only by reviewed migrations; admin read-only. A recording guard accepts only a completed, not-yet-invoiced order delivery, and `zz_guard_invoice_delivery_billed_outside_crx` on `invoices` refuses an invoice for a recorded delivery or a whole-order invoice on its order (`DELIVERY_BILLED_OUTSIDE_CRX`). Excluded from the integrity report's delivery-invoice check, Integrity Cleanup, the dashboard and Office Cockpit "Delivered, not invoiced" lists (`20261007150000`).
 
 ## Receiving
 - `receiving_records` - Per-event receiving records (purchase_order_id, po_item_id, product_id, quantity_received, condition, lot_number, notes, storage_location, received_by, is_non_returnable)
@@ -388,6 +389,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | delivery_items | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin | Admin / Sales Rep |
 | delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
 | delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| delivery_external_billings | Admin | - (migrations only) | - (migrations only) | - (migrations only) |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
 | payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
 | team_notes | All authenticated | Own created_by (active profile) | Own created_by / Admin | Admin |
