@@ -151,6 +151,11 @@ Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets, Orders, Vehicle
 ### Tailwind CSS only
 - No other CSS frameworks (no Bootstrap, no styled-components, no CSS modules)
 - All styling uses Tailwind utility classes
+- Tailwind 4 (since 2026-10-03). There is no `tailwind.config.js`: theme tokens (brand colours, fonts, `shadow-card`) live in the `@theme` block of `src/index.css`.
+- `src/index.css` pins several names to their **Tailwind 3** meaning so the app looked the same after the upgrade: the standard palette uses Tailwind 3's hex values; `shadow-sm`, `shadow`, `rounded-sm`, `rounded`, `blur-sm`, `blur`, `drop-shadow-sm` and `drop-shadow` keep their 3.x sizes; bare `ring` is 3px blue-500/50; borders default to gray-200; hover styles apply on touch devices too; `space-x/y-*` and `divide-*` put the gap or rule before every visible child after the first (Tailwind 3's rule), so a hidden or `display: contents` last child leaves no stray gap. Tailwind 4's documentation describes those names differently — follow the existing pages, not the docs, for these.
+- Use `shrink-0`/`grow`, `outline-hidden` (hides the outline but keeps it in high-contrast mode) and opacity modifiers such as `bg-black/50`; the old `flex-shrink-0`, `bg-opacity-*` spellings no longer exist, and `outline-none` now removes the outline outright. Existing `outline-none` uses were left as they are; a forced-colors rule at the end of `src/index.css` keeps their keyboard focus visible in Windows high-contrast mode.
+- Arbitrary values use `_` for spaces: `grid-cols-[1fr_100px_100px]`. Tailwind 4 copies commas through literally, so `grid-cols-[1fr,100px,100px]` becomes invalid CSS and is silently dropped.
+- Stacked variants read left to right: `file:hover:` styles the file button when the button is hovered; `hover:file:` styles it whenever the whole input is hovered.
 
 ### Brand color
 - Primary green: `crx-green` (#28A26A)

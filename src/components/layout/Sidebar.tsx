@@ -707,7 +707,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         role="navigation"
         aria-label="Main navigation"
         className={`
-          hidden md:flex flex-col flex-shrink-0
+          hidden md:flex flex-col shrink-0
           h-screen sticky top-0
           bg-nav-dark
           transition-[width] duration-200 ease-in-out
@@ -757,7 +757,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           {isExpanded ? (
             <>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-8 h-8 rounded-full bg-crx-green/20 flex items-center justify-center flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-crx-green/20 flex items-center justify-center shrink-0">
                   <span className="text-xs font-semibold text-crx-green">
                     {profile?.full_name?.split(' ').map((n) => n[0]).join('') || '?'}
                   </span>

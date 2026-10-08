@@ -23,7 +23,7 @@ export default function JobTagChip({ tag, onRemove }: JobTagChipProps) {
       }}
     >
       <span
-        className="w-2 h-2 rounded-full flex-shrink-0"
+        className="w-2 h-2 rounded-full shrink-0"
         style={{ backgroundColor: tag.color }}
         aria-hidden="true"
       />

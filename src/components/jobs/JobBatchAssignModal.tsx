@@ -144,7 +144,7 @@ export default function JobBatchAssignModal({
             choice === REMOVE ? 'border-red-300 bg-red-50' : 'border-gray-200 hover:bg-gray-50'
           }`}
         >
-          <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" aria-hidden="true" />
+          <XCircle className="w-4 h-4 text-red-500 shrink-0" aria-hidden="true" />
           <span className="text-sm text-nav-dark font-medium flex-1">Remove from batch</span>
           <span className="text-xs text-secondary">
             {unbatchedCount === selectedJobIds.length
@@ -173,7 +173,7 @@ export default function JobBatchAssignModal({
                     choice === b.id ? 'border-crx-green bg-crx-green/5' : 'border-gray-200 hover:bg-gray-50'
                   }`}
                 >
-                  <Layers className="w-4 h-4 text-crx-green flex-shrink-0" aria-hidden="true" />
+                  <Layers className="w-4 h-4 text-crx-green shrink-0" aria-hidden="true" />
                   <span className="text-sm text-nav-dark font-medium flex-1 min-w-0 truncate">
                     {b.name}
                     {b.description && <span className="text-secondary font-normal"> — {b.description}</span>}

@@ -1,12 +1,24 @@
 # Decision Log
 
-Last verified: 2026-10-02 (nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-06 (CRX-LIFE-001 scope decision entry added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-06 — CRX-LIFE-001 lands as scoped; rep scoping of the order-invoice RPCs is the next change
+
+**Decision (Mason, in chat: "Land it then lock down rep scoping next").** PR #885 lands the CRX-LIFE-001 fix (order invoices may only be `chemical_sale` or `misc_charge`; a `field_application` invoice can never carry an order) without widening it. Codex Luna round 3 rated two pre-existing gaps in the same RPCs HIGH: they check neither that the order's customer is assigned to the calling rep nor that the salesperson the caller names is themselves. Those are deferred by this decision, not by an agent, and are the next job.
+**Why.** Closing them touches delivery completion and split billing (`complete_delivery` calls the split RPC), so it needs its own reviewed change; the CRX-LIFE-001 fix stands on its own and is proven.
+**What this implies:** the rep-scoping change is the immediate follow-up — reps bill only their own customers and only under their own name, admins unrestricted, matching `save_invoice`'s `CUSTOMER_SCOPE_DENIED`. The gaps stay listed as OPEN in `KNOWN_ISSUES.md` until it lands. Source: `docs/changelog.d/2026-10-06-crx-life-001-*.md`.
+
+## 2026-10-03 — Claude plans, then proceeds; agents never ask Mason to act for CodeRabbit
+
+**Decision (Mason, in chat).** Claude drops its "post a plan and wait for Mason's OK" pause and works like Codex: post a short plain-English plan, then continue. Agents request any CodeRabbit review themselves and never ask Mason to comment, label, or click for it (FarmRx adopted the same rule in its own repository).
+**Why.** Mason wants maximum agent autonomy and no manual CodeRabbit step; he can still say "stop" at any time after seeing the plan.
+**What this forbids/implies:** the approval gates in `AGENTS.md` › Safety and Protected Delivery are unchanged, and each still needs his explicit yes in the current conversation. Source: `docs/changelog.d/2026-10-03-slim-agent-guidance.md`.
 
 ## 2026-10-02 — CORRECTION: PRs do merge on CodeRabbit's approval under `protect-main`
 
