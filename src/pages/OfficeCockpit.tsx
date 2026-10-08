@@ -601,11 +601,23 @@ export default function OfficeCockpit() {
     const deliveryOrderIds = [...new Set(completedDeliveryCandidates.map((row) => row.order_id))];
     let deliveryInvoiceError: { message?: string } | null = null;
     let activeDeliveryInvoices: DeliveryInvoiceCoverage[] = [];
+    // Deliveries billed outside CRX (e.g. QuickBooks) are not "delivered, not invoiced".
+    // delivery_external_billings is admin-readable only; other roles read no rows.
+    let billedOutsideCrx = new Set<string>();
 
     if (deliveryOrderIds.length > 0) {
-      const invoiceCoverageRes = await fetchActiveInvoiceCoveragePages(deliveryOrderIds);
-      deliveryInvoiceError = invoiceCoverageRes.error;
+      const [invoiceCoverageRes, externalBillingRes] = await Promise.all([
+        fetchActiveInvoiceCoveragePages(deliveryOrderIds),
+        supabaseUntyped
+          .from('delivery_external_billings')
+          .select('delivery_id')
+          .in('delivery_id', completedDeliveryCandidates.map((row) => row.id)),
+      ]);
+      deliveryInvoiceError = invoiceCoverageRes.error ?? externalBillingRes.error;
       activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverage[];
+      billedOutsideCrx = new Set(
+        ((externalBillingRes.data ?? []) as Array<{ delivery_id: string }>).map((r) => r.delivery_id),
+      );
     }
 
     const rawLapsedPlannedHolds = (lapsedPlannedHoldsRes.data || []) as RawLapsedPlannedHold[];
@@ -768,7 +780,7 @@ export default function OfficeCockpit() {
     // The guarded fix action lives on DeliveryDetail, where the RPC is confirmed.
     const deliveredNotInvoiced: DeliveredNotInvoicedRow[] = deliveredNotInvoicedLoadOk
       ? completedDeliveryCandidates
-        .filter((deliveryRow) => !activeDeliveryInvoices.some((invoiceRow) =>
+        .filter((deliveryRow) => !billedOutsideCrx.has(deliveryRow.id) && !activeDeliveryInvoices.some((invoiceRow) =>
           activeInvoiceCoversDelivery(invoiceRow, deliveryRow.id, deliveryRow.order_id)
         ))
         .map((deliveryRow) => ({

@@ -29,9 +29,15 @@
 --          complete_delivery's per-delivery invoice, the Delivery page's create-invoice action);
 --        * a WHOLE-ORDER invoice (delivery_id NULL) on an order with any recorded delivery —
 --          save_invoice and the split-by-field engine both bill a fully delivered order without
---          naming a delivery, which would bill the recorded deliveries again. Such an order's
---          remaining deliveries are still invoiced per delivery; complete_delivery's automatic
---          split attempt already falls back to "needs split billing" when its engine refuses.
+--          naming a delivery, which would bill the recorded deliveries again
+--          (create_invoice_from_order already refuses any order with an active delivery). On an
+--          ordinary order the remaining deliveries are still invoiced per delivery. On a
+--          split-billed order (field allocations) the split engine is the only CRX billing path,
+--          so recording any of its deliveries leaves the rest unbillable in CRX until the record
+--          is removed — record such an order only if ALL of its billing happened outside CRX.
+--          complete_delivery's automatic split attempt falls back to "needs split billing"
+--          when refused, so completing a delivery is never blocked. (Checked 2026-10-07: none of
+--          the spring 2026 orders this was built for has field allocations.)
 --      Every invoice writer is a postgres-owned SECURITY DEFINER function, so a table trigger
 --      binds all of them. Credit memos are exempt: they credit, never bill. The trigger is named
 --      zz_ so it fires after trg_guard_invoice_terminal_order, which locks the order on INSERT: by
