@@ -11,7 +11,7 @@
 -- Creating CRX invoices for them would invent revenue and receivables that do not exist in CRX's
 -- books, so instead this records the fact explicitly.
 --
--- What this file does (schema only; it marks NO deliveries — that is a separate, owner-approved
+-- What this file does (schema and one read-only dashboard function; it marks NO deliveries — that is a separate, owner-approved
 -- data migration):
 --   1. delivery_external_billings: one row per delivery billed outside CRX, with a reason.
 --      Admin read-only through RLS. No INSERT/UPDATE/DELETE grant to any API role, so a row can
@@ -34,13 +34,20 @@
 --          split attempt already falls back to "needs split billing" when its engine refuses.
 --      Every invoice writer is a postgres-owned SECURITY DEFINER function, so a table trigger
 --      binds all of them. Credit memos are exempt: they credit, never bill. The trigger is named
---      zz_ so it fires after trg_guard_invoice_terminal_order, which locks the order: by then a
---      recording committed by guard 2 (which holds the same lock) is visible.
+--      zz_ so it fires after trg_guard_invoice_terminal_order, which locks the order on INSERT: by
+--      then a recording committed by guard 2 (which holds the same lock) is visible. (That trigger
+--      also refuses any UPDATE of order_id/delivery_id, so the only UPDATE this guard can see is an
+--      invoice_type change; recordings are written only by migrations, so that unlocked window is
+--      accepted.) A recorded delivery that is later voided still blocks whole-order billing of its
+--      order — fail-closed; remove the record by migration if that is ever wanted.
+--   4. get_dashboard_action_items: the dashboard's "Delivered, not invoiced" list skips recorded
+--      deliveries (live body re-emitted with one added predicate; preflight-pinned).
 --
--- No existing row changes. No money moves. Reversible: drop the two triggers, their functions and
--- the table (rollback block at the end of this comment).
---
--- Rollback (only after removing any dependent frontend reads):
+-- No existing row changes. No money moves. Reversible by a new reviewed migration (never by
+-- editing this file), in this order, only after removing the dependent frontend reads:
+--   0. Re-emit get_dashboard_action_items from 20260827041300_align_return_credit_delivery_surfaces.sql
+--      (body md5 d2fb4364e19598c3dbe9d998adae7fae) FIRST — otherwise the dashboard fails once the
+--      table below is gone.
 --   DROP TRIGGER IF EXISTS zz_guard_invoice_delivery_billed_outside_crx ON public.invoices;
 --   DROP FUNCTION IF EXISTS public.guard_invoice_delivery_billed_outside_crx();
 --   DROP TABLE IF EXISTS public.delivery_external_billings;
@@ -92,8 +99,8 @@ CREATE POLICY delivery_external_billings_admin_select
 REVOKE ALL ON TABLE public.delivery_external_billings FROM PUBLIC, anon, authenticated, service_role, metabase_ro;
 GRANT SELECT ON TABLE public.delivery_external_billings TO authenticated;
 
-DROP TRIGGER IF EXISTS set_updated_at ON public.delivery_external_billings;
-CREATE TRIGGER set_updated_at
+DROP TRIGGER IF EXISTS set_delivery_external_billings_updated_at ON public.delivery_external_billings;
+CREATE TRIGGER set_delivery_external_billings_updated_at
   BEFORE UPDATE ON public.delivery_external_billings
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
 
@@ -437,10 +444,12 @@ DO $postflight$
 BEGIN
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'guard_delivery_external_billing'
-         AND NOT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']) <> 1
+         AND NOT p.prosecdef AND p.proowner = 'postgres'::regrole
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']) <> 1
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'guard_invoice_delivery_billed_outside_crx'
-         AND p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']) <> 1
+         AND p.prosecdef AND p.proowner = 'postgres'::regrole
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']) <> 1
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
          AND p.proname IN ('guard_delivery_external_billing', 'guard_invoice_delivery_billed_outside_crx')) <> 2 THEN
@@ -463,7 +472,9 @@ BEGIN
   IF has_table_privilege('authenticated', 'public.delivery_external_billings', 'INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('anon', 'public.delivery_external_billings', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
      OR has_table_privilege('service_role', 'public.delivery_external_billings', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE')
-     OR NOT has_table_privilege('authenticated', 'public.delivery_external_billings', 'SELECT') THEN
+     OR NOT has_table_privilege('authenticated', 'public.delivery_external_billings', 'SELECT')
+     OR (EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_ro')
+         AND has_table_privilege('metabase_ro', 'public.delivery_external_billings', 'SELECT')) THEN
     RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: table privileges are not admin-read-only';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.invoices'::regclass
