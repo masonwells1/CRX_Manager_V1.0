@@ -814,14 +814,18 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   // ── Check 3 & 4: Invoice payments + balance formula ────────────
   try {
     const [invoiceRes, allocRes] = await Promise.all([
-      supabase
+      fetchAllRows((from, to) => supabase
         .from('invoices')
         .select('id, invoice_number, order_id, invoice_type, status, paid_amount_cents, prepay_applied_cents, write_off_cents, credit_applied_cents, total_amount_cents, balance_cents')
         .not('status', 'in', '("voided","cancelled")')
-        .is('deleted_at', null),
-      supabase
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to)),
+      fetchAllRows((from, to) => supabase
         .from('invoice_line_allocations')
-        .select('invoice_id, amount_cents'),
+        .select('invoice_id, amount_cents')
+        .order('id')
+        .range(from, to)),
     ]);
 
     if (invoiceRes.error) throw new Error(`Invoices query failed: ${invoiceRes.error.message}`);

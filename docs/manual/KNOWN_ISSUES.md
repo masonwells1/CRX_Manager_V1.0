@@ -55,9 +55,11 @@ leave these open:
   recorded delivery still blocks whole-order CRX billing of its order (fail-closed).
 - **The Order page and Orders list still offer whole-order invoicing on those 33 orders.** The server
   refuses with `DELIVERY_BILLED_OUTSIDE_CRX`, now shown in plain English, so no double bill.
-- **Reads of `delivery_external_billings` and the integrity checks' other table reads are not
-  paginated.** Fine at today's size (53 recorded deliveries); past the PostgREST row cap the reads
-  would truncate. The server still refuses to invoice any recorded delivery.
+- **The integrity checks page by offset, not by a snapshot.** Their reads (and the
+  `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
+  inserted between two pages can shift the next page by one, so a single run can miss or repeat a
+  row. Accepted: the report is a re-runnable diagnostic, ledger rows are never deleted, and the
+  server still refuses to invoice any recorded delivery. Keyset paging would close it.
 - **Six spring orders remain `partially_fulfilled`** (ORD-2026-0161/0162/0172/0176/0331/0343) with
   undelivered lines still reserving stock, and three of their deliveries are stuck `scheduled` /
   `in_progress` since April (DEL-00075, DEL-00077, DEL-00082). Whether that product is still owed is

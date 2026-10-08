@@ -44,9 +44,11 @@
 --      binds all of them. Credit memos are exempt: they credit, never bill. The trigger is named
 --      zz_ so it fires after trg_guard_invoice_terminal_order, which locks the order on INSERT: by
 --      then a recording committed by guard 2 (which holds the same lock) is visible. (That trigger
---      also refuses any UPDATE of order_id/delivery_id, so the only UPDATE this guard can see is an
---      invoice_type change; recordings are written only by migrations, so that unlocked window is
---      accepted.) A recorded delivery that is later voided still blocks whole-order billing of its
+--      also refuses any UPDATE of order_id/delivery_id, so the UPDATEs this guard acts on are an
+--      invoice_type change and an invoice becoming active again — a restore from soft-delete, which
+--      no app path does, or an un-void, which needs the admin override. For those the guard takes
+--      the order lock itself before checking, so a concurrent recording is always seen.)
+--      A recorded delivery that is later voided still blocks whole-order billing of its
 --      order — fail-closed; remove the record by migration if that is ever wanted.
 --   4. get_dashboard_action_items: the dashboard's "Delivered, not invoiced" list skips recorded
 --      deliveries (live body re-emitted with one added predicate; preflight-pinned).
@@ -87,7 +89,7 @@ CREATE TABLE IF NOT EXISTS public.delivery_external_billings (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT delivery_external_billings_reason_chk
-    CHECK (char_length(btrim(reason)) BETWEEN 1 AND 500)
+    CHECK (char_length(reason) <= 500 AND reason ~ '[^[:space:]]')
 );
 
 COMMENT ON TABLE public.delivery_external_billings IS
@@ -199,6 +201,13 @@ BEGIN
      AND OLD.status NOT IN ('voided', 'cancelled') THEN
     RETURN NEW;
   END IF;
+
+  -- Take the order lock the recording guard takes, then check: a recording committed meanwhile is
+  -- seen (READ COMMITTED re-reads after the wait), and one that starts later waits for this
+  -- invoice and then sees it. On INSERT trg_guard_invoice_terminal_order already holds it.
+  PERFORM 1 FROM public.orders o
+   WHERE o.id = COALESCE(NEW.order_id, (SELECT d.order_id FROM public.deliveries d WHERE d.id = NEW.delivery_id))
+     FOR UPDATE;
 
   IF NEW.delivery_id IS NOT NULL THEN
     IF EXISTS (
@@ -494,9 +503,20 @@ BEGIN
          AND has_table_privilege('metabase_ro', 'public.delivery_external_billings', 'SELECT')) THEN
     RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: table privileges are not read-only';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.invoices'::regclass
-                  AND tgname = 'zz_guard_invoice_delivery_billed_outside_crx' AND tgenabled = 'O' AND NOT tgisinternal) THEN
-    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: invoice guard trigger missing';
+  -- The invoice guard must call the right function and fire on exactly these columns: dropping
+  -- deleted_at or status would reopen the restore / un-void path.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t
+     WHERE t.tgrelid = 'public.invoices'::regclass
+       AND t.tgname = 'zz_guard_invoice_delivery_billed_outside_crx'
+       AND t.tgenabled = 'O' AND NOT t.tgisinternal
+       AND t.tgfoid = 'public.guard_invoice_delivery_billed_outside_crx()'::regprocedure
+       AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+              FROM pg_attribute a
+             WHERE a.attrelid = t.tgrelid AND a.attnum = ANY (t.tgattr::int2[]))
+           = ARRAY['deleted_at', 'delivery_id', 'invoice_type', 'order_id', 'status']
+  ) THEN
+    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: invoice guard trigger missing or not firing on the intended columns';
   END IF;
   IF (SELECT count(*) FROM pg_proc p
        WHERE p.oid = 'public.get_dashboard_action_items(integer)'::regprocedure
