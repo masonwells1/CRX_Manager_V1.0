@@ -1,9 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-07 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-07 11:47 UTC, after PR #885's apply: 1019 rows /
-1012 distinct names, `max(version)` `20261007114554`; the read before it, unchanged since PR #800's
-apply, had 1018 rows, `max(version)` `20261002230949`).
+**Last verified:** 2026-10-09 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr` on 2026-10-09: 1019 rows / 1012 distinct names,
+`max(version)` `20261007114554`, unchanged since the 2026-10-07 11:47 UTC read after PR #885's apply;
+the read before that, unchanged since PR #800's apply, had 1018 rows, `max(version)`
+`20261002230949`).
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
@@ -18,6 +19,11 @@ ships or quarterly, whichever comes first.
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
   line goes stale on the next apply. The full boundary history is in
   `docs/reference/migration-history.md`.
+- **Written, NOT applied (waits for Mason's approval):** `20261008120000_scope_order_invoices_to_rep`
+  (migration-history row 938, branch `claude/rep-scope-order-invoices`) scopes invoices created from
+  orders to the calling sales rep (only their assigned customers, only under their own name; admins
+  unrestricted). It does not move the high-water above until it is applied; live still lets any rep
+  invoice any order (KNOWN_ISSUES, "FIXED, PENDING APPLY").
 - **Applied since 2026-09-20 (authored name → ledger version):** `20260914100100_next_invoice_number_year_chicago`
   (`20260921141423`), `20260914100200_commission_history_report_replay_guard` (`20260921141451`),
   `20260914100300_refuse_stale_commission_payment_recipient` (`20260921141740`),

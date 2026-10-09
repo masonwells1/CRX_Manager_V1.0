@@ -361,6 +361,17 @@ to show was stale: live also pins the actor.
 | rebate_programs | Admin / Sales Rep | Admin | Admin | Admin |
 | rebate_claims | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 
+**Invoices created from orders (RPC-level scope, not RLS).** Because `invoices.salesman_id` is a
+SELECT key ("Assigned salesman" above), the salesman an RPC records decides who can read the invoice.
+`save_invoice` already refuses a sales rep a customer not assigned to them (`CUSTOMER_SCOPE_DENIED`)
+or a requested salesman other than themselves (`SALESMAN_SCOPE_DENIED`). The same rule for
+`create_invoice_from_order` and `create_split_invoices_from_order` (customer = the order's customer,
+and for a split every field billing owner; salesman = `COALESCE(p_salesman_id, orders.salesman_id)`,
+which must be NULL or the rep; admins unrestricted) is in migration `20261008120000`, which is
+**written but NOT applied** (it waits for Mason's approval). Until it is applied, those two RPCs
+check only that the caller is an admin or a sales rep. `complete_delivery`'s non-allocated
+auto-invoice is not covered by either (see KNOWN_ISSUES).
+
 ---
 
 ## Debugging: Why Is My Query Returning Empty?

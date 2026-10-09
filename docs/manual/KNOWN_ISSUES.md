@@ -1,9 +1,11 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-07 (America/Chicago) against the live migration ledger** (read-only, after
-PR #885's apply; the counts and high-water live only in `docs/reference/migration-history.md`). That
-read re-certified only the applied-migration list in this header and the CRX-LIFE-001 entry (fix live; two
-post-apply gates still open). Every other entry's status (open, or
+**Last verified: 2026-10-09 (America/Chicago) against the live migration ledger** (read-only; the
+ledger was unchanged from the 2026-10-07 read after PR #885's apply; the counts and high-water live
+only in `docs/reference/migration-history.md`). The 2026-10-09 read re-certified only the
+applied-migration list in this header and the five entries dated 2026-10-08 (rep scoping written but
+NOT applied, and four new open items); the 2026-10-07 read re-certified the CRX-LIFE-001 entry (fix
+live; two post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
 date and was not all re-measured.
@@ -171,6 +173,100 @@ Mason's go-ahead; he was briefed on 2026-09-20 and chose to ship the scoped seas
 with this gap documented. (The original September 30 target was superseded by his 2026-09-28
 decision to land the four field-season migrations after 2026-10-01; see the entry above.)
 
+## FIXED, PENDING APPLY (written 2026-10-08; NOT applied — waits for Mason's approval) — order-invoice RPCs were not scoped to the calling rep
+
+**Live is still unfixed.** The fix is the migration
+`supabase/migrations/20261008120000_scope_order_invoices_to_rep.sql` (migration-history row 938). It
+is written and proven in a container, but it has **not** been applied to the live database; applying
+it needs Mason's explicit yes, because it changes what sales reps may do. Until then the gap below is
+open on live.
+
+**The gap (found 2026-10-06 while fixing CRX-LIFE-001; pre-existing; read from the live catalog).**
+`create_invoice_from_order` and `create_split_invoices_from_order` checked only
+`is_admin() OR is_sales_rep()`:
+- **Customer scope.** Any active rep holding an order's id could create a draft invoice on another
+  rep's (or an unassigned) customer and then read it (`created_by` = the rep). `save_invoice` refuses
+  the same case (`CUSTOMER_SCOPE_DENIED`).
+- **Salesperson.** They store `COALESCE(p_salesman_id, orders.salesman_id)` as the invoice's
+  `salesman_id` with no check. `invoices.salesman_id` is a read-access key (the `invoices` SELECT
+  policy and its child-table policies, `get_customer_balance_listing`, `get_field_profitability`), so
+  naming another profile grants that profile read access to the invoice. Sales reports and
+  commissions read `orders.salesman_id`, not this column. The app sends the signed-in profile's id.
+- **Split type gate (Codex review on PR #885).** A refused `field_application` split on an allocated
+  order failed on the table CHECK only after its first INSERT had drawn an invoice number, leaving a
+  numbering gap (never sent by the app).
+
+**The fix (Mason, 2026-10-06: reps bill only their own customers and only under their own name;
+admins unrestricted).** For a caller where `is_sales_rep()` is true, before any lock, idempotency
+lookup or claim, invoice number or write: the rep must be the assigned rep of the order's customer
+(for the split, also of every field billing owner the split could bill); the salesman the RPC will
+record, `COALESCE(p_salesman_id, orders.salesman_id)`, must be NULL or the rep. Refusals are bare
+`CUSTOMER_SCOPE_DENIED` / `SALESMAN_SCOPE_DENIED`; the app shows "You can only work with customers
+assigned to you" / "You can only create invoices under your own name". Each wrapper re-checks the
+invoices it actually returns (race and idempotent replay). The split wrapper gets the CRX-LIFE-001
+type allow-list before its claim, so a refused split draws no number. `complete_delivery` is not
+changed: its auto-split call is inside `EXCEPTION WHEN OTHERS`, so when a rep completes the last
+delivery of an allocated order that is not fully theirs the delivery still completes and the order is
+flagged `needs_split_billing` with an admin notification instead. Proof (container, not live):
+`node scripts/smoke/prove-order-invoice-rep-scope-real-schema.mjs` and the container-only chain
+`scripts/smoke/smoke-order-invoice-rep-scope.sql`. **Exposure** (read-only on live,
+2026-10-09): only 1 of 154 customers is assigned to a sales rep, there are 3 active reps, and no
+order-backed invoice has ever been created by a sales rep, so no past work would have been refused. This entry moves to the archive once the migration is applied and its
+post-apply checks pass.
+
+## OPEN 2026-10-08 — `complete_delivery`'s non-allocated auto-invoice is not scoped to the rep
+
+Found while proving the rep-scope fix above; pre-existing and **not** closed by it. When the last
+delivery of an order **without** field allocations completes, `complete_delivery` creates the draft
+invoice with a direct INSERT, outside `create_invoice_from_order`, so the new rep checks never run.
+Any sales rep who can complete a delivery can therefore produce a draft invoice for a customer that
+is not theirs (`salesman_id` NULL, `created_by` = the rep). Reproduced in the container prover
+(DELIVERIES step (e), before and after the fix: rep A completing rep B's customer's delivery leaves
+an invoice for that customer created by rep A). Not exercised live. Fix shape: decide whether a rep
+may complete another rep's customer's delivery at all, or scope the mono auto-invoice the same way;
+a separate reviewed migration on `_complete_delivery_authorized_impl`. Needs a Mason decision on the
+rule.
+
+## OPEN 2026-10-08 (latent; never fired live) — invoices created through the order RPCs would be numbered `INV-` instead of `CS-` / `MC-`
+
+`invoices.invoice_number` defaults to `next_invoice_number('field_application')`, which always uses
+the `INV` prefix and `invoice_number_seq`, and the order-RPC implementations
+(`20260827041400_align_return_credit_order_invoice_gates.sql:153-160, 424-430`) rely on that default,
+so a `chemical_sale` or `misc_charge` invoice created through `create_invoice_from_order` or
+`create_split_invoices_from_order` would get an `INV-` number. Read-only on live 2026-10-09: all 12
+order-backed invoices are `chemical_sale` with `CS-` numbers (they come from `complete_delivery`,
+which numbers them itself), so this has never fired. Fix shape: pass the type-correct number in both
+implementations; separate reviewed migration.
+
+## OPEN 2026-10-08 (latent) — the order split engine can never bill a landlord: the terminal-order guard refuses a split invoice for a customer other than the order's
+
+`guard_invoice_terminal_order` (live LF md5 `d2ce62f92956ccd651f570a94ce3f1dc`) raises
+`INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID: invoice and order customer must match` for any order-backed
+invoice whose customer is not the order's customer. `create_split_invoices_from_order` bills each
+field's billing owners (`field_billing_defaults`), so any split where a field is billed (even partly)
+to a different customer — a landlord — is refused whole, for admins too, and `complete_delivery`'s
+auto-split falls back to `needs_split_billing`. Reproduced in the rep-scope container prover (an
+admin's 50/50 landlord split and an admin's delivery completion both refuse; outcome unchanged by the
+rep-scope fix). Read-only on live 2026-10-09: 1 `field_billing_defaults` row bills a customer other
+than its field's owner, but no allocated order uses such a field and no order is flagged
+`needs_split_billing`, so it has not fired. Needs a decision on whether order split billing to a
+landlord is meant to work (then the guard or the split engine must change) or not (then the UI should
+not offer it).
+
+## OPEN 2026-10-08 — two registered smoke chains fail on `main` for reasons unrelated to rep scoping
+
+Found while running the rep-scope prover; identical before and after `20261008120000` (the prover
+asserts the same first error both times):
+- `scripts/smoke/smoke-financial-scope-and-delivery-aggregate.sql` stops at its `save_invoice` replay
+  step with `SMOKE_FAIL: wrong invoice replay scope error: IDEMPOTENCY_ACTOR_MISMATCH` — the current
+  `save_invoice` answers another actor's key with `IDEMPOTENCY_ACTOR_MISMATCH` before the customer
+  scope check the chain expects. Its later delivery-aggregate steps therefore never run.
+- `scripts/smoke/smoke-split_invoices_jsonb_fix.sql` inserts a priced product directly, which the
+  governed-pricing trigger refuses (`PRODUCT_PRICING_GOVERNED_PATH_REQUIRED`).
+Both are stale fixtures/expectations, not product bugs; they need their own small repair (decide
+which refusal `save_invoice` should give a cross-actor replay, and price the product through the
+governed RPCs).
+
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 
 Each item was re-checked against `main` on 2026-09-26. Each source doc named below is removed in the
@@ -334,30 +430,9 @@ Each of these was recorded inside an entry that is otherwise fixed or closed and
 archive. They are listed here so the open part of this file shows them. None was re-measured on
 2026-09-26 unless it says so.
 
-- **Order-invoice RPCs are not scoped to the rep (found 2026-10-06 while fixing CRX-LIFE-001;
-  pre-existing; read from the live catalog, not exercised live).** Two related gaps in
-  `create_invoice_from_order` and `create_split_invoices_from_order`, whose only gate is
-  `is_admin() OR is_sales_rep()`:
-  - **Customer scope.** They never check that the order's customer is assigned to the calling rep,
-    so any active rep holding an order's id can create a draft invoice on another rep's customer
-    and then read it (`created_by` = the rep). `save_invoice` refuses the same case
-    (`CUSTOMER_SCOPE_DENIED`); the CRX-LIFE-001 container run showed a rep invoicing an unassigned
-    customer's order.
-  - **Salesperson.** They store `COALESCE(p_salesman_id, orders.salesman_id)` as the invoice's
-    `salesman_id` with no check that a rep may only name themselves. `invoices.salesman_id` is a
-    read-access key (the `invoices` SELECT policy and the policies on its line, share and
-    field-billing child tables, plus `get_customer_balance_listing` and `get_field_profitability`),
-    so naming another profile grants that profile read access to the invoice. Sales reports and
-    commissions read `orders.salesman_id`, not this column. The app sends the signed-in profile's id.
-  **Mason, 2026-10-06: the next change after CRX-LIFE-001** (`DECISION_LOG.md`). Intended rule:
-  reps bill only their own customers and only under their own name; admins unrestricted. Fix in a
-  separate reviewed migration: refuse a non-admin caller whose customer is not assigned to them or
-  whose non-null `p_salesman_id` differs from `auth.uid()`, minding `complete_delivery`'s call into
-  the split RPC. That change re-emits the split wrapper, so it also adds the CRX-LIFE-001 type
-  allow-list there, before any claim or insert: today a refused `field_application` split on an
-  allocated order fails on the table CHECK only after its first INSERT has drawn an invoice number
-  from the sequence, so each such refused call (never sent by the app) leaves a numbering gap
-  (Codex GitHub review on PR #885). (See CRX-LIFE-001.)
+- **Order-invoice RPCs are not scoped to the rep** — moved 2026-10-08 to its own entry above,
+  "FIXED, PENDING APPLY … order-invoice RPCs were not scoped to the calling rep". The fix
+  (`20261008120000`) is written but NOT applied; live is still unfixed until Mason approves the apply.
 
 - **Customer documents.** Not recorded in this file: the post-apply live check for `20260914100700`
   (the five browser Storage policies on `customer-documents` gone, the path-shape constraint present,
