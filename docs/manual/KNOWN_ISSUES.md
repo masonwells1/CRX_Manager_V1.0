@@ -226,6 +226,9 @@ same sweep went to `TODO.md` §5. Re-verify against the live app before fixing.
   as current on one and 30–59 on the other. (2) `invoice_date` has no future-date bound in the UI or on the
   server, so a typo like 2206 is accepted. (3) Three filters cut the day at UTC midnight rather than Chicago:
   `Invoices.tsx` season filter, `TeamBoard.tsx` date filter, and the `CustomerDetail.tsx` 90-day window.
+  (Since 2026-10-09 the `Invoices.tsx` season filter applies only to closed invoices — paid, voided,
+  cancelled; open ones show from every season, see `src/lib/invoiceSeasonWindow.ts` — so the UTC cut can
+  only move a closed invoice on or off the list.)
   (Source: `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (removed in the 2026-09-26 docs cleanup; recover with `git show 4b6ff6293:docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md`).)
 - **List-page row caps (scale limit).** `DataTable` has no pagination, so most list pages load a fixed
   number of rows and filter in the browser.
@@ -702,7 +705,9 @@ cannot see that anything was skipped.
 
 **The cosmetic ones** — report/dialog defaults the user can change in the UI:
 `ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
-`ReportShell.tsx:20-29`, `FieldInvoices.tsx:44`, `ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
+`ReportShell.tsx:20-29`, `invoiceSeasonWindow.ts` (the invoice lists' window for CLOSED invoices only;
+open invoices are never season-windowed since 2026-10-09, and these lists have no season control),
+`ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
 `SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
 pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
 

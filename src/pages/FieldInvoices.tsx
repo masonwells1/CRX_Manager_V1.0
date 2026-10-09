@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import Tabs, { type TabItem } from '../components/ui/Tabs';
 import PageHeader from '../components/ui/PageHeader';
 import { supabase } from '../lib/db';
-import { getSeasonDates } from '../utils/season';
+import { openOrInSeasonFilter } from '../lib/invoiceSeasonWindow';
 import FieldInvoicesListPanel from '../components/field-invoices/FieldInvoicesListPanel';
 import FieldInvoicesUnpostedPanel from '../components/field-invoices/FieldInvoicesUnpostedPanel';
 import FieldInvoicesPostedPanel from '../components/field-invoices/FieldInvoicesPostedPanel';
@@ -41,7 +41,9 @@ export default function FieldInvoices() {
     let cancelled = false;
 
     const loadCounts = async () => {
-      const { start: seasonStart, end: seasonEnd } = getSeasonDates();
+      // Same rule as the tab lists (src/lib/invoiceSeasonWindow.ts): open invoices
+      // count from every season, closed (paid) ones only this season, so each badge
+      // matches the rows its tab shows.
       const countInvoices = (statuses: string[]) =>
         supabase
           .from('invoices')
@@ -49,8 +51,7 @@ export default function FieldInvoices() {
           .eq('invoice_type', 'field_application')
           .in('status', statuses)
           .is('deleted_at', null)
-          .gte('invoice_date', seasonStart)
-          .lte('invoice_date', seasonEnd);
+          .or(openOrInSeasonFilter('invoice_date'));
 
       // These are independent, read-only count queries. They intentionally do
       // not use RPCs, and a count failure only omits a nonessential badge.

@@ -28,7 +28,8 @@ import {
 } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
-import { getSeasonDates } from '../utils/season';
+import { openOrInSeasonFilter } from '../lib/invoiceSeasonWindow';
+import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
 import PageHeader from '../components/ui/PageHeader';
@@ -131,7 +132,6 @@ export default function Invoices() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
     const QUERY_LIMIT = 2000;
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
@@ -142,8 +142,11 @@ export default function Invoices() {
       // own area (/field-invoices). This Chemical Sales list excludes them so a
       // field invoice no longer shows in BOTH lists.
       .neq('invoice_type', 'field_application')
-      .gte('created_at', seasonStart)
-      .lte('created_at', seasonEnd + 'T23:59:59')
+      // Open invoices (draft / unposted / posted / overdue) show from EVERY season, so a
+      // prior-season invoice still to post or collect never drops off at the Oct 1
+      // rollover; closed ones (paid / voided / cancelled) stay this-season only,
+      // windowed on created_at as before. See src/lib/invoiceSeasonWindow.ts.
+      .or(openOrInSeasonFilter('created_at'))
       .order('created_at', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -588,7 +591,12 @@ export default function Invoices() {
       key: 'invoice_date',
       header: 'Date',
       sortable: true,
-      render: (row) => new Date(row.invoice_date + 'T00:00:00').toLocaleDateString(),
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>{new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}</span>
+          <SeasonTag season={row.season} />
+        </div>
+      ),
     },
     {
       key: 'total_amount_cents',

@@ -23,7 +23,8 @@ import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
-import { getSeasonDates } from '../../utils/season';
+import { openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
+import SeasonTag from '../invoices/SeasonTag';
 import { SkeletonTable } from '../ui/Skeleton';
 import {
   mapFieldInvoiceRow,
@@ -102,19 +103,17 @@ export default function FieldInvoicesPostedPanel() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
-    // Window on invoice_date — the same field the Trans. Date filter/column and
-    // the monthly batch (date_trunc('month', invoice_date)) key off. Windowing
-    // on created_at would drop an invoice whose invoice_date is in range but
-    // created_at fell outside the season.
+    // Posted / overdue invoices still have money to collect, so they show from EVERY
+    // season; paid ones stay this-season only. The season window is on invoice_date —
+    // the same field the Trans. Date filter/column and the monthly batch
+    // (date_trunc('month', invoice_date)) key off. See src/lib/invoiceSeasonWindow.ts.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
       .eq('invoice_type', 'field_application')
       .in('status', [...STATUS_POSTED])
       .is('deleted_at', null)
-      .gte('invoice_date', seasonStart)
-      .lte('invoice_date', seasonEnd)
+      .or(openOrInSeasonFilter('invoice_date'))
       .order('invoice_date', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -507,7 +506,8 @@ export default function FieldInvoicesPostedPanel() {
               aria-label="Posting scope"
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             >
-              <option value="season">This Season</option>
+              {/* The query also keeps older still-unpaid (posted / overdue) invoices. */}
+              <option value="season">This Season + older unpaid</option>
               <option value="mtd">Month-to-date</option>
               {monthBatches.length > 0 && (
                 <optgroup label="Monthly batches">
@@ -602,6 +602,7 @@ export default function FieldInvoicesPostedPanel() {
                 <p className="mt-1 text-xs text-secondary">
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
+                <div className="mt-1"><SeasonTag season={row.season} /></div>
               </div>
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
@@ -667,6 +668,7 @@ export default function FieldInvoicesPostedPanel() {
                     </td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
                       {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}
+                      <div className="mt-0.5"><SeasonTag season={row.season} /></div>
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-1">

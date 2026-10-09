@@ -23,7 +23,7 @@ import { downloadReportPdf } from '../../lib/reportPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatCents as fmt } from '../../lib/money';
-import { getSeasonDates } from '../../utils/season';
+import SeasonTag from '../invoices/SeasonTag';
 import { SkeletonTable } from '../ui/Skeleton';
 import type { PostInvoiceGroupResult } from '../../types';
 import {
@@ -99,20 +99,18 @@ export default function FieldInvoicesUnpostedPanel() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
-    // Window on invoice_date — it is what the 'Trans. Date' filter + column use
-    // (ChemMan "Trans. Date" = the invoice/transaction date). Windowing on
-    // created_at would silently drop an invoice whose invoice_date is in range
-    // but whose created_at fell outside the season — hiding it from the list,
-    // the footer totals, AND Post All.
+    // NO season window: every row here is still to be posted, and an unposted bill
+    // must stay in the working tray, its footer totals AND Post All whatever season
+    // it was filed in. A season window hid every prior-season unposted invoice on
+    // the Oct 1 rollover (2026-10-09). Each row shows its season via SeasonTag;
+    // posting a prior-season invoice goes through the same post_invoice RPC, whose
+    // server-side rules decide whether it may post.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
       .eq('invoice_type', 'field_application')
       .in('status', ['draft', 'unposted'])
       .is('deleted_at', null)
-      .gte('invoice_date', seasonStart)
-      .lte('invoice_date', seasonEnd)
       .order('invoice_date', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -615,6 +613,7 @@ export default function FieldInvoicesUnpostedPanel() {
                 <p className="mt-1 text-xs text-secondary">
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
+                <div className="mt-1"><SeasonTag season={row.season} /></div>
               </div>
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
@@ -671,6 +670,7 @@ export default function FieldInvoicesUnpostedPanel() {
                     <td className="px-3 py-2 text-right tabular-nums font-medium">{fmt(row.total_amount_cents)}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
                       {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}
+                      <div className="mt-0.5"><SeasonTag season={row.season} /></div>
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-1">
