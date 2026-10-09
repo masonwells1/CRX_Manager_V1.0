@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   buildCodexExecArgs,
@@ -15,6 +16,7 @@ import {
   CODEX_REVIEW_EFFORT,
   CODEX_REVIEW_MODEL,
   CODEX_REVIEW_PERMISSION_PROFILE,
+  captureReviewOutput,
   codexExecutable,
   codexPushProofPath,
   codexReviewDenyReadPaths,
@@ -24,11 +26,15 @@ import {
   createSanitizedReviewWorkspace,
   DEFAULT_TIMEOUT_SEC,
   defaultCodexBinRoot,
+  fallbackCodexExecutable,
   fixedGitExecutable,
   GUARDED_BASE,
+  isCodexSandboxStartupFailure,
   parseArgs,
   removeSanitizedReviewWorkspace,
   resolveRepoRoot,
+  run,
+  runCodexWithSandboxFallback,
   safeReviewCaptureText,
   timeoutMessage,
   worktreeIsClean,
@@ -808,5 +814,227 @@ assert.throws(
   /Trusted Codex CLI not found/,
   "missing binary throws instead of trusting PATH",
 );
+
+// ── sandbox-startup fallback (2026-10-08) ────────────────────────────────────
+// The Codex app's 0.162.0-alpha.2 cannot start its elevated sandbox with any
+// deny-read entry. Only that exact failure shape may be retried, once, on the
+// fixed npm-installed Codex; everything else must stay final.
+const SANDBOX_STDERR =
+  "ERROR codex_core::session: Failed to create session: failed to load AGENTS.md instructions for environment `local`: " +
+  "fs sandbox helper failed with status exit code: 1: windows sandbox failed: helper_unknown_error: setup refresh had errors";
+const sandboxFailure = { status: 1, stdout: "", stderr: SANDBOX_STDERR };
+const cleanReview = { status: 0, stdout: `No blockers.\n${CODEX_VERDICT_TOKEN}: CLEAN\n`, stderr: "" };
+const blockersReview = { status: 0, stdout: `[P1] money bug\n${CODEX_VERDICT_TOKEN}: BLOCKERS\n`, stderr: "" };
+
+assert.equal(isCodexSandboxStartupFailure(sandboxFailure), true, "the observed alpha failure is a sandbox startup failure");
+assert.equal(isCodexSandboxStartupFailure(cleanReview), false, "a clean review is never retried");
+assert.equal(isCodexSandboxStartupFailure(blockersReview), false, "a BLOCKERS review is never retried");
+assert.equal(
+  isCodexSandboxStartupFailure({ ...sandboxFailure, stdout: "[P1] partial findings" }),
+  false,
+  "a run that produced ANY model output is never retried, even with a sandbox error on stderr",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ ...sandboxFailure, stdout: "\n" }),
+  false,
+  "even whitespace-only stdout makes the run final (Sol round 1, LOW)",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ ...sandboxFailure, status: 0 }),
+  false,
+  "a zero exit is never a startup failure",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ ...sandboxFailure, status: null, signal: "SIGTERM" }),
+  false,
+  "a killed run is never retried",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ ...sandboxFailure, error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) }),
+  false,
+  "a timeout is never retried",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ status: 1, stdout: "", stderr: "ERROR: 401 Unauthorized — please run codex login" }),
+  false,
+  "an auth failure is never retried",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ status: 1, stdout: "", stderr: "ERROR: You've hit your usage limit / out of credits" }),
+  false,
+  "a credit failure is never retried",
+);
+assert.equal(
+  isCodexSandboxStartupFailure({ status: 1, stdout: "", stderr: "exec command failed: windows sandbox failed to run rg" }),
+  false,
+  "a sandbox error from a command DURING a started session is not a startup failure",
+);
+
+// Fallback resolution: Windows only, a fixed path under the home directory, and
+// only when a real file exists there.
+assert.equal(fallbackCodexExecutable({ platform: "linux", home: "/home/x", pathExists: () => true }), null, "no fallback off Windows");
+assert.equal(
+  fallbackCodexExecutable({ platform: "win32", home: "C:\\Users\\mason", pathExists: () => false }),
+  null,
+  "a missing fallback resolves to null",
+);
+assert.equal(
+  fallbackCodexExecutable({
+    platform: "win32",
+    home: "C:\\Users\\mason",
+    pathExists: () => true,
+    statFn: () => ({ isFile: () => false }),
+  }),
+  null,
+  "a directory at the fallback path is not a binary",
+);
+assert.equal(
+  fallbackCodexExecutable({
+    platform: "win32",
+    home: "C:\\Users\\mason",
+    pathExists: () => true,
+    statFn: () => ({ isFile: () => true }),
+  }),
+  "C:\\Users\\mason\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+  "the fallback is the fixed npm install path under the home directory",
+);
+
+// Scenarios (a)–(e) through the SHARED runner plus the real verdict parser and
+// proof builder. run() itself is deliberately not injectable (Sol, 2026-10-08:
+// an injectable spawn would let any script mint a proof from a fake Codex), so
+// the mint decision is exercised exactly as run() makes it: a proof exists only
+// when codexReviewProofVerdict() of the runner's final result is "clean".
+{
+  const PRIMARY = "C:\\fake\\OpenAI\\Codex\\bin\\alpha\\codex.exe";
+  const FALLBACK = "C:\\fake\\npm\\codex.exe";
+  const HEAD_SHA = "c".repeat(40);
+  const BASE_SHA = "d".repeat(40);
+  const captureRoot = mkdtempSync(path.join(tmpdir(), "crx-review-fallback-"));
+  const reviewArgs = buildCodexExecArgs({ root: "C:\\packet", prompt: "p", platform: "win32", permissionConfig: "x" });
+
+  const runCase = ({ primary, fallback, fallbackBin = FALLBACK }) => {
+    const calls = [];
+    const notices = [];
+    const outcome = runCodexWithSandboxFallback({
+      primaryBin: PRIMARY,
+      args: reviewArgs,
+      spawnOptions: { input: "fixed review prompt\n", shell: false },
+      platform: "win32",
+      spawn: (bin, args, options) => {
+        calls.push({ bin, args, input: options.input });
+        return bin === PRIMARY ? primary : fallback;
+      },
+      resolveFallback: () => fallbackBin,
+      notify: (message) => notices.push(message),
+    });
+    const verdict = codexReviewProofVerdict({ status: outcome.result.status, stdout: outcome.result.stdout });
+    const proof = verdict ? buildCodexPushProof({ headSha: HEAD_SHA, baseSha: BASE_SHA, verdict }) : null;
+    const capture = readFileSync(captureReviewOutput(captureRoot, outcome.result, { ...outcome, primaryBin: PRIMARY }), "utf8");
+    return { calls, notices, outcome, proof, capture };
+  };
+
+  try {
+    // (a) Startup sandbox failure → exactly one fallback run with identical
+    // args and prompt → its CLEAN verdict yields a proof the guard accepts.
+    const a = runCase({ primary: sandboxFailure, fallback: cleanReview });
+    assert.equal(a.calls.length, 2, "(a) primary + exactly one fallback run");
+    assert.equal(a.calls[0].bin, PRIMARY, "(a) the primary binary runs first");
+    assert.equal(a.calls[1].bin, FALLBACK, "(a) the retry uses the fallback binary");
+    assert.deepEqual(a.calls[1].args, a.calls[0].args, "(a) same args (model, effort, profile) on the retry");
+    assert.equal(a.calls[1].input, a.calls[0].input, "(a) same prompt on the retry");
+    assert.ok(a.calls[1].args.includes(CODEX_REVIEW_MODEL), "(a) the retry still pins the Sol model");
+    assert.ok(a.calls[1].args.includes('windows.sandbox="elevated"'), "(a) the retry keeps the elevated sandbox");
+    assert.equal(a.outcome.fallbackUsed, true, "(a) the runner reports the fallback was used");
+    assert.equal(a.outcome.codexBin, FALLBACK, "(a) the runner reports the binary that produced the verdict");
+    assert.ok(a.notices.length === 1 && /^NOTICE:/.test(a.notices[0]), "(a) one clear NOTICE line");
+    assert.ok(a.proof, "(a) the fallback's clean verdict is mintable");
+    assert.equal(proofValid(a.proof, HEAD_SHA, new Date(), BASE_SHA), true, "(a) and passes the guard's proofValid");
+    assert.ok(a.capture.includes(`Codex binary: ${FALLBACK}`), "(a) the capture records the binary that actually ran");
+    assert.ok(/Fallback: used/.test(a.capture), "(a) the capture records that the fallback was used");
+
+    // (b) Real findings from the primary → no retry, nothing mintable.
+    const b = runCase({ primary: blockersReview, fallback: cleanReview });
+    assert.equal(b.calls.length, 1, "(b) a BLOCKERS verdict is never retried");
+    assert.equal(b.proof, null, "(b) nothing mintable");
+    assert.ok(b.capture.includes(`Codex binary: ${PRIMARY}`), "(b) the capture records the primary binary");
+    const b2 = runCase({ primary: { ...sandboxFailure, stdout: "[P1] partial" }, fallback: cleanReview });
+    assert.equal(b2.calls.length, 1, "(b) any model output makes the run final");
+    assert.equal(b2.proof, null, "(b) nothing mintable after partial output");
+
+    // (c) Timeout, and a non-sandbox error → no retry, nothing mintable.
+    const c1 = runCase({
+      primary: { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }) },
+      fallback: cleanReview,
+    });
+    assert.equal(c1.calls.length, 1, "(c) a timeout is never retried");
+    assert.equal(c1.proof, null, "(c) nothing mintable after a timeout");
+    const c2 = runCase({ primary: { status: 1, stdout: "", stderr: "ERROR: 401 Unauthorized" }, fallback: cleanReview });
+    assert.equal(c2.calls.length, 1, "(c) an auth error is never retried");
+    assert.equal(c2.proof, null, "(c) nothing mintable after an auth error");
+
+    // (d) Fallback missing (or the same binary) → fail closed.
+    const d = runCase({ primary: sandboxFailure, fallback: cleanReview, fallbackBin: null });
+    assert.equal(d.calls.length, 1, "(d) no fallback binary → no second run");
+    assert.equal(d.proof, null, "(d) nothing mintable");
+    const dSame = runCase({ primary: sandboxFailure, fallback: cleanReview, fallbackBin: PRIMARY.toLowerCase() });
+    assert.equal(dSame.calls.length, 1, "(d) a fallback that IS the primary binary is not a second run");
+    assert.equal(dSame.proof, null, "(d) nothing mintable");
+
+    // (e) Fallback also fails → exactly two runs, then fail closed.
+    const e = runCase({ primary: sandboxFailure, fallback: sandboxFailure });
+    assert.equal(e.calls.length, 2, "(e) the fallback runs once and is never retried itself");
+    assert.equal(e.proof, null, "(e) nothing mintable");
+    const e2 = runCase({ primary: sandboxFailure, fallback: blockersReview });
+    assert.equal(e2.calls.length, 2, "(e) a BLOCKERS fallback is final");
+    assert.equal(e2.proof, null, "(e) a BLOCKERS fallback mints nothing");
+  } finally {
+    rmSync(captureRoot, { recursive: true, force: true });
+  }
+}
+
+// run() must stay non-injectable and hard-wire the real spawn and binaries.
+{
+  const wrapperSource = readFileSync(fileURLToPath(new URL("./write-codex-push-proof.mjs", import.meta.url)), "utf8");
+  assert.ok(
+    wrapperSource.includes("export function run(argv = process.argv.slice(2)) {"),
+    "run() accepts only argv — no caller-supplied spawn, cwd, or binary resolver",
+  );
+  assert.equal(run.length, 0, "run() declares no required injection parameters");
+  const runBody = wrapperSource.slice(wrapperSource.indexOf("export function run("));
+  assert.ok(runBody.includes("codexBin = codexExecutable();"), "run() resolves the primary from the fixed install root");
+  assert.ok(runBody.includes("spawn: spawnSync,"), "run() hands the shared runner the real spawnSync");
+  assert.ok(
+    runBody.includes("resolveFallback: () => fallbackCodexExecutable(),"),
+    "run() hands the shared runner the fixed fallback resolver",
+  );
+}
+
+// write-apply-proofs.mjs must use the SAME shared runner, not a private copy.
+{
+  const applySource = readFileSync(fileURLToPath(new URL("./write-apply-proofs.mjs", import.meta.url)), "utf8");
+  assert.ok(applySource.includes("runCodexWithSandboxFallback("), "migration-apply proofs use the shared fallback runner");
+  assert.equal(/\bspawnSync\s*\(\s*codexBin/.test(applySource), false, "migration-apply proofs no longer spawn Codex directly");
+}
+
+// The shared runner itself, outside run(): the fallback's result is returned
+// as-is and the notice names both binaries.
+{
+  const notices = [];
+  const spawned = [];
+  const outcome = runCodexWithSandboxFallback({
+    primaryBin: "P",
+    args: ["exec", "-"],
+    spawnOptions: { input: "x" },
+    platform: "linux",
+    spawn: (bin) => { spawned.push(bin); return bin === "P" ? sandboxFailure : cleanReview; },
+    resolveFallback: () => "F",
+    notify: (message) => notices.push(message),
+  });
+  assert.deepEqual(spawned, ["P", "F"], "runner: primary then fallback");
+  assert.equal(outcome.fallbackUsed, true, "runner: reports the fallback was used");
+  assert.equal(outcome.codexBin, "F", "runner: reports the binary that produced the result");
+  assert.equal(outcome.result, cleanReview, "runner: returns the fallback's result untouched");
+  assert.ok(notices.length === 1 && /NOTICE/.test(notices[0]) && notices[0].includes("P") && notices[0].includes("F"), "runner: one notice naming both binaries");
+}
 
 console.log("OK - write-codex-push-proof helpers passed.");
