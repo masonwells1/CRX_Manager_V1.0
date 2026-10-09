@@ -192,6 +192,8 @@ interface CockpitData {
   // True only when get_watchdog_flags loaded cleanly. When false we CANNOT tell which
   // invoices are flagged, so bulk-posting is disabled (fail-safe — never post on unknown).
   watchdogLoadOk: boolean;
+  // Every cockpit query loaded without error (gates the page-wide "All clear!").
+  allChecksLoadOk: boolean;
 }
 
 interface MorningSummaryRpc {
@@ -486,6 +488,7 @@ export default function OfficeCockpit() {
     plannedBookingAttention: [],
     plannedBookingAttentionLoadOk: false,
     watchdogLoadOk: false,
+    allChecksLoadOk: false,
   });
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   // §4 Post-all-clean state.
@@ -924,6 +927,7 @@ export default function OfficeCockpit() {
       plannedBookingAttention,
       plannedBookingAttentionLoadOk,
       watchdogLoadOk,
+      allChecksLoadOk: errors.length === 0,
     });
     setMorningSummary(nextMorningSummary);
     setMorningSummaryLoadOk(nextMorningSummaryLoadOk);
@@ -1134,9 +1138,9 @@ export default function OfficeCockpit() {
       />
 
       {/* All-clear banner when nothing is wrong */}
-      {/* Only after every tracked check loaded: a failed check, or a capped delivery scan that
-          found nothing, has not proved anything clear. */}
-      {totalExceptions === 0
+      {/* Only after every check loaded: a failed query, or a capped delivery scan that found
+          nothing, has not proved anything clear. */}
+      {totalExceptions === 0 && data.allChecksLoadOk
         && data.deliveredNotInvoicedLoadOk && !data.deliveredNotInvoicedHitLimit
         && data.shortfallsLoadOk && data.plannedBookingAttentionLoadOk && data.watchdogLoadOk && (
         <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-4">

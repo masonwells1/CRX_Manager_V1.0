@@ -19,3 +19,7 @@
 - The page-wide "All clear!" banner now also requires every tracked check (delivered-not-invoiced,
   shortfalls, planned bookings, watchdog) to have loaded; a failed check no longer reads as clear
   (CodeRabbit).
+- The banner now requires every cockpit query to have loaded without error (allChecksLoadOk), not
+  just the four tiles that track their own load (CodeRabbit). OfficeCockpit.all-clear.test.tsx
+  proves it shows on a clean load and stays hidden when one query fails (mutation-checked: the
+  second case fails without the gate).

@@ -40,9 +40,11 @@ function query(table: string) {
   return builder;
 }
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+const stableNavigate = vi.fn();
+const stableToast = vi.fn();
+vi.mock('react-router-dom', () => ({ useNavigate: () => stableNavigate }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { role: 'admin' } }) }));
-vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: stableToast }) }));
 vi.mock('../lib/idempotency', () => ({ generateIdempotencyKey: vi.fn(() => 'key') }));
 vi.mock('../lib/criticalAction', () => ({ runCriticalAction: vi.fn() }));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
@@ -74,8 +76,6 @@ describe('OfficeCockpit "Delivered, not invoiced"', () => {
     expect(await screen.findByText('#DEL-UNBILLED', {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.queryByText('#DEL-B0')).toBeNull();
     expect(screen.queryByText('No completed deliveries need invoicing.')).toBeNull();
-    // The page may load more than once; each load reads page 1, then page 2, and stops there.
-    expect(deliveryRanges.slice(0, 2)).toEqual([[0, 49], [50, 99]]);
-    expect(deliveryRanges.every(([from]) => from === 0 || from === 50)).toBe(true);
+    expect(deliveryRanges).toEqual([[0, 49], [50, 99]]);
   });
 });
