@@ -39,7 +39,9 @@ is the commit GitHub will merge onto. The exemption applies only when:
 listed under "Never eligible" below: `AGENTS.md`, `CLAUDE.md`, `docs/workflows/`, the
 guardrails and model-tuning references, the owner playbook and this page. The other
 `docs/manual/` files, including `DECISION_LOG.md`, `KNOWN_ISSUES.md` and `CURRENT_STATE.md`,
-stay eligible because Mason approved `docs/manual/` with only `OWNER_PLAYBOOK.md` excluded. A
+stay eligible because Mason approved `docs/manual/` with only `OWNER_PLAYBOOK.md` excluded.
+When Luna twice asked for `DECISION_LOG.md` to always need Sol, Mason chose to keep it
+eligible ("keep it", 2026-10-09). A
 decision-log entry records a decision; it cannot open a gate. Approval for a gated action
 comes only from Mason in the current conversation, and the guards enforce the gates in code.
 

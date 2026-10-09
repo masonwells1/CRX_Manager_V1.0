@@ -20,7 +20,7 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
   files at the head, deleted files and old names at the base (Luna round 2). A symlink, submodule
   or executable named `x.md` needs Sol. The comparison must also end at the head, and each change
   status must be a plain edit.
-- **Reviewer disagreement, left for Mason.** Luna round 2 rated it a BLOCKER that
+- **Reviewer disagreement, decided by Mason ("keep it", 2026-10-09).** Luna round 2 rated it a BLOCKER that
   `docs/manual/DECISION_LOG.md` stays eligible. It is kept eligible because Mason's approved list
   includes `docs/manual/` with only `OWNER_PLAYBOOK.md` excluded, and a log entry cannot open any
   gate. `docs/reference/sol-exempt-paths.md` now says exactly which documents count as

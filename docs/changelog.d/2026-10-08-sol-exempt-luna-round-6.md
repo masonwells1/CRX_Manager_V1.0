@@ -2,10 +2,10 @@
 
 Luna's sixth review of the documentation-only Sol exemption raised one HIGH and three LOWs.
 
-- **HIGH, not changed, left for Mason.** Luna again says `docs/manual/DECISION_LOG.md` should
+- **HIGH, not changed: Mason decided.** Luna again says `docs/manual/DECISION_LOG.md` should
   always need Sol. This is the round-2 disagreement. Mason's approved list makes all of
-  `docs/manual/` eligible except `OWNER_PLAYBOOK.md`, so it stays eligible unless he decides
-  otherwise.
+  `docs/manual/` eligible except `OWNER_PLAYBOOK.md`, and asked directly, he chose to keep it
+  eligible ("keep it", 2026-10-09).
 - **LOW, fixed.** `AGENTS.md`'s autonomous-landing rule still listed a clean Sol review as a
   condition for every agent merge. It now says the documentation-only exception also satisfies
   it, and so does the Autonomous landing block in `docs/reference/agent-guardrails.md`.
