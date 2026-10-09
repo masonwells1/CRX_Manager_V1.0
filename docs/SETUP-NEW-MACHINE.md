@@ -171,7 +171,7 @@ The `env-guard` PreToolUse hook should refuse.
 Type `/preflight` or say "do a preflight check." It should:
 - Detect what changed (nothing if you haven't edited anything yet)
 - Skip subagent dispatch (no relevant changes)
-- Run lint + build + tests
+- Run lint + typecheck + build + tests
 - Print a verdict
 
 If these checks work, the automation is fully active.

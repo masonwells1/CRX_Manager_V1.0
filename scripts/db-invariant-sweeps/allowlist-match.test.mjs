@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { assertRequestedContracts, buildSweepQuery, functionContractSql, subtractAllowlist, hasStatementBreak, stripLeadingComments } from './allowlist-match.mjs';
+import { classifySql } from '../../.claude/hooks/live-testdata-lib.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const allowlist = JSON.parse(readFileSync(new URL('./allowlist.json', import.meta.url), 'utf8'));
@@ -131,12 +132,17 @@ try {
   // uncaught TypeError. Run from a COPY of this directory so the repo's predicates/ stays untouched —
   // a stray file there would break the fingerprint and sweep gates. (CodeRabbit on PR #791.)
   {
-    const fakeDir = path.join(scratch, 'sweeps');
+    // Same relative layout as the repo: allowlist-match.mjs imports the sweep envelope from the
+    // live-data guard two directories up.
+    const fakeDir = path.join(scratch, 'scripts', 'db-invariant-sweeps');
     const fakePredicates = path.join(fakeDir, 'predicates');
+    const fakeHooks = path.join(scratch, '.claude', 'hooks');
     mkdirSync(fakePredicates, { recursive: true });
+    mkdirSync(fakeHooks, { recursive: true });
     for (const f of ['run-sweeps.mjs', 'allowlist-match.mjs', 'allowlist.json']) {
       copyFileSync(path.join(root, 'scripts/db-invariant-sweeps', f), path.join(fakeDir, f));
     }
+    copyFileSync(path.join(root, '.claude/hooks/live-testdata-lib.mjs'), path.join(fakeHooks, 'live-testdata-lib.mjs'));
     writeFileSync(path.join(fakePredicates, 'bad-shape.sql'), 'VALUES (1)\n');
     const bad = spawnSync(
       process.execPath,
@@ -213,6 +219,19 @@ try {
   const printed = spawnSync(process.execPath, [runner, '--only', 'actor-forgery'], { cwd: root, env, encoding: 'utf8' });
   equal(printed.status, 0, printed.stderr);
   check(printed.stdout.includes('--adjudicate') && printed.stdout.includes('key-only comparison is NOT sufficient') && printed.stdout.includes("'function_contracts'"), 'MCP instructions preserve the exact matcher/metadata contract');
+  // Every block the full print-mode run emits must be sendable EXACTLY as printed: the guard allows
+  // a wrapped query only when it ends at `AS sweep_result;`, so nothing (e.g. the exception-key notes)
+  // may follow the query inside its block (Codex connector on #881). A block runs from its banner's
+  // closing `└───` line to the next banner or the closing note; predicates may contain blank lines.
+  const full = spawnSync(process.execPath, [runner], { cwd: root, env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  equal(full.status, 0, full.stderr);
+  const blocks = full.stdout.replace(/\r\n?/g, '\n').split(/^└─+\n/m).slice(1)
+    .map((rest) => rest.split(/\n┌─ PREDICATE|\nClaude: after running/)[0].replace(/\s+$/, ''));
+  const predicateCount = readdirSync(path.join(root, 'scripts/db-invariant-sweeps/predicates')).filter((f) => f.endsWith('.sql')).length;
+  equal(blocks.length, predicateCount, 'one printed block per predicate');
+  for (const block of blocks) {
+    equal(classifySql(block), { block: false, kind: 'known-sweep-query' }, `printed block is allowed exactly as printed: ${block.slice(0, 80)}`);
+  }
   console.log(`ACTOR_ALLOWLIST_MATCH_PASS ${assertions} assertions; actual CLI mutation refusals observed`);
 } finally {
   rmSync(scratch, { recursive: true, force: true });

@@ -52,13 +52,13 @@
 // Run: node scripts/db-invariant-sweeps/write-predicate-fingerprints.mjs
 //   exit 0  the guard already matches the files
 //   exit 1  it does not (the replacement block is printed to stdout), the
-//           guard's markers are ambiguous, or the Set the guard exports
+//           guard's markers are ambiguous, or the Map the guard exports
 //           disagrees with its own marked block
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { KNOWN_SWEEP_PREDICATE_SHA256, normalizePredicateSql } from "../../.claude/hooks/live-testdata-lib.mjs";
+import { KNOWN_SWEEP_PREDICATES, normalizePredicateSql } from "../../.claude/hooks/live-testdata-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PREDICATE_DIR = path.join(HERE, "predicates");
@@ -154,11 +154,14 @@ export function renderRegion(predicates) {
       throw new Error(`refusing to embed a duplicate fingerprint: ${file} and ${seen.get(sha256)} normalise to the same text`);
     }
     seen.set(sha256, file);
-    return `  "${sha256}", // ${file}`;
+    // The file name is now a JavaScript string VALUE (the guard binds a wrapped
+    // sweep query's predicate name to it), not just a comment. The filename
+    // check above already excludes quotes, backslashes and line breaks.
+    return `  ["${sha256}", "${file}"],`;
   });
   return [
     BEGIN_LINE,
-    "export const KNOWN_SWEEP_PREDICATE_SHA256 = new Set([",
+    "export const KNOWN_SWEEP_PREDICATES = new Map([",
     ...lines,
     "]);",
     END_LINE,
@@ -183,10 +186,11 @@ export function renderRegion(predicates) {
 // same set the predicate normaliser folds (Codex, PR #648 round 7).
 //
 // The text comparison covers the marked block only, and code after the block
-// could still change the Set when the module loads. So when the caller passes
-// the Set the guard actually exports, a matching block with a different
-// runtime Set is "overridden", never "current" (Codex, PR #648 round 7).
-export function planRegeneration(guardText, predicates, loadedSet) {
+// could still change the Map when the module loads. So when the caller passes
+// the Map the guard actually exports, a matching block with a different
+// runtime Map — a hash added or dropped, or a hash re-pointed at another file —
+// is "overridden", never "current" (Codex, PR #648 round 7).
+export function planRegeneration(guardText, predicates, loadedMap) {
   const lines = String(guardText).replace(/\r\n?/g, "\n").split("\n");
   const at = (phrase) => lines.flatMap((line, i) => (line.includes(phrase) ? [i] : []));
   const beginAt = at(BEGIN);
@@ -205,9 +209,9 @@ export function planRegeneration(guardText, predicates, loadedSet) {
   const region = renderRegion(predicates);
   const current = lines.slice(beginAt[0], endAt[0] + 1).join("\n");
   if (current !== region) return { status: "stale", region };
-  if (loadedSet) {
-    const want = predicates.map((p) => String(p.sha256)).sort();
-    const got = [...loadedSet].sort();
+  if (loadedMap) {
+    const want = predicates.map((p) => `${String(p.sha256)} ${String(p.file)}`).sort();
+    const got = [...loadedMap].map(([sha256, file]) => `${sha256} ${file}`).sort();
     if (want.length !== got.length || want.some((h, i) => h !== got[i])) {
       return { status: "overridden", region };
     }
@@ -218,14 +222,14 @@ export function planRegeneration(guardText, predicates, loadedSet) {
 function main() {
   const predicates = collectPredicates();
   const rel = path.relative(process.cwd(), GUARD_PATH);
-  const plan = planRegeneration(fs.readFileSync(GUARD_PATH, "utf8"), predicates, KNOWN_SWEEP_PREDICATE_SHA256);
+  const plan = planRegeneration(fs.readFileSync(GUARD_PATH, "utf8"), predicates, KNOWN_SWEEP_PREDICATES);
   if (plan.status === "ambiguous") {
     console.error(`Refusing: ${rel} must contain exactly one well-formed marker line of each kind, in order; found ${plan.begins} begin and ${plan.ends} end.`);
     console.error("Restore a single well-formed marker pair; this script will not guess which list the guard uses.");
     process.exit(1);
   }
   if (plan.status === "overridden") {
-    console.error(`Refusing: the marked block in ${rel} matches the files, but the Set the guard exports does not.`);
+    console.error(`Refusing: the marked block in ${rel} matches the files, but the Map the guard exports does not.`);
     console.error("Code outside the markers changes the list when the guard loads. Remove it; this script will not.");
     process.exit(1);
   }
