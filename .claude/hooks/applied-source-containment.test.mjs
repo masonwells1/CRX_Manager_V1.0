@@ -542,6 +542,19 @@ try {
   const wrap = runHook(stopWrapPath, { session_id: "c3-test-corrupt" }, tmp);
   assert.equal(wrap.status, 0, "checker is fail-open on a corrupt ledger");
   assert.ok(!/APPLIED TO LIVE/.test(wrap.stdout), "corrupt ledger adds no phantom issue");
+  assert.ok(!/"decision":"block"/.test(wrap.stdout), "a corrupt ledger never blocks");
+
+  // Every OTHER loose end is a non-blocking note (Mason, 2026-10-02): an
+  // uncommitted file with no recorded apply ends the session with a
+  // systemMessage, never a block (CodeRabbit, PR #874).
+  writeFileSync(ledgerPath, "[]\n");
+  writeFileSync(path.join(tmp, "loose-end-notes.txt"), "uncommitted\n");
+  const note = runHook(stopWrapPath, { session_id: "c3-test-note" }, tmp);
+  assert.equal(note.status, 0, "a loose-end note exits 0");
+  assert.match(note.stdout, /"systemMessage"/, "an uncommitted file is reported as a note");
+  assert.match(note.stdout, /uncommitted file/, "the note names the loose end");
+  assert.ok(!/"decision":"block"/.test(note.stdout), "an uncommitted file alone never blocks");
+  rmSync(path.join(tmp, "loose-end-notes.txt"));
 
   console.log("OK - applied-source-containment checks passed.");
 } finally {

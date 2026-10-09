@@ -73,9 +73,9 @@ export default function ListSettingsModal({
           } disabled:opacity-60`}
         >
           {settings.showCompleted ? (
-            <Eye className="w-4 h-4 text-crx-green flex-shrink-0" aria-hidden="true" />
+            <Eye className="w-4 h-4 text-crx-green shrink-0" aria-hidden="true" />
           ) : (
-            <EyeOff className="w-4 h-4 text-secondary flex-shrink-0" aria-hidden="true" />
+            <EyeOff className="w-4 h-4 text-secondary shrink-0" aria-hidden="true" />
           )}
           <span className="text-sm font-medium text-nav-dark flex-1">Show Completed Jobs</span>
           <span className="text-xs text-secondary">
@@ -105,7 +105,7 @@ export default function ListSettingsModal({
                   } disabled:opacity-60`}
                 >
                   <span
-                    className={`flex items-center justify-center w-4 h-4 rounded border flex-shrink-0 ${
+                    className={`flex items-center justify-center w-4 h-4 rounded border shrink-0 ${
                       on ? 'bg-crx-green border-crx-green' : 'bg-white border-gray-300'
                     }`}
                     aria-hidden="true"

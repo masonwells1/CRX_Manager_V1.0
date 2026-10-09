@@ -92,10 +92,15 @@ row("Returns schema reference", documentedStatus, returnsDocLine || "missing",
 
 // Every hook wired in settings.json must be documented in agent-guardrails.md,
 // so the doc future agents are routed to can never silently fall behind the guard net.
+// Read only the `hooks` block: since 2026-09-26 `permissions.ask` also names hook
+// files and libraries (Mason is asked before a production gate is edited), and a
+// permission rule is not wiring. Falls back to the raw text if it does not parse.
 const settingsRaw = read(".claude/settings.json");
+let settingsHooksText = settingsRaw;
+try { settingsHooksText = JSON.stringify(JSON.parse(settingsRaw).hooks ?? JSON.parse(settingsRaw)); } catch { /* raw */ }
 const guardrails = read("docs/reference/agent-guardrails.md");
 const wiredHooks = [...new Set(
-  [...settingsRaw.matchAll(/\.claude[\\/]hooks[\\/]([\w.-]+\.mjs)/g)].map((m) => m[1])
+  [...settingsHooksText.matchAll(/\.claude[\\/]hooks[\\/]([\w.-]+\.mjs)/g)].map((m) => m[1])
 )];
 const undocumentedHooks = wiredHooks.filter((name) => !guardrails.includes(name));
 row("wired hooks documented in agent-guardrails.md", wiredHooks.length, wiredHooks.length - undocumentedHooks.length,

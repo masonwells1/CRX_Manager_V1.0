@@ -1537,7 +1537,7 @@ export default function FieldSetup() {
                 <p className="text-xs font-medium text-secondary">Field sections</p>
                 {drawnPolygons.map((poly, idx) => (
                   <div key={poly.drawId} className="flex items-center gap-3 p-2 border border-gray-100 rounded-lg">
-                    <div className="w-3 h-3 rounded-full bg-crx-green flex-shrink-0" />
+                    <div className="w-3 h-3 rounded-full bg-crx-green shrink-0" />
                     <span className="flex-1 text-sm text-nav-dark truncate">
                       Part {idx + 1} of {drawnPolygons.length} &mdash; {poly.acres.toFixed(2)} ac
                     </span>

@@ -1534,6 +1534,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_purchase_order',
   'save_quote',
   'set_product_phase3_metadata',
+  'soft_delete_customer_document',
   'stage_offline_action',
   'stage_supplier_price_import', // Supplier Pricing 1b — see approve_supplier_price_import note
   'stage_vendor_alias', // Supplier Pricing 1b — see approve_supplier_price_import note
@@ -2775,6 +2776,11 @@ function registryMigrationHighWater(): string {
 // here now sort above the boundary and are discovered without registration. They
 // stay registered so a later refresh that moves the boundary past them cannot
 // silently drop them; clear them on the same type-regeneration rule as above.
+// The four field-season files 20260914101000..101300 were added on 2026-10-02:
+// they applied live that day (PR #871) and the registry refresh taken after the
+// apply moved the authored boundary to 20260914101300, so they no longer sort
+// above it while src/types/supabase.ts still predates them. Clear them on the
+// same type-regeneration rule.
 const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260831160000',
   '20260831161000',
@@ -2792,6 +2798,10 @@ const MIGRATIONS_AWAITING_TYPE_REGENERATION = new Set<string>([
   '20260914100500',
   '20260914100600',
   '20260914100800',
+  '20260914101000',
+  '20260914101100',
+  '20260914101200',
+  '20260914101300',
 ]);
 
 /**
@@ -2976,7 +2986,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // supabase/migrations:
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
-
 ]);
 
 /**

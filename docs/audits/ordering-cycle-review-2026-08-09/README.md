@@ -17,6 +17,13 @@ The review changed no application source, schema, migration, deployment, or live
 | `build-report.mjs` | Generates `report.html` from `findings.json`. Correct a verdict there and re-run to rebuild. |
 | `workflow.mjs` | The review workflow itself — 9 finder agents across 3 phases, each finding adversarially verified. Kept verbatim as the record of what ran; its prompt embeds the original session's absolute repo path, so update that before re-running elsewhere. |
 
+**Cited records removed later.** Some evidence in `FINDINGS.md`, `findings.json`, `REFUTED.md` and `refuted.json`
+cites files under `docs/archive/` that the 2026-09-26 docs cleanup removed. They include the 2026-07-01
+inventory-aware scheduling handoff, the 2026-06-10 sell-side ship prompt, the UI-overhaul `STATE.md`, and several
+2026-05 spring-archive reports. The citations are left as written. Recover any cited file with
+`git show 4b6ff6293:<path>`, for example
+`git show 4b6ff6293:docs/archive/2026-summer-closeout/roadmap/2026-07-01-inventory-aware-scheduling-layer-2-handoff.md`.
+
 ## Method
 
 Nine finder agents ran across three phases at high reasoning effort, with no severity cap (per the CLAUDE.md review-prompt rule). **Every** finding was then handed to an independent verifier whose instruction was to refute it, defaulting to refuted when evidence was weak or the issue was already recorded in `KNOWN_ISSUES.md` or the 2026-08-05 gauntlet section-04 baseline. Only findings that survived that pass are recorded here.

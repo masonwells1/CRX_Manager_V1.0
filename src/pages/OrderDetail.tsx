@@ -1382,7 +1382,7 @@ export default function OrderDetail() {
         if (inProgressCount > 0) parts.push(`${inProgressCount} in progress`);
         return (
           <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-blue-50 border border-blue-200">
-            <Truck className="w-5 h-5 text-blue-600 flex-shrink-0" />
+            <Truck className="w-5 h-5 text-blue-600 shrink-0" />
             <div className="flex-1">
               <p className="text-sm font-medium text-blue-800">
                 {activeDeliveries.length} active {activeDeliveries.length === 1 ? 'delivery' : 'deliveries'} — {parts.join(', ')}
@@ -1537,7 +1537,7 @@ export default function OrderDetail() {
       {order.notes && (
         <Card>
           <div className="flex items-start gap-3">
-            <FileText className="w-4 h-4 text-secondary mt-0.5 flex-shrink-0" />
+            <FileText className="w-4 h-4 text-secondary mt-0.5 shrink-0" />
             <div>
               <p className="text-xs text-secondary font-medium mb-1">Order Notes <HelpTip text="Notes about this order that carry through to the load sheet and delivery. Use for special instructions like 'Call before delivering'." className="ml-1" /></p>
               <p className="text-sm text-nav-dark whitespace-pre-wrap">{order.notes}</p>
@@ -1851,7 +1851,7 @@ export default function OrderDetail() {
 
           {sharesLocked && (
             <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
                 Bill split is locked because invoice <strong>{lockingInvoice?.invoice_number}</strong> is already posted.
                 Void the invoice first to change the split.
@@ -2081,7 +2081,7 @@ export default function OrderDetail() {
       <Modal open={voidModalOpen} onClose={() => { setVoidModalOpen(false); setVoidReason(''); }} title="Void Order">
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg border border-red-200">
-            <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
             <div className="text-sm text-red-700 space-y-1">
               <p className="font-semibold">This action cannot be undone.</p>
               <ul className="list-disc list-inside space-y-0.5 text-red-600">

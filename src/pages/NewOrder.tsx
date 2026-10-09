@@ -639,7 +639,7 @@ export default function NewOrder() {
       {rupWarnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="text-sm text-amber-800">
               {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
             </div>
@@ -880,7 +880,7 @@ export default function NewOrder() {
                                 : 0
                             )}`}
                             aria-label="Reset price to catalog"
-                            className="p-1.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition-colors flex-shrink-0"
+                            className="p-1.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition-colors shrink-0"
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
