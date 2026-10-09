@@ -23,7 +23,7 @@ import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
-import { openOrInSeasonFilter, otherSeasonLabel } from '../../lib/invoiceSeasonWindow';
+import { isCurrentSeason, openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
 import { computeSeason, seasonStartDate } from '../../utils/season';
 import SeasonTag from '../invoices/SeasonTag';
 import { SkeletonTable } from '../ui/Skeleton';
@@ -189,9 +189,6 @@ export default function FieldInvoicesPostedPanel() {
   // 'YYYY-MM' of the current season's first month (October); earlier batch months
   // belong to a prior season. 'YYYY-MM' strings compare chronologically.
   const currentSeasonStartMonth = seasonStartDate(computeSeason()).slice(0, 7);
-  // The displayed set crosses more than one month-end batch — an Unpost All here
-  // would touch multiple batch totals (each must be re-reconciled / reprinted).
-  const crossesBatches = useMemo(() => spansMultipleBatches(visible), [visible]);
 
   const customerOptions: MultiSelectOption[] = useMemo(() => {
     const byId = new Map<string, string>();
@@ -356,7 +353,9 @@ export default function FieldInvoicesPostedPanel() {
       action: async () => {
         await downloadReportPdf({
           title: 'Posted Field Application Invoices',
-          subtitle: `${totals.count} invoice(s) — ${totals.totalAcres.toLocaleString()} acres — ${fmt(totals.totalAmountCents)}`,
+          // The scope wording goes on the PDF: the default scope mixes in older seasons'
+          // unpaid invoices, and an older month batch here holds only its unpaid ones.
+          subtitle: `${scopeReportLabel} — ${totals.count} invoice(s) — ${totals.totalAcres.toLocaleString()} acres — ${fmt(totals.totalAmountCents)}`,
           columns: [
             { header: 'Job #', key: 'job_number', format: (v) => String(v || '-') },
             { header: 'Invoice #', key: 'invoice_number' },
@@ -397,11 +396,26 @@ export default function FieldInvoicesPostedPanel() {
     () => visible.filter((r) => r.status === 'posted' || r.status === 'overdue'),
     [visible],
   );
+  // A row with no season counts as not this season (unknown), so it is left out too.
   const candidates = useMemo(
-    () => (scope.kind === 'season' ? unpostable.filter((r) => otherSeasonLabel(r.season) === null) : unpostable),
+    () => (scope.kind === 'season' ? unpostable.filter((r) => isCurrentSeason(r.season)) : unpostable),
     [unpostable, scope.kind],
   );
   const skippedOlderSeasonCount = unpostable.length - candidates.length;
+  // Unpost All's targets cross more than one month-end batch: it would touch multiple
+  // batch totals (each must be re-reconciled / reprinted). Based on what Unpost All
+  // would actually change, not on every row shown.
+  const crossesBatches = useMemo(() => spansMultipleBatches(candidates), [candidates]);
+  // Scope wording for the report PDF, so a printed total says what it covers.
+  const scopeReportLabel = (() => {
+    if (scope.kind === 'season') return "This season + older seasons' unpaid invoices";
+    if (scope.kind === 'mtd') return 'Month-to-date';
+    const batch = monthBatches.find((b) => b.month === scope.month);
+    const name = batch?.label ?? scope.month;
+    return scope.month < currentSeasonStartMonth
+      ? `${name} batch — unpaid invoices only (paid ones are not on this list)`
+      : `${name} batch`;
+  })();
 
   const runUnpostAll = async () => {
     setShowUnpostConfirm(false);
@@ -496,13 +510,14 @@ export default function FieldInvoicesPostedPanel() {
         </p>
       </div>
 
-      {/* Dynamic month-batch span warning (only when the shown set crosses batches) */}
+      {/* Dynamic month-batch span warning (only when Unpost All's targets cross batches) */}
       {crossesBatches && (
         <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <p>
-            The invoices shown span more than one month-end batch. A bulk action here would affect
-            multiple batch totals — narrow the scope to a single batch (below) to act on one batch at a time.
+            The invoices Unpost All would change span more than one month-end batch. Unposting them here
+            would affect multiple batch totals — narrow the scope to a single batch (below) to act on one
+            batch at a time.
           </p>
         </div>
       )}
@@ -756,7 +771,10 @@ export default function FieldInvoicesPostedPanel() {
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-secondary">
-            Bulk actions apply to all {totals.count} invoice(s) currently shown.
+            Print actions apply to all {totals.count} invoice(s) currently shown.
+            {skippedOlderSeasonCount > 0
+              ? ` Unpost All applies to this season's ${candidates.length} only; ${skippedOlderSeasonCount} from another season are left out.`
+              : ' Unpost All applies to the unpaid ones.'}
           </p>
           <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
@@ -798,7 +816,7 @@ export default function FieldInvoicesPostedPanel() {
           `affected month-end batch totals. Paid invoices are skipped. Invoices in a ` +
           `closed accounting period cannot be unposted.` +
           (skippedOlderSeasonCount > 0
-            ? ` ${skippedOlderSeasonCount} unpaid invoice(s) from an earlier season in view are NOT included; ` +
+            ? ` ${skippedOlderSeasonCount} unpaid invoice(s) in view not from this season are NOT included; ` +
               `choose that month batch in Scope to unpost them.`
             : '')
         }

@@ -26,6 +26,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { retryGenericInvoiceCutover } from '../lib/genericInvoiceCutoverRetry';
 import { Sentry } from '../lib/sentry';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
+import { savedInvoiceChangedSinceLoad } from '../lib/invoicePostRecheck';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { todayInBusinessTz, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -311,13 +312,22 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     type SavedInvoiceForPost = {
       customer_id: string | null;
       total_amount_cents: number | null;
-      invoice_items: { product_id: string | null }[] | null;
+      invoice_date: string | null;
+      payment_terms: string | null;
+      due_date: string | null;
+      invoice_items: {
+        id: string;
+        product_id: string | null;
+        quantity: number | string | null;
+        unit_price_cents: number | null;
+        extended_cents: number | null;
+      }[] | null;
     };
     let saved: SavedInvoiceForPost | null = null;
     try {
       const { data, error } = await supabase
         .from('invoices')
-        .select('customer_id, total_amount_cents, invoice_items(product_id)')
+        .select('customer_id, total_amount_cents, invoice_date, payment_terms, due_date, invoice_items(id, product_id, quantity, unit_price_cents, extended_cents)')
         .eq('id', id!)
         .maybeSingle();
       if (error) throw error;
@@ -329,9 +339,30 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'Could not re-check the saved invoice before posting. Nothing was posted — please try again.');
       return;
     }
-    // Saved somewhere else since this screen loaded: show the current invoice first,
-    // so the person posting sees the customer and amount that will actually post.
-    if (saved.customer_id !== invoice.customer_id || saved.total_amount_cents !== invoice.total_amount_cents) {
+    // Saved somewhere else since this screen loaded: show the current invoice first, so
+    // the person posting sees what will actually post. Compares the customer, total,
+    // invoice date (the posting month), terms, due date AND every line's product,
+    // quantity, price and amount — a line swapped at the same total also reloads.
+    // (No unsaved local edits exist here, so `invoice` / `items` are the loaded copy.)
+    const changedElsewhere = savedInvoiceChangedSinceLoad(
+      {
+        customer_id: saved.customer_id,
+        total_amount_cents: saved.total_amount_cents,
+        invoice_date: saved.invoice_date,
+        payment_terms: saved.payment_terms,
+        due_date: saved.due_date,
+        lines: saved.invoice_items ?? [],
+      },
+      {
+        customer_id: invoice.customer_id,
+        total_amount_cents: invoice.total_amount_cents,
+        invoice_date: invoice.invoice_date,
+        payment_terms: invoice.payment_terms,
+        due_date: invoice.due_date,
+        lines: items,
+      },
+    );
+    if (changedElsewhere) {
       toast('error', 'This invoice was changed somewhere else since you opened it. It has been reloaded — check it, then post again.');
       fetchInvoice(id!);
       return;
@@ -951,6 +982,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     }
     // Credit-limit check on the SAVED customer and total (read in openPostConfirm) — the
     // account and amount post_invoice will actually post. No fresh read, no post.
+    // Limitation: for a split group this checks THIS invoice's total only, although
+    // post_invoice_group posts every sibling (unchanged from before; the check is a
+    // dismissible warning, not a gate).
     const savedPost = savedPostRef.current;
     if (!savedPost) {
       toast('error', 'Could not re-check the saved invoice before posting. Nothing was posted — please try again.');

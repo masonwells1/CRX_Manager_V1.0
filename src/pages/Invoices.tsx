@@ -28,7 +28,7 @@ import {
 } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
-import { openOrInSeasonFilter } from '../lib/invoiceSeasonWindow';
+import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib/invoiceSeasonWindow';
 import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
@@ -222,7 +222,18 @@ export default function Invoices() {
   // Determine what's selected for action buttons
   const selectedInvoices = invoices.filter((i) => selected.has(i.id));
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
-  const postConfirmation = describeInvoicePostScope(selectedPostable);
+  const basePostConfirmation = describeInvoicePostScope(selectedPostable);
+  // The list shows open invoices from every season, and the server does not check the
+  // season when posting, so the confirm names any selected invoice not from this season.
+  const selectedOtherSeasonPostable = selectedPostable.filter((i) => !isCurrentSeason(i.season));
+  const postConfirmation = selectedOtherSeasonPostable.length > 0
+    ? {
+        ...basePostConfirmation,
+        message:
+          `${basePostConfirmation.message} This includes ${selectedOtherSeasonPostable.length} invoice(s) not from ` +
+          `this season (${otherSeasonLabels(selectedOtherSeasonPostable)}); each posts into its own invoice-date month.`,
+      }
+    : basePostConfirmation;
   const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue'].includes(i.status));
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
   const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
@@ -496,8 +507,12 @@ export default function Invoices() {
     });
   };
 
+  // Select All picks only THIS season's rows (2026-10-09). The list also shows older
+  // seasons' open invoices, and one Select All + Post / Void / Delete must not reach
+  // last season's work by accident. An older invoice is still selectable by ticking
+  // its own box (it carries a visible "Season N" tag).
   const toggleAll = () => {
-    const selectable = filtered.filter((i) => selectableStatuses.includes(i.status));
+    const selectable = filtered.filter((i) => selectableStatuses.includes(i.status) && isCurrentSeason(i.season));
     if (selected.size === selectable.length && selectable.length > 0) {
       setSelected(new Set());
     } else {
@@ -858,6 +873,7 @@ export default function Invoices() {
                   <button
                     onClick={toggleAll}
                     className="text-xs text-crx-green hover:underline ml-2"
+                    title="Selects this season's invoices only. Tick an older-season invoice's own box to include it."
                   >
                     {selected.size > 0 ? 'Deselect All' : 'Select All'}
                   </button>

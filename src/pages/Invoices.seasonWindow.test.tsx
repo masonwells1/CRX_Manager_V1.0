@@ -9,15 +9,15 @@
  * row set, so this proves which rows the query actually returns.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { buildInMemoryQuery } from '../test-utils/inMemoryQuery';
 
-const { mockFrom, mockToast } = vi.hoisted(() => ({ mockFrom: vi.fn(), mockToast: vi.fn() }));
+const { mockFrom, mockRpc, mockToast } = vi.hoisted(() => ({ mockFrom: vi.fn(), mockRpc: vi.fn(), mockToast: vi.fn() }));
 
 vi.mock('../lib/db', async () => {
   const actual = await vi.importActual<typeof import('../lib/db')>('../lib/db');
-  return { ...actual, supabase: { from: mockFrom, rpc: vi.fn() } };
+  return { ...actual, supabase: { from: mockFrom, rpc: mockRpc } };
 });
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
 vi.mock('../contexts/AuthContext', () => ({
@@ -108,5 +108,40 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(postedTotal).toHaveTextContent('$200.00');
     expect(postedTotal).toHaveTextContent('2 posted invoices (including overdue)');
     expect(screen.getByText(/plus any invoice from an earlier season that is still unposted\s+or unpaid/)).toBeInTheDocument();
+  });
+
+  it('Select All picks only this season, so Select All + Post posts no prior-season draft', async () => {
+    mockRpc.mockImplementation(() => {
+      const result = Promise.resolve({ data: null, error: null });
+      return Object.assign(result, { throwOnError: () => result });
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+    // Only NEW-DRAFT (this season) is postable / deletable; the Season 2026 draft,
+    // unposted and posted / overdue invoices are not selected, so no Void button either.
+    expect(screen.getByRole('button', { name: /Post 1 Selected/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete 1/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Void \d+ Selected/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/not from this season/)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'NEW-DRAFT' });
+  });
+
+  it('a prior-season draft ticked by hand is named as not from this season in the Post confirm', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+
+    const row = screen.getAllByText('OLD-DRAFT').map((el) => el.closest('tr')).find(Boolean)!;
+    fireEvent.click(within(row).getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/This includes 1 invoice\(s\) not from this season \(Season 2026\)/)).toBeInTheDocument();
   });
 });

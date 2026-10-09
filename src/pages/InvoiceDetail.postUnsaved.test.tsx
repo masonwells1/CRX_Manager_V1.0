@@ -89,7 +89,6 @@ const SAVED_INVOICE = {
   header_notes: '',
   footer_notes: '',
   created_at: '2026-10-05T15:00:00Z',
-  invoice_items: [{ product_id: 'prod-A' }, { product_id: 'prod-RUP' }],
 };
 
 function lineItem(overrides: Record<string, unknown>) {
@@ -107,7 +106,15 @@ function lineItem(overrides: Record<string, unknown>) {
   };
 }
 
-// Mutable "database": what the invoices / invoice_items reads return right now.
+// The saved $4,000.00 invoice's two lines: prod-A and a restricted-use line (prod-RUP).
+const SAVED_TWO_LINES = [
+  lineItem({ id: 'item-1', product_id: 'prod-A', unit_price_cents: 150000, extended_cents: 150000 }),
+  lineItem({ id: 'item-2', product_id: 'prod-RUP', product: { product_name: 'RUP Product' }, description: 'RUP Product', unit_price_cents: 250000, extended_cents: 250000, sort_order: 1 }),
+];
+
+// Mutable "database": what the invoices / invoice_items reads return right now. The
+// invoices read embeds the SAME saved lines (invoice_items) the line read returns, as
+// the real database does.
 let savedInvoiceRow: Record<string, unknown> = SAVED_INVOICE;
 let savedLineItems: Array<Record<string, unknown>> = [];
 let invoiceReadError: { message: string } | null = null;
@@ -118,7 +125,9 @@ function setup(screenItems: Array<Record<string, unknown>>) {
   invoiceReadError = null;
   mockFrom.mockImplementation((table: string) => {
     if (table === 'invoices') {
-      return chain(invoiceReadError ? { data: null, error: invoiceReadError } : { data: savedInvoiceRow, error: null });
+      return chain(invoiceReadError
+        ? { data: null, error: invoiceReadError }
+        : { data: { ...savedInvoiceRow, invoice_items: savedLineItems }, error: null });
     }
     if (table === 'invoice_items') return chain({ data: savedLineItems, error: null });
     return chain({ data: [], error: null });
@@ -213,12 +222,14 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
   });
 
   it('reloads instead of posting when the invoice was moved to another customer elsewhere, then checks the NEW customer', async () => {
-    setup([lineItem({})]);
+    setup(SAVED_TWO_LINES);
     renderPage();
     const post = await screen.findByRole('button', { name: 'Post' });
 
-    // Another tab re-assigned the saved invoice to customer B at $5,000.
+    // Another tab re-assigned the saved invoice to customer B at $5,000 (prod-RUP line
+    // raised to $3,500).
     savedInvoiceRow = { ...SAVED_INVOICE, customer_id: 'cust-2', customer: { farm_name: 'Other Farm' }, total_amount_cents: 500000, balance_cents: 500000 };
+    savedLineItems = [SAVED_TWO_LINES[0], { ...SAVED_TWO_LINES[1], unit_price_cents: 350000, extended_cents: 350000 }];
     fireEvent.click(post);
 
     await waitFor(() =>
@@ -240,10 +251,9 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
   });
 
   it('runs the credit-limit and RUP checks on the saved invoice that will be posted', async () => {
-    // What this screen loaded ($2,500, prod-A only) is not what is saved now ($4,000 with
-    // a restricted-use line, e.g. saved from another tab). post_invoice posts the SAVED
-    // invoice, so the checks must look at the saved one.
-    setup([lineItem({ quantity: 1, unit_price_cents: 250000, extended_cents: 250000 })]);
+    // Screen and database agree ($4,000 with a restricted-use line): the checks use the
+    // freshly read saved customer, total and lines, then the invoice posts.
+    setup(SAVED_TWO_LINES);
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Post' }));
@@ -252,5 +262,41 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
     await waitFor(() => expect(postInvoiceCalls()).toHaveLength(1));
     expect(mockRupCheck).toHaveBeenCalledWith('cust-1', ['prod-A', 'prod-RUP']);
     expect(mockCreditCheck).toHaveBeenCalledWith({ customerId: 'cust-1', newAmountCents: 400000 });
+  });
+
+  it('reloads instead of posting when a line was swapped elsewhere at the SAME customer and total', async () => {
+    // Review round 2: the re-check used to compare only customer and total, so a product
+    // swapped from another tab at the same price posted lines this screen never showed.
+    setup(SAVED_TWO_LINES);
+    renderPage();
+    const post = await screen.findByRole('button', { name: 'Post' });
+
+    // Another tab replaced prod-A with prod-B at the same price: customer and total unchanged.
+    savedLineItems = [{ ...SAVED_TWO_LINES[0], product_id: 'prod-B', product: { product_name: 'Product B' }, description: 'Product B' }, SAVED_TWO_LINES[1]];
+    fireEvent.click(post);
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/changed somewhere else/)),
+    );
+    expect(screen.queryByText(/This will lock amounts/)).not.toBeInTheDocument();
+    expect(mockCreditCheck).not.toHaveBeenCalled();
+    expect(postInvoiceCalls()).toHaveLength(0);
+    // The reload shows the swapped line before anything can be posted.
+    expect((await screen.findAllByText(/Product B/)).length).toBeGreaterThan(0);
+  });
+
+  it('reloads instead of posting when the invoice date was moved elsewhere (a different posting month)', async () => {
+    setup(SAVED_TWO_LINES);
+    renderPage();
+    const post = await screen.findByRole('button', { name: 'Post' });
+
+    savedInvoiceRow = { ...SAVED_INVOICE, invoice_date: '2026-11-02' };
+    fireEvent.click(post);
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/changed somewhere else/)),
+    );
+    expect(mockCreditCheck).not.toHaveBeenCalled();
+    expect(postInvoiceCalls()).toHaveLength(0);
   });
 });

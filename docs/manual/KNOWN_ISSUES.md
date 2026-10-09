@@ -712,7 +712,13 @@ pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
 **Not user-changeable, but low impact:** `invoiceSeasonWindow.ts` (the invoice lists' season
 window; replaced `FieldInvoices.tsx:44` on 2026-10-09). These lists have no season control, but
 the window applies to CLOSED invoices only (paid, voided, cancelled); open invoices are never
-season-windowed, so the browser-clock season can only move a closed invoice on or off a list.
+season-windowed, so for the list itself the browser-clock season can only move a closed invoice on
+or off a list. The same browser-clock season also decides which open invoices count as "this
+season": the "Season N" tag, and which invoices the season-limited bulk actions skip (field Drafts
+Post All, Posted Unpost All in its default scope, Chemical Sales Select All). A browser clock that
+is wrong across October 1 would treat last season's invoices as this season's (no tag, included in
+those bulk actions) or the reverse. An invoice with no season, or a later season (for example from
+an `invoice_date` typo), counts as "not this season" and is left out.
 
 `FieldApplicationInvoice.tsx:533` (line as of 2026-09-26) is **fine** — it inherits `transactionDate`, which is now the
 Chicago business date.

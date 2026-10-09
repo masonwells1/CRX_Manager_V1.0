@@ -11,11 +11,14 @@
  * is in; only a CLOSED invoice (paid, voided, cancelled) is limited to the current
  * season. This is a display filter only.
  *
- * Caution: post_invoice / post_invoice_group have NO season or closed-month check
- * (live pg_proc read, 2026-10-09), so listing an older open invoice also makes it
- * reachable by bulk actions. The field Drafts tab's Post All names how many earlier-
- * season invoices it will post, and the Posted tab's Unpost All leaves earlier-season
- * invoices out of its default scope (see those panels).
+ * Caution: post_invoice / post_invoice_group do NOT check the invoice's SEASON. They
+ * DO refuse an invoice dated in a closed accounting period (check_period_open, in
+ * _post_invoice_impl_20260714 and _post_invoice_group_customer_scope_impl; live
+ * pg_proc read, 2026-10-09). Listing an older open invoice would make it reachable by
+ * bulk actions, so the bulk actions leave other-season invoices out by default: the
+ * field Drafts tab's Post All and the Posted tab's Unpost All (default scope) skip
+ * them, and the Chemical Sales "Select All" picks only this season's rows. An older
+ * invoice is still posted or changed one at a time, as an explicit choice.
  */
 import type { InvoiceStatus } from '../types';
 import { computeSeason, seasonStartDate } from '../utils/season';
@@ -36,6 +39,32 @@ export function openOrInSeasonFilter(
   // Half-open [Oct 1, next Oct 1): covers the whole of Sep 30 for a timestamp column too.
   const nextStart = seasonStartDate(season + 1);
   return `status.in.(${OPEN_INVOICE_STATUSES.join(',')}),and(${column}.gte.${start},${column}.lt.${nextStart})`;
+}
+
+/**
+ * True only when the invoice is filed in the current season. A missing season counts
+ * as NOT current (unknown), so a bulk action limited to this season leaves it out.
+ * The current season comes from the browser clock (computeSeason).
+ */
+export function isCurrentSeason(
+  season: number | null | undefined,
+  currentSeason: number = computeSeason(),
+): boolean {
+  return season === currentSeason;
+}
+
+/**
+ * Distinct season labels of rows that are NOT in the current season, for confirm text
+ * (e.g. "Season 2026, Season 2028"). A row with no season is listed as "no season".
+ */
+export function otherSeasonLabels(
+  rows: ReadonlyArray<{ season?: number | null }>,
+  currentSeason: number = computeSeason(),
+): string {
+  const labels = rows
+    .filter((row) => !isCurrentSeason(row.season, currentSeason))
+    .map((row) => otherSeasonLabel(row.season, currentSeason) ?? 'no season');
+  return [...new Set(labels)].join(', ');
 }
 
 /**

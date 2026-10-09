@@ -100,26 +100,50 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     expect(screen.getByText('$4,285.78')).toBeInTheDocument();
   });
 
-  it('Post All reaches the prior-season unposted invoice through the normal server post_invoice call, and its confirm says so', async () => {
+  it('Post All posts only this season; prior-season invoices are listed but left out, and the confirm says so', async () => {
     renderInRouter(<FieldInvoicesUnpostedPanel />);
     await waitFor(() => expect(screen.getAllByText('FA-OLD-UNPOSTED').length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByRole('button', { name: /Post All/ }));
-    // post_invoice has no season or closed-month check, so the confirm must name the
-    // earlier-season invoices it is about to post (FA-OLD-UNPOSTED + FA-OLD-DRAFT).
-    expect(await screen.findByText(/This includes 2 invoice\(s\) from an earlier season \(Season 2026\)/)).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Post 3 target(s)' }));
+    // post_invoice does not check the season (it does refuse a closed accounting period),
+    // so Post All leaves the two Season 2026 invoices out and names them.
+    expect(await screen.findByText(/2 invoice\(s\) not from this season \(Season 2026\) are NOT included/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Post 1 target(s)' }));
 
-    await waitFor(() => {
-      const posted = mockRpc.mock.calls
-        .filter(([name]) => name === 'post_invoice')
-        .map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id);
-      expect(posted).toEqual(expect.arrayContaining(['FA-OLD-UNPOSTED', 'FA-OLD-DRAFT', 'FA-NEW-DRAFT']));
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
+    const posted = mockRpc.mock.calls
+      .filter(([name]) => name === 'post_invoice')
+      .map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id);
+    expect(posted).toEqual(['FA-NEW-DRAFT']);
+  });
+
+  it('Post All skips a split group with a prior-season member hidden by a filter, and counts that hidden member', async () => {
+    // A this-season member and a Season 2026 member of the same split group. Filtering the
+    // view to the this-season member still must not post the group: post_invoice_group
+    // posts every member, including the hidden Season 2026 one.
+    const groupNew = fieldInvoice({ invoice_number: 'FA-GRP-NEW', status: 'unposted', season: 2027, invoice_group_id: 'grp-1', invoice_date: '2026-10-04', created_at: '2026-10-04T15:00:00+00:00' });
+    const groupOld = fieldInvoice({ invoice_number: 'FA-GRP-OLD', status: 'unposted', season: 2026, invoice_group_id: 'grp-1', invoice_date: '2026-09-20', created_at: '2026-09-20T15:00:00+00:00' });
+    mockFrom.mockImplementation((table: string) =>
+      buildInMemoryQuery(table === 'invoices' ? [groupNew, groupOld, ROWS[6]] : []));
+    mockRpc.mockImplementation((name: string) => {
+      const result = Promise.resolve({ data: name === 'post_invoice_group' ? { posted: 2 } : null, error: null });
+      return Object.assign(result, { throwOnError: () => result });
     });
-    // Nothing season-specific is sent. NOTE: post_invoice has NO season or closed-month
-    // check on the server, so the confirm text above is the only prior-season warning.
-    const postArgs = mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args);
-    for (const args of postArgs) expect(Object.keys(args as object).sort()).toEqual(['p_idempotency_key', 'p_invoice_id']);
+    renderInRouter(<FieldInvoicesUnpostedPanel />);
+    await waitFor(() => expect(screen.getAllByText('FA-GRP-OLD').length).toBeGreaterThan(0));
+
+    // Narrow the view to this season's dates only: FA-GRP-OLD (Sep 20) is hidden.
+    fireEvent.change(screen.getByLabelText('Trans. Date From'), { target: { value: '2026-10-01' } });
+    await waitFor(() => expect(screen.queryByText('FA-GRP-OLD')).not.toBeInTheDocument());
+    expect(screen.getAllByText('FA-GRP-NEW').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Post All/ }));
+    expect(await screen.findByText(/1 invoice\(s\) not from this season \(Season 2026\) are NOT included, nor is any split group that has one of them as a member \(1 group\(s\)\)/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Post 1 target(s)' }));
+
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')).toHaveLength(1));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'FA-NEW-DRAFT' });
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice_group')).toHaveLength(0);
   });
 
   it('Posted tab keeps prior-season overdue invoices but season-windows paid ones', async () => {
@@ -143,7 +167,7 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
 
     // Default scope: FA-OLD-OVERDUE is listed but NOT an Unpost All candidate.
     fireEvent.click(screen.getByRole('button', { name: 'Unpost All (1)' }));
-    expect(await screen.findByText(/1 unpaid invoice\(s\) from an earlier season in view are NOT included/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 unpaid invoice\(s\) in view not from this season are NOT included/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Unpost 1' }));
     await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'unpost_invoice')).toHaveLength(1));
     expect(mockRpc.mock.calls.filter(([name]) => name === 'unpost_invoice').map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id))
