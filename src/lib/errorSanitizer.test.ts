@@ -64,7 +64,7 @@ describe('sanitizeError', () => {
 
   it('maps return-credit and customer-scope tokens to operator guidance', () => {
     expect(sanitizeError('CUSTOMER_SCOPE_DENIED')).toBe('You can only work with customers assigned to you');
-    expect(sanitizeError('SALESMAN_SCOPE_DENIED')).toBe('You can only create invoices under your own name');
+    expect(sanitizeError('SALESMAN_SCOPE_DENIED')).toBe('You can only bill invoices under your own name');
     expect(sanitizeError(
       'ORDER_INVOICE_TYPE_NOT_ALLOWED: an invoice created from an order must be chemical_sale or misc_charge'
     )).toBe('An invoice created from an order must be a chemical sale or a misc charge');

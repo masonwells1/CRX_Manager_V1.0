@@ -24,12 +24,18 @@
 --      text save_invoice raises.
 --   2. Each wrapper re-checks the invoices it actually returns (created or replayed): this
 --      closes the window between the unlocked pre-check read and the implementation's
---      order lock, and scopes an idempotent replay the way save_invoice does. A refusal
---      here comes after the implementation drew its invoice number: the invoice rows roll
---      back, the number does not. Only a change committed inside that window reaches it
---      (an admin moving the order's customer or salesman, or anyone allowed to edit
---      field_billing_defaults - sales reps included - re-pointing a field's billing owner),
---      and the result is a gap in invoice numbering, never an out-of-scope invoice.
+--      order lock, and scopes an idempotent replay the way save_invoice does (including a
+--      replayed invoice whose salesman was changed after it was created). A refusal here
+--      comes after the implementation drew its invoice number: the invoice rows roll back,
+--      the number does not. Only a change committed inside that window reaches it (an admin
+--      moving the order's customer or salesman), and the result is a gap in invoice
+--      numbering, never an out-of-scope invoice. A field_billing_defaults change in that
+--      window (which live RLS lets sales reps make) cannot bill a different customer either:
+--      the existing lineage guard (trg_guard_invoice_terminal_order) refuses any order
+--      invoice whose customer is not the order's, again after a number is drawn. The
+--      re-check covers the invoices actually written; a candidate owner whose share nets to
+--      zero gets no invoice, so it is checked only by the strict pre-check (Mason's rule is
+--      about who is billed, and that set is exactly the returned invoices).
 --   3. The split wrapper also gets the CRX-LIFE-001 type allow-list (chemical_sale or
 --      misc_charge, ORDER_INVOICE_TYPE_NOT_ALLOWED / 23514) right after its role gate, so
 --      a refused split no longer draws an invoice number (nextval in the invoice_number
@@ -38,6 +44,10 @@
 -- BEGIN ... EXCEPTION WHEN OTHERS, so a refusal there flags the order for split billing and
 -- notifies admins; the delivery itself always completes. The idempotency request shapes
 -- and contract names are byte-identical, so existing keys keep replaying.
+-- NOT covered here (open, needs Mason's decision, see KNOWN_ISSUES): complete_delivery's
+-- auto-invoice for an order WITHOUT field allocations is a direct INSERT that never calls
+-- either wrapper, so a rep completing another rep's customer's last delivery still gets a
+-- draft for that customer. This file does not by itself enforce the rule system-wide.
 --
 -- idempotency-body-check: exempt - both wrappers keep their existing, unchanged idempotency:
 -- create_invoice_from_order requires the key and delegates to
@@ -52,8 +62,10 @@
 -- 20261007150000, 20261007150050, 20261007150100 and 20261007150200 MUST be applied live
 -- first: applying this file before them raises the ledger high-water above their stamps and
 -- strands them (they would then need renumbering). The pending-set guard reads only files on
--- origin/main, so it cannot enforce this while #889 is unmerged - re-read the live ledger
--- immediately before applying.
+-- origin/main, so it cannot enforce this while #889 is unmerged; the preflight below does
+-- (PREFLIGHT_PR889_NOT_APPLIED: all four must be in the ledger by name, as
+-- scripts/apply-migration-file.mjs records them). If #889 is renumbered or dropped, change
+-- that check in the same change. Still re-read the live ledger immediately before applying.
 
 SET LOCAL lock_timeout = '5s';
 
@@ -140,6 +152,8 @@ BEGIN
     RAISE EXCEPTION 'PREFLIGHT_SPLIT_INVOICE_DELEGATE_DRIFT: expected the exact reviewed split provenance implementation (its owner rule is what the scope pre-check mirrors)';
   END IF;
   IF (SELECT md5(replace(p.prosrc, chr(13), '')) = 'fcb3133010fe3f4f56e3be31f709d102' AND p.prosecdef
+        AND p.provolatile = 's' AND p.proowner = 'postgres'::regrole
+        AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public.is_sales_rep()'))
        IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'PREFLIGHT_ROLE_HELPER_DRIFT: expected the exact reviewed public.is_sales_rep()';
@@ -147,14 +161,26 @@ BEGIN
   IF (SELECT md5(replace(p.prosrc, chr(13), '')) = 'f8de9f000e40f7bfd8f792012f04fee0'
         FROM pg_proc p
        WHERE p.oid = to_regprocedure('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
+       IS DISTINCT FROM true
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = 'a1e9a043f27d3566f8ecf6d5e3a809ab'
+        FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
        IS DISTINCT FROM true THEN
-    RAISE EXCEPTION 'PREFLIGHT_COMPLETE_DELIVERY_DRIFT: expected the exact reviewed complete_delivery implementation (its auto-split call must stay inside EXCEPTION WHEN OTHERS)';
+    RAISE EXCEPTION 'PREFLIGHT_COMPLETE_DELIVERY_DRIFT: expected the exact reviewed complete_delivery wrapper and implementation (its auto-split call must stay inside EXCEPTION WHEN OTHERS)';
   END IF;
 
   IF (SELECT count(*)
-        FROM (VALUES ('customers', 'assigned_sales_rep'),
+        FROM (VALUES ('customers', 'id'),
+                     ('customers', 'assigned_sales_rep'),
+                     ('orders', 'id'),
                      ('orders', 'customer_id'),
                      ('orders', 'salesman_id'),
+                     ('order_items', 'id'),
+                     ('order_items', 'order_id'),
+                     ('invoices', 'id'),
+                     ('invoices', 'customer_id'),
+                     ('invoices', 'salesman_id'),
+                     ('fields', 'id'),
                      ('field_billing_defaults', 'field_id'),
                      ('field_billing_defaults', 'customer_id'),
                      ('fields', 'customer_id'),
@@ -165,8 +191,20 @@ BEGIN
          AND a.attname = want.column_name
          AND a.atttypid = 'uuid'::regtype
          AND a.attnum > 0
-         AND NOT a.attisdropped) <> 8 THEN
-    RAISE EXCEPTION 'PREFLIGHT_SCOPE_COLUMNS_MISSING: a customer, order, field or allocation column the scope rule reads is missing or not uuid';
+         AND NOT a.attisdropped) <> 16 THEN
+    RAISE EXCEPTION 'PREFLIGHT_SCOPE_COLUMNS_MISSING: a customer, order, line, invoice, field or allocation column the scope rule reads is missing or not uuid';
+  END IF;
+
+  -- Apply order (see the ORDERING header): PR #889's four migrations must already be in the
+  -- ledger, by the name scripts/apply-migration-file.mjs records (the file stem; its version
+  -- column is the apply time, so it cannot be used). Applying this file first strands them.
+  IF (SELECT count(DISTINCT m.name)
+        FROM supabase_migrations.schema_migrations m
+       WHERE m.name IN ('20261007150000_record_deliveries_billed_outside_crx',
+                        '20261007150050_lock_soft_deleted_orders',
+                        '20261007150100_mark_spring_2026_deliveries_billed_in_chem_man',
+                        '20261007150200_release_reservations_of_deleted_spring_orders')) <> 4 THEN
+    RAISE EXCEPTION 'PREFLIGHT_PR889_NOT_APPLIED: apply PR #889''s 20261007150000, 150050, 150100 and 150200 live first; applying this file before them strands them';
   END IF;
 END
 $preflight$;
@@ -583,11 +621,17 @@ BEGIN
        WHERE p.oid = to_regprocedure('public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)'))
        IS DISTINCT FROM true
      OR (SELECT md5(replace(p.prosrc, chr(13), '')) = 'fcb3133010fe3f4f56e3be31f709d102' AND p.prosecdef
+        AND p.provolatile = 's' AND p.proowner = 'postgres'::regrole
+        AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         FROM pg_proc p WHERE p.oid = to_regprocedure('public.is_sales_rep()'))
        IS DISTINCT FROM true
      OR (SELECT md5(replace(p.prosrc, chr(13), '')) = 'f8de9f000e40f7bfd8f792012f04fee0'
         FROM pg_proc p
        WHERE p.oid = to_regprocedure('public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
+       IS DISTINCT FROM true
+     OR (SELECT md5(replace(p.prosrc, chr(13), '')) = 'a1e9a043f27d3566f8ecf6d5e3a809ab'
+        FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'))
        IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'POSTFLIGHT_DELEGATE_CHANGED: an implementation, the role helper or complete_delivery changed during the apply';
   END IF;

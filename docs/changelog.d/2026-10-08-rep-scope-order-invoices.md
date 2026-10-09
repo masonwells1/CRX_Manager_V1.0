@@ -21,7 +21,7 @@ bodies (read-only md5s re-read 2026-10-09: `a1a91643…` and `398030fb…`):
 - `complete_delivery` is unchanged: a rep's refused auto-split falls back to `needs_split_billing` +
   admin notification and the delivery still completes.
 
-**App:** `src/lib/errorSanitizer.ts` now shows "You can only create invoices under your own name" for
+**App:** `src/lib/errorSanitizer.ts` now shows "You can only bill invoices under your own name" for
 `SALESMAN_SCOPE_DENIED` and a plain message for `ORDER_INVOICE_TYPE_NOT_ALLOWED`; both codes added to
 `RpcErrorCodes` in `src/lib/db.ts`. No screen changes.
 
@@ -69,6 +69,62 @@ test: `src/lib/orderInvoiceRepScopeMigration.test.ts`.
   stale chains are not repaired here (the admin split replay is asserted directly instead), and
   mutation (g) is an order-customer race, because a landlord-only race cannot create an invoice
   under the lineage guard.
+
+**Review round 2 (2026-10-09) fixes.**
+- **Not fixed, needs Mason (HIGH, deferred):** `complete_delivery`'s auto-invoice for an order without
+  field allocations still bypasses the rule (a rep completing another rep's customer's last delivery
+  gets a draft for that customer). It needs a business decision and its own reviewed migration on
+  `_complete_delivery_authorized_impl`, so this change does NOT make the rule hold system-wide; the
+  migration header, KNOWN_ISSUES and CURRENT_STATE now say so.
+- **Apply order is now enforced by the file (MED):** the preflight refuses with
+  `PREFLIGHT_PR889_NOT_APPLIED` unless all four PR #889 migrations are in the ledger by name (the name
+  `scripts/apply-migration-file.mjs` records; its version is the apply time). If #889 is renumbered or
+  dropped, that check changes with it.
+- **Prover replays #889 (MED):** its two schema migrations (`20261007150000`, `20261007150050`) are
+  replayed before the candidate (from disk once #889 is on the base, else from #889's head
+  `6f05ddbe3`), all four are recorded in the container ledger, and the external-billing and
+  deleted-order triggers are asserted present, so every result is proven on the schema live will have.
+  **Found for PR #889:** on its schema the registered chain
+  `smoke-govern-invoice-order-money-lifecycle.sql` stops at `ORDER_DELETED_LINES_LOCKED` (it plants a
+  line and a delivery on a soft-deleted order, which #889's `20261007150050` now refuses), before and
+  after this candidate alike. This prover checks that identical failure and also runs the chain with
+  #889's three deleted-order lock triggers disabled inside its own rolled-back transaction, where it
+  passes before and after. #889 should update that chain's fixture.
+- **Stronger pins:** the public `complete_delivery` wrapper (md5 `a1e9a043…`), `is_sales_rep`'s
+  volatility, owner and `search_path`, and eight more uuid scope columns (16 in all, re-read live).
+  The wrapper bodies are unchanged, so both postflight md5s are unchanged.
+- **Prover additions:** a replay after an admin changed the invoice's salesman (only the post-check's
+  salesman leg can refuse it; mutation (o) shows it returns the invoice without that leg); the
+  held-lock ordering mutations now hold one lock at a time (claim-only for (h)/(j), order-only for
+  (i)/(k)) and check the exact refusal when restored, plus (v) for the cifo pre-check; per-leg
+  mutations (q) cifo salesman pre-check, (r) COALESCE fallback, (s) split salesman pre-check, (t) the
+  order-customer owner leg (new fixture, step 5c) and (u) the billing-default filter (new allow case:
+  a field billed 100% to the rep's customer); a missing order for both wrappers; 16 more preflight
+  drift cases (overloads, owner, strictness, volatility, security mode, `search_path`, implementation
+  ACLs, a second scope column, #889 missing from the ledger); three postflight mutants (two wrong body
+  pins, and a late split type gate with a matching pin) that roll the apply back; the
+  idempotency-lock helpers (`check_idempotency`, `_claim_bound_lifecycle_idempotency`) pinned to live;
+  the admin-notification count read from the data. The proof line now says the two stale chains
+  assert nothing.
+- **Wording:** `SALESMAN_SCOPE_DENIED` now reads "You can only bill invoices under your own name"
+  (`save_invoice` also raises it on edits); the `db.ts` comment names its real origin; the chain spec
+  no longer reads as if its row check proves ordering; the migration header no longer says a
+  `field_billing_defaults`-only race reaches the post-check (the lineage guard refuses it).
+- **Recorded deviations from the design:** the split-billing chain keeps its md5 carve-out (accepts the
+  burned number only for the exact pre-candidate body `398030fb…`, printing `SMOKE_NOTE`) instead of the
+  design's `chainSource()` pin of the old chain in the CRX-LIFE-001 prover; it is deliberate, so the
+  registered chain stays runnable against live before the apply, and this prover asserts the note is
+  absent after the apply. If a later change restores that exact body, the chain's burn check turns off
+  with a note, not silently. The two stale chains are still not repaired (follow-up).
+- **Refuted (Luna MED):** "a zero-share field owner can slip through the split post-check". The
+  post-check covers every invoice written; a zero-share owner gets no invoice, and the lineage guard
+  refuses any order invoice whose customer is not the order's, so no unassigned customer can be
+  billed. Mason's rule is about who is billed.
+- **Deferred:** the split wrapper not requiring an idempotency key (pre-existing; KNOWN_ISSUES), a rep
+  replacing an order's named salesman with themselves (a Mason decision; KNOWN_ISSUES), the
+  `CRX_REP_SCOPE_NOT_IN_TRANSACTION` transaction-id branch (not reachable: a leftover marker table makes
+  the file's own `CREATE TEMP TABLE` fail first), the NULL-uid path, and a scope column changing type
+  rather than name.
 
 **Found on the way and recorded as open in KNOWN_ISSUES (not fixed here):** `complete_delivery`'s
 non-allocated auto-invoice is not rep-scoped; order-RPC invoices would be numbered `INV-` (latent);

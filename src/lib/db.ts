@@ -166,8 +166,9 @@ export const RpcErrorCodes = {
   // return-credit COGS and year-end report guards (20260827041000/041100)
   RETURN_CREDIT_CUTOVER_IN_PROGRESS: 'RETURN_CREDIT_CUTOVER_IN_PROGRESS',
   CUSTOMER_SCOPE_DENIED: 'CUSTOMER_SCOPE_DENIED',
-  // Order-invoice rep scope (20261008120000) and order-invoice type allow-list
-  // (20261006200000; the split wrapper since 20261008120000).
+  // save_invoice salesman scope (20260716190000+), now also the order-invoice wrappers
+  // (20261008120000); order-invoice type allow-list (20261006200000; split wrapper since
+  // 20261008120000).
   SALESMAN_SCOPE_DENIED: 'SALESMAN_SCOPE_DENIED',
   ORDER_INVOICE_TYPE_NOT_ALLOWED: 'ORDER_INVOICE_TYPE_NOT_ALLOWED',
   PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED: 'PO_CUMULATIVE_BILLING_CONFIRMATION_REQUIRED',

@@ -321,9 +321,11 @@ BEGIN
 
   -- 10. Replay re-scope: C_A is reassigned to rep B; rep A's exact replays are now refused.
   -- The PRE-check refuses these (the order's customer is no longer rep A's), before the
-  -- idempotency lookup. The post-check's replay leg is defence in depth: under the current
-  -- lineage guards a replayed invoice's customer is always the order's, so no fixture here
-  -- reaches it with the pre-check passing.
+  -- idempotency lookup. The post-check's CUSTOMER replay leg is defence in depth: under the
+  -- current lineage guards a replayed invoice's customer is always the order's, so no fixture
+  -- here reaches it with the pre-check passing. Its SALESMAN replay leg is reachable (an
+  -- admin can change a draft's salesman through save_invoice) and is proven by the prover
+  -- (FIX and mutation (o): a replay after the salesman became another rep).
   UPDATE public.customers SET assigned_sales_rep = v_rep_b WHERE id = v_c_a;
   BEGIN
     PERFORM public.create_invoice_from_order(v_o_a, NULL, 'chemical_sale', 'e2e-rep-scope-step-8-' || v_suffix);

@@ -6,10 +6,13 @@
  *
  * Builds the checked-in 2026-07-27 production schema baseline in a
  * network-disabled Supabase PostgreSQL 17 container, replays every ordered
- * post-baseline migration before the candidate, and then, as the
- * `authenticated` role exactly like a browser session through PostgREST:
+ * post-baseline migration before the candidate plus PR #889's schema
+ * migrations (which must be applied live first; all four #889 migrations are
+ * recorded in the container ledger, which the candidate's preflight requires),
+ * and then, as the `authenticated` role exactly like a browser session through
+ * PostgREST:
  *   0. FIDELITY: the replayed order-path bodies hash to the values read from
- *      live on 2026-10-08, so this is the code production runs;
+ *      live on 2026-10-08/09, so this is the code production runs;
  *   1. BEFORE (the bug): a rep invoices another rep's customer; a rep names
  *      another rep as salesman and that rep can then read the invoice; a rep
  *      splits another rep's allocated order; an admin field_application split
@@ -18,7 +21,9 @@
  *   2. AUTOCOMMIT: run statement by statement the file stops at its preflight;
  *      PREFLIGHT: a drifted split wrapper in the same transaction blocks it, and
  *      so does a drift of every other pin group (delegates, role helper,
- *      complete_delivery, the wrapper ACLs, the scope columns);
+ *      complete_delivery, the wrapper ACLs and attributes, the scope columns,
+ *      PR #889 missing from the ledger); POSTFLIGHT: a wrong body pin or a
+ *      late split type gate makes the postflight roll the apply back;
  *   3. APPLY: POSTFLIGHT_OK, the new md5s, OIDs, ACLs and delegates;
  *   4. FIX: every refusal of chain steps 1-7 as `authenticated`, with no
  *      invoice number drawn; the same refusals again while a second session
@@ -32,12 +37,16 @@
  *      plus the exact auto-split call repeated directly to show WHY it fell back;
  *   6. CHAINS: the registered chains around these RPCs;
  *   7. RE-APPLY: refused on its own pins, nothing changed;
- *   8. MUTATIONS (a)-(p): each removed or moved layer makes its check fail for
- *      the stated reason, including four real two-session interleavings that
- *      show what the post-checks (customer and salesman legs) catch; each
- *      restored body re-passes.
+ *   8. MUTATIONS (a)-(v): each removed or moved layer or pre-check leg makes its
+ *      check fail for the stated reason, including four real two-session
+ *      interleavings that show what the post-checks (customer and salesman legs)
+ *      catch and a replay whose salesman changed; each restored body re-passes.
+ * Two registered chains (financial-scope, split jsonb) fail on main before
+ * reaching any changed RPC: they assert nothing about this change, and are only
+ * checked to fail identically before and after.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
@@ -78,6 +87,28 @@ const STALE_CHAINS = {
   financialScope: /SMOKE_FAIL: wrong invoice replay scope error: IDEMPOTENCY_ACTOR_MISMATCH/,
   splitJsonb: /PRODUCT_PRICING_GOVERNED_PATH_REQUIRED/,
 };
+// PR #889's 20261007150050 locks soft-deleted orders, and the order money-lifecycle chain plants a
+// line and a delivery on a soft-deleted order as a fixture, so on #889's schema that chain stops at
+// ORDER_DELETED_LINES_LOCKED - identically before and after this candidate (#889's problem, not
+// this change's). To keep its coverage of these RPCs, it is ALSO run with #889's three
+// deleted-order lock triggers disabled inside the chain's own rolled-back transaction.
+const PR889_LOCK_TRIGGERS = ['guard_deleted_order_status_locked', 'guard_deleted_order_lines_locked', 'guard_deleted_order_deliveries_locked'];
+const LIFECYCLE_PR889_FAILURE = /ORDER_DELETED_LINES_LOCKED/;
+function withoutPr889Locks(source) {
+  return `BEGIN;
+DO $unlock$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT tgrelid::regclass AS rel, tgname FROM pg_trigger
+            WHERE tgname IN (${PR889_LOCK_TRIGGERS.map((t) => `'${t}'`).join(', ')}) AND NOT tgisinternal LOOP
+    EXECUTE format('ALTER TABLE %s DISABLE TRIGGER %I', r.rel, r.tgname);
+  END LOOP;
+END
+$unlock$;
+${source}
+ROLLBACK;
+`;
+}
 // md5(replace(prosrc, chr(13), '')) read from live (project rhyzpcqhnizqbxphqdkr) on
 // 2026-10-08. Live stores the idem impl's body with CRLF (raw md5 7cbf7aef577c10b16c45070da68edb33)
 // and replay stores LF; the others have no carriage returns, so this IS their raw md5.
@@ -92,7 +123,20 @@ const LIVE_BODY_MD5 = {
   'public.is_sales_rep()': 'fcb3133010fe3f4f56e3be31f709d102',
   // The order-invoice customer-lineage guard (INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID).
   'public.guard_invoice_terminal_order()': 'd2ce62f92956ccd651f570a94ce3f1dc',
+  // The two helpers whose advisory-lock key ('crx:idempotency:' || key) heldAttempt holds;
+  // read from live 2026-10-09 (check_idempotency's raw md5 is 2c93efc82ad63c906eab944e8b70c88e).
+  'public.check_idempotency(text,text)': 'cb810b6f78d587b8e0f2869f87ded757',
+  'public._claim_bound_lifecycle_idempotency(text,text,text,text,jsonb)': '0d6fe6c0c9ea71f11ce8cc233665eba2',
 };
+// PR #889 (unmerged when this was written) must be applied live BEFORE the candidate, and the
+// candidate's preflight refuses unless all four of its migrations are in the ledger. Its two
+// schema migrations are replayed here - from disk once #889 is on this branch's base, else
+// from #889's reviewed head - and all four are then recorded in the container ledger. Its two
+// data migrations change only specific live rows (their preflights expect them), so they are
+// not replayed; they add no schema. Re-pin PR889_HEAD if #889 changes before it merges.
+const PR889_HEAD = '6f05ddbe37f807b1c763d470b1651809dacfc0ff';
+const PR889_SCHEMA = ['20261007150000_record_deliveries_billed_outside_crx', '20261007150050_lock_soft_deleted_orders'];
+const PR889_DATA = ['20261007150100_mark_spring_2026_deliveries_billed_in_chem_man', '20261007150200_release_reservations_of_deleted_spring_orders'];
 const NEW_CIFO_MD5 = '78c3444e301aec889d39dac8dceeb11c';
 const NEW_SPLIT_MD5 = 'adf183df988ab9507f845fbccd91a8ee';
 // The image's auth.uid() reads only request.jwt.claim.sub. Live's (md5 below, read
@@ -135,7 +179,13 @@ const O = {
   // S_FIELD_B: rep A's order whose line is allocated to a field owned by rep B's customer.
   // R_S*: salesman interleavings (cifo); R_SS*: salesman interleavings (split).
   S_FIELD_B: id('2011'), R_S1: id('2012'), R_S2: id('2013'), R_SS1: id('2014'), R_SS2: id('2015'),
+  // S_OVR: rep A's order on a field owned by rep B's customer but billed 100% to rep A's
+  // customer through field_billing_defaults (allowed). S_T: rep B's customer's order allocated
+  // to rep A's own field (refused only by the order-customer leg of the split owner set).
+  S_OVR: id('2016'), S_T: id('2017'),
+  MISSING: id('2fff'),
 };
+const F_OVR = id('1006');
 const DEL = { D_OWN: id('3001'), D_B: id('3002'), D_MIXED: id('3003'), D_DRV: id('3004'), D_MONO: id('3005') };
 
 function docker(args, options = {}) {
@@ -196,7 +246,26 @@ function selected() {
       `${name} now touches invoices, orders, deliveries or receipts; skipping it would change this proof - replay it or re-think the skip`,
     );
   }
-  return before.filter((f) => !PARKED.has(path.basename(f)));
+  return before.filter((f) => !PARKED.has(path.basename(f)) && !PR889_DATA.includes(path.basename(f, '.sql')));
+}
+
+/** Replay #889's schema migrations (if not already replayed from disk) and record all four in the ledger. */
+function replayPr889(replayed) {
+  for (const stem of PR889_SCHEMA) {
+    if (replayed.some((f) => path.basename(f, '.sql') === stem)) continue;
+    const r = spawnSync('git', ['show', `${PR889_HEAD}:supabase/migrations/${stem}.sql`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    if (r.status !== 0) throw new Error(`PR #889's ${stem} is not on disk and its reviewed head ${PR889_HEAD} is not available here (git fetch origin):\n${r.stderr}`);
+    const name = `pr889-${stem}.sql`;
+    stageText(name, r.stdout.replaceAll('\r\n', '\n'));
+    const a = apply(name, true);
+    if (a.status !== 0) throw new Error(`PR #889 replay failed at ${stem}:\n${a.output}`);
+  }
+  assert.equal(scalar(`SELECT to_regclass('public.delivery_external_billings') IS NOT NULL
+    AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.invoices'::regclass AND tgname = 'zz_guard_invoice_delivery_billed_outside_crx' AND NOT tgisinternal)
+    AND (SELECT count(*) FROM pg_trigger WHERE tgname IN ('guard_deleted_order_status_locked', 'guard_deleted_order_lines_locked', 'guard_deleted_order_deliveries_locked') AND NOT tgisinternal) = 3;`),
+  't', 'PR #889\'s schema (external-billing table and invoice guard, deleted-order lock triggers) is not in place');
+  psql(`INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES
+    ${[...PR889_SCHEMA, ...PR889_DATA].map((stem, i) => `('2026100900000${i + 1}', '${stem}', ARRAY[]::text[])`).join(',\n    ')};`);
 }
 
 // Same replay repair the other real-schema provers use: live stores this one
@@ -270,6 +339,15 @@ function wrappersUnchanged(cifoMd5, splitMd5, label) {
   assert.equal(lfBodyMd5(SPLIT), splitMd5, `${label}: create_split_invoices_from_order changed`);
 }
 
+/** md5 of a `CREATE ... AS $function$<body>$function$;` statement's body: what pg_proc.prosrc stores. */
+function statementBodyMd5(statement) {
+  const open = '$function$';
+  const start = statement.indexOf(open);
+  const end = statement.lastIndexOf(open);
+  assert.ok(start >= 0 && end > start, 'statement has no $function$ body');
+  return createHash('md5').update(statement.slice(start + open.length, end), 'utf8').digest('hex');
+}
+
 // The image's auth.uid() may read request.jwt.claim.sub before request.jwt.claims; set both.
 function asUser(uid, role = 'authenticated') {
   return `SELECT set_config('request.jwt.claims', '{"sub":"${uid}","role":"${role}"}', true);\nSELECT set_config('request.jwt.claim.sub', '${uid}', true);\nSET LOCAL ROLE ${role};`;
@@ -321,6 +399,32 @@ function expectRefused(a, expected, label) {
   // Weak by construction: the call's own writes roll back with the DO block's subtransaction.
   // The ordering evidence is heldAttempt below; this only shows nothing else was left.
   assert.deepEqual([a.invoices, a.keys, a.claims], [0, 0, 0], `${label}: the refused call left an invoice, key or claim`);
+}
+
+/**
+ * The salesman leg of the cifo post-check on the REPLAY path: rep A creates their own order
+ * invoice with key K (no salesman); the invoice's salesman is then changed to rep B (an admin
+ * can do this through save_invoice; here the owner sets it directly, inside the same rolled-back
+ * transaction); rep A replays K. The pre-check passes (the order names no salesman and neither
+ * does the call), so only the post-check can refuse. Returns ok or <sqlstate>|<message>.
+ */
+function replayAfterSalesmanChange(key) {
+  const r = probeAs(REP_A, `SELECT ${call('cifo', O.A, null, 'chemical_sale', key)} AS first \\gset
+RESET ROLE;
+UPDATE public.invoices SET salesman_id = '${REP_B}' WHERE id = :'first';
+SET LOCAL ROLE authenticated;
+DO $replay$
+BEGIN
+  PERFORM ${call('cifo', O.A, null, 'chemical_sale', key)};
+  RAISE NOTICE 'REPLAY|ok';
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'REPLAY|%|%', SQLSTATE, SQLERRM;
+END
+$replay$;`);
+  assert.ok(r.ok, `the salesman-change replay probe failed to run:\n${r.error}`);
+  const result = /REPLAY\|([^\n]*)/.exec(r.error)?.[1];
+  assert.ok(result, `the salesman-change replay probe printed no result:\n${r.error}`);
+  return result;
 }
 
 function runChain(file, name, source = lf(file)) {
@@ -397,11 +501,13 @@ function seed() {
       ('${F_OWN}', '${C_A}', '[PROVER] Rep A Field', 'corn', 100),
       ('${F_B}', '${C_B}', '[PROVER] Rep B Field', 'corn', 100),
       ('${F_G1}', '${C_A}', '[PROVER] Race Field 1', 'corn', 100),
-      ('${F_G2}', '${C_A}', '[PROVER] Race Field 2', 'corn', 100);
+      ('${F_G2}', '${C_A}', '[PROVER] Race Field 2', 'corn', 100),
+      ('${F_OVR}', '${C_B}', '[PROVER] Rep B Field Billed To Rep A', 'corn', 100);
   `);
   psql(`BEGIN;
     INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_primary) VALUES
-      ('${F_MIXED}', '${C_A}', 50, true), ('${F_MIXED}', '${C_B}', 50, false);
+      ('${F_MIXED}', '${C_A}', 50, true), ('${F_MIXED}', '${C_B}', 50, false),
+      ('${F_OVR}', '${C_A}', 100, true);
     COMMIT;`);
   psql(`
     ${orderSql(O.A, C_A, null, 'A')}
@@ -425,6 +531,8 @@ function seed() {
     ${orderSql(O.R_S2, C_A, null, 'R-S2')}
     ${orderSql(O.R_SS1, C_A, null, 'R-SS1')} ${allocateSql(O.R_SS1, F_OWN)}
     ${orderSql(O.R_SS2, C_A, null, 'R-SS2')} ${allocateSql(O.R_SS2, F_OWN)}
+    ${orderSql(O.S_OVR, C_A, null, 'S-OVR')} ${allocateSql(O.S_OVR, F_OVR)}
+    ${orderSql(O.S_T, C_B, null, 'S-T')} ${allocateSql(O.S_T, F_OWN)}
   `);
 }
 
@@ -461,11 +569,16 @@ SELECT 'FACTS|' || (SELECT status FROM public.deliveries WHERE id = '${deliveryI
   if (directSplit) assert.ok(directResult, `the direct auto-split repeat printed no result:\n${r.error}`);
   return { status, flagged, activity: Number(activity), notifications: Number(notifications), invoices, drew: sequences() !== before, direct: directResult };
 }
+function activeAdmins() {
+  return Number(scalar("SELECT count(*) FROM public.profiles WHERE role = 'admin' AND is_active = true;"));
+}
 function expectFallback(f, label, { drew = false } = {}) {
+  const admins = activeAdmins();
+  assert.ok(admins >= 2, `${label}: expected at least the two seeded active admins, found ${admins}`);
   assert.equal(f.status, 'completed', `${label}: the delivery did not complete`);
   assert.equal(f.flagged, 'true', `${label}: the order was not flagged needs_split_billing`);
   assert.equal(f.activity, 1, `${label}: expected one order_needs_split_billing activity row`);
-  assert.equal(f.notifications, 2, `${label}: expected one split_billing notification per active admin (2)`);
+  assert.equal(f.notifications, admins, `${label}: expected one split_billing notification per active admin (${admins})`);
   assert.equal(f.invoices, '', `${label}: the fallback left an invoice: ${f.invoices}`);
   assert.equal(f.drew, drew, `${label}: ${drew ? 'expected the pre-fix refusal to draw an invoice number' : 'the refused auto-split drew an invoice number'}`);
 }
@@ -582,13 +695,17 @@ ROLLBACK;
  * pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || key, 0))), while the caller runs
  * with a short lock_timeout. A refusal that comes before the claim and the order lock returns
  * its own error; one placed after either of them waits and ends in 55P03 (lock timeout).
+ * `hold` = 'claim' or 'order' holds only that one lock, so an ordering mutation can be shown to
+ * be caught by the order lock on its own (the claim comes first, so holding both would always
+ * stop a late check at the claim).
  */
-async function heldAttempt(uid, kind, order, salesman, type, key, label) {
+async function heldAttempt(uid, kind, order, salesman, type, key, label, { hold = 'both' } = {}) {
+  assert.ok(['both', 'claim', 'order'].includes(hold), `heldAttempt: unknown hold ${hold}`);
   const tag = `${label}`.replace(/[^a-z0-9]/gi, '_').toLowerCase();
   const holder = session(`crx_scope_hold_${tag}`);
   holder.child.stdin.write(`BEGIN;
-SELECT 1 FROM public.orders WHERE id = '${order}' FOR UPDATE;
-SELECT pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || '${key}', 0));
+${hold !== 'claim' ? `SELECT 1 FROM public.orders WHERE id = '${order}' FOR UPDATE;` : ''}
+${hold !== 'order' ? `SELECT pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || '${key}', 0));` : ''}
 \\echo HOLDING
 `);
   try {
@@ -624,6 +741,8 @@ async function main() {
     if (r.status !== 0) throw new Error(`source replay failed at ${path.basename(file)}:\n${r.output}`);
   }
   console.log(`[prover] replayed ${migrations.length} post-baseline migrations before the candidate (skipped: ${[...PARKED].join(', ')})`);
+  replayPr889(migrations);
+  console.log(`[prover] PR #889: schema migrations ${PR889_SCHEMA.join(', ')} replayed and all four #889 migrations recorded in the ledger (the candidate's apply-order preflight requires them)`);
   psql(`CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $live_uid$${LIVE_AUTH_UID_SRC}$live_uid$;`, { user: 'supabase_admin' });
   assert.equal(scalar(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'auth.uid()'::regprocedure;`), LIVE_AUTH_UID_MD5, 'auth.uid() is not live\'s body');
 
@@ -677,6 +796,13 @@ SELECT 'VISIBLE_TO_B|' || (SELECT count(*) FROM public.invoices WHERE id = :'inv
     assert.match(output, failure, `${key} fails on main for a reason this prover does not know:\n${output}`);
     staleBefore[key] = firstError(output);
   }
+  const lifecycleBeforeOutput = runChain(CHAINS.lifecycle, 'lifecycle-before.sql');
+  assert.doesNotMatch(lifecycleBeforeOutput, /SMOKE_PASS_ROLLBACK/, 'the lifecycle chain now passes on #889\'s schema; drop the #889 lock carve-out');
+  assert.match(lifecycleBeforeOutput, LIFECYCLE_PR889_FAILURE, `the lifecycle chain fails on #889's schema for a reason this prover does not know:\n${lifecycleBeforeOutput}`);
+  // The chain's order numbers carry a random suffix; compare the error with it masked.
+  const maskSuffix = (error) => error.replace(/E2E-LIFE-DELETED-[0-9a-f]+/g, 'E2E-LIFE-DELETED-<suffix>');
+  const lifecycleBefore = maskSuffix(firstError(lifecycleBeforeOutput));
+  expectChainPass(CHAINS.lifecycle, 'lifecycle-before-unlocked.sql', withoutPr889Locks(lf(CHAINS.lifecycle)));
   console.log('[prover] BEFORE: rep A invoiced rep B\'s customer, recorded rep B as salesman (rep B can then read it), split rep B\'s allocated order and auto-billed rep B\'s customer by completing a delivery; an admin field_application split was refused but drew a number; the new chain fails at step 1; the split chain passes on its pre-candidate branch (SMOKE_NOTE) so it stays runnable against live before the apply');
 
   // 2a. AUTOCOMMIT.
@@ -714,9 +840,25 @@ $drift$;`;
     ['cifo wrapper granted to anon', `GRANT EXECUTE ON FUNCTION ${CIFO} TO anon;`, 'PREFLIGHT_ORDER_INVOICE_WRAPPER_DRIFT'],
     ['split wrapper revoked from service_role', `REVOKE EXECUTE ON FUNCTION ${SPLIT} FROM service_role;`, 'PREFLIGHT_SPLIT_INVOICE_WRAPPER_DRIFT'],
     ['scope column renamed', 'ALTER TABLE public.field_billing_defaults RENAME COLUMN customer_id TO customer_id_prover_drift;', 'PREFLIGHT_SCOPE_COLUMNS_MISSING'],
+    ['invoice scope column renamed', 'ALTER TABLE public.invoices RENAME COLUMN salesman_id TO salesman_id_prover_drift;', 'PREFLIGHT_SCOPE_COLUMNS_MISSING'],
+    ['PR #889 data migration missing from the ledger', `DELETE FROM supabase_migrations.schema_migrations WHERE name = '${PR889_DATA[1]}';`, 'PREFLIGHT_PR889_NOT_APPLIED'],
+    ['PR #889 schema migration missing from the ledger', `DELETE FROM supabase_migrations.schema_migrations WHERE name = '${PR889_SCHEMA[0]}';`, 'PREFLIGHT_PR889_NOT_APPLIED'],
+    ['is_sales_rep search_path', 'ALTER FUNCTION public.is_sales_rep() SET search_path = public;', 'PREFLIGHT_ROLE_HELPER_DRIFT'],
+    ['is_sales_rep VOLATILE', 'ALTER FUNCTION public.is_sales_rep() VOLATILE;', 'PREFLIGHT_ROLE_HELPER_DRIFT'],
+    ['is_sales_rep owner', 'ALTER FUNCTION public.is_sales_rep() OWNER TO supabase_admin;', 'PREFLIGHT_ROLE_HELPER_DRIFT', 'supabase_admin'],
+    ['complete_delivery wrapper body', commentDrift('public.complete_delivery(uuid,text,uuid,jsonb,text,text,text,timestamp with time zone)'), 'PREFLIGHT_COMPLETE_DELIVERY_DRIFT'],
+    ['cifo second overload', "CREATE FUNCTION public.create_invoice_from_order(uuid, uuid, text) RETURNS uuid LANGUAGE sql AS 'SELECT NULL::uuid';", 'PREFLIGHT_ORDER_INVOICE_WRAPPER_DRIFT'],
+    ['split second overload', "CREATE FUNCTION public.create_split_invoices_from_order(uuid) RETURNS uuid[] LANGUAGE sql AS 'SELECT NULL::uuid[]';", 'PREFLIGHT_SPLIT_INVOICE_WRAPPER_DRIFT'],
+    ['cifo STRICT', `ALTER FUNCTION ${CIFO} STRICT;`, 'PREFLIGHT_ORDER_INVOICE_WRAPPER_DRIFT'],
+    ['cifo search_path', `ALTER FUNCTION ${CIFO} SET search_path = public;`, 'PREFLIGHT_ORDER_INVOICE_WRAPPER_DRIFT'],
+    ['cifo owner', `ALTER FUNCTION ${CIFO} OWNER TO supabase_admin;`, 'PREFLIGHT_ORDER_INVOICE_WRAPPER_DRIFT', 'supabase_admin'],
+    ['split STABLE', `ALTER FUNCTION ${SPLIT} STABLE;`, 'PREFLIGHT_SPLIT_INVOICE_WRAPPER_DRIFT'],
+    ['split SECURITY INVOKER', `ALTER FUNCTION ${SPLIT} SECURITY INVOKER;`, 'PREFLIGHT_SPLIT_INVOICE_WRAPPER_DRIFT'],
+    ['impl0718 ACL', 'GRANT EXECUTE ON FUNCTION public._create_invoice_from_order_impl_20260718(uuid,uuid,text,text) TO authenticated;', 'PREFLIGHT_ORDER_INVOICE_DELEGATE_DRIFT'],
+    ['split provenance impl ACL', 'GRANT EXECUTE ON FUNCTION public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text) TO authenticated;', 'PREFLIGHT_SPLIT_INVOICE_DELEGATE_DRIFT'],
   ];
-  for (const [label, driftSql, code] of pinDrifts) {
-    const r = docker([...psqlArgs()], { input: `BEGIN;\n${driftSql}\n\\i /tmp/candidate.sql\nCOMMIT;\n`, allowFailure: true });
+  for (const [label, driftSql, code, user] of pinDrifts) {
+    const r = docker([...psqlArgs(user)], { input: `BEGIN;\n${driftSql}\n\\i /tmp/candidate.sql\nCOMMIT;\n`, allowFailure: true });
     const out = `${r.stdout}\n${r.stderr}`;
     assert.notEqual(r.status, 0, `PREFLIGHT (${label}): the candidate applied over the drift`);
     assert.match(out, new RegExp(code), `PREFLIGHT (${label}): wrong refusal, expected ${code}:\n${out}`);
@@ -725,7 +867,33 @@ $drift$;`;
   for (const [signature, md5] of Object.entries(LIVE_BODY_MD5)) {
     assert.equal(lfBodyMd5(signature), md5, `PREFLIGHT: a rolled-back drift left ${signature} changed`);
   }
-  console.log(`[prover] PREFLIGHT: a split wrapper drifted by one comment blocks the apply, and so does each of ${pinDrifts.length} other pin drifts (delegate, provenance, role-helper and complete_delivery bodies, delegate and wrapper ACLs, is_sales_rep SECURITY DEFINER, a scope column), each with its own code; nothing changed`);
+  console.log(`[prover] PREFLIGHT: a split wrapper drifted by one comment blocks the apply, and so does each of ${pinDrifts.length} other pin drifts (delegate, provenance, role-helper and both complete_delivery bodies; delegate and wrapper ACLs; wrapper overloads, owner, strictness, volatility, security mode and search_path; is_sales_rep security mode, volatility, owner and search_path; two scope columns; PR #889 missing from the ledger), each with its own code; nothing changed`);
+
+  // 2d. POSTFLIGHT: the postflight refuses (and rolls the whole apply back) when the applied
+  // bodies are not the reviewed ones, and when the split type gate sits after the claim even
+  // with a matching md5 pin.
+  const candidateText = lf(CANDIDATE);
+  const reviewedCifoStatement = functionStatement(CANDIDATE, 'CREATE OR REPLACE FUNCTION public.create_invoice_from_order(');
+  const reviewedSplitStatement = functionStatement(CANDIDATE, 'CREATE OR REPLACE FUNCTION public.create_split_invoices_from_order(');
+  assert.equal(statementBodyMd5(reviewedCifoStatement), NEW_CIFO_MD5, 'NEW_CIFO_MD5 is not the md5 of the candidate cifo body');
+  assert.equal(statementBodyMd5(reviewedSplitStatement), NEW_SPLIT_MD5, 'NEW_SPLIT_MD5 is not the md5 of the candidate split body');
+  const lateGateSplit = move(reviewedSplitStatement, '  -- CRX-LIFE-001 type allow-list, before any claim, lock or insert', '      USING ERRCODE = \'check_violation\';\n  END IF;\n\n', '  PERFORM 1\n    FROM public.orders o\n   WHERE o.id = p_order_id\n   FOR UPDATE;', 'postflight late gate');
+  const postflightMutants = [
+    ['cifo pin', candidateText.replace(`= '${NEW_CIFO_MD5}'`, `= '${'0'.repeat(32)}'`), /POSTFLIGHT_ORDER_INVOICE_WRAPPER_CONTRACT: public create_invoice_from_order body/],
+    ['split pin', candidateText.replace(`= '${NEW_SPLIT_MD5}'`, `= '${'0'.repeat(32)}'`), /POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: public create_split_invoices_from_order body/],
+    ['split type gate after the claim', candidateText.replace(reviewedSplitStatement.trimEnd(), lateGateSplit.trimEnd()).replace(`= '${NEW_SPLIT_MD5}'`, `= '${statementBodyMd5(lateGateSplit)}'`),
+      /POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: the split wrapper must refuse a disallowed type before its idempotency claim/],
+  ];
+  for (const [label, text, code] of postflightMutants) {
+    assert.notEqual(text, candidateText, `POSTFLIGHT (${label}): the mutant is the candidate`);
+    stageText('postflight-mutant.sql', text);
+    const r = apply('postflight-mutant.sql', true);
+    assert.notEqual(r.status, 0, `POSTFLIGHT (${label}): the mutant applied`);
+    assert.match(r.output, code, `POSTFLIGHT (${label}): wrong refusal:\n${r.output}`);
+    assert.doesNotMatch(r.output, /POSTFLIGHT_OK/, `POSTFLIGHT (${label}): printed POSTFLIGHT_OK`);
+    wrappersUnchanged(LIVE_BODY_MD5[CIFO], LIVE_BODY_MD5[SPLIT], `POSTFLIGHT (${label})`);
+  }
+  console.log('[prover] POSTFLIGHT: a wrong cifo or split body pin, and a split type gate moved after the claim (with its md5 pin matched), each make the postflight refuse and roll the whole apply back');
 
   // 3. APPLY.
   const applied = apply('candidate.sql', true);
@@ -748,6 +916,9 @@ $drift$;`;
     ['5a split rep B\'s allocated order', 'split', O.S_B, REP_A, 'chemical_sale', /^P0001\|CUSTOMER_SCOPE_DENIED$/],
     ['5 split with rep B\'s landlord', 'split', O.S_MIXED, REP_A, 'chemical_sale', /^P0001\|CUSTOMER_SCOPE_DENIED$/],
     ['5b split rep A\'s order on rep B\'s field', 'split', O.S_FIELD_B, null, 'chemical_sale', /^P0001\|CUSTOMER_SCOPE_DENIED$/],
+    ['5c split rep B\'s order on rep A\'s field', 'split', O.S_T, REP_A, 'chemical_sale', /^P0001\|CUSTOMER_SCOPE_DENIED$/],
+    ['5d cifo missing order', 'cifo', O.MISSING, null, 'chemical_sale', new RegExp(`^P0001\\|Order not found: ${O.MISSING}$`)],
+    ['5e split missing order', 'split', O.MISSING, REP_A, 'chemical_sale', new RegExp(`^P0001\\|Order not found: ${O.MISSING}$`)],
     ['6 split naming rep B', 'split', O.S_OWN, REP_B, 'chemical_sale', /^P0001\|SALESMAN_SCOPE_DENIED$/],
     ['7 split field_application', 'split', O.S_OWN, REP_A, 'field_application', /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED: an invoice created from an order must be chemical_sale or misc_charge$/],
   ];
@@ -771,6 +942,14 @@ RESET ROLE;
 SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || salesman_id, ',') FROM public.invoices WHERE id::text = ANY (string_to_array(:'first', ','));`);
   assert.ok(ownSplit.ok, `FIX: rep A's own split broke:\n${ownSplit.error}`);
   assert.equal(ownSplit.last, `true|${C_A}:${REP_A}`, `FIX: rep A's own split or its replay is wrong: ${ownSplit.last}`);
+  // Not over-strict: a field owned by rep B's customer but billed 100% to rep A's customer
+  // through field_billing_defaults is rep A's to split (the owner rule takes the billing
+  // default over fields.customer_id, exactly as the provenance implementation does).
+  const override = attempt(REP_A, 'split', O.S_OVR, REP_A, 'chemical_sale', 'prover-fix-ovr');
+  assert.equal(override.result, 'ok', `FIX: rep A could not split their order on a field billed to their customer: ${override.result}`);
+  assert.equal(override.detail, `${C_A}:${REP_A}:${REP_A}`, `FIX: the billing-default override split billed the wrong customer: ${override.detail}`);
+  // The salesman leg of the cifo post-check on the replay path (the pre-check passes here).
+  assert.equal(replayAfterSalesmanChange('prover-fix-replay-salesman'), 'P0001|SALESMAN_SCOPE_DENIED', 'FIX: a replay of an invoice whose salesman became rep B was not refused');
   const adminOther = attempt(ADMIN, 'cifo', O.B, REP_B, 'chemical_sale', 'prover-fix-admin-cifo');
   assert.equal(adminOther.result, 'ok', `FIX: an admin could not invoice rep B's customer under rep B: ${adminOther.result}`);
   assert.equal(adminOther.detail, `${C_B}:${REP_B}:${ADMIN}`);
@@ -797,7 +976,7 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || COALESC
     const anon = probeAs(REP_A, `SELECT ${call(kind, O.A, null, 'chemical_sale', `prover-anon-${kind}`)};`, 'anon');
     assert.ok(!anon.ok && /permission denied for function create_(split_invoices|invoice)_from_order/.test(anon.error), `anon could execute the ${kind} wrapper:\n${anon.error}`);
   }
-  console.log('[prover] FIX: steps 1-7 (and 5a, 5b) refused as authenticated with no number drawn, and refused the same way while a second session held the order row and the key\'s claim lock (so before the claim and the lock); admin/credit_memo/NULL split types refused with no number; rep A\'s own invoice and split replay exactly; an admin\'s split replays exactly; misc_charge splits unchanged; admins unrestricted; anon denied');
+  console.log('[prover] FIX: steps 1-7 (and 5a-5e: rep B\'s order on rep A\'s field, a missing order for both wrappers) refused as authenticated with no number drawn, and refused the same way while a second session held the order row and the key\'s claim lock (so before the claim and the lock); admin/credit_memo/NULL split types refused with no number; rep A\'s own invoice and split replay exactly; a field billed to rep A\'s customer through field_billing_defaults is rep A\'s to split; a replay of an invoice whose salesman became rep B is SALESMAN_SCOPE_DENIED; an admin\'s split replays exactly; misc_charge splits unchanged; admins unrestricted; anon denied');
   console.log(`[prover] FIX: misc_charge split outcome (admin before = admin after = rep A after): ${miscBefore.result}`);
 
   // 5. DELIVERIES.
@@ -808,13 +987,14 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || COALESC
   expectChainPass(CHAINS.repScope, 'rep-scope-after.sql');
   expectChainPass(CHAINS.typeGate, 'type-gate-after.sql');
   assert.doesNotMatch(expectChainPass(CHAINS.split, 'split-after.sql'), SPLIT_PRE_GATE_NOTE, 'AFTER: the split chain took its pre-candidate branch');
-  expectChainPass(CHAINS.lifecycle, 'lifecycle-after.sql');
+  assert.equal(maskSuffix(firstError(runChain(CHAINS.lifecycle, 'lifecycle-after.sql'))), lifecycleBefore, 'the lifecycle chain now fails differently on #889\'s schema than before the candidate');
+  expectChainPass(CHAINS.lifecycle, 'lifecycle-after-unlocked.sql', withoutPr889Locks(lf(CHAINS.lifecycle)));
   expectChainPass(CHAINS.keys, 'keys-after.sql');
   expectChainPass(CHAINS.periodGuard, 'period-guard-after.sql');
   for (const key of Object.keys(STALE_CHAINS)) {
     assert.equal(firstError(runChain(CHAINS[key], `${key}-after.sql`)), staleBefore[key], `${key} now fails differently than before the candidate`);
   }
-  console.log('[prover] CHAINS: rep-scope, type-gate, split-billing, order lifecycle, required keys and delivery period guard pass and roll back; the two stale chains fail exactly as they did before the candidate');
+  console.log('[prover] CHAINS: rep-scope, type-gate, split-billing, required keys and delivery period guard pass and roll back; the order lifecycle chain stops on #889\'s deleted-order lock exactly as before the candidate and passes, before and after, with those #889 locks disabled in its own rolled-back transaction; the two stale chains fail exactly as they did before the candidate');
 
   // 7. RE-APPLY.
   const reapplied = apply('candidate.sql', true);
@@ -900,26 +1080,32 @@ INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_
 
   // (h)-(k) ORDERING: the split pre-check, or the type gate, moved to just after the claim or
   // just after the order locks still refuses on the committed rows - but only after waiting on
-  // the held claim/order locks, so the held attempt ends in a lock timeout instead.
+  // a held lock, so the held attempt ends in a lock timeout instead. (h)/(j) hold ONLY the
+  // key's claim lock and (i)/(k) ONLY the order row, so each lock is shown to catch a late
+  // check on its own. (v) does the same for the cifo pre-check moved after the idempotent
+  // implementation call (check_idempotency takes the same advisory lock before its order lock).
   const preCheck = ['  -- Rep scope (Mason 2026-10-06): a sales rep must be the assigned rep', '      RAISE EXCEPTION \'SALESMAN_SCOPE_DENIED\';\n    END IF;\n  END IF;\n\n'];
   const typeGate = ['  -- CRX-LIFE-001 type allow-list, before any claim, lock or insert', '      USING ERRCODE = \'check_violation\';\n  END IF;\n\n'];
   const afterClaim = '  PERFORM 1\n    FROM public.orders o\n   WHERE o.id = p_order_id\n   FOR UPDATE;';
   const afterLocks = '  SELECT EXISTS (\n    SELECT 1\n      FROM public.order_item_field_allocations oifa';
+  const STEP5A = /^P0001\|CUSTOMER_SCOPE_DENIED$/;
+  const STEP7 = /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED: an invoice created from an order must be chemical_sale or misc_charge$/;
   const orderingMutants = [
-    ['h', 'scope pre-check after the claim', preCheck, afterClaim, ['5a', 'split', O.S_B, REP_A, 'chemical_sale']],
-    ['i', 'scope pre-check after the order locks', preCheck, afterLocks, ['5a', 'split', O.S_B, REP_A, 'chemical_sale']],
-    ['j', 'type gate after the claim', typeGate, afterClaim, ['7', 'split', O.S_OWN, REP_A, 'field_application']],
-    ['k', 'type gate after the order locks', typeGate, afterLocks, ['7', 'split', O.S_OWN, REP_A, 'field_application']],
+    ['h', 'scope pre-check after the claim', reviewedSplit, preCheck, afterClaim, 'claim', ['5a', 'split', O.S_B, REP_A, 'chemical_sale', STEP5A]],
+    ['i', 'scope pre-check after the order locks', reviewedSplit, preCheck, afterLocks, 'order', ['5a', 'split', O.S_B, REP_A, 'chemical_sale', STEP5A]],
+    ['j', 'type gate after the claim', reviewedSplit, typeGate, afterClaim, 'claim', ['7', 'split', O.S_OWN, REP_A, 'field_application', STEP7]],
+    ['k', 'type gate after the order locks', reviewedSplit, typeGate, afterLocks, 'order', ['7', 'split', O.S_OWN, REP_A, 'field_application', STEP7]],
+    ['v', 'cifo pre-check after the idempotent implementation call', reviewedCifo, cifoPreCheck, '  -- Authoritative re-check of the invoice actually created or replayed', 'claim', ['1', 'cifo', O.B, null, 'chemical_sale', STEP5A]],
   ];
-  for (const [letter, label, [from, through], anchor, [step, kind, order, salesman, type]] of orderingMutants) {
-    applyText(`mutant-${letter}.sql`, move(reviewedSplit, from, through, anchor, `mutant ${letter}`));
-    const held = await heldAttempt(REP_A, kind, order, salesman, type, `prover-mutant-${letter}`, `mutant ${letter}`);
-    assert.match(held.result, LOCK_TIMEOUT, `MUTATION (${letter}) ${label}: the held-lock check did not detect it (step ${step} returned ${held.result})`);
+  for (const [letter, label, statement, [from, through], anchor, hold, [step, kind, order, salesman, type, expected]] of orderingMutants) {
+    applyText(`mutant-${letter}.sql`, move(statement, from, through, anchor, `mutant ${letter}`));
+    const held = await heldAttempt(REP_A, kind, order, salesman, type, `prover-mutant-${letter}`, `mutant ${letter}`, { hold });
+    assert.match(held.result, LOCK_TIMEOUT, `MUTATION (${letter}) ${label}: the ${hold}-only held-lock check did not detect it (step ${step} returned ${held.result})`);
     restore(letter);
-    const heldRestored = await heldAttempt(REP_A, kind, order, salesman, type, `prover-restored-${letter}`, `restored ${letter}`);
-    assert.doesNotMatch(heldRestored.result, LOCK_TIMEOUT, `RESTORED (${letter}): the reviewed body waited on a held lock: ${heldRestored.result}`);
+    const heldRestored = await heldAttempt(REP_A, kind, order, salesman, type, `prover-restored-${letter}`, `restored ${letter}`, { hold });
+    expectRefused(heldRestored, expected, `RESTORED (${letter}) step ${step} with only the ${hold} lock held`);
   }
-  console.log('[prover] MUTATION (h)-(k): the scope pre-check or the type gate moved after the claim, or after the order locks, waits on the held locks (lock timeout) instead of refusing first; each restored body refuses first');
+  console.log('[prover] MUTATION (h)-(k),(v): the split scope pre-check or type gate moved after the claim (only the claim lock held) or after the order locks (only the order row held), and the cifo pre-check moved after the idempotent implementation call (only the claim lock held), each wait on that one lock (lock timeout) instead of refusing first; each restored body refuses first with its exact error and no number');
 
   // (l)/(m) each owner branch of the split pre-check is load-bearing: without the
   // field_billing_defaults branch step 5 is refused only after a number is drawn (by the
@@ -937,7 +1123,9 @@ INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_
   assert.equal(reviewedSplit.split(gateList).length - 1, 1, 'mutant n: the split type list must occur once');
   applyText('mutant-n.sql', reviewedSplit.replace(gateList, "p_invoice_type NOT IN ('chemical_sale')"));
   const miscMutant = attempt(REP_A, 'split', O.S_OWN, REP_A, 'misc_charge', 'prover-mutant-n');
-  assert.match(miscMutant.result, /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED/, `MUTATION (n): a narrowed gate should refuse misc_charge, so FIX's allow check would fail: ${miscMutant.result}`);
+  assert.match(miscMutant.result, /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED/, `MUTATION (n): a narrowed gate should refuse misc_charge: ${miscMutant.result}`);
+  // The exact FIX allow assertion, re-run against the mutant, must fail.
+  assert.throws(() => assert.doesNotMatch(miscMutant.result, /ORDER_INVOICE_TYPE_NOT_ALLOWED/), 'MUTATION (n): FIX\'s misc_charge allow assertion would still pass against the narrowed gate');
   restore('n');
   console.log('[prover] MUTATION (n): a split gate narrowed to chemical_sale refuses misc_charge, which the FIX allow check rejects');
 
@@ -950,7 +1138,11 @@ INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_
   const raceO = await interleave(O.R_S1, salesmanRace(O.R_S1), cifoCall(O.R_S1), 'mutation o');
   assert.ok(raceO.ok, `MUTATION (o): without the cifo salesman post-check the raced call should have succeeded:\n${raceO.error}`);
   assert.equal(raceO.result, `${C_A}:${REP_B}`, `MUTATION (o): without the salesman post-check rep A's invoice should be recorded under rep B: ${raceO.result}`);
+  // ... and on the replay path: without that leg, rep A's replay returns the invoice now
+  // recorded under rep B (FIX asserts the reviewed body refuses it).
+  assert.equal(replayAfterSalesmanChange('prover-mutant-o-replay'), 'ok', 'MUTATION (o): without the salesman post-check the replay should have returned rep B\'s invoice');
   restore('o');
+  assert.equal(replayAfterSalesmanChange('prover-restored-o-replay'), 'P0001|SALESMAN_SCOPE_DENIED', 'RESTORED (o): the replay of an invoice whose salesman became rep B was not refused');
   const raceO2 = await interleave(O.R_S2, salesmanRace(O.R_S2), cifoCall(O.R_S2), 'restored o');
   assert.ok(!raceO2.ok && /ERROR:\s+SALESMAN_SCOPE_DENIED/.test(raceO2.error), `RESTORED (o): the cifo salesman post-check did not refuse:\n${raceO2.error}\n${raceO2.result}`);
   applyText('mutant-p.sql', cut(reviewedSplit, '    IF EXISTS (SELECT 1\n                 FROM unnest(COALESCE(v_invoice_ids, \'{}\'::uuid[])) AS returned(invoice_id)\n                 JOIN public.invoices i ON i.id = returned.invoice_id\n                WHERE i.salesman_id IS NOT NULL', '      RAISE EXCEPTION \'SALESMAN_SCOPE_DENIED\';\n    END IF;\n', 'mutant p'));
@@ -960,10 +1152,44 @@ INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_
   restore('p');
   const raceP2 = await interleave(O.R_SS2, salesmanRace(O.R_SS2), splitCallNoSalesman(O.R_SS2), 'restored p');
   assert.ok(!raceP2.ok && /ERROR:\s+SALESMAN_SCOPE_DENIED/.test(raceP2.error), `RESTORED (p): the split salesman post-check did not refuse:\n${raceP2.error}\n${raceP2.result}`);
-  wrappersUnchanged(NEW_CIFO_MD5, NEW_SPLIT_MD5, 'final');
-  console.log('[prover] MUTATION (o)-(p): without the salesman leg of either post-check, a two-session race (order salesman set to rep B under the lock) records rep A\'s invoice under rep B; restored, SALESMAN_SCOPE_DENIED');
+  console.log('[prover] MUTATION (o)-(p): without the salesman leg of either post-check, a two-session race (order salesman set to rep B under the lock) records rep A\'s invoice under rep B, and (cifo) a replay of an invoice whose salesman became rep B returns it; restored, SALESMAN_SCOPE_DENIED');
 
-  console.log('ORDER_INVOICE_REP_SCOPE_PROOF_PASS before=bug_reproduced autocommit=refused preflight=blocks_every_pin_group fix=refused_no_number,before_claim_and_lock allowed=own_customer,admin,misc_charge deliveries=complete chains=pass reapply=refused mutations=a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p_detected');
+  // (q)-(u) each pre-check LEG on its own: without it the call is refused only later (after a
+  // number is drawn) or wrongly.
+  const cifoSalesmanPre = ['    IF COALESCE(p_salesman_id, v_order_salesman_id) IS NOT NULL', '      RAISE EXCEPTION \'SALESMAN_SCOPE_DENIED\';\n    END IF;\n'];
+  // (q) no cifo salesman pre-check -> step 3 (rep A names rep B) burns a number.
+  applyText('mutant-q.sql', cut(reviewedCifo, ...cifoSalesmanPre, 'mutant q'));
+  expectChainFail(CHAINS.repScope, 'mutant-q.sql', /SMOKE_FAIL: step 3: a refused call drew an invoice number .*: SALESMAN_SCOPE_DENIED/, 'MUTATION (q)');
+  restore('q');
+  // (r) the cifo salesman pre-check reading only p_salesman_id (save_invoice's rule) -> step 4
+  // (the order's recorded salesman is rep B, the call names no one) burns a number.
+  assert.equal(reviewedCifo.split('COALESCE(p_salesman_id, v_order_salesman_id)').length - 1, 2, 'mutant r: the cifo salesman pre-check must use the COALESCE twice');
+  applyText('mutant-r.sql', reviewedCifo.replaceAll('COALESCE(p_salesman_id, v_order_salesman_id)', 'p_salesman_id'));
+  expectChainFail(CHAINS.repScope, 'mutant-r.sql', /SMOKE_FAIL: step 4: a refused call drew an invoice number .*: SALESMAN_SCOPE_DENIED/, 'MUTATION (r)');
+  restore('r');
+  // (s) no split salesman pre-check -> step 6 (rep A's own split naming rep B) burns a number.
+  applyText('mutant-s.sql', cut(reviewedSplit, ...cifoSalesmanPre, 'mutant s'));
+  expectChainFail(CHAINS.repScope, 'mutant-s.sql', /SMOKE_FAIL: step 6: a refused call drew an invoice number .*: SALESMAN_SCOPE_DENIED/, 'MUTATION (s)');
+  restore('s');
+  // (t) no order-customer leg in the split owner set -> rep B's customer's order allocated to
+  // rep A's own field (FIX step 5c) passes the pre-check and is refused only after a number.
+  applyText('mutant-t.sql', cut(reviewedSplit, '          SELECT v_order_customer_id AS customer_id\n', '          UNION\n', 'mutant t'));
+  const tMutant = attempt(REP_A, 'split', O.S_T, REP_A, 'chemical_sale', 'prover-mutant-t');
+  assert.notEqual(tMutant.seqAfter, tMutant.seqBefore, `MUTATION (t): without the order-customer leg step 5c should draw a number (got ${tMutant.result})`);
+  assert.throws(() => expectRefused(tMutant, /^P0001\|CUSTOMER_SCOPE_DENIED$/, 'mutant t'), 'MUTATION (t): FIX step 5c would still pass');
+  restore('t');
+  // (u) the fields.customer_id branch without its "no billing default" filter -> the override
+  // field's owner (rep B's customer) is counted although it is never billed: over-strict.
+  const noFbdFilter = '\n             AND NOT EXISTS (SELECT 1 FROM public.field_billing_defaults d WHERE d.field_id = oifa.field_id)';
+  assert.equal(reviewedSplit.split(noFbdFilter).length - 1, 1, 'mutant u: the fields-branch filter must occur once');
+  applyText('mutant-u.sql', reviewedSplit.replace(noFbdFilter, ''));
+  const uMutant = attempt(REP_A, 'split', O.S_OVR, REP_A, 'chemical_sale', 'prover-mutant-u');
+  assert.equal(uMutant.result, 'P0001|CUSTOMER_SCOPE_DENIED', `MUTATION (u): without the filter the override split should be (wrongly) refused, which FIX's allow check catches: ${uMutant.result}`);
+  restore('u');
+  wrappersUnchanged(NEW_CIFO_MD5, NEW_SPLIT_MD5, 'final');
+  console.log('[prover] MUTATION (q)-(u): without the cifo salesman pre-check step 3 burns a number; with it reading only p_salesman_id step 4 burns one; without the split salesman pre-check step 6 burns one; without the order-customer owner leg step 5c burns one; without the fields-branch billing-default filter the override split is wrongly refused');
+
+  console.log('ORDER_INVOICE_REP_SCOPE_PROOF_PASS pr889=replayed_and_required before=bug_reproduced autocommit=refused preflight=blocks_every_pin_group postflight=refuses_wrong_body fix=refused_no_number,before_claim_and_lock,replay_salesman_rescoped allowed=own_customer,billing_default_override,admin,misc_charge deliveries=complete(mono_auto_invoice_gap_open) chains=5_pass,lifecycle_pass_with_pr889_locks_off,financialScope+splitJsonb_stale_assert_nothing reapply=refused mutations=a-v_detected');
 }
 
 try { await main(); }

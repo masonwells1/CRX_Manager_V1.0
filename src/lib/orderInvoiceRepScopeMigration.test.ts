@@ -133,10 +133,34 @@ describe('order-invoice rep scope migration (20261008120000)', () => {
       "('customers', 'assigned_sales_rep')",
       "('field_billing_defaults', 'customer_id')",
       "('order_item_field_allocations', 'order_item_id')",
+      "('order_items', 'order_id')",
+      "('invoices', 'customer_id')",
+      "('invoices', 'salesman_id')",
+      // the public complete_delivery wrapper, and is_sales_rep's volatility and owner
+      'a1e9a043f27d3566f8ecf6d5e3a809ab',
+      "AND p.provolatile = 's' AND p.proowner = 'postgres'::regrole",
+      // PR #889 must already be applied (stranding guard), read from the ledger by name
+      'PREFLIGHT_PR889_NOT_APPLIED',
+      "'20261007150000_record_deliveries_billed_outside_crx'",
+      "'20261007150050_lock_soft_deleted_orders'",
+      "'20261007150100_mark_spring_2026_deliveries_billed_in_chem_man'",
+      "'20261007150200_release_reservations_of_deleted_spring_orders'",
     ]) {
       expect(preflight, pin).toContain(pin);
     }
-    expect(preflight.match(/md5\(replace\(p\.prosrc, chr\(13\), ''\)\)/g)?.length).toBe(7);
+    expect(preflight.match(/md5\(replace\(p\.prosrc, chr\(13\), ''\)\)/g)?.length).toBe(8);
+    expect(preflight).toContain(') <> 16 THEN');
+  });
+
+  it('keeps the PR #889 ledger names in step with the prover', () => {
+    for (const stem of [
+      '20261007150000_record_deliveries_billed_outside_crx',
+      '20261007150050_lock_soft_deleted_orders',
+      '20261007150100_mark_spring_2026_deliveries_billed_in_chem_man',
+      '20261007150200_release_reservations_of_deleted_spring_orders',
+    ]) {
+      expect(proverSource, stem).toContain(`'${stem}'`);
+    }
   });
 
   it('pins the same new wrapper md5s in the postflight as the prover expects', () => {
@@ -151,5 +175,7 @@ describe('order-invoice rep scope migration (20261008120000)', () => {
     expect(postflight).toContain('POSTFLIGHT_DELEGATE_CHANGED');
     expect(postflight).toContain('POSTFLIGHT_ORDER_INVOICE_WRAPPER_IDENTITY');
     expect(postflight).toContain('POSTFLIGHT_SPLIT_INVOICE_WRAPPER_IDENTITY');
+    expect(postflight).toContain('a1e9a043f27d3566f8ecf6d5e3a809ab');
+    expect(postflight).toContain("AND p.provolatile = 's' AND p.proowner = 'postgres'::regrole");
   });
 });

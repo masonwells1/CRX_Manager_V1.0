@@ -202,8 +202,12 @@ lookup or claim, invoice number or write: the rep must be the assigned rep of th
 (for the split, also of every field billing owner the split could bill); the salesman the RPC will
 record, `COALESCE(p_salesman_id, orders.salesman_id)`, must be NULL or the rep. Refusals are bare
 `CUSTOMER_SCOPE_DENIED` / `SALESMAN_SCOPE_DENIED`; the app shows "You can only work with customers
-assigned to you" / "You can only create invoices under your own name". Each wrapper re-checks the
-invoices it actually returns (race and idempotent replay). **Accepted residual (2026-10-09):** that
+assigned to you" / "You can only bill invoices under your own name". Each wrapper re-checks the
+invoices it actually returns (race and idempotent replay, including a replay after an admin changed
+the invoice's salesman). It does not re-check a candidate field owner whose share nets to zero: such
+an owner gets no invoice, and the existing lineage guard refuses any order invoice whose customer is
+not the order's anyway, so no unassigned customer can be billed through that gap (Luna round 2,
+refuted). **Accepted residual (2026-10-09):** that
 re-check runs after the implementation has drawn its invoice number, so a refusal there rolls back the
 invoice but leaves a gap in invoice numbering. Only a change committed between the unlocked pre-check
 and the order lock reaches it, and a sales rep can cause one, not only an admin: live RLS lets any rep
@@ -214,7 +218,13 @@ rep to own the order's own customer, even when every line is allocated and the s
 field owners, so a rep's delivery completion of such an order whose header customer is not theirs
 always falls back to `needs_split_billing` plus an admin notification, even if the rep owns every field
 owner. This is intended, not a bug. **Apply order:** PR #889's four migrations (`20261007150000`..
-`20261007150200`) must be applied live first, or this file strands them. The split wrapper gets the CRX-LIFE-001
+`20261007150200`) must be applied live first, or this file strands them; since review round 2 the
+file's own preflight refuses (`PREFLIGHT_PR889_NOT_APPLIED`) unless all four are in the ledger by
+name. **Open for Mason (2026-10-09, not a bug in the rule as written):** a rep may replace an order's
+named salesman (another rep) with themselves on an order whose customer is theirs, because the check
+is on the salesman the invoice will record; that satisfies "only under their own name" and matches
+`save_invoice`, but moves the invoice's salesperson attribution. If Mason wants the order's named
+salesman to win, a follow-up also refuses when `orders.salesman_id` is another rep. The split wrapper gets the CRX-LIFE-001
 type allow-list before its claim, so a refused split draws no number. `complete_delivery` is not
 changed: its auto-split call is inside `EXCEPTION WHEN OTHERS`, so when a rep completes the last
 delivery of an allocated order that is not fully theirs the delivery still completes and the order is
@@ -236,7 +246,19 @@ is not theirs (`salesman_id` NULL, `created_by` = the rep). Reproduced in the co
 an invoice for that customer created by rep A). Not exercised live. Fix shape: decide whether a rep
 may complete another rep's customer's delivery at all, or scope the mono auto-invoice the same way;
 a separate reviewed migration on `_complete_delivery_authorized_impl`. Needs a Mason decision on the
-rule.
+rule. **Until it is fixed, Mason's rule is not enforced system-wide** (review round 2, Luna HIGH,
+deferred to this decision). Recommended option: keep deliveries always completing and, when the
+completing rep is not the customer's assigned rep, skip the automatic draft and flag the order for an
+admin to bill, the same fallback the allocated-order auto-split already uses.
+
+## OPEN 2026-10-09 — `create_split_invoices_from_order` does not require an idempotency key on an allocated order
+
+Pre-existing (live body `20260719060256`, kept byte-identical by `20261008120000`): with a NULL
+`p_idempotency_key` the split wrapper skips the claim and still creates invoices; only the
+implementation's "active invoice already exists" guard stops a duplicate. `create_invoice_from_order`
+refuses a NULL key. The only app caller (`OrderDetail.tsx`) always sends a key, and
+`complete_delivery`'s internal call passes `key || ':autosplit'`. Fix shape: a separate migration that
+raises `IDEMPOTENCY_KEY_REQUIRED` before the claim, after checking every caller.
 
 ## OPEN 2026-10-08 (latent; never fired live) — invoices created through the order RPCs would be numbered `INV-` instead of `CS-` / `MC-`
 

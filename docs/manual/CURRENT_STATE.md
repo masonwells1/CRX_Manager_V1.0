@@ -24,8 +24,11 @@ ships or quarterly, whichever comes first.
   orders to the calling sales rep (only their assigned customers, only under their own name; admins
   unrestricted). It does not move the high-water above until it is applied; live still lets any rep
   invoice any order (KNOWN_ISSUES, "FIXED, PENDING APPLY"). **Apply order:** PR #889's
-  `20261007150000`..`20261007150200` must be applied first, or this file strands them; no guard
-  enforces that while #889 is off `main`.
+  `20261007150000`..`20261007150200` must be applied first, or this file strands them; the
+  pending-set guard cannot see #889 while it is off `main`, so the file's own preflight refuses
+  (`PREFLIGHT_PR889_NOT_APPLIED`) unless all four are in the live ledger. Even once applied, a rep can
+  still get a draft for another rep's customer by completing that customer's last delivery on an order
+  without field allocations (KNOWN_ISSUES; needs Mason's decision).
 - **Applied since 2026-09-20 (authored name → ledger version):** `20260914100100_next_invoice_number_year_chicago`
   (`20260921141423`), `20260914100200_commission_history_report_replay_guard` (`20260921141451`),
   `20260914100300_refuse_stale_commission_payment_recipient` (`20260921141740`),
