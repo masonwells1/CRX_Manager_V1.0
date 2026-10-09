@@ -188,7 +188,8 @@ function treeProblem({ files, baseSha, headSha, repoPath, gh }) {
       lookups.push({ commit: baseSha, file: entry.previous_filename });
     }
   }
-  const folderOf = ({ commit, file }) => `${commit}:${file.slice(0, file.lastIndexOf("/"))}`;
+  // A file at the repository root lives in the root tree, "<sha>:".
+  const folderOf = ({ commit, file }) => `${commit}:${file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : ""}`;
   const expressions = [...new Set(lookups.map(folderOf))];
   const [, owner, name] = repoPath.split("/");
   const args = ["api", "graphql", "-f", `query=${solExemptTreeQuery(expressions.length)}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
