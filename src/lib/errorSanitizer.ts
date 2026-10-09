@@ -11,6 +11,11 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'Create this field invoice from its job, blend ticket, or the Field Application screen'],
   [/^CUSTOMER_SCOPE_DENIED\b/i,
    'You can only work with customers assigned to you'],
+  // Order-invoice rep scope and type allow-list (20261006200000, 20261008120000).
+  [/^SALESMAN_SCOPE_DENIED\b/i,
+   'You can only create invoices under your own name'],
+  [/^ORDER_INVOICE_TYPE_NOT_ALLOWED\b/i,
+   'An invoice created from an order must be a chemical sale or a misc charge'],
   [/^RETURN_NOT_FOUND\b/i,
    'This return could not be found'],
   [/^RETURN_CREDIT_UNIT_MISMATCH\b/i,
