@@ -37,6 +37,35 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (ACCEPTED residual) 2026-10-09 — the invoice editor's pre-Post re-check is not atomic with `post_invoice`
+
+**What it is.** Since 2026-10-09 (`docs/changelog.d/2026-10-09-invoice-screen-safety.md`), Post on
+the invoice editor (`src/pages/InvoiceDetail.tsx`, `openPostConfirm`) first re-reads the SAVED
+invoice and compares it with the copy on screen (`src/lib/invoicePostRecheck.ts`): customer, total,
+invoice date, terms, due date and every line's product, description, quantity, price and amount. If
+anything differs, the page reloads and refuses that Post. That re-read happens in the browser, and
+`post_invoice` / `post_invoice_group` take only the invoice ID — nothing tells the server what the
+person posting actually looked at.
+
+**What can still happen.** Another user (or another tab) saves the same invoice in the moment
+between the re-read and the post — in practice while the Post confirm box is open. Then:
+- `post_invoice` posts what is saved at that moment, which this person never saw (for example a
+  different line or customer).
+- The client-side credit-limit warning and restricted-use (RUP) license warning ran on the saved
+  total / lines read a moment earlier, so they could describe a total or product list that has just
+  changed.
+- For a split group, only the open invoice is fingerprinted; `post_invoice_group` posts every
+  sibling as saved.
+
+**Why it is accepted for now.** It needs two people editing the same invoice within seconds of each
+other. Closing it fully is a server change, out of scope for the app-only fix.
+
+**Real fix (not built).** An optimistic-concurrency token: the editor sends the version it checked
+(for example the invoice's `updated_at`, or a server-computed fingerprint of the invoice and its
+lines) to `post_invoice` / `post_invoice_group`, and the function refuses inside the same
+transaction when the saved invoice no longer matches. That is a new migration plus a reviewed RPC
+signature change.
+
 ## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
 
 **Resolved 2026-10-02:** all four applied live 2026-10-02 from PR #871's checkout, in stamp order: `20260914101000` (ledger `20261002201451`, with Mason's chat yes and his Windows Hello approval), `20260914101100` (`20261002201523`), `20260914101200` (`20261002201542`) and `20260914101300` (`20261002201609`, after the quiet-database check returned no rows). Post-apply read-only checks passed (see the top capture in `docs/reference/migration-history.md`), and the daily cross-season invoice check returned zero rows. The text below is kept as history.
@@ -718,7 +747,12 @@ season": the "Season N" tag, and which invoices the season-limited bulk actions 
 Post All, Posted Unpost All in its default scope, Chemical Sales Select All). A browser clock that
 is wrong across October 1 would treat last season's invoices as this season's (no tag, included in
 those bulk actions) or the reverse. An invoice with no season, or a later season (for example from
-an `invoice_date` typo), counts as "not this season" and is left out.
+an `invoice_date` typo), counts as "not this season" and is left out; a missing season is tagged
+"Season unknown". Separately, paths that rely on the `invoices.season` column default stamp it
+from the UTC date (see "other paths still stamp `invoices.season` from the UTC clock" below), so
+for about five hours on each September 30 evening (Chicago time) such a new invoice is stamped with
+next season while the browser still says this season: it shows a "Season N+1" tag and the
+season-limited bulk actions skip it until the browser date also rolls over.
 
 `FieldApplicationInvoice.tsx:533` (line as of 2026-09-26) is **fine** — it inherits `transactionDate`, which is now the
 Chicago business date.

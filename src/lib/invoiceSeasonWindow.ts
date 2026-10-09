@@ -55,27 +55,33 @@ export function isCurrentSeason(
 
 /**
  * Distinct season labels of rows that are NOT in the current season, for confirm text
- * (e.g. "Season 2026, Season 2028"). A row with no season is listed as "no season".
+ * (e.g. "Season 2026, Season 2028, Season unknown").
  */
 export function otherSeasonLabels(
   rows: ReadonlyArray<{ season?: number | null }>,
   currentSeason: number = computeSeason(),
 ): string {
   const labels = rows
-    .filter((row) => !isCurrentSeason(row.season, currentSeason))
-    .map((row) => otherSeasonLabel(row.season, currentSeason) ?? 'no season');
+    .map((row) => otherSeasonLabel(row.season, currentSeason))
+    .filter((label): label is string => label !== null);
   return [...new Set(labels)].join(', ');
 }
 
+/** Label shown for an invoice with no season on it. */
+export const UNKNOWN_SEASON_LABEL = 'Season unknown';
+
 /**
- * Label for an invoice whose filed season is not the current one (e.g. "Season 2026"),
- * so a prior-season open invoice is recognisable on a "this season" list. Null when the
- * invoice is in the current season or has no season.
+ * Label for an invoice that is NOT in the current season, so a prior-season open
+ * invoice is recognisable on a "this season" list: "Season 2026", or "Season unknown"
+ * when the invoice has no season. Null only when it is in the current season. This
+ * matches isCurrentSeason: every row that gets a label is one the this-season bulk
+ * actions leave out.
  */
 export function otherSeasonLabel(
   season: number | null | undefined,
   currentSeason: number = computeSeason(),
 ): string | null {
-  if (season === null || season === undefined || season === currentSeason) return null;
+  if (isCurrentSeason(season, currentSeason)) return null;
+  if (season === null || season === undefined) return UNKNOWN_SEASON_LABEL;
   return `Season ${season}`;
 }

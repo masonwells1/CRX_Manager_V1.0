@@ -133,6 +133,80 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(mockRpc.mock.calls.filter(([name]) => name === 'post_invoice')[0][1]).toMatchObject({ p_invoice_id: 'NEW-DRAFT' });
   });
 
+  // Regression (2026-10-09 final review): the toggle compared HOW MANY rows were
+  // selected with how many this-season rows there were, not WHICH rows. A hand-ticked
+  // older row skews the count, so the button could clear when it said Select All, or
+  // select when it said Deselect All.
+  const toggleButton = () => screen.getByRole('button', { name: /^(Select|Deselect) All$/ });
+  const tickRow = (number: string) => {
+    const row = screen.getAllByText(number).map((el) => el.closest('tr')).find(Boolean)!;
+    fireEvent.click(within(row).getByRole('checkbox'));
+  };
+
+  it('with an older-season invoice ticked by hand, Select All adds this season and keeps the ticked one', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('OLD-DRAFT');
+    // One row selected, but this season's NEW-DRAFT is not: the button must offer to
+    // select, and must not clear.
+    expect(toggleButton()).toHaveTextContent('Select All');
+    fireEvent.click(toggleButton());
+
+    expect(screen.getByRole('button', { name: /Post 2 Selected/ })).toBeInTheDocument();
+    expect(toggleButton()).toHaveTextContent('Deselect All');
+  });
+
+  it('Deselect All clears everything, including a hand-ticked older-season invoice', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('OLD-DRAFT');
+    tickRow('NEW-DRAFT');
+    expect(screen.getByRole('button', { name: /Post 2 Selected/ })).toBeInTheDocument();
+    expect(toggleButton()).toHaveTextContent('Deselect All');
+    fireEvent.click(toggleButton());
+
+    expect(screen.queryByRole('button', { name: /Post \d+ Selected/ })).not.toBeInTheDocument();
+    expect(toggleButton()).toHaveTextContent('Select All');
+  });
+
+  it('a partial selection offers Clear selection, which clears it', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('OLD-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(screen.queryByRole('button', { name: /Post \d+ Selected/ })).not.toBeInTheDocument();
+  });
+
+  it('Select All is disabled when every selectable row in view is from an older or unknown season', async () => {
+    mockFrom.mockImplementation((table: string) =>
+      buildInMemoryQuery(table === 'invoices'
+        ? [
+          ...ROWS.filter((row) => (row as { season?: number }).season === 2026),
+          invoice({ invoice_number: 'NO-SEASON', status: 'draft', season: null, invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+        ]
+        : []));
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('NO-SEASON').length).toBeGreaterThan(0));
+
+    // The unknown-season draft is tagged like an older-season one.
+    expect(screen.getAllByText('Season unknown').length).toBeGreaterThan(0);
+    expect(toggleButton()).toHaveTextContent('Select All');
+    expect(toggleButton()).toBeDisabled();
+    fireEvent.click(toggleButton());
+    expect(screen.queryByRole('button', { name: /Post \d+ Selected/ })).not.toBeInTheDocument();
+
+    // A hand-ticked row can still be cleared with the same button.
+    tickRow('NO-SEASON');
+    expect(toggleButton()).toHaveTextContent('Deselect All');
+    expect(toggleButton()).toBeEnabled();
+    fireEvent.click(toggleButton());
+    expect(screen.queryByRole('button', { name: /Post \d+ Selected/ })).not.toBeInTheDocument();
+  });
+
   it('a prior-season draft ticked by hand is named as not from this season in the Post confirm', async () => {
     render(<MemoryRouter><Invoices /></MemoryRouter>);
     await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));

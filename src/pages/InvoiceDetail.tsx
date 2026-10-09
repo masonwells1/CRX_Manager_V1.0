@@ -26,7 +26,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { retryGenericInvoiceCutover } from '../lib/genericInvoiceCutoverRetry';
 import { Sentry } from '../lib/sentry';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
-import { savedInvoiceChangedSinceLoad } from '../lib/invoicePostRecheck';
+import { savedInvoiceChangedSinceLoad, type PostRecheckLine } from '../lib/invoicePostRecheck';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { todayInBusinessTz, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -309,25 +309,21 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // posts. Blocking unsaved LOCAL edits does not cover a change saved from another
     // tab or by another user, so the saved row is read fresh here, and the post is
     // refused (never checked against the loaded copy) when that read fails.
+    // Line shape comes from the re-check helper, so the read and the fingerprint input
+    // cannot drift apart. The select must name every PostRecheckLine field.
     type SavedInvoiceForPost = {
       customer_id: string | null;
       total_amount_cents: number | null;
       invoice_date: string | null;
       payment_terms: string | null;
       due_date: string | null;
-      invoice_items: {
-        id: string;
-        product_id: string | null;
-        quantity: number | string | null;
-        unit_price_cents: number | null;
-        extended_cents: number | null;
-      }[] | null;
+      invoice_items: Array<PostRecheckLine & { id: string }> | null;
     };
     let saved: SavedInvoiceForPost | null = null;
     try {
       const { data, error } = await supabase
         .from('invoices')
-        .select('customer_id, total_amount_cents, invoice_date, payment_terms, due_date, invoice_items(id, product_id, quantity, unit_price_cents, extended_cents)')
+        .select('customer_id, total_amount_cents, invoice_date, payment_terms, due_date, invoice_items(id, product_id, description, quantity, unit_price_cents, extended_cents)')
         .eq('id', id!)
         .maybeSingle();
       if (error) throw error;
@@ -342,7 +338,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // Saved somewhere else since this screen loaded: show the current invoice first, so
     // the person posting sees what will actually post. Compares the customer, total,
     // invoice date (the posting month), terms, due date AND every line's product,
-    // quantity, price and amount — a line swapped at the same total also reloads.
+    // description, quantity, price and amount — a line swapped at the same total also
+    // reloads. Amounts are compared as exact text, never through a float.
+    // Not atomic with post_invoice (accepted residual, docs/manual/KNOWN_ISSUES.md).
     // (No unsaved local edits exist here, so `invoice` / `items` are the loaded copy.)
     const changedElsewhere = savedInvoiceChangedSinceLoad(
       {

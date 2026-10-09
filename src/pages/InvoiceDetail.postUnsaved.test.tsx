@@ -54,11 +54,19 @@ vi.mock('../components/invoices/InvoicePrintDialog', () => ({ default: () => nul
 
 import InvoiceDetail from './InvoiceDetail';
 
+const selectCalls: string[] = [];
+
 function chain(result: { data: unknown; error: unknown }) {
   const self: Record<string, unknown> = {};
   for (const m of ['select', 'eq', 'neq', 'in', 'is', 'not', 'or', 'gte', 'lte', 'order', 'limit', 'single', 'maybeSingle']) {
     self[m] = () => self;
   }
+  // Record every select list, so a test can check the pre-post re-read asks for the
+  // fields it compares (this mock returns whole rows whatever is selected).
+  self.select = (columns: unknown) => {
+    selectCalls.push(String(columns));
+    return self;
+  };
   self.then = (resolve: (v: typeof result) => unknown, reject?: (e: unknown) => unknown) =>
     Promise.resolve(result).then(resolve, reject);
   return self;
@@ -151,6 +159,7 @@ function postInvoiceCalls() {
 describe('InvoiceDetail — Post never posts something other than what is on screen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    selectCalls.length = 0;
     mockCreditCheck.mockResolvedValue(true);
     mockRupCheck.mockResolvedValue({ hasRUPProducts: false, hasValidLicense: true, rupProductNames: [], missingLicense: false });
     mockRpc.mockImplementation(() => {
@@ -283,6 +292,25 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
     expect(postInvoiceCalls()).toHaveLength(0);
     // The reload shows the swapped line before anything can be posted.
     expect((await screen.findAllByText(/Product B/)).length).toBeGreaterThan(0);
+  });
+
+  it('reloads instead of posting when only a line description was changed elsewhere (it prints on the invoice)', async () => {
+    setup(SAVED_TWO_LINES);
+    renderPage();
+    const post = await screen.findByRole('button', { name: 'Post' });
+
+    // Same product, quantity, price and amount; only the printed description differs.
+    savedLineItems = [{ ...SAVED_TWO_LINES[0], description: 'Product A - see note' }, SAVED_TWO_LINES[1]];
+    fireEvent.click(post);
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/changed somewhere else/)),
+    );
+    expect(mockCreditCheck).not.toHaveBeenCalled();
+    expect(postInvoiceCalls()).toHaveLength(0);
+    // The real re-read must actually ask the database for the line description.
+    const reRead = selectCalls.find((columns) => columns.includes('total_amount_cents') && columns.includes('invoice_items('));
+    expect(reRead).toMatch(/invoice_items\([^)]*\bdescription\b/);
   });
 
   it('reloads instead of posting when the invoice date was moved elsewhere (a different posting month)', async () => {

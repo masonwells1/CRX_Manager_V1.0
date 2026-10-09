@@ -37,8 +37,16 @@ below).
   - On the Chemical Sales list, **Select All** picks only this season's invoices, so one Select
     All + Post / Void / Delete cannot reach last season's work. An older invoice can still be
     ticked by hand (it shows a "Season N" tag); if one is selected, the Post confirm says how
-    many are not from this season.
+    many are not from this season. The button goes by **which** invoices are ticked, not how
+    many: it reads **Select All** (and adds this season's invoices to anything already ticked)
+    until every this-season invoice in view is ticked, then **Deselect All** (which clears
+    everything, including hand-ticked older ones). A partial selection also shows **Clear
+    selection**. When every invoice in view is from an older season, Select All is greyed out
+    instead of silently doing nothing.
   - An invoice with no season, or a later season, counts as "not this season" for these actions.
+    An invoice with no season shows a **"Season unknown"** tag, so it is never an untagged row
+    that the bulk actions quietly skip. (The live `invoices.season` column cannot be empty today;
+    this only matters if that ever changes.)
 - The Posted tab's **Print Invoice Report** PDF now names its scope in the subtitle (for example
   "This season + older seasons' unpaid invoices", or "June 2026 batch — unpaid invoices only"),
   so a printed total says what it covers.
@@ -81,9 +89,10 @@ screen: it posted the old saved amounts and then quietly threw the edits away.
 - If that re-read fails, nothing is posted: an error says to try again (it no longer falls back
   to the possibly out-of-date copy on screen). If the invoice was changed somewhere else (another
   tab or another person) since the page loaded — a different customer, total, invoice date (the
-  posting month), payment terms or due date, or any line's product, quantity, price or amount
-  (for example a product swapped at the same total) — the page reloads it and asks you to check
-  it and post again.
+  posting month), payment terms or due date, or any line's product, description, quantity, price
+  or amount (for example a product swapped at the same total, or a line's printed description
+  reworded) — the page reloads it and asks you to check it and post again. Amounts are compared as
+  exact digits, never rounded through a floating-point number.
 - For a split-group invoice the credit-limit warning still looks at this invoice's own total,
   although the group post posts every member (unchanged from before; the warning can be
   dismissed and is not a gate).
@@ -113,7 +122,64 @@ screen: it posted the old saved amounts and then quietly threw the edits away.
   swapped elsewhere at the same total, or the invoice date moved; plus unit tests for the season
   filter, the season labels and the saved-invoice comparison. The Select All, line-swap and
   date-move tests were each run against the round-1 code and failed there.
+- Final fix round added tests for: Select All with an older invoice ticked by hand (adds this
+  season, keeps the ticked one), Deselect All clearing a mix of this-season and older invoices,
+  Clear selection, Select All greyed out when only older or unknown-season invoices are in view,
+  the "Season unknown" tag, the invoice editor reloading when only a line description changed
+  elsewhere (and the re-read actually asking the database for the description), and exact-digit
+  amount comparison above 2^53. Each was run against the round-2 code and failed there.
 - typecheck, lint, the full Vitest suite and the production build pass.
+
+### Known gaps and deferred items (not fixed in this change)
+
+In plain English, everything the review rounds found that this change deliberately does not fix:
+
+- **Post is not locked to what was checked (accepted residual, tracked OPEN in
+  `docs/manual/KNOWN_ISSUES.md`).** The editor re-reads the saved invoice when you press Post, but
+  the server's posting step (`post_invoice`) only receives the invoice's ID. If another person
+  saves the same invoice in the moment between that re-read and your click on the confirm box,
+  the server posts what is saved then — something you did not see — and the credit-limit and
+  restricted-use warnings you saw were worked out from a total or product list that changed
+  milliseconds earlier. The real fix is a server change: the editor sends the version it checked
+  and `post_invoice` refuses, inside the same database transaction, if the invoice no longer
+  matches (an "optimistic-concurrency token").
+- **No leave-page warning on the regular invoice editor.** Post, Print, Email and Transfer are now
+  blocked while there are unsaved edits, but clicking a sidebar link, Back, or closing the tab
+  still throws unsaved edits away with no prompt. (The field-application invoice page does warn.)
+  Adding it needs the editor's tests moved to a router that can host the leave-page blocker.
+- **"This season" comes from the computer's clock.** Which invoices get a season tag and which ones
+  the bulk actions (Post All, Unpost All, Select All) leave out depends on the date on the
+  person's computer, not the server. A wrong computer date around October 1 would treat last
+  season's invoices as this season's, or the reverse. Also, invoices created through paths that
+  use the database's default season are stamped from UTC time, so for about five hours on each
+  September 30 evening a new invoice is stamped "next season" and the bulk actions skip it until
+  midnight Chicago time.
+- **Lists still stop at 2,000 rows, newest first.** The lists now include older open invoices, so
+  if a list ever reaches its 2,000-row cap, the oldest still-open invoices are the first to be cut
+  off — the original bug again, for exactly those rows. A message appears when the cap is hit.
+  Not reachable at today's volume.
+- **The Orders list is still limited to this season.** `src/pages/Orders.tsx` uses the same
+  current-season-only filter the invoice lists used to, so last season's open orders (20 at the
+  time of the review) are hidden from it.
+- **Split-group credit and season checks look at one invoice.** On the invoice editor, the
+  credit-limit warning for a split-group invoice uses that invoice's own total, although the
+  group post posts every member. On the Chemical Sales list, batch Post checks the season of the
+  selected rows only, while posting a split group posts every member (including one from another
+  season). Theoretical today: there are no live split groups, and a database rule keeps split
+  members in the same season.
+- **A partly-failed first save of a new field-application invoice.** If the first Save creates the
+  invoice but a later step fails (for example the billing details), the page keeps a link to the
+  invoice it created and a second Save updates it. But some checks (season date guard, split
+  preview, billing key) still behave as if the invoice were new (the server still refuses a
+  filed-season change), and if the page is refreshed before saving again, that link is lost and
+  saving the re-typed form creates a second invoice (the leave-page prompt warns before the
+  refresh).
+- **Post All on the Drafts tab never includes older-season invoices.** Last season's unposted
+  field invoice has to be posted from its own page. Whether Post All should get an "include
+  older seasons" option is an owner decision.
+- **Undoing an edit can leave Post greyed out.** Changing a quantity and changing it back can
+  leave the line amount slightly different from what was loaded, so the page still asks for a
+  Save. Safe (it never posts the wrong thing), just an extra click.
 
 ### Not verified here
 
@@ -122,17 +188,8 @@ screen: it posted the old saved amounts and then quietly threw the edits away.
   and the Post All confirm saying it is left out; that invoice posting from its own invoice page; a
   new field-app Save landing on the saved invoice; invoice-editor Post/Print disabled after an edit
   and enabled after Save.
-- Out of scope and unchanged: the invoice editor still has no leave-page warning for unsaved edits
-  (its component tests use a plain router that cannot host the leave-page blocker; adding it needs
-  that test setup changed first). The Orders list (`src/pages/Orders.tsx`) uses the same
-  current-season-only filter, so last season's 20 open orders are hidden from it. After a
-  partly-failed first save of a new field-app invoice, the page still treats some checks
-  (season date guard, split preview, billing key) as for a new invoice; the server still refuses
-  a filed-season change. If the page is refreshed after such a partly-failed first save, the
-  in-memory link to the invoice already created is lost, so saving the re-typed form creates a
-  second invoice (the leave-page prompt warns before the refresh). The lists still load at most
-  2,000 rows newest-first (a message appears when the cap is hit), so at very large volumes the
-  oldest open invoices would drop off first. The list-test helper returns whole rows whatever
-  columns a query selects, so it would not notice a list that stopped selecting `season`.
+- The list-test helper returns whole rows whatever columns a query selects, so it would not
+  notice a list that stopped selecting `season`. (Deferred product gaps are listed in "Known gaps
+  and deferred items" above.)
 - Owner decision (not made here): whether the server should also refuse posting an invoice into
   a **season** other than its own (it already refuses a closed accounting period).

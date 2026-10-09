@@ -508,16 +508,35 @@ export default function Invoices() {
   };
 
   // Select All picks only THIS season's rows (2026-10-09). The list also shows older
-  // seasons' open invoices, and one Select All + Post / Void / Delete must not reach
-  // last season's work by accident. An older invoice is still selectable by ticking
-  // its own box (it carries a visible "Season N" tag).
+  // seasons' open invoices (and any whose season is unknown), and one Select All +
+  // Post / Void / Delete must not reach that work by accident. An older invoice is
+  // still selectable by ticking its own box (it carries a visible "Season N" tag).
+  //
+  // The toggle works on invoice IDs, not on how many rows are selected: a hand-ticked
+  // older row counts toward the selection but is never one of the rows Select All
+  // picks, so comparing counts could clear when the button said Select All, or select
+  // when it said Deselect All.
+  //   - "Deselect All" shows only when something is selected AND every this-season row
+  //     in view is already selected (or none is in view); it clears the whole selection.
+  //   - Otherwise "Select All" ADDS this season's rows in view and keeps hand-ticked
+  //     ones. It is disabled when no this-season row in view can be selected.
+  // A partial selection also gets its own "Clear selection" button.
+  const selectableThisSeason = filtered.filter(
+    (i) => selectableStatuses.includes(i.status) && isCurrentSeason(i.season),
+  );
+  const toggleAllClears = selected.size > 0 && selectableThisSeason.every((i) => selected.has(i.id));
+  const toggleAllDisabled = !toggleAllClears && selectableThisSeason.length === 0;
   const toggleAll = () => {
-    const selectable = filtered.filter((i) => selectableStatuses.includes(i.status) && isCurrentSeason(i.season));
-    if (selected.size === selectable.length && selectable.length > 0) {
+    if (toggleAllClears) {
       setSelected(new Set());
-    } else {
-      setSelected(new Set(selectable.map((i) => i.id)));
+      return;
     }
+    if (selectableThisSeason.length === 0) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const row of selectableThisSeason) next.add(row.id);
+      return next;
+    });
   };
 
   const columns: Column<InvoiceRow>[] = [
@@ -871,11 +890,28 @@ export default function Invoices() {
                 </button>
                 {filtered.some((i) => selectableStatuses.includes(i.status)) && (
                   <button
+                    type="button"
                     onClick={toggleAll}
-                    className="text-xs text-crx-green hover:underline ml-2"
-                    title="Selects this season's invoices only. Tick an older-season invoice's own box to include it."
+                    disabled={toggleAllDisabled}
+                    className="text-xs text-crx-green hover:underline ml-2 disabled:text-gray-400 disabled:no-underline disabled:cursor-not-allowed"
+                    title={
+                      toggleAllClears
+                        ? 'Clears every selected invoice.'
+                        : toggleAllDisabled
+                          ? "No invoice from this season is in view. Tick an older-season invoice's own box to select it."
+                          : "Selects this season's invoices only. Tick an older-season invoice's own box to include it."
+                    }
                   >
-                    {selected.size > 0 ? 'Deselect All' : 'Select All'}
+                    {toggleAllClears ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
+                {selected.size > 0 && !toggleAllClears && (
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="text-xs text-secondary hover:underline ml-2"
+                  >
+                    Clear selection
                   </button>
                 )}
               </div>

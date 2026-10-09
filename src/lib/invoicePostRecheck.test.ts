@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { savedInvoiceChangedSinceLoad, type PostRecheckInvoice } from './invoicePostRecheck';
+import { canonicalNumberText, savedInvoiceChangedSinceLoad, type PostRecheckInvoice } from './invoicePostRecheck';
 
 const LOADED: PostRecheckInvoice = {
   customer_id: 'cust-1',
@@ -50,6 +50,43 @@ describe('savedInvoiceChangedSinceLoad', () => {
       ],
     };
     expect(savedInvoiceChangedSinceLoad(saved, LOADED)).toBe(true);
+  });
+
+  it('is true when only a line description changed (it prints on the invoice)', () => {
+    const loaded = { ...LOADED, lines: [{ ...LOADED.lines[0], description: 'Roundup 2.5 gal' }, LOADED.lines[1]] };
+    const saved = { ...LOADED, lines: [{ ...LOADED.lines[0], description: 'Roundup 2.5 gal - SPECIAL PRICE' }, LOADED.lines[1]] };
+    expect(savedInvoiceChangedSinceLoad(saved, loaded)).toBe(true);
+    // A blank and a missing description are the same thing.
+    expect(savedInvoiceChangedSinceLoad(
+      { ...LOADED, lines: [{ ...LOADED.lines[0], description: '' }, LOADED.lines[1]] },
+      { ...LOADED, lines: [{ ...LOADED.lines[0], description: null }, LOADED.lines[1]] },
+    )).toBe(false);
+  });
+
+  it('compares cents digit for digit, without rounding through a float above 2^53', () => {
+    // Both of these become the same JavaScript Number (9007199254740992).
+    expect(Number('9007199254740993')).toBe(Number('9007199254740992'));
+    expect(savedInvoiceChangedSinceLoad(
+      { ...LOADED, total_amount_cents: '9007199254740993' },
+      { ...LOADED, total_amount_cents: '9007199254740992' },
+    )).toBe(true);
+    expect(savedInvoiceChangedSinceLoad(
+      { ...LOADED, total_amount_cents: '9007199254740993' },
+      { ...LOADED, total_amount_cents: '9007199254740993' },
+    )).toBe(false);
+  });
+
+  it('treats the same amount written differently as equal, and junk as a change', () => {
+    expect(canonicalNumberText(400000)).toBe('400000');
+    expect(canonicalNumberText('400000')).toBe('400000');
+    expect(canonicalNumberText('2.5000')).toBe('2.5');
+    expect(canonicalNumberText(2.5)).toBe('2.5');
+    expect(canonicalNumberText('007')).toBe('7');
+    expect(canonicalNumberText('-0.00')).toBe('0');
+    expect(canonicalNumberText('')).toBeNull();
+    expect(canonicalNumberText(null)).toBeNull();
+    expect(savedInvoiceChangedSinceLoad({ ...LOADED, total_amount_cents: '400000.00' }, LOADED)).toBe(false);
+    expect(savedInvoiceChangedSinceLoad({ ...LOADED, total_amount_cents: 'abc' }, LOADED)).toBe(true);
   });
 
   it('is true when a line was added or removed', () => {

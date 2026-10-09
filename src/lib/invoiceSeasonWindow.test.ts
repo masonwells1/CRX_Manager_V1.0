@@ -26,9 +26,18 @@ describe('season labels and the this-season test', () => {
     expect(isCurrentSeason(undefined, 2027)).toBe(false);
   });
 
+  it('tags a missing season as "Season unknown", the same way bulk actions treat it', () => {
+    expect(otherSeasonLabel(null, 2027)).toBe('Season unknown');
+    expect(otherSeasonLabel(undefined, 2027)).toBe('Season unknown');
+    // Every season value gets a tag exactly when it is not this season.
+    for (const season of [2025, 2026, 2027, 2028, null, undefined]) {
+      expect(otherSeasonLabel(season, 2027) === null).toBe(isCurrentSeason(season, 2027));
+    }
+  });
+
   it('lists the distinct other-season labels for confirm text, including a missing season', () => {
     expect(otherSeasonLabels([{ season: 2026 }, { season: 2027 }, { season: 2026 }, { season: 2028 }, { season: null }], 2027))
-      .toBe('Season 2026, Season 2028, no season');
+      .toBe('Season 2026, Season 2028, Season unknown');
     expect(otherSeasonLabels([{ season: 2027 }], 2027)).toBe('');
   });
 });
