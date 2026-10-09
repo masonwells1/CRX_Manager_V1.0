@@ -705,11 +705,14 @@ cannot see that anything was skipped.
 
 **The cosmetic ones** — report/dialog defaults the user can change in the UI:
 `ARaging.tsx:80`, `CropPrograms.tsx:55`, `FieldProfitability.tsx:62`, `YearEndSummaryDialog.tsx:26`,
-`ReportShell.tsx:20-29`, `invoiceSeasonWindow.ts` (the invoice lists' window for CLOSED invoices only;
-open invoices are never season-windowed since 2026-10-09, and these lists have no season control),
-`ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
+`ReportShell.tsx:20-29`, `ApplicationRecords.tsx:36`, `Reports.tsx:118,122`,
 `SalesReports.tsx:29,33,100`. `AccountsReceivable.tsx:45` and `CustomerContextCard.tsx:46` similarly
 pass a **UTC** `toISOString().slice(0,10)` as an as-of date.
+
+**Not user-changeable, but low impact:** `invoiceSeasonWindow.ts` (the invoice lists' season
+window; replaced `FieldInvoices.tsx:44` on 2026-10-09). These lists have no season control, but
+the window applies to CLOSED invoices only (paid, voided, cancelled); open invoices are never
+season-windowed, so the browser-clock season can only move a closed invoice on or off a list.
 
 `FieldApplicationInvoice.tsx:533` (line as of 2026-09-26) is **fine** — it inherits `transactionDate`, which is now the
 Chicago business date.

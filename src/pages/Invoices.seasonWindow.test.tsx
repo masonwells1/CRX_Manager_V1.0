@@ -97,4 +97,16 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     const card = await screen.findByRole('button', { name: 'Show invoices ready to post' });
     await waitFor(() => expect(card).toHaveTextContent('3'));
   });
+
+  it('counts overdue invoices in the Posted Total and Outstanding cards, and says older open invoices are included', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+
+    // OLD-POSTED ($100.00) + OLD-OVERDUE ($100.00): overdue is a posted invoice past due.
+    const outstanding = (await screen.findByText('unpaid balance on posted and overdue invoices')).parentElement!;
+    await waitFor(() => expect(outstanding).toHaveTextContent('$200.00'));
+    const postedTotal = screen.getByText(/posted invoices \(including overdue\)/).parentElement!;
+    expect(postedTotal).toHaveTextContent('$200.00');
+    expect(postedTotal).toHaveTextContent('2 posted invoices (including overdue)');
+    expect(screen.getByText(/plus any invoice from an earlier season that is still unposted\s+or unpaid/)).toBeInTheDocument();
+  });
 });

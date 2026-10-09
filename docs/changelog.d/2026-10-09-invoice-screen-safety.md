@@ -14,9 +14,21 @@ overdue had disappeared, and the Drafts tab's **Post All** could not reach them.
   earlier season.
 - A **closed** invoice (paid, voided, cancelled) still shows only for the current season, as
   before.
-- **Post All** on the Drafts tab now includes last season's unposted field invoices. It posts
-  them through the same server posting step as always, so every server-side rule (including the
-  filed-season rules) still decides whether each one may post.
+- **Post All** on the Drafts tab now includes last season's unposted field invoices. Important:
+  the server posting step (`post_invoice` / `post_invoice_group`) has **no season or
+  closed-month check** (live read of the function bodies, 2026-10-09), so a last-season invoice
+  posts into its own invoice-date month batch (for example August). The Post All confirm box
+  therefore says how many of the invoices it is about to post are from an earlier season; to
+  leave them out, filter them out of the view first.
+- **Unpost All** on the Posted tab, in the default "This Season + older unpaid" scope, still
+  reverses only **this season's** posted invoices, as it did before. Older unpaid invoices are
+  listed but left out (the confirm says how many); to unpost one, choose its month batch in Scope.
+  Month batches from an earlier season are marked "unpaid only", because paid invoices from that
+  season are not on this list.
+- The Chemical Sales **Posted Total** and **Outstanding** cards now count overdue invoices too
+  (an overdue invoice is a posted invoice past its due date; before, the two live overdue
+  invoices were listed but left out of both totals). A note under the cards says older open
+  invoices are included.
 - The Posted tab's scope menu now reads "This Season + older unpaid", and the All Invoices tab
   says it also shows older unposted or unpaid invoices.
 
@@ -34,6 +46,8 @@ had worked, and choosing **Stay** then **Save** created a **second, duplicate** 
 - If part of the save fails (for example the billing details), the form keeps your typed values
   and the prompt still appears, as before. Choosing Stay and saving again now **updates the
   invoice that was already created** instead of creating another one.
+- Deleting a field-application invoice, or transferring it back to scheduling, also leaves the
+  page without a false "Unsaved Changes" prompt.
 
 ### 3. Post is blocked on the invoice editor while there are unsaved edits
 
@@ -42,9 +56,16 @@ job/blend field invoices), the **Post** button is greyed out while you have unsa
 the note "Save your changes before posting." Before, Post could be clicked with unsaved edits on
 screen: it posted the old saved amounts and then quietly threw the edits away.
 
-- Save first, then Post.
-- The credit-limit check and the restricted-use (RUP) license warning before posting now look at
-  the saved invoice that will actually be posted, not at what happens to be on screen.
+- Save first, then Post. **Print**, **Email** and **Transfer to Scheduling** are greyed out the
+  same way, because they also work from the saved invoice.
+- Before the Post confirm opens, the app re-reads the saved invoice. The credit-limit check uses
+  the saved **customer and total**, and the restricted-use (RUP) license warning uses the saved
+  lines — what will actually be posted, not what happens to be on screen.
+- If that re-read fails, nothing is posted: an error says to try again (it no longer falls back
+  to the possibly out-of-date copy on screen). If the invoice was changed somewhere else (another
+  tab or another person) to a different customer or total, the page reloads it and asks you to
+  check it and post again.
+- Typing into an empty PO or notes field and deleting it again no longer counts as an unsaved edit.
 
 ### Proof
 
@@ -58,13 +79,26 @@ screen: it posted the old saved amounts and then quietly threw the edits away.
 - The new list filter was sent to the live API read-only with the public key. It got past the
   filter parser (it stopped at the permission check), while a deliberately broken filter was
   rejected by the parser. So the filter syntax is valid on the real server.
+- Review round 1 added tests for: the saved-invoice re-read failing (no post), the invoice moved
+  to another customer elsewhere (reload, then the credit check uses the new customer and total),
+  the unsaved-edit baseline being retaken after a save, Print disabled with unsaved edits, the
+  Post All earlier-season notice, Unpost All's this-season default, and overdue invoices in the
+  Chemical Sales cards. The two new Post tests fail on the round-0 code.
 - typecheck, lint, the full Vitest suite and the production build pass.
 
 ### Not verified here
 
-- Not clicked through in a signed-in browser against live data.
-- Out of scope and unchanged: Print, Email and Transfer to Scheduling on the invoice editor still
-  use what is on screen. The invoice editor still has no leave-page warning for unsaved edits. The
-  Orders list (`src/pages/Orders.tsx`) uses the same current-season-only filter. Transfer to
-  Scheduling on the field-application editor uses the same `setDirty(false)` then navigate
-  pattern, and may show the same false prompt.
+- Not clicked through in a signed-in browser against live data. Before shipping: the Invoices
+  list showing the 2 overdue and the drafts; the Drafts tab showing last season's unposted field invoice
+  and the Post All confirm naming it as an earlier-season invoice; a new field-app Save landing on the saved
+  invoice; invoice-editor Post/Print disabled after an edit and enabled after Save.
+- Out of scope and unchanged: the invoice editor still has no leave-page warning for unsaved edits
+  (its component tests use a plain router that cannot host the leave-page blocker; adding it needs
+  that test setup changed first). The Orders list (`src/pages/Orders.tsx`) uses the same
+  current-season-only filter, so last season's 20 open orders are hidden from it. After a
+  partly-failed first save of a new field-app invoice, the page still treats some checks
+  (season date guard, split preview, billing key) as for a new invoice; the server still refuses
+  a filed-season change. The lists still load at most 2,000 rows newest-first (a message appears
+  when the cap is hit), so at very large volumes the oldest open invoices would drop off first.
+- Owner decision (not made here): whether `post_invoice` should refuse posting into a closed or
+  prior-season month.

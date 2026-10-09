@@ -2136,6 +2136,9 @@ export default function FieldApplicationInvoice() {
       });
 
       toast('success', 'Invoice deleted');
+      // The invoice is gone, so any unsaved edits are moot: let this navigation
+      // through without the "Unsaved Changes" prompt (see useUnsavedChanges).
+      skipUnsavedPromptRef.current = true;
       navigate('/field-invoices');
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'delete_field_app_invoice' } });
@@ -2539,8 +2542,11 @@ export default function FieldApplicationInvoice() {
       transferToSchedulingIdem.resetKey();
       // The invoice is now cancelled and the form holds stale, deleted contents —
       // clear the unsaved-changes guard so leaving doesn't prompt, then go to the job.
+      // setDirty(false) alone is not seen by the router's block check before this
+      // navigate(), so the one-shot skip ref lets the navigation through.
       setDirty(false);
       toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
+      skipUnsavedPromptRef.current = true;
       navigate(`/jobs/${result.job_id}`);
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'transfer_invoice_to_job' } });

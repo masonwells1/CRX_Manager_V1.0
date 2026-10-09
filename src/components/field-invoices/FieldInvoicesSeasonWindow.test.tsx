@@ -100,11 +100,14 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     expect(screen.getByText('$4,285.78')).toBeInTheDocument();
   });
 
-  it('Post All reaches the prior-season unposted invoice through the normal server post_invoice call', async () => {
+  it('Post All reaches the prior-season unposted invoice through the normal server post_invoice call, and its confirm says so', async () => {
     renderInRouter(<FieldInvoicesUnpostedPanel />);
     await waitFor(() => expect(screen.getAllByText('FA-OLD-UNPOSTED').length).toBeGreaterThan(0));
 
     fireEvent.click(screen.getByRole('button', { name: /Post All/ }));
+    // post_invoice has no season or closed-month check, so the confirm must name the
+    // earlier-season invoices it is about to post (FA-OLD-UNPOSTED + FA-OLD-DRAFT).
+    expect(await screen.findByText(/This includes 2 invoice\(s\) from an earlier season \(Season 2026\)/)).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Post 3 target(s)' }));
 
     await waitFor(() => {
@@ -113,7 +116,8 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
         .map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id);
       expect(posted).toEqual(expect.arrayContaining(['FA-OLD-UNPOSTED', 'FA-OLD-DRAFT', 'FA-NEW-DRAFT']));
     });
-    // Nothing season-specific is sent: the server's own season guards decide.
+    // Nothing season-specific is sent. NOTE: post_invoice has NO season or closed-month
+    // check on the server, so the confirm text above is the only prior-season warning.
     const postArgs = mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args);
     for (const args of postArgs) expect(Object.keys(args as object).sort()).toEqual(['p_idempotency_key', 'p_invoice_id']);
   });
@@ -124,6 +128,30 @@ describe('Field Invoices tabs — season window after the Oct 1 rollover', () =>
     await waitFor(() => expect(screen.getAllByText('FA-NEW-PAID').length).toBeGreaterThan(0));
     expect(screen.getAllByText('FA-OLD-OVERDUE').length).toBeGreaterThan(0);
     expect(screen.queryByText('FA-OLD-PAID')).not.toBeInTheDocument();
+  });
+
+  it('Unpost All in the default scope only touches this season; an older invoice needs its month batch chosen', async () => {
+    const thisSeasonPosted = fieldInvoice({ invoice_number: 'FA-NEW-POSTED', status: 'posted', season: 2027, invoice_date: '2026-10-04', created_at: '2026-10-04T15:00:00+00:00' });
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? [...ROWS, thisSeasonPosted] : []));
+    mockRpc.mockImplementation(() => Promise.resolve({ data: true, error: null }));
+    renderInRouter(<FieldInvoicesPostedPanel />);
+    await waitFor(() => expect(screen.getAllByText('FA-OLD-OVERDUE').length).toBeGreaterThan(0));
+
+    // The prior-season month is labelled as holding only its unpaid invoices.
+    expect(screen.getByRole('option', { name: /June 2026 \(1\) — unpaid only/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /October 2026 \(2\)$/ })).toBeInTheDocument();
+
+    // Default scope: FA-OLD-OVERDUE is listed but NOT an Unpost All candidate.
+    fireEvent.click(screen.getByRole('button', { name: 'Unpost All (1)' }));
+    expect(await screen.findByText(/1 unpaid invoice\(s\) from an earlier season in view are NOT included/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Unpost 1' }));
+    await waitFor(() => expect(mockRpc.mock.calls.filter(([name]) => name === 'unpost_invoice')).toHaveLength(1));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'unpost_invoice').map(([, args]) => (args as { p_invoice_id: string }).p_invoice_id))
+      .toEqual(['FA-NEW-POSTED']);
+
+    // Choosing the June 2026 batch is the explicit opt-in that reaches the older invoice.
+    fireEvent.change(screen.getByLabelText('Posting scope'), { target: { value: '2026-06' } });
+    expect(await screen.findByRole('button', { name: 'Unpost All (1)' })).toBeEnabled();
   });
 
   it('All Invoices tab keeps prior-season open invoices but season-windows closed ones', async () => {

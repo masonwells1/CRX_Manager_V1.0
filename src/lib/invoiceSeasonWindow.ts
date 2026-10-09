@@ -9,8 +9,13 @@
  *
  * Rule: an OPEN invoice (still to post or still to collect) shows whatever season it
  * is in; only a CLOSED invoice (paid, voided, cancelled) is limited to the current
- * season. This is a display filter only; posting and editing still go through the
- * server RPCs and their season guards.
+ * season. This is a display filter only.
+ *
+ * Caution: post_invoice / post_invoice_group have NO season or closed-month check
+ * (live pg_proc read, 2026-10-09), so listing an older open invoice also makes it
+ * reachable by bulk actions. The field Drafts tab's Post All names how many earlier-
+ * season invoices it will post, and the Posted tab's Unpost All leaves earlier-season
+ * invoices out of its default scope (see those panels).
  */
 import type { InvoiceStatus } from '../types';
 import { computeSeason, seasonStartDate } from '../utils/season';

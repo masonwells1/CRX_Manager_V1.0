@@ -24,6 +24,7 @@ import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from
 import { useAuth } from '../../contexts/AuthContext';
 import { formatCents as fmt } from '../../lib/money';
 import SeasonTag from '../invoices/SeasonTag';
+import { otherSeasonLabel } from '../../lib/invoiceSeasonWindow';
 import { SkeletonTable } from '../ui/Skeleton';
 import type { PostInvoiceGroupResult } from '../../types';
 import {
@@ -102,9 +103,11 @@ export default function FieldInvoicesUnpostedPanel() {
     // NO season window: every row here is still to be posted, and an unposted bill
     // must stay in the working tray, its footer totals AND Post All whatever season
     // it was filed in. A season window hid every prior-season unposted invoice on
-    // the Oct 1 rollover (2026-10-09). Each row shows its season via SeasonTag;
-    // posting a prior-season invoice goes through the same post_invoice RPC, whose
-    // server-side rules decide whether it may post.
+    // the Oct 1 rollover (2026-10-09). Each row shows its season via SeasonTag.
+    // NOTE: post_invoice / post_invoice_group have NO season or closed-month check
+    // (live pg_proc read 2026-10-09), so a prior-season invoice posts into its own
+    // invoice-date month batch. Post All's confirm names how many such invoices it
+    // will post, so staff decide knowingly.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
@@ -371,6 +374,10 @@ export default function FieldInvoicesUnpostedPanel() {
     [visible],
   );
   const postIndividualCount = visible.filter((row) => !row.invoice_group_id).length;
+  // Displayed invoices filed in an earlier season, with their season labels, so the
+  // Post All confirm can say so (nothing on the server stops them posting).
+  const priorSeasonRows = visible.filter((row) => otherSeasonLabel(row.season) !== null);
+  const priorSeasonLabels = [...new Set(priorSeasonRows.map((row) => otherSeasonLabel(row.season)))].join(', ');
 
   // --- POST ALL (posts every displayed individual invoice and each displayed split
   // group once, after confirm). post_invoice_group intentionally posts ALL members,
@@ -765,7 +772,12 @@ export default function FieldInvoicesUnpostedPanel() {
         onClose={() => setShowPostAll(false)}
         onConfirm={postAll}
         title="Post all displayed invoices?"
-        message={`Post ${postIndividualCount} individual invoice(s) + ${postGroupCount} split group(s) represented in the current view? A split group always posts all of its members together, even when some members are hidden by filters. Posting commits them to accounts receivable and is logged.`}
+        message={
+          `Post ${postIndividualCount} individual invoice(s) + ${postGroupCount} split group(s) represented in the current view? A split group always posts all of its members together, even when some members are hidden by filters. Posting commits them to accounts receivable and is logged.` +
+          (priorSeasonRows.length > 0
+            ? ` This includes ${priorSeasonRows.length} invoice(s) from an earlier season (${priorSeasonLabels}); each posts into its own invoice-date month batch. To leave them out, filter them out of the view first.`
+            : '')
+        }
         confirmLabel={`Post ${postIndividualCount + postGroupCount} target(s)`}
         variant="info"
         icon={ClipboardCheck}

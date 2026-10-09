@@ -208,13 +208,15 @@ export default function Invoices() {
     return true;
   });
 
-  // Summary stats
+  // Summary stats. An overdue invoice is a posted invoice past its due date, so it
+  // counts as posted here (as the Field Invoices list's isPostedLike does). The list
+  // includes open invoices from earlier seasons, so these totals do too (noted under
+  // the cards).
   const unpostedCount = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted').length;
-  const postedTotal = invoices
-    .filter((i) => i.status === 'posted')
-    .reduce((s, i) => s + i.total_amount_cents, 0);
-  const outstandingBalance = invoices
-    .filter((i) => i.status === 'posted' && i.balance_cents > 0)
+  const postedLikeInvoices = invoices.filter((i) => i.status === 'posted' || i.status === 'overdue');
+  const postedTotal = postedLikeInvoices.reduce((s, i) => s + i.total_amount_cents, 0);
+  const outstandingBalance = postedLikeInvoices
+    .filter((i) => i.balance_cents > 0)
     .reduce((s, i) => s + i.balance_cents, 0);
 
   // Determine what's selected for action buttons
@@ -767,7 +769,7 @@ export default function Invoices() {
           </div>
           <p className="text-2xl font-semibold font-heading text-crx-green">{fmt(postedTotal)}</p>
           <p className="text-xs text-secondary mt-1">
-            {invoices.filter((i) => i.status === 'posted').length} posted invoices
+            {postedLikeInvoices.length} posted invoices (including overdue)
           </p>
         </Card>
         <Card>
@@ -778,8 +780,12 @@ export default function Invoices() {
             <span className="text-sm text-secondary">Outstanding</span>
           </div>
           <p className="text-2xl font-semibold font-heading text-red-600">{fmt(outstandingBalance)}</p>
-          <p className="text-xs text-secondary mt-1">unpaid balance on posted invoices</p>
+          <p className="text-xs text-secondary mt-1">unpaid balance on posted and overdue invoices</p>
         </Card>
+        <p className="sm:col-span-3 text-xs text-secondary">
+          Shows this season&apos;s invoices plus any invoice from an earlier season that is still unposted
+          or unpaid; the totals above include those older open invoices.
+        </p>
       </div>
 
       {/* Data Table */}

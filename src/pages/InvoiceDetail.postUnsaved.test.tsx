@@ -107,10 +107,20 @@ function lineItem(overrides: Record<string, unknown>) {
   };
 }
 
+// Mutable "database": what the invoices / invoice_items reads return right now.
+let savedInvoiceRow: Record<string, unknown> = SAVED_INVOICE;
+let savedLineItems: Array<Record<string, unknown>> = [];
+let invoiceReadError: { message: string } | null = null;
+
 function setup(screenItems: Array<Record<string, unknown>>) {
+  savedInvoiceRow = SAVED_INVOICE;
+  savedLineItems = screenItems;
+  invoiceReadError = null;
   mockFrom.mockImplementation((table: string) => {
-    if (table === 'invoices') return chain({ data: SAVED_INVOICE, error: null });
-    if (table === 'invoice_items') return chain({ data: screenItems, error: null });
+    if (table === 'invoices') {
+      return chain(invoiceReadError ? { data: null, error: invoiceReadError } : { data: savedInvoiceRow, error: null });
+    }
+    if (table === 'invoice_items') return chain({ data: savedLineItems, error: null });
     return chain({ data: [], error: null });
   });
 }
@@ -150,6 +160,8 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
     fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '2' } });
 
     expect(screen.getByRole('button', { name: 'Post' })).toBeDisabled();
+    // Print builds the PDF from the saved lines, so it waits for the save too.
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled();
     expect(screen.getByText(/Save your changes before posting/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Post' }));
     expect(screen.queryByText(/This will lock amounts/)).not.toBeInTheDocument();
@@ -159,6 +171,12 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
   it('allows Post again once the edits are saved', async () => {
     setup([lineItem({})]);
     mockRpc.mockImplementation((name: string) => {
+      if (name === 'save_invoice') {
+        // The save stores the edit: from now on the database holds quantity 2, so the
+        // reload after the save shows quantity 2 — DIFFERENT from the first load. Post
+        // is enabled again only if the unsaved-edit baseline is retaken after the save.
+        savedLineItems = [lineItem({ quantity: 2, extended_cents: 800000 })];
+      }
       const result = Promise.resolve(name === 'save_invoice' ? { data: 'inv-1', error: null } : { data: null, error: null });
       return Object.assign(result, { throwOnError: () => result });
     });
@@ -170,9 +188,55 @@ describe('InvoiceDetail — Post never posts something other than what is on scr
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(mockRpc.mock.calls.some(([name]) => name === 'save_invoice')).toBe(true));
-    // The save reloads the saved invoice; the screen matches it again.
+    // The save reloads the saved invoice (quantity 2); the screen matches it again.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Post' })).toBeEnabled());
+    expect(screen.getByDisplayValue('2')).toBeInTheDocument();
     expect(screen.queryByText(/Save your changes before posting/i)).not.toBeInTheDocument();
+  });
+
+  it('refuses to post when the saved invoice cannot be re-read, instead of checking the loaded copy', async () => {
+    setup([lineItem({})]);
+    renderPage();
+    const post = await screen.findByRole('button', { name: 'Post' });
+
+    // The fresh read of the saved invoice fails (network, permission, ...).
+    invoiceReadError = { message: 'network down' };
+    fireEvent.click(post);
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/Could not re-check the saved invoice/)),
+    );
+    expect(screen.queryByText(/This will lock amounts/)).not.toBeInTheDocument();
+    expect(mockCreditCheck).not.toHaveBeenCalled();
+    expect(mockRupCheck).not.toHaveBeenCalled();
+    expect(postInvoiceCalls()).toHaveLength(0);
+  });
+
+  it('reloads instead of posting when the invoice was moved to another customer elsewhere, then checks the NEW customer', async () => {
+    setup([lineItem({})]);
+    renderPage();
+    const post = await screen.findByRole('button', { name: 'Post' });
+
+    // Another tab re-assigned the saved invoice to customer B at $5,000.
+    savedInvoiceRow = { ...SAVED_INVOICE, customer_id: 'cust-2', customer: { farm_name: 'Other Farm' }, total_amount_cents: 500000, balance_cents: 500000 };
+    fireEvent.click(post);
+
+    await waitFor(() =>
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/changed somewhere else/)),
+    );
+    expect(screen.queryByText(/This will lock amounts/)).not.toBeInTheDocument();
+    expect(mockCreditCheck).not.toHaveBeenCalled();
+    expect(postInvoiceCalls()).toHaveLength(0);
+
+    // After the reload the screen shows the saved invoice, and a second Post checks
+    // customer B's credit with the $5,000 saved total — never customer A's.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Post' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Post' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Invoice' }));
+    await waitFor(() => expect(postInvoiceCalls()).toHaveLength(1));
+    expect(mockCreditCheck).toHaveBeenCalledTimes(1);
+    expect(mockCreditCheck).toHaveBeenCalledWith({ customerId: 'cust-2', newAmountCents: 500000 });
+    expect(mockRupCheck).toHaveBeenCalledWith('cust-2', ['prod-A', 'prod-RUP']);
   });
 
   it('runs the credit-limit and RUP checks on the saved invoice that will be posted', async () => {
