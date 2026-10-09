@@ -12,18 +12,19 @@ export const PROMPT_DEDUPE_BLOCKS = [
   { text: PUSH_POLICY, replacement: "LANDING POLICY: as stated above (unchanged)." },
 ];
 
+// Mason, 2026-10-02: five reminder modules were unwired here
+// (dangerous-phrase-warning, codex-gauntlet-reminder, agent-pair-review-reminder,
+// codex-to-claude-handoff-reminder, autopilot-intent-reminder). They duplicated
+// the user-level risky-phrase nudge or the ship reminder, and fired on agent
+// reports as often as on Mason's words. Without autopilot-intent-reminder the
+// OVERNIGHT-INTENT flag is never written, so the overnight handshake no longer
+// blocks work.
 export const SHARED_PROMPT_MODULES = [
-  "./dangerous-phrase-warning.mjs",
-  "./codex-gauntlet-reminder.mjs",
-  "./agent-pair-review-reminder.mjs",
-  "./codex-to-claude-handoff-reminder.mjs",
   "./ship-intent-reminder.mjs",
   "./hold-latch-prompt.mjs",
 ];
 
-export const CLAUDE_ONLY_PROMPT_MODULES = [
-  "./autopilot-intent-reminder.mjs",
-];
+export const CLAUDE_ONLY_PROMPT_MODULES = [];
 
 export function promptModulesFor(surface = process.env.CRX_AGENT_SURFACE || "claude") {
   return surface === "codex"

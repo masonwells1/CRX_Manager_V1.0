@@ -163,7 +163,9 @@ for (const command of [
   'F=$(decode); pwsh --CommandWithArgs \'"node" $F\'',
 ]) {
   ok(computedJavaScriptScriptArgument(command), `computed script argument: ${command}`);
-  ok(checkDangerousCommand(command), `computed-script launch denied by shell guard: ${command}`);
+  // Since 2026-10-02 (Mason) a computed script path alone is no longer refused:
+  // the producer it guarded was retired and deleted on 2026-09-05.
+  eq(checkMaintenanceProducerInvocation(command), null, `computed-script launch no longer refused by the producer rule: ${command}`);
 }
 // (c) NODE_OPTIONS mutation through PowerShell is its own ordered check now (it
 //     used to ride inside the classifier); the 2026-08-12 decoded launch still
@@ -289,7 +291,7 @@ for (const command of [
   "node (Get-Item scripts/x.mjs).FullName",
 ]) {
   ok(computedJavaScriptScriptArgument(command), `computed script argument recognised: ${command}`);
-  ok(checkDangerousCommand(command), `computed-script launch denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch (was denied): ${command}`);
 }
 // (g) Codex App review of PR #619 (three P2 findings on 0d5823915), each pinned
 //     in both directions.
@@ -307,7 +309,7 @@ for (const command of [
   'F=x </dev/null node "$F"',
 ]) {
   ok(computedJavaScriptScriptArgument(command), `redirection does not hide a computed script: ${command}`);
-  ok(checkDangerousCommand(command), `computed-script launch behind a redirection denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch behind a redirection (was denied): ${command}`);
 }
 //     2. A separator inside quotes is data, not a new segment: a search or a
 //        commit message that quotes `; node "$F"` is not a launch, while a shell
@@ -330,7 +332,7 @@ for (const command of [
   "echo \"it's\"; node \"$F\"",
 ]) {
   ok(computedJavaScriptScriptArgument(command), `real separator or shell head still reaches the launch: ${command}`);
-  ok(checkDangerousCommand(command), `computed-script launch after a quoted word denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch after a quoted word (was denied): ${command}`);
 }
 eq(splitShellSegments("rg -n 'a; b | c' docs; node x").length, 2, "quoted separators do not split; a real one does");
 eq(splitShellSegments('echo "a; \\" b"; node x').length, 2, "an escaped quote inside double quotes does not end the quote");
@@ -350,7 +352,7 @@ for (const command of [
   'F=x > "out file" node "$F"',
 ]) {
   ok(computedJavaScriptScriptArgument(command), `quoted redirection target does not hide a computed script: ${command}`);
-  ok(checkDangerousCommand(command), `computed-script launch behind a quoted redirection target denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed-script launch behind a quoted redirection target (was denied): ${command}`);
 }
 for (const command of [
   'node > "out file" scripts/safe.mjs',
@@ -386,7 +388,7 @@ for (const command of [
   'flock lockfile node "$F"',
 ]) {
   ok(computedJavaScriptScriptArgument(command), `path-qualified or launcher-fronted computed script is seen: ${command}`);
-  ok(checkDangerousCommand(command), `path-qualified or launcher-fronted computed launch denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: path-qualified or launcher-fronted computed launch (was denied): ${command}`);
 }
 for (const command of [
   "/usr/bin/node scripts/safe.mjs",
@@ -417,7 +419,7 @@ for (const command of [
   "xargs -I{} node \"$F\"",
 ]) {
   ok(computedJavaScriptScriptArgument(command), `a runtime name used as an option value does not shadow the launch: ${command}`);
-  ok(checkDangerousCommand(command), `launch behind an earlier runtime-name token denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: launch behind an earlier runtime-name token (was denied): ${command}`);
 }
 for (const command of [
   "env -u node node scripts/safe.mjs",
@@ -449,7 +451,7 @@ for (const command of [
   "node --loader=$P scripts/safe.mjs",
 ]) {
   ok(computedJavaScriptScriptArgument(command), `computed option name, unquoted value, or loader value is still a computed script: ${command}`);
-  ok(checkDangerousCommand(command), `computed option launch denied: ${command}`);
+  eq(checkMaintenanceProducerInvocation(command), null, `2026-10-02, no longer refused: computed option launch (was denied): ${command}`);
 }
 // Quoted data that merely MENTIONS a runtime, a shell, or an encoded-command
 // spelling was never an invocation; it stays outside the producer gate.
@@ -477,12 +479,9 @@ for (const dataCommand of [
   eq(checkMaintenanceProducerInvocation(dataCommand), null, `quoted data stays outside the producer gate: ${dataCommand}`);
   ok(!checkDangerousCommand(dataCommand), `quoted data stays allowed: ${dataCommand}`);
 }
-// KNOWN OVER-BLOCK, pinned deliberately. A SHELL head makes the whole segment a
-// command line to this rule, so a computed `node …` inside a quoted argument of
-// `pwsh`/`bash` is refused even when that argument is not a -Command string. The
-// old classifier parsed each shell's option grammar to tell the two apart; that
-// grammar is what never converged under review. The refusal names the fix.
-ok(checkDangerousCommand("pwsh -ExecutionPolicy Bypass 'Write-Output node $value'"), "computed node text inside a shell's quoted argument is refused (recorded over-block)");
+// FORMER OVER-BLOCK: computed `node …` text inside a shell's quoted argument was
+// refused until the computed-script rule was dropped on 2026-10-02 (Mason).
+ok(!checkDangerousCommand("pwsh -ExecutionPolicy Bypass 'Write-Output node $value'"), "computed node text inside a shell's quoted argument is no longer refused");
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
 ok(checkDangerousCommand("NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("FOO=1 NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "prefixed NODE_OPTIONS preload is denied");
@@ -557,7 +556,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(!checkCommandDeep("npm run safe", tmp), "npm run safe stays allowed");
     ok(checkCommandDeep("npm run dangerous", tmp), "npm run dangerous is caught via its resolved script body");
     ok(checkCommandDeep("npm run producer", tmp), "producer invocation hidden in an npm script is denied");
-    ok(checkCommandDeep("npm run producer:computed", tmp), "computed-script launch hidden in an npm script is denied");
+    ok(!checkCommandDeep("npm run producer:computed", tmp), "2026-10-02: a computed-script launch in an npm script is no longer refused");
     ok(
       checkCommandDeep("npm run chain:a", tmp),
       "a dangerous command hidden 2 levels deep behind chained npm scripts is caught (FIX 2)"
@@ -621,13 +620,13 @@ for (const command of [
   eq(r.status, 0, `bash-safety exits 0 on: ${command}`);
   ok(!r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs allows the ordinary shape: ${command}`);
 }
-// …and the redirection-glued launch from the same review is refused by the LIVE hook.
-r = runHook({ tool_name: "Bash", tool_input: { command: 'F=x; node</dev/null "$F"' } });
-eq(r.status, 0, "bash-safety exits 0 after denying a redirection-glued computed launch");
-ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies node</dev/null \"$F\"");
-r = runHook({ tool_name: "Bash", tool_input: { command: 'node > "out file" "$F"' } });
-eq(r.status, 0, "bash-safety exits 0 after denying a launch behind a quoted redirection target");
-ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies node > \"out file\" \"$F\"");
+// A computed script path is no longer refused by the LIVE hook either
+// (2026-10-02, Mason): the retired producer was the only reason for the rule.
+for (const command of ['F=x; node</dev/null "$F"', 'node > "out file" "$F"', 'for f in scripts/*.mjs; do node "$f" --check; done']) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety exits 0 on: ${command}`);
+  ok(!r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs allows a computed script path: ${command}`);
+}
 
 for (const command of [
   "git push origin feature/test --force",

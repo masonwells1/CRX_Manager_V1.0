@@ -32,25 +32,25 @@ function run(script, payload, { surface = "claude", projectDir } = {}) {
 }
 
 const promptCases = [
-  ["drop this migration", "DELETE/DROP MIGRATION"],
-  ["review this code", "Codex Review Gauntlet"],
-  ["have claude and codex review this code", "Agent Pair Review"],
-  ["ask claude to review the codex work", "Codex-to-Claude Handoff/Review"],
   ["implement this fix", "Ship-It reminder"],
 ];
 for (const [prompt, marker] of promptCases) {
   const output = run(PROMPT, { prompt });
   ok(output?.hookSpecificOutput?.additionalContext.includes(marker), `prompt router preserves ${marker}`);
 }
+// Unwired 2026-10-02 (Mason): these prompts no longer inject their reminders.
+for (const [prompt, marker] of [
+  ["drop this migration", "DELETE/DROP MIGRATION"],
+  ["review this code", "Codex Review Gauntlet"],
+  ["have claude and codex review this code", "Agent Pair Review"],
+  ["ask claude to review the codex work", "Codex-to-Claude Handoff/Review"],
+]) {
+  const output = run(PROMPT, { prompt });
+  ok(!String(output?.hookSpecificOutput?.additionalContext || "").includes(marker), `prompt router no longer injects ${marker}`);
+}
 
-// The landing policy is embedded by BOTH the gauntlet and the ship-intent
-// reminders; one prompt that trips both must carry it once (2026-09-04).
+// The landing policy is stated once per turn.
 {
-  const both = run(PROMPT, { prompt: "review this code, then ship it" });
-  const context = both?.hookSpecificOutput?.additionalContext || "";
-  ok(context.includes("Codex Review Gauntlet") && context.includes("Ship-It reminder"), "one prompt trips both reminders");
-  eq((context.match(/LANDING POLICY: Mason's autonomous-landing rule/g) || []).length, 1, "the full landing policy appears exactly once");
-  ok(context.includes("LANDING POLICY: as stated above (unchanged)."), "the second reminder points at the policy instead of repeating it");
   const shipOnly = run(PROMPT, { prompt: "implement this fix" });
   eq((shipOnly?.hookSpecificOutput?.additionalContext.match(/LANDING POLICY: Mason's autonomous-landing rule/g) || []).length, 1, "a single reminder still carries the full policy");
   ok(!shipOnly?.hookSpecificOutput?.additionalContext.includes("as stated above"), "nothing is replaced when the policy appears once");
@@ -76,22 +76,15 @@ try {
   ok(output?.hookSpecificOutput?.additionalContext.includes("HOLD LATCHED"), "hold rule remains stateful and visible");
   ok(existsSync(path.join(temp, ".claude", "session-state", "hold.json")), "hold router writes the original latch");
 
-  // `overnight` REMINDS but never LATCHES (Mason, 2026-09-02, after five review
-  // rounds on PR #565 — the narrowed pattern kept freezing ordinary questions,
-  // ending with `what is overnight?`). The reminder half is the part that still
-  // matters here: a genuine "run this overnight" is still told to arm autopilot.
-  output = run(PROMPT, { prompt: "run this overnight" }, { projectDir: temp });
-  ok(output?.hookSpecificOutput?.additionalContext.includes("autopilot reminder"), "Claude prompt router preserves autopilot reminder");
-  ok(!existsSync(path.join(temp, ".claude", "session-state", "OVERNIGHT-INTENT.flag")), "the word overnight must NOT latch the intent flag");
-
-  // ...but the router must still carry the latch for an unambiguous request, or
-  // removing the word would have quietly disabled the handshake end to end.
+  // The autopilot reminder was unwired on 2026-10-02 (Mason), so a hands-free
+  // request neither reminds nor writes the OVERNIGHT-INTENT flag that used to
+  // trigger the overnight handshake denial.
   output = run(PROMPT, { prompt: "im going to bed, keep working" }, { projectDir: temp });
-  ok(output?.hookSpecificOutput?.additionalContext.includes("autopilot reminder"), "Claude prompt router reminds on a real hands-free request");
-  ok(existsSync(path.join(temp, ".claude", "session-state", "OVERNIGHT-INTENT.flag")), "Claude autopilot reminder preserves intent flag for a real request");
+  ok(!String(output?.hookSpecificOutput?.additionalContext || "").includes("autopilot reminder"), "autopilot reminder is unwired");
+  ok(!existsSync(path.join(temp, ".claude", "session-state", "OVERNIGHT-INTENT.flag")), "no overnight-intent flag is written");
 
   output = run(PROMPT, { prompt: "run this overnight" }, { surface: "codex", projectDir: temp });
-  eq(output, null, "Codex router does not acquire Claude-only autopilot behavior");
+  eq(output, null, "Codex router stays silent on an ordinary prompt");
 
   output = run(PROMPT, { prompt: "<task-notification>review this code</task-notification>" }, { projectDir: temp });
   eq(output, null, "machine-generated prompt remains silent across the router");
@@ -100,8 +93,8 @@ try {
     tool_name: "Edit",
     tool_input: { file_path: path.join(temp, "supabase", "migrations", "20260827000000_router.sql") },
   }, { projectDir: temp });
-  eq(output?.decision, "block", "migration edit still returns the original blocking decision");
-  ok(output?.reason.includes("MIGRATION SAFETY CHECK"), "migration edit reason is preserved");
+  eq(output?.decision, undefined, "migration edit is a reminder, not a (cosmetic) PostToolUse block");
+  ok(output?.hookSpecificOutput?.additionalContext.includes("MIGRATION SAFETY CHECK"), "migration reminder text is preserved as context");
   ok(existsSync(path.join(temp, ".claude", "session-state", "SESSION-HEARTBEAT")), "Claude PostToolUse router preserves heartbeat");
 
   const stateDir = path.join(temp, ".claude", "session-state");
@@ -125,8 +118,8 @@ try {
   rmSync(temp, { recursive: true, force: true });
 }
 
-eq(promptModulesFor("codex").length, 6, "Codex prompt router has six shared modules");
-eq(promptModulesFor("claude").length, 7, "Claude prompt router adds exactly one Claude-only module");
+eq(promptModulesFor("codex").length, 2, "Codex prompt router has two shared modules");
+eq(promptModulesFor("claude").length, 2, "Claude prompt router has no Claude-only modules");
 eq(postToolModulesFor({ tool_name: "Edit" }, "claude"), ["./posttooluse-migration.mjs", "./eslint-autofix.mjs", "./session-heartbeat.mjs"], "write/edit path is explicit");
 eq(postToolModulesFor({ tool_name: "mcp__supabase__apply_migration" }, "codex"), ["./registry-freshness.mjs", "./applied-snapshot-invalidate.mjs"], "Codex apply path is explicit");
 

@@ -321,15 +321,36 @@ try {
   const cacheLAfter = JSON.parse(readFileSync(cacheL, "utf8"));
   eq(cacheLAfter.ok, false, "OFFSITE(e): the failed refetch is cached as a failure");
 
-  // OFFSITE (f): gh answers but the workflow has NO successful run on record —
-  // that is a real answer, and with no marker it must warn loudly.
+  // OFFSITE (f): a cached answer with NO success date is re-checked rather than
+  // trusted (2026-10-02). With gh unavailable and no marker it must still warn
+  // loudly, but labeled unverified — an empty sample is not proof that the
+  // workflow never succeeded (CodeRabbit, PR #874).
   const dirM = path.join(tmpRoot, "m");
   scaffoldWithMarker(dirM, null);
   const cacheM = path.join(tmpRoot, "cache-m.json");
   seedCache(cacheM, { ok: true, completed_at: null });
   r = runHook(dirM, offsiteEnv(cacheM));
   const ctxM = additionalContextOf(r);
-  ok(ctxM.includes("💾") && ctxM.includes("never succeeded"), "OFFSITE(f): no marker + no successful off-site run -> real no-backup warning");
+  ok(ctxM.includes("💾") && ctxM.includes("No database backup exists yet"), "OFFSITE(f): no marker + no dated off-site success -> no-backup warning");
+  ok(ctxM.includes("Could not verify") && !ctxM.includes("never succeeded"), "OFFSITE(f): the warning is labeled unverified, not 'never succeeded'");
+
+  // OFFSITE (g): gh ANSWERS, with 20 runs and none successful. An older success
+  // may sit beyond the sample, so the warning is unverified, not "never
+  // succeeded" (CodeRabbit, PR #874). The fake gh is a shell script, which
+  // execFileSync cannot launch on Windows, so this case runs on POSIX (CI) only.
+  if (process.platform !== "win32") {
+    const dirN = path.join(tmpRoot, "n");
+    scaffoldWithMarker(dirN, null);
+    const fakeGh = path.join(tmpRoot, "fake-gh-no-success.sh");
+    const runs = Array.from({ length: 20 }, (_, i) => ({ conclusion: "failure", updatedAt: daysAgoIso(i + 1) }));
+    writeFileSync(fakeGh, `#!/bin/sh\necho '${JSON.stringify(runs)}'\n`, { mode: 0o755 });
+    const cacheN = path.join(tmpRoot, "cache-n.json");
+    r = runHook(dirN, { ...offsiteEnv(cacheN), CRX_OFFSITE_BACKUP_GH: fakeGh });
+    const ctxN = additionalContextOf(r);
+    ok(ctxN.includes("Could not verify") && !ctxN.includes("never succeeded"),
+      "OFFSITE(g): 20 runs with no success -> unverified, not 'never succeeded'");
+    eq(JSON.parse(readFileSync(cacheN, "utf8")).ok, false, "OFFSITE(g): the no-success sample is cached as unverified");
+  }
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {
