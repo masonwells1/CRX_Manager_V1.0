@@ -3,7 +3,7 @@
 // session-scoped changes from pre-existing WIP.
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -14,12 +14,31 @@ try {
 
 const sessionId = payload?.session_id || "unknown";
 
+// The same repository stop-wrap.mjs checks: payload cwd first, then
+// CLAUDE_PROJECT_DIR, then the process cwd, normalized to the worktree root.
+// A hook started from another checkout would otherwise snapshot that
+// checkout's status and reflog, and stop-wrap would compare its own
+// repository against an anchor it never contained (CodeRabbit, PR #827).
+const candidateDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+function gitToplevelOr(candidate) {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: candidate, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return top ? top : candidate;
+  } catch {
+    return candidate;
+  }
+}
+const projectDir = gitToplevelOr(candidateDir);
+
 let porcelain = "";
 try {
   porcelain = execFileSync("git", ["status", "--porcelain"], {
     encoding: "utf8",
     timeout: 5000,
     stdio: ["ignore", "pipe", "ignore"],
+    cwd: projectDir,
   });
 } catch {
   process.exit(0);
@@ -32,5 +51,26 @@ const snapPath = path.join(dir, `session-${sessionId}.snapshot`);
 try {
   writeFileSync(snapPath, porcelain, "utf8");
 } catch { /* ignore */ }
+
+// HEAD's newest reflog entry at session start, as an anchor. stop-wrap.mjs
+// treats every entry newer than it as the session's own, instead of trusting
+// entry timestamps, which come from the committer date and can be backdated
+// (`rebase --committer-date-is-author-date`), or the reflog's length, which
+// expiry changes (Codex P2s, PR #827). The line format must match the one
+// stop-wrap.mjs reads. An empty file means the reflog was empty.
+// A resumed or cleared session reuses its ID, so delete the previous anchor
+// first: if the read or write below fails, a leftover anchor would pull the
+// earlier run's commits into this one instead of falling back (Codex P2, PR #827).
+const anchorPath = path.join(dir, `session-${sessionId}.reflog`);
+try { rmSync(anchorPath, { force: true }); } catch { /* ignore */ }
+try {
+  const newest = execFileSync("git", ["reflog", "show", "-n", "1", "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"], {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"],
+    cwd: projectDir,
+  }).split("\n")[0] ?? "";
+  writeFileSync(anchorPath, newest, "utf8");
+} catch { /* no HEAD yet — stop-wrap falls back to timestamps */ }
 
 process.exit(0);
