@@ -5,7 +5,8 @@ hand-merges the implementing pull request, which supersedes PR #870. The exact l
 are in `docs/reference/sol-exempt-paths.md`, enforced by `.claude/hooks/sol-exempt-lib.mjs`.
 They are stricter than this proposal in four ways: only `.md` files qualify;
 `claude-model-tuning.md`, `sol-exempt-paths.md` and `migration-history.md` stay excluded; a
-nested `CLAUDE.md`/`AGENTS.md` or package file anywhere needs Sol; and matching ignores case.
+nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` or package file anywhere needs Sol; and the
+never-eligible lists match without regard to case, while the eligible folders must match exactly.
 **Drafted:** 2026-10-02 by Claude, at Mason's request.
 **Decision owner:** Mason. `AGENTS.md` is hand-maintained, and its rules say an agent may never
 weaken a review gate, even on request. So an agent drafted this and built the change, and

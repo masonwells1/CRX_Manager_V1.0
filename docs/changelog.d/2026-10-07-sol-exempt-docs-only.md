@@ -31,7 +31,8 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
 - **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
   scripts and draft `.sql`). `claude-model-tuning.md`, `sol-exempt-paths.md` and
   `migration-history.md` stay excluded. A nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` (agents load these
-  as folder instructions) or a package file needs Sol in any folder. Matching ignores case.
+  as folder instructions) or a package file needs Sol in any folder. The never-eligible lists match
+  without regard to case; the eligible folders must match exactly.
 - **Protected.** The module joined the Codex guard's protected-file list and the
   `.claude/settings.json` `ask` tier, like the other merge-guard libraries.
 - Updated `docs/reference/agent-guardrails.md`, `docs/manual/DECISION_LOG.md`, `.claude/commands/ship.md`

@@ -30,9 +30,10 @@ is the commit GitHub will merge onto. The exemption applies only when:
 5. none of those names matches a never-eligible path or name; and
 6. a second GitHub lookup (GraphQL, one query) confirms that every changed path is a plain
    file (git mode `100644`) where it exists. Added and kept files are checked at the exact
-   head; deleted files and the old names of renames and copies are checked at the base. A
-   symlink, a submodule or an executable named `notes.md` is not documentation, and the
-   comparison alone cannot tell them apart.
+   head; deleted and edited files, and the old names of renames and copies, are checked at
+   the base. A symlink, a submodule or an executable named `notes.md` is not documentation,
+   and the comparison alone cannot tell them apart. Checking an edited file at the base
+   means turning one of them into a plain file still needs Sol.
 
 **What "rule-defining documents" means here.** The rule-defining documents are the ones
 listed under "Never eligible" below: `AGENTS.md`, `CLAUDE.md`, `docs/workflows/`, the

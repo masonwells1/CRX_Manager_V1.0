@@ -1658,9 +1658,10 @@ try {
       ...overrides,
     });
     // Answers the PR view with `pr`, the compare call with `compare`, and the
-    // GraphQL file-kind lookup with every compared file as a plain file (mode
-    // 100644) unless `kinds` says otherwise. Records every gh call so the test
-    // can see the comparison was asked for.
+    // GraphQL file-kind lookup, at the head and at the base, with every compared
+    // file and old name as a plain file (mode 100644) unless `kinds` says
+    // otherwise; a `<sha>:<path>` key sets the kind at that commit only. Records
+    // every gh call so the test can see the comparison was asked for.
     const ghFor = (pr, compare, calls = [], kinds = {}) => (args) => {
       calls.push(args);
       if (args[0] === "api" && /\/compare\//.test(String(args[1]))) {
@@ -1668,14 +1669,14 @@ try {
         return JSON.stringify(compare);
       }
       if (args[0] === "api" && args[1] === "graphql") {
-        const files = (compare?.files || []).map((entry) => entry.filename);
+        const files = (compare?.files || []).flatMap((entry) => [entry.filename, entry.previous_filename].filter(Boolean));
         const repository = {};
         args.forEach((arg, i) => {
           const match = args[i - 1] === "-f" && /^e(\d+)=([^:]+):(.*)$/.exec(String(arg));
-          if (!match || match[2] !== docs.sha) return;
+          if (!match || (match[2] !== docs.sha && match[2] !== docs.base)) return;
           repository[`d${match[1]}`] = { entries: files
             .filter((file) => file.slice(0, file.lastIndexOf("/")) === match[3])
-            .map((file) => ({ name: file.slice(file.lastIndexOf("/") + 1), mode: 0o100644, type: "blob", ...kinds[file] })) };
+            .map((file) => ({ name: file.slice(file.lastIndexOf("/") + 1), mode: 0o100644, type: "blob", ...kinds[file], ...kinds[`${match[2]}:${file}`] })) };
         });
         return JSON.stringify({ data: { repository } });
       }
@@ -1725,6 +1726,10 @@ try {
       "a symlink named like a docs file needs Sol");
     assert.equal(mergeDocs({ kinds: { "docs/plans/2026-10-07-note.md": { mode: 0o160000, type: "commit" } } }).blocked, true,
       "a submodule named like a docs file needs Sol");
+    // Luna round 5: the head alone shows a plain file; the edit replaced an executable.
+    const exBit = mergeDocs({ kinds: { [`${docs.base}:docs/plans/2026-10-07-note.md`]: { mode: 0o100755 } } });
+    assert.equal(exBit.blocked, true, "an edit that removes the executable bit from a docs-named file needs Sol");
+    assert.match(exBit.reason, /not a plain file at the base/, "and the refusal says the base version was not a plain file");
     assert.equal(mergeDocs({ compare: compareOf(["docs/plans/2026-10-07-note.md"], { head: docs.base }) }).blocked, true,
       "a comparison that does not end at the PR's head needs Sol");
 

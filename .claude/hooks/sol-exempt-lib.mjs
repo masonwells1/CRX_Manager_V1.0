@@ -176,14 +176,18 @@ export function solExemptTreeQuery(folderCount) {
 }
 
 // null when every changed file is a plain file where it exists, otherwise why
-// not. A file the pull request adds or keeps is read at the head; a deleted file,
-// and the old name of a rename or copy, at the base, so deleting or moving a
-// symlink or submodule needs Sol too.
+// not. A file the pull request adds or keeps is read at the head; a deleted or
+// edited file, and the old name of a rename or copy, at the base, so deleting,
+// editing or moving a symlink or submodule needs Sol too.
 function treeProblem({ files, baseSha, headSha, repoPath, gh }) {
   const lookups = [];
   for (const entry of files) {
-    const removed = String(entry.status).toLowerCase() === "removed";
-    lookups.push({ commit: removed ? baseSha : headSha, file: entry.filename });
+    const status = String(entry.status).toLowerCase();
+    // After the change: every file the pull request leaves in place.
+    if (status !== "removed") lookups.push({ commit: headSha, file: entry.filename });
+    // Before it: a deleted or edited file under its own name (Luna, round 5), so
+    // turning a symlink, submodule or executable into a plain file needs Sol too.
+    if (status === "removed" || status === "modified") lookups.push({ commit: baseSha, file: entry.filename });
     if (typeof entry.previous_filename === "string" && entry.previous_filename) {
       lookups.push({ commit: baseSha, file: entry.previous_filename });
     }

@@ -130,13 +130,14 @@ const FOLDER = { mode: 0o040000, type: "tree" };
 const MISSING = "missing";
 // Answers the GraphQL tree lookup the way GitHub does: for each requested
 // `<sha>:<folder>`, the entries of that folder AT THAT COMMIT. HEAD holds every
-// file the comparison adds or keeps; BASE holds every deleted file and every old
-// name. Any other commit finds nothing. `kinds` overrides a path's git kind.
+// file the comparison adds or keeps; BASE holds every deleted or edited file and
+// every old name. Any other commit finds nothing. `kinds` overrides a path's git
+// kind at both commits; a `<sha>:<path>` key overrides it at that commit only.
 function treeAnswer(args, answer, kinds) {
   const entries = Array.isArray(answer?.files) ? answer.files.filter((f) => f && typeof f.filename === "string") : [];
   const atHead = entries.filter((f) => String(f.status).toLowerCase() !== "removed").map((f) => f.filename);
   const atBase = [
-    ...entries.filter((f) => String(f.status).toLowerCase() === "removed").map((f) => f.filename),
+    ...entries.filter((f) => ["removed", "modified"].includes(String(f.status).toLowerCase())).map((f) => f.filename),
     ...entries.map((f) => f.previous_filename).filter((f) => typeof f === "string" && f),
   ];
   const repository = {};
@@ -147,8 +148,8 @@ function treeAnswer(args, answer, kinds) {
     const files = sha === HEAD ? atHead : sha === BASE ? atBase : null;
     repository[`d${index}`] = files === null ? null : {
       entries: files
-        .filter((file) => file.slice(0, file.lastIndexOf("/")) === folder && kinds[file] !== MISSING)
-        .map((file) => ({ name: file.slice(file.lastIndexOf("/") + 1), ...(kinds[file] || PLAIN) })),
+        .filter((file) => file.slice(0, file.lastIndexOf("/")) === folder && (kinds[`${sha}:${file}`] ?? kinds[file]) !== MISSING)
+        .map((file) => ({ name: file.slice(file.lastIndexOf("/") + 1), ...(kinds[`${sha}:${file}`] ?? kinds[file] ?? PLAIN) })),
     };
   });
   return { data: { repository } };
@@ -293,6 +294,17 @@ function contractFailures(lib) {
   check(!viaGitHub(removalOnly, {}, { "docs/plans/old.md": SUBMODULE }), "deleting a submodule named like a docs file needs Sol");
   check(!viaGitHub(compareAnswer({ files: [{ filename: "docs/plans/new.md", previous_filename: "docs/plans/old.md", status: "renamed" }] }), {}, { "docs/plans/old.md": SYMLINK }),
     "renaming a symlink into a plain-looking name needs Sol (the old name is read at the base)");
+  // an edited file is read at the base too (Luna, round 5): a plain file at the
+  // head says nothing about what the edit replaced
+  const editOnly = compareAnswer({ files: [modified(NOTE)] });
+  check(viaGitHub(editOnly), "editing a plain documentation file is exempt");
+  check(!viaGitHub(editOnly, {}, { [`${BASE}:${NOTE}`]: EXECUTABLE }), "an edit that removes the executable bit needs Sol");
+  check(!viaGitHub(editOnly, {}, { [`${BASE}:${NOTE}`]: SYMLINK }), "an edit that turns a symlink into a plain file needs Sol");
+  check(!viaGitHub(editOnly, {}, { [`${BASE}:${NOTE}`]: SUBMODULE }), "an edit that turns a submodule into a plain file needs Sol");
+  check(!viaGitHub(editOnly, {}, { [`${BASE}:${NOTE}`]: MISSING }), "an edited file GitHub cannot show at the base needs Sol");
+  check(!viaGitHub(editOnly, {}, { [`${HEAD}:${NOTE}`]: EXECUTABLE }), "an edit that adds the executable bit needs Sol");
+  check(viaGitHub(compareAnswer({ files: [{ filename: "docs/plans/new.md", previous_filename: null, status: "added" }] }), {}, { [`${BASE}:docs/plans/new.md`]: MISSING }),
+    "an added file is not looked for at the base, where it does not exist yet");
   check(viaGitHub(compareAnswer(), { baseSha: BASE.toUpperCase(), headSha: HEAD.toUpperCase() }),
     "upper-case commit ids are read as the same commits");
 
@@ -403,10 +415,14 @@ const MUTANTS = [
   ["executables accepted", "const PLAIN_FILE_MODE = 0o100644;", "const PLAIN_FILE_MODE = 0o100755;"],
   ["file missing at the head accepted", "if (!entry) return", "if (!entry) continue; if (false) return"],
   ["failed file-kind lookup read as fine", "return `GitHub could not confirm what kind", "return null; void `GitHub could not confirm what kind"],
-  ["file kinds read at the wrong commit", "{ commit: removed ? baseSha : headSha, file: entry.filename }", "{ commit: \"HEAD\", file: entry.filename }"],
-  ["deleted files read at the head", "{ commit: removed ? baseSha : headSha, file: entry.filename }", "{ commit: headSha, file: entry.filename }"],
+  ["file kinds read at the wrong commit", `if (status !== "removed") lookups.push({ commit: headSha, file: entry.filename });`,
+    `if (status !== "removed") lookups.push({ commit: "HEAD", file: entry.filename });`],
+  ["deleted files read at the head", `if (status !== "removed") lookups.push({ commit: headSha,`, `if (true) lookups.push({ commit: headSha,`],
+  ["kept files not kind-checked at the head", `if (status !== "removed") lookups.push({ commit: headSha,`, `if (false) lookups.push({ commit: headSha,`],
   ["old names not kind-checked", "lookups.push({ commit: baseSha, file: entry.previous_filename });", "void 0;"],
-  ["deleted files not kind-checked", "{ commit: removed ? baseSha : headSha, file: entry.filename }", "...(removed ? [] : [{ commit: headSha, file: entry.filename }])"],
+  ["deleted files not kind-checked", `if (status === "removed" || status === "modified") lookups.push`, `if (status === "modified") lookups.push`],
+  ["edited files not kind-checked at the base (Luna, round 5)", `if (status === "removed" || status === "modified") lookups.push`, `if (status === "removed") lookups.push`],
+  ["added files looked for at the base", `if (status === "removed" || status === "modified") lookups.push`, `if (status !== "renamed" && status !== "copied") lookups.push`],
   ["base commit id unchecked", `if (!SHA_RE.test(String(rawBase || "")) || !SHA_RE.test(String(rawHead || ""))) {`, "if (false) {"],
 ];
 const mutantDir = mkdtempSync(path.join(tmpdir(), "sol-exempt-mutants-"));
