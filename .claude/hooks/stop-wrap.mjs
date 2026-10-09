@@ -10,8 +10,8 @@
 //   - Migrations lacking a fresh migration-review-*.json proof
 //   - Prompt to capture learnings to memory if the session was substantive
 //
-// Returns "block" with the loose-ends list, so Claude is forced to surface it
-// before declaring the session done.
+// Blocks only when a migration was applied to live with no committed source;
+// every other loose end is shown as a non-blocking note (Mason, 2026-10-02).
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync, statSync, writeFileSync, renameSync } from "node:fs";
@@ -803,4 +803,13 @@ const reason =
   `\n──\nAck signature (copy verbatim into .claude/session-state/stop-wrap-ack.json as {"signature": ...}):\n` +
   JSON.stringify(ackSignature);
 
-process.stdout.write(JSON.stringify({ decision: "block", reason }));
+// BLOCK ONLY FOR A LIVE APPLY WITH NO SAVED SOURCE (Mason, 2026-10-02). That is
+// the one loose end where ending the session can lose something real: the live
+// database changed and the SQL that changed it exists nowhere in the repo.
+// Every other loose end (uncommitted files, reminders, the ratchet) is shown as
+// a non-blocking note — these blocked the stop 77 times in 14 days.
+if (appliedUncontained.length > 0) {
+  process.stdout.write(JSON.stringify({ decision: "block", reason }));
+} else {
+  process.stdout.write(JSON.stringify({ systemMessage: issues.join("\n\n") }));
+}

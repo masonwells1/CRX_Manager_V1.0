@@ -463,6 +463,49 @@ for (const payload of [
   assert.equal(result.stdout, "");
 }
 
+// Mason, 2026-10-02: the enforcement-surface rule now DENIES only commands that
+// plainly write into a guarded path (redirects, delete/copy/move verbs, in-place
+// edits, working-tree-rewriting git subcommands) and WARNS on anything else it
+// cannot vouch for. These are the exotic shapes from the review rounds below that
+// no longer deny; each must still produce the visible warning.
+const WARN_ONLY_SINCE_2026_10_02 = new Set([
+  "python -c open('.husky/pre-push','w')",
+  "someNewTool --overwrite .husky/pre-push",
+  "node -e require('fs').writeFileSync('.husky/pre-push','')",
+  "node --eval require('fs').writeFileSync('.husky/pre-push','')",
+  "sed -n w .husky/pre-push /dev/null",
+  "find . -name x -fprintf .husky/pre-push %p",
+  "awk -v p=.husky/pre-push END{print>p}",
+  "uniq /tmp/in .husky/pre-push",
+  "yq -i .a=1 .codex/hooks.json",
+  "xxd -r /tmp/x .husky/pre-push",
+  // `sort -o`, `diff --output=`, `git diff/show --output` and `grep --output=`
+  // name the guarded path as an output flag's VALUE — a plain write — so they
+  // still deny (Luna round 1, 2026-10-02).
+  "scripts/cat .husky/pre-push",
+  "/tmp/git diff .github/workflows/ci.yml",
+  "./cat .husky/pre-push",
+  'cat(){ cp /tmp/evil "$1"; }; cat .husky/pre-push',
+  "function cat { cp /tmp/evil .husky/pre-push; }; cat .husky/pre-push",
+  "alias cat=cp; cat /tmp/evil .husky/pre-push",
+  "echo $(rm -f .husky/pre-push)",
+  "echo `rm -f .husky/pre-push`",
+  "cat <(cp /tmp/evil .husky/pre-push)",
+  "PATH=/tmp:$PATH; cat .husky/pre-push",
+  "export PATH=/tmp:$PATH; cat .claude/hooks/sql-safety.mjs",
+  "NODE_OPTIONS=--require=/tmp/evil.js node .claude/hooks/sql-safety.mjs",
+  "rg --pre rm pattern .github/workflows/ci.yml",
+  "rg --pre=rm pattern .claude/hooks/review-proof-guard.mjs",
+  "rg --hostname-bin rm pattern .husky/pre-push",
+  "rg --pre-glob '*' --pre rm x .codex/hooks.json",
+  "git -c diff.external=rm diff --ext-diff -- .husky/pre-push",
+  "git grep --open-files-in-pager=rm pattern -- .husky/pre-push",
+  "git grep -O rm pattern -- .github/workflows/ci.yml",
+  "git -c core.pager=rm log .husky/pre-push",
+  "git --config-env=diff.external=EVIL diff .codex/hooks.json",
+  "git -c core.pager=cat log .husky/pre-push",
+]);
+
 // ---------------------------------------------------------------------------
 // Enforcement surfaces outside `.claude`, absorbed here 2026-09-01 when
 // guarded-surface-lock was removed. These are the ONLY paths that lock covered
@@ -630,7 +673,55 @@ for (const command of [
 ]) {
   const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  if (WARN_ONLY_SINCE_2026_10_02.has(command)) {
+    assert.doesNotMatch(result.stdout, /permissionDecision/, `must not deny (warn only): ${command}`);
+    assert.match(result.stdout, /"systemMessage":"⚠ review-proof-guard/, `must warn: ${command}`);
+  } else {
+    assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+  }
+}
+
+// Luna round 2 (2026-10-02): writes behind an env assignment, and mode changes,
+// are plain writes and deny.
+// Codex GitHub review (P1) and Luna round 3: wrapper OPTIONS must not hide the
+// real program.
+for (const command of [
+  "env APP=1 rm -f .husky/pre-push", "APP=1 rm -f .husky/pre-push", "chmod -x .husky/pre-push",
+  "sudo -u root rm -f .husky/pre-push", "xargs -0 rm -f .husky/pre-push", "timeout -s KILL 5 rm -f .husky/pre-push",
+  "nice -n 10 cp /tmp/x .claude/hooks/sql-safety.mjs", "sudo -- rm -f .husky/pre-push", "env -i PATH=/bin rm .husky/pre-push",
+  "npm exec rimraf .husky/pre-push", "git checkout-index --force -- .husky/pre-push",
+  "find .husky -name pre-push -delete", "find .claude/hooks -name x.mjs -exec rm {} ;",
+  // Deliberate exception (CodeRabbit, PR #874): ANY find action that runs a
+  // program denies, even a read-only one, because the program can be anything
+  // (`-exec sh -c …`). `grep -r` covers the read.
+  "find .github/workflows -name '*.yml' -exec grep -l on: {} +",
+  // Valueless wrapper options must not swallow the real command (CodeRabbit).
+  "sudo -n rm -f .husky/pre-push", "env -i rm -f .husky/pre-push", "xargs -0 -r rm -f .husky/pre-push",
+  "sudo -n -u root rm -f .husky/pre-push",
+  // Repointing or unsetting core.hooksPath disables husky (Codex review).
+  "git config core.hooksPath /evil/.husky", "git config --unset core.hooksPath .husky",
+  // A shell launcher's payload is the command (Codex review).
+  "sh -c 'rm .husky/pre-push'", "bash -lc \"rm -f .husky/pre-push\"", "pwsh -Command Remove-Item .husky/pre-push",
+  "cmd /c del .husky\\pre-push",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
   assert.match(result.stdout, /"permissionDecision":"deny"/, `must deny: ${command}`);
+}
+
+// Ordinary reads that the fail-closed allowlist used to refuse (each one was a
+// real denial in the 14 days before 2026-10-02). They must never deny again; the
+// warning is acceptable.
+for (const command of [
+  "for f in .claude/hooks/*.mjs; do grep -c deny $f; done",
+  "sed -n 1,20p .claude/hooks/review-proof-guard.mjs",
+  "diff .claude/hooks/sql-safety.mjs .claude/hooks/money-safety.mjs",
+  "node -e \"console.log(Object.keys(require('./.claude/settings.json').hooks))\"",
+  "grep -E \"(deny|allow)\" .husky/pre-push",
+  "cd /c/repo && sort .claude/hooks/x.txt | uniq -c",
+]) {
+  const result = run({ tool_name: "Bash", tool_input: { command } });
+  assert.equal(result.status, 0, `hook should exit 0: ${command}`);
+  assert.doesNotMatch(result.stdout, /permissionDecision/, `must not deny a read: ${command}`);
 }
 
 // Reading them stays allowed — that is the whole reason this is a destructive-verb
@@ -760,17 +851,14 @@ for (const payload of [
   assert.match(result.stdout, /"permissionDecision":"deny"/);
 }
 
-// SECOND KNOWN OVER-BLOCK, also pinned. Segment splitting is not quote-aware, so
-// a `|` inside a quoted regex splits the command and the fragment after it is
-// read as an unallowlisted command head. `grep -E "(a|b)" <protected>` is a plain
-// read and is refused. Left unfixed on purpose: a quote-aware splitter changes
-// what counts as a segment, and a mistake there converts denials into ALLOWs —
-// which is exactly how five review rounds' worth of bypasses got in. A false
-// refusal with a one-line workaround is the acceptable failure here.
+// FORMER OVER-BLOCK. Segment splitting is not quote-aware, so a `|` inside a
+// quoted regex splits the command and the fragment after it is read as an
+// unallowlisted command head. Until 2026-10-02 that refused this plain read;
+// since unvouched heads now warn instead of deny, it is allowed with a warning.
 {
   const result = run({ tool_name: "Bash", tool_input: { command: 'grep -E "(typecheck|build)" .husky/pre-push' } });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /"permissionDecision":"deny"/);
+  assert.doesNotMatch(result.stdout, /permissionDecision/);
 }
 // …while the bracket-class form of the same read is allowed, which is the
 // documented workaround. CodeRabbit, PR #530: this assertion used to pass a plain

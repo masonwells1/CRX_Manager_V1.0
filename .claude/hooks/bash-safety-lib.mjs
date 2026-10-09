@@ -287,9 +287,11 @@ export function checkMaintenanceProducerInvocation(command) {
   if (maintenanceProducerNamed(value)) {
     return "Blocked maintenance producer invocation. The 2026-08-12 maintenance producer was retired unapplied on 2026-09-05 and no invocation of that path is allowed; chaining, wrappers, substitutions, alternate spellings, and indirect writers are denied as before.";
   }
-  if (computedJavaScriptScriptArgument(value)) {
-    return "Blocked JavaScript runtime launch of a script whose path is computed at run time (node \"$F\", node scripts/$(...), a glob). The maintenance producer runs only by its exact reviewed command; spell the script path out.";
-  }
+  // The computed-script-path rule (`node "$F"`) was dropped on 2026-10-02 (Mason):
+  // it existed only to keep the maintenance producer from running under a name
+  // this rule could not read, that producer was retired and deleted on
+  // 2026-09-05, and the rule kept refusing ordinary `for f in …; do node "$f"`
+  // loops. computedJavaScriptScriptArgument stays exported; nothing calls it now.
   return null;
 }
 
@@ -515,7 +517,7 @@ export function checkCommandDeep(cmd, cwd) {
   const seen = new Set();
   for (const name of names) {
     for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
-      if (maintenanceProducerNamed(resolved) || computedJavaScriptScriptArgument(resolved)) {
+      if (maintenanceProducerNamed(resolved)) {
         return "Blocked indirect maintenance producer invocation. Run the exact repository-relative node command directly; npm scripts and lifecycle wrappers are denied.";
       }
       // Run BOTH check families on the resolved body — a script that rewrites an
