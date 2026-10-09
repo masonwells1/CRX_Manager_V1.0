@@ -20,6 +20,12 @@
 -- invoices_field_application_has_no_order CHECK, after a number is drawn) and
 -- says so with a SMOKE_NOTE, so a run against live before the apply is not
 -- read as a regression. Any other wrapper body gets the strict check.
+-- TEMPORARY CARVE-OUT - REMOVE AFTER THE APPLY: once 20261008120000 is applied
+-- live (live split wrapper LF md5 adf183df988ab9507f845fbccd91a8ee), a follow-up
+-- change must delete the pre-gate branch below (v_split_pre_gate and its
+-- SMOKE_NOTE) so only the strict check remains, and drop the matching
+-- SPLIT_PRE_GATE_NOTE checks in prove-order-invoice-rep-scope-real-schema.mjs.
+-- Tracked as an OPEN line in docs/manual/KNOWN_ISSUES.md (rep-scope entry).
 --
 -- One DO block, terminal exception -> nothing commits.
 CREATE OR REPLACE FUNCTION pg_temp.convert_quote_to_order_smoke(
@@ -432,6 +438,8 @@ BEGIN
   -- drawing a number: the number check runs before the error-text check, so a
   -- wrapper without the gate fails on the burned number. Nothing the refused call
   -- wrote (invoices, claim, provenance) survives.
+  -- TEMPORARY CARVE-OUT - REMOVE AFTER 20261008120000 IS APPLIED (see the header and
+  -- KNOWN_ISSUES): delete v_split_pre_gate and its branch, keeping only the strict check.
   SELECT md5(replace(p.prosrc, chr(13), '')) = '398030fbb64006b4750e7e89a61b6cb9'
     INTO v_split_pre_gate
     FROM pg_proc p
@@ -456,7 +464,7 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
         v_state, v_constraint, v_err;
     END IF;
-    RAISE NOTICE 'SMOKE_NOTE: the split wrapper predates 20261008120000; its field_application refusal came from the invoices CHECK after an invoice number was drawn';
+    RAISE NOTICE 'SMOKE_NOTE: the split wrapper predates 20261008120000; its field_application refusal came from the invoices CHECK after an invoice number was drawn (TEMPORARY pre-apply carve-out: remove it in the follow-up after 20261008120000 is applied, see KNOWN_ISSUES)';
   ELSE
     IF (SELECT last_value::text || '/' || is_called::text FROM public.invoice_number_seq)
          IS DISTINCT FROM v_seq_before THEN

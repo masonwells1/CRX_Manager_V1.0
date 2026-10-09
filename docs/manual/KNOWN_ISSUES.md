@@ -232,8 +232,16 @@ flagged `needs_split_billing` with an admin notification instead. Proof (contain
 `node scripts/smoke/prove-order-invoice-rep-scope-real-schema.mjs` and the container-only chain
 `scripts/smoke/smoke-order-invoice-rep-scope.sql`. **Exposure** (read-only on live,
 2026-10-09): only 1 of 154 customers is assigned to a sales rep, there are 3 active reps, and no
-order-backed invoice has ever been created by a sales rep, so no past work would have been refused. This entry moves to the archive once the migration is applied and its
-post-apply checks pass.
+order-backed invoice has ever been created by a sales rep, so no past work would have been refused.
+**OPEN (follow-up due right after the apply; added 2026-10-09):** `scripts/smoke/smoke-backfill-refuse-split-billing.sql`
+carries a TEMPORARY pre-apply carve-out: for the exact pre-candidate split wrapper (LF md5
+`398030fb…`) it accepts the old `field_application` refusal that draws an invoice number and prints a
+`SMOKE_NOTE`, so the registered chain stays runnable against live before the apply. Once
+`20261008120000` is applied, a follow-up change must delete that branch (`v_split_pre_gate`) so the
+chain only accepts the new refusal with no number drawn, and drop the matching `SPLIT_PRE_GATE_NOTE`
+checks in `prove-order-invoice-rep-scope-real-schema.mjs`; until then a restored old wrapper body would
+pass that chain with a note instead of failing it. This entry moves to the archive once the migration
+is applied, its post-apply checks pass, and that carve-out is removed.
 
 ## OPEN 2026-10-08 — `complete_delivery`'s non-allocated auto-invoice is not scoped to the rep
 
@@ -307,7 +315,8 @@ recorded in the prover).
 (spec `create_invoice_for_unbilled_delivery`) accepts the old `field_application` split refusal (the
 `invoices_field_application_has_no_order` CHECK, which draws an invoice number) only for the exact
 split wrapper live runs until `20261008120000` is applied, and prints a `SMOKE_NOTE` saying so. After
-the apply it requires the new refusal with no number drawn.
+the apply it requires the new refusal with no number drawn. This carve-out is temporary: removing it
+after the apply is the OPEN follow-up in the rep-scope entry above.
 
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 

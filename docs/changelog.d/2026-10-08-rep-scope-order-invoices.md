@@ -32,9 +32,10 @@ then read the invoice, splits another rep's allocated order, auto-bills another 
 completing a delivery; an admin `field_application` split burns a number); autocommit and drifted-
 preflight refusals; every refusal with no number drawn, and (held-lock check) before the
 idempotency claim and the order lock; own-customer and admin cases still work with exact replay;
-deliveries by admin, rep, driver; the related chains; re-apply refused; sixteen mutations (a)-(p),
-including four real two-session races that show what the post-checks' customer and salesman legs
-catch.
+deliveries by admin, rep, driver; the related chains; re-apply refused; twenty-four mutations
+(a)-(x), including four real two-session races that show what the post-checks' customer and salesman
+legs catch, a replay whose salesman changed, the split's `orders.salesman_id` fallback (w) and a split
+replay after the customer was reassigned (x). Last run 2026-10-09 (final fixer round, below): PASS.
 New container-only chain `scripts/smoke/smoke-order-invoice-rep-scope.sql` (spec
 `order_invoice_rep_scope`); `smoke-backfill-refuse-split-billing.sql` now also fails if a refused
 `field_application` split draws an invoice number, except against the exact pre-candidate split
@@ -125,6 +126,34 @@ test: `src/lib/orderInvoiceRepScopeMigration.test.ts`.
   `CRX_REP_SCOPE_NOT_IN_TRANSACTION` transaction-id branch (not reachable: a leftover marker table makes
   the file's own `CREATE TEMP TABLE` fail first), the NULL-uid path, and a scope column changing type
   rather than name.
+
+**Final fixer round (2026-10-09, prover-skeptic MEDs).** Function bodies unchanged (md5s
+`78c3444e…` / `adf183df…` still pinned).
+- **Split salesman fallback now tested.** New fixture: rep A's own allocated order whose
+  `orders.salesman_id` is rep B. Chain step 6b and prover FIX step 6b: rep A's split with
+  `p_salesman_id` NULL is `SALESMAN_SCOPE_DENIED` with no number drawn, also while the order row and
+  the key's claim lock are held. BEFORE shows the old body recorded rep B through the fallback.
+  Mutation (w) makes the split pre-check read only `p_salesman_id`: the chain then fails at step 6b on
+  the burned number, the call draws a number, and with only the claim lock held it times out (it got
+  past the pre-check); restored, refused first.
+- **Split post-check on the replay path.** Rep A splits their own allocated order, the order's
+  customer is reassigned to rep B (as postgres, rolled back), rep A replays the key:
+  `CUSTOMER_SCOPE_DENIED` (FIX). With the reviewed body the PRE-check refuses this first, and the
+  order's customer cannot be moved to get past it (`ORDER_CUSTOMER_LINEAGE_LOCKED` once invoices
+  exist, observed in the container), so mutation (x) isolates the post-check: without the split
+  owner pre-check the post-check alone still refuses the replay; without both, the replay returns the
+  reassigned customer's invoices. Mutation (g) also shows that with only the post-check removed the
+  pre-check still refuses it. (Deviation from the requested shape - "remove only the post-check" -
+  because that alone cannot change the outcome on this path.)
+- **The split-billing chain's md5 carve-out is now marked TEMPORARY.** It stays (it keeps the
+  registered chain runnable against live before the apply), but the chain header, the branch itself,
+  its `SMOKE_NOTE`, the spec, the prover and KNOWN_ISSUES now say it must be removed in a follow-up
+  right after `20261008120000` is applied: delete the `v_split_pre_gate` branch so only the strict
+  no-number check remains, and drop the prover's `SPLIT_PRE_GATE_NOTE` checks. **Follow-up owed after
+  the apply; tracked as an OPEN line in the KNOWN_ISSUES rep-scope entry.**
+- Proof: `node scripts/smoke/prove-order-invoice-rep-scope-real-schema.mjs` PASS
+  (`ORDER_INVOICE_REP_SCOPE_PROOF_PASS ... mutations=a-x_detected`), `npm run
+  proof:order-invoice-type-gate` PASS, plus the vitest, typecheck, lint and doc-drift checks.
 
 **Found on the way and recorded as open in KNOWN_ISSUES (not fixed here):** `complete_delivery`'s
 non-allocated auto-invoice is not rep-scoped; order-RPC invoices would be numbered `INV-` (latent);

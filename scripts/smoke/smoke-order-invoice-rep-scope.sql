@@ -8,7 +8,7 @@
 --
 -- FAIL-FIRST CONTRACT: against the pre-fix wrappers a sales rep's create_invoice_from_order on
 -- another rep's customer SUCCEEDS and this chain raises its step-1 SMOKE_FAIL. Against the fix,
--- steps 1-7 refuse with NO invoice number drawn and nothing left behind; steps 8-9 (the rep's
+-- steps 1-7 (with 5a, 5b and 6b) refuse with NO invoice number drawn and nothing left behind; steps 8-9 (the rep's
 -- own customer, with exact replay) still work; a replay after the customer is reassigned is
 -- re-scoped by the pre-check (10); admins are unrestricted (11); and a rep completing the last
 -- delivery of another rep's allocated order still completes it, with the auto-split falling
@@ -25,6 +25,10 @@
 -- customer (no billing defaults), so only the split pre-check's fields.customer_id branch can
 -- refuse it before a number is drawn; step 5 is refused only by its field_billing_defaults
 -- branch.
+-- Step 6b is the rep's own allocated order whose recorded salesman (orders.salesman_id) is another
+-- rep, called with p_salesman_id NULL: only the split pre-check's COALESCE(p_salesman_id,
+-- orders.salesman_id) fallback can refuse it before a number is drawn (the implementation records
+-- that same fallback as the invoice's salesman, so without it the post-check refuses only after).
 -- Step 5a (another rep's single-owner allocated order) runs before step 5 (the rep's order with
 -- a 50/50 landlord split): a mixed-owner split cannot create invoices for anyone today, because
 -- trg_guard_invoice_terminal_order refuses an order invoice whose customer is not the order's
@@ -56,6 +60,7 @@ DECLARE
   v_s_b uuid;
   v_s_deliver uuid;
   v_s_field_b uuid;
+  v_s_sales_b uuid;
   v_f_mixed uuid;
   v_f_own uuid;
   v_f_b uuid;
@@ -175,15 +180,16 @@ BEGIN
 
   -- Orders: O_A (C_A, no salesman), O_Aother (C_A, salesman B), O_B (C_B), O_U (C_U), and the
   -- allocated S_mixed (C_A, mixed field), S_own (C_A, own field), S_b (C_B, C_B's field) and
-  -- S_deliver (C_B, C_B's field, with an in-progress delivery of every unit), and S_field_b
-  -- (C_A, C_B's field). No salesman on any order except O_Aother.
-  FOR v_i IN 1..9 LOOP
+  -- S_deliver (C_B, C_B's field, with an in-progress delivery of every unit), S_field_b
+  -- (C_A, C_B's field) and S_sales_b (C_A, C_A's own field, salesman B). No salesman on any
+  -- order except O_Aother and S_sales_b.
+  FOR v_i IN 1..10 LOOP
     INSERT INTO public.orders (order_number, customer_id, order_date, status, booking_draw, salesman_id)
     VALUES (
       'E2E-REP-SCOPE-' || v_i || '-' || v_suffix,
-      (ARRAY[v_c_a, v_c_a, v_c_b, v_c_u, v_c_a, v_c_a, v_c_b, v_c_b, v_c_a])[v_i],
+      (ARRAY[v_c_a, v_c_a, v_c_b, v_c_u, v_c_a, v_c_a, v_c_b, v_c_b, v_c_a, v_c_a])[v_i],
       v_today, 'confirmed', false,
-      (ARRAY[NULL, v_rep_b, NULL, NULL, NULL, NULL, NULL, NULL, NULL]::uuid[])[v_i]
+      (ARRAY[NULL, v_rep_b, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v_rep_b]::uuid[])[v_i]
     ) RETURNING id INTO v_order;
     INSERT INTO public.order_items (
       order_id, product_id, product_name, price_per_unit, cost_per_unit,
@@ -225,10 +231,14 @@ BEGIN
           delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
         ) VALUES (v_delivery, v_item, v_product, 10, 0, 'GL');
         UPDATE public.deliveries SET status = 'in_progress' WHERE id = v_delivery;
-      ELSE
+      WHEN 9 THEN
         v_s_field_b := v_order;
         INSERT INTO public.order_item_field_allocations (order_item_id, field_id, acres)
         VALUES (v_item, v_f_b, 10);
+      ELSE
+        v_s_sales_b := v_order;
+        INSERT INTO public.order_item_field_allocations (order_item_id, field_id, acres)
+        VALUES (v_item, v_f_own, 10);
     END CASE;
   END LOOP;
 
@@ -237,16 +247,17 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_rep_a::text, true);
 
   -- Steps 1-7, as rep A: each is refused with no invoice number drawn and nothing left behind.
-  FOR v_i IN 1..9 LOOP
-    v_label := (ARRAY['1', '2', '3', '4', '5a', '5', '5b', '6', '7'])[v_i];
-    v_kind := (ARRAY['cifo', 'cifo', 'cifo', 'cifo', 'split', 'split', 'split', 'split', 'split'])[v_i];
-    v_order := (ARRAY[v_o_b, v_o_u, v_o_a, v_o_a_other, v_s_b, v_s_mixed, v_s_field_b, v_s_own, v_s_own])[v_i];
-    v_salesman := (ARRAY[NULL, NULL, v_rep_b, NULL, v_rep_a, v_rep_a, NULL, v_rep_b, v_rep_a]::uuid[])[v_i];
+  FOR v_i IN 1..10 LOOP
+    v_label := (ARRAY['1', '2', '3', '4', '5a', '5', '5b', '6', '6b', '7'])[v_i];
+    v_kind := (ARRAY['cifo', 'cifo', 'cifo', 'cifo', 'split', 'split', 'split', 'split', 'split', 'split'])[v_i];
+    v_order := (ARRAY[v_o_b, v_o_u, v_o_a, v_o_a_other, v_s_b, v_s_mixed, v_s_field_b, v_s_own, v_s_sales_b, v_s_own])[v_i];
+    v_salesman := (ARRAY[NULL, NULL, v_rep_b, NULL, v_rep_a, v_rep_a, NULL, v_rep_b, NULL, v_rep_a]::uuid[])[v_i];
     v_type := (ARRAY['chemical_sale', 'chemical_sale', 'chemical_sale', 'chemical_sale', 'chemical_sale',
-                     'chemical_sale', 'chemical_sale', 'chemical_sale', 'field_application'])[v_i];
+                     'chemical_sale', 'chemical_sale', 'chemical_sale', 'chemical_sale', 'field_application'])[v_i];
     v_expect := (ARRAY['CUSTOMER_SCOPE_DENIED', 'CUSTOMER_SCOPE_DENIED', 'SALESMAN_SCOPE_DENIED',
                        'SALESMAN_SCOPE_DENIED', 'CUSTOMER_SCOPE_DENIED', 'CUSTOMER_SCOPE_DENIED',
-                       'CUSTOMER_SCOPE_DENIED', 'SALESMAN_SCOPE_DENIED', 'ORDER_INVOICE_TYPE_NOT_ALLOWED'])[v_i];
+                       'CUSTOMER_SCOPE_DENIED', 'SALESMAN_SCOPE_DENIED', 'SALESMAN_SCOPE_DENIED',
+                       'ORDER_INVOICE_TYPE_NOT_ALLOWED'])[v_i];
     v_key := 'e2e-rep-scope-step-' || v_label || '-' || v_suffix;
     SELECT string_agg(sequencename || '=' || COALESCE(last_value::text, 'none'), ',' ORDER BY sequencename)
       INTO v_seq_before
@@ -322,8 +333,11 @@ BEGIN
   -- 10. Replay re-scope: C_A is reassigned to rep B; rep A's exact replays are now refused.
   -- The PRE-check refuses these (the order's customer is no longer rep A's), before the
   -- idempotency lookup. The post-check's CUSTOMER replay leg is defence in depth: under the
-  -- current lineage guards a replayed invoice's customer is always the order's, so no fixture
-  -- here reaches it with the pre-check passing. Its SALESMAN replay leg is reachable (an
+  -- current lineage guards a replayed invoice's customer is always the order's (and the order's
+  -- customer is locked once invoices exist: ORDER_CUSTOMER_LINEAGE_LOCKED), so no fixture here
+  -- reaches it with the pre-check passing. The prover's mutation (x) proves that leg on this
+  -- same kind of split replay with the pre-check's owner leg removed (still refused), and with
+  -- the post-check removed as well (the replay then returns the invoices). Its SALESMAN replay leg is reachable (an
   -- admin can change a draft's salesman through save_invoice) and is proven by the prover
   -- (FIX and mutation (o): a replay after the salesman became another rep).
   UPDATE public.customers SET assigned_sales_rep = v_rep_b WHERE id = v_c_a;

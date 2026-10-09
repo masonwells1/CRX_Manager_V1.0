@@ -37,10 +37,12 @@
  *      plus the exact auto-split call repeated directly to show WHY it fell back;
  *   6. CHAINS: the registered chains around these RPCs;
  *   7. RE-APPLY: refused on its own pins, nothing changed;
- *   8. MUTATIONS (a)-(v): each removed or moved layer or pre-check leg makes its
+ *   8. MUTATIONS (a)-(x): each removed or moved layer or pre-check leg makes its
  *      check fail for the stated reason, including four real two-session
  *      interleavings that show what the post-checks (customer and salesman legs)
- *      catch and a replay whose salesman changed; each restored body re-passes.
+ *      catch, a replay whose salesman changed, the split salesman fallback (w) and
+ *      a split replay after the customer was reassigned (x); each restored body
+ *      re-passes.
  * Two registered chains (financial-scope, split jsonb) fail on main before
  * reaching any changed RPC: they assert nothing about this change, and are only
  * checked to fail identically before and after.
@@ -183,6 +185,9 @@ const O = {
   // customer through field_billing_defaults (allowed). S_T: rep B's customer's order allocated
   // to rep A's own field (refused only by the order-customer leg of the split owner set).
   S_OVR: id('2016'), S_T: id('2017'),
+  // S_SALES_B: rep A's own allocated order whose recorded salesman (orders.salesman_id) is rep B
+  // (the split pre-check's COALESCE(p_salesman_id, orders.salesman_id) fallback, step 6b).
+  S_SALES_B: id('2018'),
   MISSING: id('2fff'),
 };
 const F_OVR = id('1006');
@@ -427,6 +432,39 @@ $replay$;`);
   return result;
 }
 
+/**
+ * The split wrapper on the REPLAY path after a reassignment: rep A splits their own allocated
+ * order S_OWN with key K (no salesman); the owner then reassigns that order's customer (C_A) to
+ * rep B, inside the same rolled-back transaction; rep A replays K. With the reviewed body the
+ * pre-check refuses first (the order's customer is no longer rep A's). The order's customer
+ * cannot be moved to make the pre-check pass (ORDER_CUSTOMER_LINEAGE_LOCKED once invoices exist)
+ * and the lineage guard keeps a replayed invoice's customer equal to the order's, so mutation (x)
+ * proves the post-check's customer leg on this path by removing the pre-check's owner leg.
+ * Returns { first: the ids the first call returned, result: ok|<ids> or <sqlstate>|<message> }.
+ */
+function splitReplayAfterReassign(key) {
+  const r = probeAs(REP_A, `SELECT array_to_string(${call('split', O.S_OWN, null, 'chemical_sale', key)}, ',') AS first \\gset
+RESET ROLE;
+UPDATE public.customers SET assigned_sales_rep = '${REP_B}' WHERE id = '${C_A}';
+SET LOCAL ROLE authenticated;
+DO $replay$
+DECLARE v_ids uuid[];
+BEGIN
+  v_ids := ${call('split', O.S_OWN, null, 'chemical_sale', key)};
+  RAISE NOTICE 'REPLAY|ok|%', array_to_string(v_ids, ',');
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'REPLAY|%|%', SQLSTATE, SQLERRM;
+END
+$replay$;
+SELECT 'FIRST|' || :'first';`);
+  assert.ok(r.ok, `the split reassignment replay probe failed to run:\n${r.error}`);
+  const result = /REPLAY\|([^\n]*)/.exec(r.error)?.[1];
+  assert.ok(result, `the split reassignment replay probe printed no result:\n${r.error}`);
+  const first = /^FIRST\|(.+)$/.exec(r.last)?.[1];
+  assert.ok(first, `the split reassignment replay probe's first call returned no invoices: ${r.last}`);
+  return { first, result };
+}
+
 function runChain(file, name, source = lf(file)) {
   stageText(name, source);
   const r = docker([...psqlArgs(), '-f', `/tmp/${name}`], { allowFailure: true });
@@ -440,6 +478,8 @@ function expectChainPass(file, name, source) {
 }
 // The split-billing chain accepts the CHECK refusal (with a number drawn) ONLY for the exact
 // pre-candidate split wrapper body, and says so with this note; any other body is strict.
+// TEMPORARY: that carve-out (and this note check) must be removed in a follow-up once
+// 20261008120000 is applied live (KNOWN_ISSUES, rep-scope entry).
 const SPLIT_PRE_GATE_NOTE = /SMOKE_NOTE: the split wrapper predates 20261008120000/;
 function expectChainFail(file, name, failure, label) {
   const output = runChain(file, name);
@@ -533,6 +573,7 @@ function seed() {
     ${orderSql(O.R_SS2, C_A, null, 'R-SS2')} ${allocateSql(O.R_SS2, F_OWN)}
     ${orderSql(O.S_OVR, C_A, null, 'S-OVR')} ${allocateSql(O.S_OVR, F_OVR)}
     ${orderSql(O.S_T, C_B, null, 'S-T')} ${allocateSql(O.S_T, F_OWN)}
+    ${orderSql(O.S_SALES_B, C_A, REP_B, 'S-SALES-B')} ${allocateSql(O.S_SALES_B, F_OWN)}
   `);
 }
 
@@ -781,6 +822,11 @@ SELECT 'VISIBLE_TO_B|' || (SELECT count(*) FROM public.invoices WHERE id = :'inv
   const repSplit = attempt(REP_A, 'split', O.S_B, REP_A, 'chemical_sale', 'prover-before-split');
   assert.equal(repSplit.result, 'ok', `before: rep A could not split rep B's allocated order: ${repSplit.result}`);
   assert.equal(repSplit.detail, `${C_B}:${REP_A}:${REP_A}`);
+  // The split salesman fallback: rep A names no salesman on their own order whose recorded
+  // salesman is rep B, and the split records rep B (COALESCE(p_salesman_id, orders.salesman_id)).
+  const fallbackSplit = attempt(REP_A, 'split', O.S_SALES_B, null, 'chemical_sale', 'prover-before-split-fallback');
+  assert.equal(fallbackSplit.result, 'ok', `before: rep A's split of their order recorded under rep B was refused: ${fallbackSplit.result}`);
+  assert.equal(fallbackSplit.detail, `${C_A}:${REP_B}:${REP_A}`, `before: the split did not record the order's salesman (rep B) through the fallback: ${fallbackSplit.detail}`);
   const mixedAdmin = attempt(ADMIN, 'split', O.S_MIXED, ADMIN, 'chemical_sale', 'prover-before-mixed');
   assert.match(mixedAdmin.result, /^P0001\|INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID/, `before: the mixed-owner split's pre-existing lineage refusal changed: ${mixedAdmin.result}`);
   deliveries('before');
@@ -803,7 +849,7 @@ SELECT 'VISIBLE_TO_B|' || (SELECT count(*) FROM public.invoices WHERE id = :'inv
   const maskSuffix = (error) => error.replace(/E2E-LIFE-DELETED-[0-9a-f]+/g, 'E2E-LIFE-DELETED-<suffix>');
   const lifecycleBefore = maskSuffix(firstError(lifecycleBeforeOutput));
   expectChainPass(CHAINS.lifecycle, 'lifecycle-before-unlocked.sql', withoutPr889Locks(lf(CHAINS.lifecycle)));
-  console.log('[prover] BEFORE: rep A invoiced rep B\'s customer, recorded rep B as salesman (rep B can then read it), split rep B\'s allocated order and auto-billed rep B\'s customer by completing a delivery; an admin field_application split was refused but drew a number; the new chain fails at step 1; the split chain passes on its pre-candidate branch (SMOKE_NOTE) so it stays runnable against live before the apply');
+  console.log('[prover] BEFORE: rep A invoiced rep B\'s customer, recorded rep B as salesman (rep B can then read it), split rep B\'s allocated order, split their own order under rep B through the orders.salesman_id fallback, and auto-billed rep B\'s customer by completing a delivery; an admin field_application split was refused but drew a number; the new chain fails at step 1; the split chain passes on its pre-candidate branch (SMOKE_NOTE) so it stays runnable against live before the apply');
 
   // 2a. AUTOCOMMIT.
   stageText('candidate.sql', lf(CANDIDATE));
@@ -920,6 +966,7 @@ $drift$;`;
     ['5d cifo missing order', 'cifo', O.MISSING, null, 'chemical_sale', new RegExp(`^P0001\\|Order not found: ${O.MISSING}$`)],
     ['5e split missing order', 'split', O.MISSING, REP_A, 'chemical_sale', new RegExp(`^P0001\\|Order not found: ${O.MISSING}$`)],
     ['6 split naming rep B', 'split', O.S_OWN, REP_B, 'chemical_sale', /^P0001\|SALESMAN_SCOPE_DENIED$/],
+    ['6b split order salesman rep B', 'split', O.S_SALES_B, null, 'chemical_sale', /^P0001\|SALESMAN_SCOPE_DENIED$/],
     ['7 split field_application', 'split', O.S_OWN, REP_A, 'field_application', /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED: an invoice created from an order must be chemical_sale or misc_charge$/],
   ];
   for (const [label, kind, order, salesman, type, expected] of steps) {
@@ -950,6 +997,9 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || salesma
   assert.equal(override.detail, `${C_A}:${REP_A}:${REP_A}`, `FIX: the billing-default override split billed the wrong customer: ${override.detail}`);
   // The salesman leg of the cifo post-check on the replay path (the pre-check passes here).
   assert.equal(replayAfterSalesmanChange('prover-fix-replay-salesman'), 'P0001|SALESMAN_SCOPE_DENIED', 'FIX: a replay of an invoice whose salesman became rep B was not refused');
+  // A split replay after the order's customer was reassigned to rep B (refused by the pre-check
+  // here; mutation (x) shows the post-check refuses it too, and what happens without both).
+  assert.equal(splitReplayAfterReassign('prover-fix-split-replay-reassigned').result, 'P0001|CUSTOMER_SCOPE_DENIED', 'FIX: a split replay after the customer was reassigned to rep B was not refused');
   const adminOther = attempt(ADMIN, 'cifo', O.B, REP_B, 'chemical_sale', 'prover-fix-admin-cifo');
   assert.equal(adminOther.result, 'ok', `FIX: an admin could not invoice rep B's customer under rep B: ${adminOther.result}`);
   assert.equal(adminOther.detail, `${C_B}:${REP_B}:${ADMIN}`);
@@ -976,7 +1026,7 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || COALESC
     const anon = probeAs(REP_A, `SELECT ${call(kind, O.A, null, 'chemical_sale', `prover-anon-${kind}`)};`, 'anon');
     assert.ok(!anon.ok && /permission denied for function create_(split_invoices|invoice)_from_order/.test(anon.error), `anon could execute the ${kind} wrapper:\n${anon.error}`);
   }
-  console.log('[prover] FIX: steps 1-7 (and 5a-5e: rep B\'s order on rep A\'s field, a missing order for both wrappers) refused as authenticated with no number drawn, and refused the same way while a second session held the order row and the key\'s claim lock (so before the claim and the lock); admin/credit_memo/NULL split types refused with no number; rep A\'s own invoice and split replay exactly; a field billed to rep A\'s customer through field_billing_defaults is rep A\'s to split; a replay of an invoice whose salesman became rep B is SALESMAN_SCOPE_DENIED; an admin\'s split replays exactly; misc_charge splits unchanged; admins unrestricted; anon denied');
+  console.log('[prover] FIX: steps 1-7 (and 5a-5e: rep B\'s order on rep A\'s field, a missing order for both wrappers; 6b: a split naming no salesman on rep A\'s order recorded under rep B) refused as authenticated with no number drawn, and refused the same way while a second session held the order row and the key\'s claim lock (so before the claim and the lock); admin/credit_memo/NULL split types refused with no number; rep A\'s own invoice and split replay exactly; a field billed to rep A\'s customer through field_billing_defaults is rep A\'s to split; a replay of an invoice whose salesman became rep B is SALESMAN_SCOPE_DENIED; a split replay after the customer was reassigned to rep B is CUSTOMER_SCOPE_DENIED; an admin\'s split replays exactly; misc_charge splits unchanged; admins unrestricted; anon denied');
   console.log(`[prover] FIX: misc_charge split outcome (admin before = admin after = rep A after): ${miscBefore.result}`);
 
   // 5. DELIVERIES.
@@ -1054,7 +1104,9 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || COALESC
   expectChainPass(CHAINS.split, 'split-restored-e.sql');
 
   // (f) without the split owner pre-check, step 5a is refused by the post-check only after a number.
-  applyText('mutant-f.sql', cut(reviewedSplit, '    IF EXISTS (\n      SELECT 1\n        FROM (\n          SELECT v_order_customer_id AS customer_id', '      RAISE EXCEPTION \'CUSTOMER_SCOPE_DENIED\';\n    END IF;\n', 'mutant f'));
+  const splitOwnerPreCheck = ['    IF EXISTS (\n      SELECT 1\n        FROM (\n          SELECT v_order_customer_id AS customer_id', '      RAISE EXCEPTION \'CUSTOMER_SCOPE_DENIED\';\n    END IF;\n'];
+  const splitPostCheck = ['  -- Authoritative re-check of every invoice actually created or replayed', '      RAISE EXCEPTION \'SALESMAN_SCOPE_DENIED\';\n    END IF;\n  END IF;\n\n'];
+  applyText('mutant-f.sql', cut(reviewedSplit, ...splitOwnerPreCheck, 'mutant f'));
   expectChainFail(CHAINS.repScope, 'mutant-f.sql', /SMOKE_FAIL: step 5a: a refused call drew an invoice number .*: CUSTOMER_SCOPE_DENIED/, 'MUTATION (f)');
   restore('f');
 
@@ -1069,10 +1121,13 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || COALESC
   const splitRace = (orderId, fieldId) => `UPDATE public.orders SET customer_id = '${C_B}' WHERE id = '${orderId}';
 INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_primary) VALUES ('${fieldId}', '${C_B}', 100, true);`;
   const splitCall = (orderId) => `array_to_string(${call('split', orderId, REP_A, 'chemical_sale', `prover-race-${orderId.slice(-4)}`)}, ',')`;
-  applyText('mutant-g.sql', cut(reviewedSplit, '  -- Authoritative re-check of every invoice actually created or replayed', '      RAISE EXCEPTION \'SALESMAN_SCOPE_DENIED\';\n    END IF;\n  END IF;\n\n', 'mutant g'));
+  applyText('mutant-g.sql', cut(reviewedSplit, ...splitPostCheck, 'mutant g'));
   const raceG = await interleave(O.R_G1, splitRace(O.R_G1, F_G1), splitCall(O.R_G1), 'mutation g');
   assert.ok(raceG.ok, `MUTATION (g): without the post-check the raced split should have succeeded:\n${raceG.error}`);
   assert.equal(raceG.result, `${C_B}:${REP_A}`, `MUTATION (g): without the post-check rep A should hold a split invoice for rep B's customer: ${raceG.result}`);
+  // On the replay path the pre-check alone still refuses a reassigned customer; mutation (x)
+  // below isolates the post-check there.
+  assert.equal(splitReplayAfterReassign('prover-mutant-g-replay').result, 'P0001|CUSTOMER_SCOPE_DENIED', 'MUTATION (g): without the post-check the pre-check should still refuse the reassigned split replay');
   restore('g');
   const raceG2 = await interleave(O.R_G2, splitRace(O.R_G2, F_G2), splitCall(O.R_G2), 'restored g');
   assert.ok(!raceG2.ok && /ERROR:\s+CUSTOMER_SCOPE_DENIED/.test(raceG2.error), `RESTORED (g): the split post-check did not refuse the raced invoice:\n${raceG2.error}\n${raceG2.result}`);
@@ -1186,10 +1241,40 @@ INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_
   const uMutant = attempt(REP_A, 'split', O.S_OVR, REP_A, 'chemical_sale', 'prover-mutant-u');
   assert.equal(uMutant.result, 'P0001|CUSTOMER_SCOPE_DENIED', `MUTATION (u): without the filter the override split should be (wrongly) refused, which FIX's allow check catches: ${uMutant.result}`);
   restore('u');
-  wrappersUnchanged(NEW_CIFO_MD5, NEW_SPLIT_MD5, 'final');
   console.log('[prover] MUTATION (q)-(u): without the cifo salesman pre-check step 3 burns a number; with it reading only p_salesman_id step 4 burns one; without the split salesman pre-check step 6 burns one; without the order-customer owner leg step 5c burns one; without the fields-branch billing-default filter the override split is wrongly refused');
 
-  console.log('ORDER_INVOICE_REP_SCOPE_PROOF_PASS pr889=replayed_and_required before=bug_reproduced autocommit=refused preflight=blocks_every_pin_group postflight=refuses_wrong_body fix=refused_no_number,before_claim_and_lock,replay_salesman_rescoped allowed=own_customer,billing_default_override,admin,misc_charge deliveries=complete(mono_auto_invoice_gap_open) chains=5_pass,lifecycle_pass_with_pr889_locks_off,financialScope+splitJsonb_stale_assert_nothing reapply=refused mutations=a-v_detected');
+  // (w) the split salesman pre-check reading only p_salesman_id (dropping the orders.salesman_id
+  // fallback) -> step 6b (rep A's own order recorded under rep B, no salesman named) now passes the
+  // pre-check: the chain fails on the burned number, the call draws a number and waits on a held
+  // claim lock, and FIX step 6b's assertion would fail. Only the post-check then refuses it.
+  const splitFallback = 'COALESCE(p_salesman_id, v_order_salesman_id)';
+  assert.equal(reviewedSplit.split(splitFallback).length - 1, 2, 'mutant w: the split salesman pre-check must use the COALESCE twice');
+  applyText('mutant-w.sql', reviewedSplit.replaceAll(splitFallback, 'p_salesman_id'));
+  expectChainFail(CHAINS.repScope, 'mutant-w.sql', /SMOKE_FAIL: step 6b: a refused call drew an invoice number .*: SALESMAN_SCOPE_DENIED/, 'MUTATION (w)');
+  const wMutant = attempt(REP_A, 'split', O.S_SALES_B, null, 'chemical_sale', 'prover-mutant-w');
+  assert.equal(wMutant.result, 'P0001|SALESMAN_SCOPE_DENIED', `MUTATION (w): without the fallback the post-check should still refuse step 6b: ${wMutant.result}`);
+  assert.notEqual(wMutant.seqAfter, wMutant.seqBefore, 'MUTATION (w): without the fallback step 6b should pass the pre-check and draw a number');
+  assert.throws(() => expectRefused(wMutant, /^P0001\|SALESMAN_SCOPE_DENIED$/, 'mutant w'), 'MUTATION (w): FIX step 6b would still pass');
+  const wHeld = await heldAttempt(REP_A, 'split', O.S_SALES_B, null, 'chemical_sale', 'prover-mutant-w-held', 'mutant w', { hold: 'claim' });
+  assert.match(wHeld.result, LOCK_TIMEOUT, `MUTATION (w): without the fallback step 6b should pass the pre-check and wait on the held claim lock: ${wHeld.result}`);
+  restore('w');
+  expectRefused(await heldAttempt(REP_A, 'split', O.S_SALES_B, null, 'chemical_sale', 'prover-restored-w', 'restored w', { hold: 'claim' }), /^P0001\|SALESMAN_SCOPE_DENIED$/, 'RESTORED (w) step 6b with only the claim lock held');
+  console.log('[prover] MUTATION (w): without the split pre-check\'s orders.salesman_id fallback, step 6b (rep A\'s own order recorded under rep B, no salesman named) passes the pre-check - the chain fails on the burned number and the held claim lock times out; restored, refused first with no number');
+
+  // (x) the split post-check's CUSTOMER leg on the REPLAY path (splitReplayAfterReassign): with
+  // the pre-check's owner leg removed, the post-check alone refuses the replay; with the post-check
+  // removed as well, the replay returns the invoices of the reassigned customer.
+  applyText('mutant-x1.sql', cut(reviewedSplit, ...splitOwnerPreCheck, 'mutant x1'));
+  assert.equal(splitReplayAfterReassign('prover-mutant-x1').result, 'P0001|CUSTOMER_SCOPE_DENIED', 'MUTATION (x1): without the owner pre-check the split post-check did not refuse the reassigned replay');
+  applyText('mutant-x2.sql', cut(cut(reviewedSplit, ...splitOwnerPreCheck, 'mutant x2 pre-check'), ...splitPostCheck, 'mutant x2 post-check'));
+  const x2 = splitReplayAfterReassign('prover-mutant-x2');
+  assert.equal(x2.result, `ok|${x2.first}`, `MUTATION (x2): without the owner pre-check and the post-check the replay should return the reassigned customer's invoices: ${x2.result}`);
+  restore('x');
+  assert.equal(splitReplayAfterReassign('prover-restored-x').result, 'P0001|CUSTOMER_SCOPE_DENIED', 'RESTORED (x): the reassigned split replay was not refused');
+  wrappersUnchanged(NEW_CIFO_MD5, NEW_SPLIT_MD5, 'final');
+  console.log('[prover] MUTATION (x): a split replay after the order\'s customer was reassigned to rep B is refused by the post-check alone when the owner pre-check is removed, and returns that customer\'s invoices when the post-check is removed as well (with only the post-check removed the pre-check still refuses it)');
+
+  console.log('ORDER_INVOICE_REP_SCOPE_PROOF_PASS pr889=replayed_and_required before=bug_reproduced autocommit=refused preflight=blocks_every_pin_group postflight=refuses_wrong_body fix=refused_no_number,before_claim_and_lock,split_salesman_fallback,replay_salesman_rescoped,split_replay_customer_rescoped allowed=own_customer,billing_default_override,admin,misc_charge deliveries=complete(mono_auto_invoice_gap_open) chains=5_pass,lifecycle_pass_with_pr889_locks_off,financialScope+splitJsonb_stale_assert_nothing reapply=refused mutations=a-x_detected split_chain_pre_apply_carve_out=temporary_remove_after_apply');
 }
 
 try { await main(); }
