@@ -143,7 +143,19 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     fireEvent.click(within(row).getByRole('checkbox'));
   };
 
-  it('with an older-season invoice ticked by hand, Select All adds this season and keeps the ticked one', async () => {
+  const rowCheckbox = (number: string) => {
+    const row = screen.getAllByText(number).map((el) => el.closest('tr')).find(Boolean)!;
+    return within(row).getByRole('checkbox');
+  };
+  const statusFilter = () => screen.getByRole('combobox', { name: 'Filter by status' });
+  const postSucceeds = () => {
+    const result = Promise.resolve({ data: null, error: null });
+    return Object.assign(result, { throwOnError: () => result });
+  };
+  const postedIds = () =>
+    mockRpc.mock.calls.filter(([name]) => name === 'post_invoice').map(([, args]) => args.p_invoice_id);
+
+  it('with an older-season invoice ticked by hand, Select All replaces it with exactly this season in view', async () => {
     render(<MemoryRouter><Invoices /></MemoryRouter>);
     await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
 
@@ -153,8 +165,120 @@ describe('Invoices list — season window after the Oct 1 rollover', () => {
     expect(toggleButton()).toHaveTextContent('Select All');
     fireEvent.click(toggleButton());
 
-    expect(screen.getByRole('button', { name: /Post 2 Selected/ })).toBeInTheDocument();
+    // Select All selects exactly this season's rows in view; it does not carry the
+    // hand-ticked older-season row along.
+    expect(screen.getByRole('button', { name: /Post 1 Selected/ })).toBeInTheDocument();
+    expect(rowCheckbox('NEW-DRAFT')).toBeChecked();
+    expect(rowCheckbox('OLD-DRAFT')).not.toBeChecked();
     expect(toggleButton()).toHaveTextContent('Deselect All');
+  });
+
+  // Regression (2026-10-09 review of the id-based toggle): Select All unioned this
+  // season's rows into the EXISTING selection, so a row ticked earlier and then hidden
+  // by a filter was still selected, counted and posted although it was not on screen.
+  it('a row ticked and then hidden by a filter is not carried into Select All + Post', async () => {
+    mockRpc.mockImplementation(postSucceeds);
+    mockFrom.mockImplementation((table: string) =>
+      buildInMemoryQuery(table === 'invoices'
+        ? [
+          ...ROWS,
+          invoice({ invoice_number: 'NEW-UNPOSTED', status: 'unposted', season: 2027, invoice_date: '2026-10-07', created_at: '2026-10-07T15:00:00+00:00' }),
+        ]
+        : []));
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-UNPOSTED').length).toBeGreaterThan(0));
+
+    tickRow('OLD-DRAFT');
+    // Unposted only: OLD-UNPOSTED (Season 2026) and NEW-UNPOSTED are in view; the
+    // ticked OLD-DRAFT is hidden.
+    fireEvent.change(statusFilter(), { target: { value: 'unposted' } });
+    expect(screen.queryByText('OLD-DRAFT')).not.toBeInTheDocument();
+    fireEvent.click(toggleButton());
+
+    // The one this-season row in view, and nothing else.
+    expect(screen.getByRole('button', { name: /Post 1 Selected/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Post 1 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 1' }));
+    await waitFor(() => expect(postedIds()).toHaveLength(1));
+    expect(postedIds()).toEqual(['NEW-UNPOSTED']);
+  });
+
+  // Regression: under a filter with no selectable rows, neither the toggle nor Clear
+  // selection rendered, yet the Print bulk button still acted on the hidden selection.
+  it('a leftover selection under a filter with no selectable rows is cleared, so no bulk button acts on it', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('NEW-DRAFT');
+    expect(screen.getByRole('button', { name: /Print 1 Selected/ })).toBeInTheDocument();
+
+    // Paid only: NEW-PAID is in view, and a paid invoice has no checkbox.
+    fireEvent.change(statusFilter(), { target: { value: 'paid' } });
+    expect(screen.getAllByText('NEW-PAID').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /Print \d+ Selected/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /(Post|Void) \d+ Selected/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Delete \d+$/ })).not.toBeInTheDocument();
+
+    // Back to every status: the hidden selection was dropped, not just hidden.
+    fireEvent.change(statusFilter(), { target: { value: '' } });
+    expect(rowCheckbox('NEW-DRAFT')).not.toBeChecked();
+    expect(screen.queryByRole('button', { name: /Print \d+ Selected/ })).not.toBeInTheDocument();
+  });
+
+  it('a ticked row hidden by the search box is dropped too, so no bulk button acts on it', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('NEW-DRAFT');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search invoices...' }), { target: { value: 'OLD-DRAFT' } });
+    expect(screen.queryByText('NEW-DRAFT')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /(Post|Print) \d+ Selected/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search invoices...' }), { target: { value: '' } });
+    expect(rowCheckbox('NEW-DRAFT')).not.toBeChecked();
+  });
+
+  it('offers Clear selection whenever something on screen is selected, even when Deselect All shows', async () => {
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('OLD-DRAFT');
+    tickRow('NEW-DRAFT');
+    expect(toggleButton()).toHaveTextContent('Deselect All');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(screen.queryByRole('button', { name: /(Post|Print) \d+ Selected/ })).not.toBeInTheDocument();
+  });
+
+  // Regression: "is anything selected" and the Print count used the raw selection,
+  // which can hold an id the list no longer loads (deleted elsewhere, row cap shift).
+  it('counts only loaded invoices: a failed post re-selecting a row the reload no longer returns drops it', async () => {
+    let rows = ROWS;
+    mockFrom.mockImplementation((table: string) => buildInMemoryQuery(table === 'invoices' ? rows : []));
+    mockRpc.mockImplementation(() => {
+      // NEW-DRAFT is deleted elsewhere while this batch runs, and both posts fail.
+      rows = ROWS.filter((row) => row.id !== 'NEW-DRAFT');
+      const failed = Promise.resolve({ data: null, error: { message: 'post failed' } });
+      return Object.assign(failed, { throwOnError: () => Promise.reject(new Error('post failed')) });
+    });
+    render(<MemoryRouter><Invoices /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByText('NEW-DRAFT').length).toBeGreaterThan(0));
+
+    tickRow('OLD-DRAFT');
+    tickRow('NEW-DRAFT');
+    fireEvent.click(screen.getByRole('button', { name: /Post 2 Selected/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Post 2' }));
+
+    await waitFor(() => expect(postedIds()).toHaveLength(2));
+    // The reload has landed: OLD-DRAFT is back on screen and NEW-DRAFT is gone.
+    await waitFor(() => {
+      expect(screen.getAllByText('OLD-DRAFT').length).toBeGreaterThan(0);
+      expect(screen.queryByText('NEW-DRAFT')).not.toBeInTheDocument();
+    });
+    // Only the still-loaded failed invoice stays selected and counted.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Post 1 Selected/ })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Print 1 Selected/ })).toBeInTheDocument();
   });
 
   it('Deselect All clears everything, including a hand-ticked older-season invoice', async () => {

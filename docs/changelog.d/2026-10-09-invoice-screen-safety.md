@@ -38,11 +38,11 @@ below).
     All + Post / Void / Delete cannot reach last season's work. An older invoice can still be
     ticked by hand (it shows a "Season N" tag); if one is selected, the Post confirm says how
     many are not from this season. The button goes by **which** invoices are ticked, not how
-    many: it reads **Select All** (and adds this season's invoices to anything already ticked)
-    until every this-season invoice in view is ticked, then **Deselect All** (which clears
-    everything, including hand-ticked older ones). A partial selection also shows **Clear
-    selection**. When every invoice in view is from an older season, Select All is greyed out
-    instead of silently doing nothing.
+    many: it reads **Select All** until every this-season invoice in view is ticked, then
+    **Deselect All** (which clears everything, including hand-ticked older ones). When every
+    invoice in view is from an older season, Select All is greyed out instead of silently doing
+    nothing.
+  - The Chemical Sales bulk buttons (Post / Void / Print / Delete and their counts) only ever act on ticked invoices that are on screen right now: a ticked invoice that a filter or the search box hides, or that the list no longer loads, is dropped from the selection, **Select All** replaces the selection with exactly this season's invoices in view (it no longer keeps rows ticked earlier), and **Clear selection** shows whenever anything on screen is ticked.
   - An invoice with no season, or a later season, counts as "not this season" for these actions.
     An invoice with no season shows a **"Season unknown"** tag, so it is never an untagged row
     that the bulk actions quietly skip. (The live `invoices.season` column cannot be empty today;
@@ -122,12 +122,19 @@ screen: it posted the old saved amounts and then quietly threw the edits away.
   swapped elsewhere at the same total, or the invoice date moved; plus unit tests for the season
   filter, the season labels and the saved-invoice comparison. The Select All, line-swap and
   date-move tests were each run against the round-1 code and failed there.
-- Final fix round added tests for: Select All with an older invoice ticked by hand (adds this
-  season, keeps the ticked one), Deselect All clearing a mix of this-season and older invoices,
+- Final fix round added tests for: Select All with an older invoice ticked by hand (now: selects
+  exactly this season's invoices in view, see the selection fix below), Deselect All clearing a mix of this-season and older invoices,
   Clear selection, Select All greyed out when only older or unknown-season invoices are in view,
   the "Season unknown" tag, the invoice editor reloading when only a line description changed
   elsewhere (and the re-read actually asking the database for the description), and exact-digit
   amount comparison above 2^53. Each was run against the round-2 code and failed there.
+- Selection fix (after the final review) added tests for: a row ticked and then hidden by a
+  filter not being carried into Select All + Post; a selection left under a filter with no
+  selectable rows being dropped (no Print / Post button acting on it); the same for a row hidden
+  by the search box; Clear selection shown
+  alongside Deselect All; and a failed post re-selecting an invoice the reload no longer returns
+  (it is dropped from the counts). Each was run against the previous commit (2e185c34b) and
+  failed there.
 - typecheck, lint, the full Vitest suite and the production build pass.
 
 ### Known gaps and deferred items (not fixed in this change)

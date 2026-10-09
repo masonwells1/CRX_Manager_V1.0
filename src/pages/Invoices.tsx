@@ -32,9 +32,14 @@ import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib
 import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
+import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
+
+// Only these statuses get a row checkbox, so only these can be part of a selection.
+const SELECTABLE_STATUSES: readonly InvoiceStatus[] = ['draft', 'unposted', 'posted', 'voided'];
+const SEARCH_KEYS = ['invoice_number', 'customer_name', 'salesman_name'];
 
 type InvoiceStatusFilter = InvoiceStatus | '' | 'ready_to_post';
 
@@ -104,22 +109,12 @@ export default function Invoices() {
   const [typeFilter, setTypeFilter] = useState('');
   const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
   const [balanceOnly, setBalanceOnly] = useState(false);
+  // The table's search box is lifted here so the page knows exactly which rows are
+  // on screen (a ticked row the search hides must not be acted on).
+  const [tableSearch, setTableSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
   const [showPostModal, setShowPostModal] = useState(false);
-
-  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
-  // user changes their selection. Otherwise the page-scoped keys would carry
-  // over — batch-post A succeeds, response lost, user picks different invoices
-  // and clicks Post → server replays A's cached success without posting B.
-  // Hashing the sorted selected IDs detects intent changes; identical retries
-  // still reuse the key for safe retry-on-network-error.
-  const selectedKey = Array.from(selected).sort().join(',');
-  useEffect(() => {
-    batchVoidIdem.resetKey();
-    batchDeleteIdem.resetKey();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey]);
   const [voiding, setVoiding] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);
@@ -219,8 +214,40 @@ export default function Invoices() {
     .filter((i) => i.balance_cents > 0)
     .reduce((s, i) => s + i.balance_cents, 0);
 
-  // Determine what's selected for action buttons
-  const selectedInvoices = invoices.filter((i) => selected.has(i.id));
+  // What the bulk actions act on (2026-10-09): only ticked rows that are loaded AND on
+  // screen right now — passing the Status / Type / Quick Deliveries / Has-a-balance
+  // filters and the search box — AND showing a checkbox. A ticked row that a filter
+  // hides, that is no longer loaded (deleted elsewhere, or past the row cap), or whose
+  // status lost its checkbox is never posted, voided, printed, deleted or counted.
+  const visibleSelectable = applyTableSearchSort(filtered, SEARCH_KEYS, tableSearch, null, 'asc')
+    .filter((i) => SELECTABLE_STATUSES.includes(i.status));
+  const selectedInvoices = visibleSelectable.filter((i) => selected.has(i.id));
+
+  // Drop ticked rows as soon as they leave the screen (a filter or search hides them,
+  // a reload no longer returns them, or a failed batch post re-selects a row a filter
+  // now hides), so a hidden selection can never reappear later and be acted on.
+  const visibleSelectableKey = visibleSelectable.map((i) => i.id).join(',');
+  useEffect(() => {
+    const inView = new Set(visibleSelectableKey.split(','));
+    setSelected((prev) => {
+      const kept = [...prev].filter((id) => inView.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [visibleSelectableKey, selected]);
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
+  // user changes their selection. Otherwise the page-scoped keys would carry
+  // over — batch-post A succeeds, response lost, user picks different invoices
+  // and clicks Post → server replays A's cached success without posting B.
+  // Hashing the sorted IDs the actions will really send detects intent changes;
+  // identical retries still reuse the key for safe retry-on-network-error.
+  const selectedKey = selectedInvoices.map((i) => i.id).sort().join(',');
+  useEffect(() => {
+    batchVoidIdem.resetKey();
+    batchDeleteIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
+
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
   const basePostConfirmation = describeInvoicePostScope(selectedPostable);
   // The list shows open invoices from every season, and the server does not check the
@@ -236,7 +263,6 @@ export default function Invoices() {
     : basePostConfirmation;
   const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue'].includes(i.status));
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
-  const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 
   // Batch post — standalone invoices post independently, while split invoices
   // are deduplicated by group and posted atomically through post_invoice_group.
@@ -472,7 +498,7 @@ export default function Invoices() {
   const handleExportPDF = async () => {
     setExportingPdf(true);
     try {
-      const rows = selected.size > 0 ? selectedInvoices : filtered;
+      const rows = selectedInvoices.length > 0 ? selectedInvoices : filtered;
       await downloadReportPdf({
         title: 'Invoices',
         subtitle: `${rows.length} invoice(s)`,
@@ -515,16 +541,16 @@ export default function Invoices() {
   // The toggle works on invoice IDs, not on how many rows are selected: a hand-ticked
   // older row counts toward the selection but is never one of the rows Select All
   // picks, so comparing counts could clear when the button said Select All, or select
-  // when it said Deselect All.
+  // when it said Deselect All. Everything here reads the on-screen selection
+  // (selectedInvoices), never ticked rows a filter hides.
   //   - "Deselect All" shows only when something is selected AND every this-season row
   //     in view is already selected (or none is in view); it clears the whole selection.
-  //   - Otherwise "Select All" ADDS this season's rows in view and keeps hand-ticked
-  //     ones. It is disabled when no this-season row in view can be selected.
-  // A partial selection also gets its own "Clear selection" button.
-  const selectableThisSeason = filtered.filter(
-    (i) => selectableStatuses.includes(i.status) && isCurrentSeason(i.season),
-  );
-  const toggleAllClears = selected.size > 0 && selectableThisSeason.every((i) => selected.has(i.id));
+  //   - Otherwise "Select All" REPLACES the selection with exactly this season's rows in
+  //     view (as before the season change), so it never carries along a row ticked
+  //     earlier. It is disabled when no this-season row in view can be selected.
+  // "Clear selection" shows whenever anything on screen is selected.
+  const selectableThisSeason = visibleSelectable.filter((i) => isCurrentSeason(i.season));
+  const toggleAllClears = selectedInvoices.length > 0 && selectableThisSeason.every((i) => selected.has(i.id));
   const toggleAllDisabled = !toggleAllClears && selectableThisSeason.length === 0;
   const toggleAll = () => {
     if (toggleAllClears) {
@@ -532,11 +558,7 @@ export default function Invoices() {
       return;
     }
     if (selectableThisSeason.length === 0) return;
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const row of selectableThisSeason) next.add(row.id);
-      return next;
-    });
+    setSelected(new Set(selectableThisSeason.map((i) => i.id)));
   };
 
   const columns: Column<InvoiceRow>[] = [
@@ -545,7 +567,7 @@ export default function Invoices() {
       header: '',
       className: 'w-10',
       render: (row) =>
-        selectableStatuses.includes(row.status) ? (
+        SELECTABLE_STATUSES.includes(row.status) ? (
           <input
             type="checkbox"
             checked={selected.has(row.id)}
@@ -690,7 +712,7 @@ export default function Invoices() {
         title="Invoices"
         actions={
           <div className="flex gap-2 flex-wrap justify-end">
-            {selected.size > 0 && canPostInvoices && (
+            {selectedInvoices.length > 0 && canPostInvoices && (
               <>
                 {selectedPostable.length > 0 && (
                   <Button
@@ -717,7 +739,7 @@ export default function Invoices() {
                   onClick={() => setShowBatchPrintDialog(true)}
                   loading={printing}
                 >
-                  Print {selected.size} Selected
+                  Print {selectedInvoices.length} Selected
                 </Button>
                 <Button
                   variant="secondary"
@@ -830,7 +852,9 @@ export default function Invoices() {
             columns={columns}
             searchable
             searchPlaceholder="Search invoices..."
-            searchKeys={['invoice_number', 'customer_name', 'salesman_name']}
+            searchKeys={SEARCH_KEYS}
+            searchValue={tableSearch}
+            onSearchChange={setTableSearch}
             onRowClick={(row) => navigate(`/invoices/${row.id}`)}
             emptyTitle="No invoices yet"
             emptyDescription="Invoices are created from orders or blend tickets — open one to bill."
@@ -888,7 +912,7 @@ export default function Invoices() {
                 >
                   Has a balance
                 </button>
-                {filtered.some((i) => selectableStatuses.includes(i.status)) && (
+                {visibleSelectable.length > 0 && (
                   <button
                     type="button"
                     onClick={toggleAll}
@@ -899,13 +923,13 @@ export default function Invoices() {
                         ? 'Clears every selected invoice.'
                         : toggleAllDisabled
                           ? "No invoice from this season is in view. Tick an older-season invoice's own box to select it."
-                          : "Selects this season's invoices only. Tick an older-season invoice's own box to include it."
+                          : "Selects exactly this season's invoices in view, replacing any other selection. Tick an older-season invoice's own box afterwards to include it."
                     }
                   >
                     {toggleAllClears ? 'Deselect All' : 'Select All'}
                   </button>
                 )}
-                {selected.size > 0 && !toggleAllClears && (
+                {selectedInvoices.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setSelected(new Set())}
