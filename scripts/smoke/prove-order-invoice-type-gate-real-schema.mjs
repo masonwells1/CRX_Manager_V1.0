@@ -68,6 +68,12 @@ const LIVE_BODY_MD5 = {
   'public._create_split_invoices_from_order_provenance_impl_20260719(uuid,uuid,text,text)': 'f671f1a3f5406cff52aedd8a5fb40b31',
 };
 const NEW_WRAPPER_MD5 = 'a1a91643bd8866823ae359f7e0ec290e';
+// The split-billing chain was later updated for 20261008120000: its field_application step
+// now expects the split wrapper's own type refusal, which only that newer migration provides.
+// This proof replays only up to its candidate (20261006200000), so it runs that chain exactly
+// as it stood when CRX-LIFE-001 landed (commit 342135561), keeping this proof reproducible.
+// Every other chain is read from disk.
+const CHAIN_AT_COMMIT = { [CHAINS.split]: '342135561' };
 // 20260914100700 is live but cannot replay here: it rewrites storage.objects
 // policies the stub storage schema cannot host. It must not touch invoices.
 const PARKED = new Set(['20260914100700_customer_document_bytes_server_only.sql']);
@@ -102,6 +108,15 @@ function stageText(name, text) {
   }
 }
 function lf(file) { return readFileSync(file, 'utf8').replaceAll('\r\n', '\n'); }
+/** A chain's SQL: from disk, or from the commit pinned in CHAIN_AT_COMMIT. */
+function chainSource(file) {
+  const commit = CHAIN_AT_COMMIT[file];
+  if (!commit) return lf(file);
+  const rel = path.relative(ROOT, file).split(path.sep).join('/');
+  const r = spawnSync('git', ['show', `${commit}:${rel}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (r.error || r.status !== 0) throw new Error(`could not read ${rel} at ${commit}: ${r.error?.message ?? r.stderr}`);
+  return r.stdout.replaceAll('\r\n', '\n');
+}
 function apply(name, allowFailure = false) {
   const r = docker([...psqlArgs(), '-1', '-f', `/tmp/${name}`], { allowFailure });
   return { status: r.status, output: `${r.stdout}\n${r.stderr}` };
@@ -202,7 +217,7 @@ function expectTypeRefusal(call, label) {
 }
 
 function runChain(file, name) {
-  stageText(name, lf(file));
+  stageText(name, chainSource(file));
   const r = docker([...psqlArgs(), '-f', `/tmp/${name}`], { allowFailure: true });
   return `${r.stdout}\n${r.stderr}`;
 }

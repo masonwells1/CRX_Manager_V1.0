@@ -13,6 +13,8 @@
 -- refuses a later mono-invoice post. The final provenance chain inserts a
 -- matching forged field-acre audit row: the old guard trusts it and posts,
 -- while the fixed guard trusts only the private canonical-RPC claim.
+-- A field_application split is refused by the split wrapper's type allow-list
+-- (20261008120000) before it draws an invoice number.
 --
 -- One DO block, terminal exception -> nothing commits.
 CREATE OR REPLACE FUNCTION pg_temp.convert_quote_to_order_smoke(
@@ -88,6 +90,7 @@ DECLARE
   v_state    text;
   v_constraint text;
   v_invoice_count integer;
+  v_seq_before text;
   v_pricing  jsonb;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
@@ -410,11 +413,21 @@ BEGIN
    WHERE id = v_oitem;
   PERFORM set_config('app.admin_override', 'false', true);
 
-  -- CRX-LIFE-001 (20261006200000): the split engine inserts its per-customer
-  -- invoices directly, so the invoices CHECK is what refuses a field_application
-  -- split; nothing it wrote (invoices, claim, provenance) survives. FAIL-FIRST:
-  -- before that migration this call creates order-backed field invoices.
+  -- CRX-LIFE-001: 20261006200000 added the invoices_field_application_has_no_order
+  -- CHECK, which refused a field_application split only AFTER the split engine had
+  -- inserted its first invoice, so the refused call still drew an invoice number
+  -- (nextval in the invoice_number default is not rolled back). 20261008120000 puts
+  -- the same ORDER_INVOICE_TYPE_NOT_ALLOWED allow-list in the split wrapper itself,
+  -- before any claim, lock or insert. FAIL-FIRST: before 20261006200000 this call
+  -- creates order-backed field invoices; between the two migrations it is refused by
+  -- the CHECK but draws a number. The number check runs before the error-text check,
+  -- so a wrapper without the gate fails on the burned number. Nothing the refused call
+  -- wrote (invoices, claim, provenance) survives.
   SELECT count(*) INTO v_invoice_count FROM public.invoices WHERE order_id = v_order;
+  SELECT last_value::text || '/' || is_called::text INTO v_seq_before FROM public.invoice_number_seq;
+  v_err := NULL;
+  v_state := NULL;
+  v_constraint := NULL;
   BEGIN
     PERFORM public.create_split_invoices_from_order(
       v_order, v_admin, 'field_application', 'e2e-h5-field-type-split-' || v_suffix
@@ -424,11 +437,17 @@ BEGIN
     GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT, v_state = RETURNED_SQLSTATE,
                             v_constraint = CONSTRAINT_NAME;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_state <> '23514' OR v_constraint IS DISTINCT FROM 'invoices_field_application_has_no_order' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
-        v_state, v_constraint, v_err;
-    END IF;
   END;
+  IF (SELECT last_value::text || '/' || is_called::text FROM public.invoice_number_seq)
+       IS DISTINCT FROM v_seq_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: a refused field_application split drew an invoice number (SQLSTATE %, constraint %): %',
+      v_state, v_constraint, v_err;
+  END IF;
+  IF v_err NOT LIKE 'ORDER_INVOICE_TYPE_NOT_ALLOWED:%' OR v_state <> '23514'
+     OR NULLIF(v_constraint, '') IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
+      v_state, v_constraint, v_err;
+  END IF;
   IF (SELECT count(*) FROM public.invoices WHERE order_id = v_order) <> v_invoice_count
      OR EXISTS (SELECT 1 FROM public.split_invoice_creation_claims WHERE order_id = v_order) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: a refused field_application split left an invoice or creation claim behind';
