@@ -292,6 +292,12 @@ async function main() {
 
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${P3}', 'x');`), /EXTERNAL_BILLING_REQUIRES_COMPLETED_ORDER_DELIVERY/, 'record a scheduled delivery');
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${Q1}', 'x');`), /DELIVERY_ALREADY_INVOICED_IN_CRX/, 'record an invoiced delivery');
+  // The recording guard looks for a delivery's invoices on its order; an invoice naming the
+  // delivery but not its order cannot exist (Luna MED, refuted by the existing order guard).
+  expectRefused(probe(`INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
+      VALUES ('PROVER-INV-NO-ORDER', '${MASON}', '${CUSTOMER}', NULL, '${P2}', 'chemical_sale', 'draft');`), /INVOICE_DELIVERY_ORDER_REQUIRED/, 'a delivery invoice that names no order');
+  expectRefused(probe(`INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
+      VALUES ('PROVER-INV-WRONG-ORDER', '${MASON}', '${CUSTOMER}', '${R}', '${P2}', 'chemical_sale', 'draft');`), /INVOICE_DELIVERY|ORDER/, 'a delivery invoice that names another order');
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${P1}', '   ');`), /delivery_external_billings_reason_chk/, 'blank reason');
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${P1}', 'x');`, MASON), /permission denied/, 'admin API write');
   psql(`INSERT INTO public.delivery_external_billings (delivery_id, reason, recorded_by) VALUES ('${P1}', '[PROVER] billed elsewhere', '${MASON}');`);

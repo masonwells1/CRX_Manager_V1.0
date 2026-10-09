@@ -9,3 +9,8 @@
   invoiced deliveries could hide an older one that still needs invoicing (CodeRabbit, PR #889).
   The footnote now reads "More deliveries may need invoicing; open Deliveries for the full list"
   when the tile is full. Test: OfficeCockpit.delivered-not-invoiced.test.tsx.
+- If all 1,000 scanned deliveries are covered, the tile says older ones were not checked instead
+  of showing an all-clear (Luna LOW).
+- Luna MED (recording guard misses an invoice naming the delivery but no order) refuted: the
+  existing invoice guard refuses such an invoice (INVOICE_DELIVERY_ORDER_REQUIRED) and one naming
+  another order; the real-schema proof now asserts both.
