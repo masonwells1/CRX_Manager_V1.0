@@ -1385,7 +1385,7 @@ export default function OfficeCockpit() {
           {!data.deliveredNotInvoicedLoadOk ? (
             <p className="py-2 text-sm text-gray-400">Invoice coverage check unavailable right now.</p>
           ) : data.deliveredNotInvoiced.length === 0 ? (
-            <AllClear label="Every completed delivery has an active invoice." />
+            <AllClear label="No completed deliveries need invoicing." />
           ) : (
             <div className="divide-y divide-gray-100">
               {data.deliveredNotInvoiced.slice(0, 5).map((row) => (
