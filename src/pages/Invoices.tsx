@@ -226,6 +226,11 @@ export default function Invoices() {
   // Drop ticked rows as soon as they leave the screen (a filter or search hides them,
   // a reload no longer returns them, or a failed batch post re-selects a row a filter
   // now hides), so a hidden selection can never reappear later and be acted on.
+  // `selected` is a dependency on purpose: a failed batch post re-ticks the failed ids
+  // with setSelected while the visible set (visibleSelectableKey) stays the same, and one
+  // of those ids may be hidden by a filter. Re-running on selection changes prunes it at
+  // once; with only visibleSelectableKey it would linger and reappear when the filter is
+  // cleared. The updater returns `prev` when nothing is pruned, so this cannot loop.
   const visibleSelectableKey = visibleSelectable.map((i) => i.id).join(',');
   useEffect(() => {
     const inView = new Set(visibleSelectableKey.split(','));
