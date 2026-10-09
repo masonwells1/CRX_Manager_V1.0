@@ -16,3 +16,6 @@
   another order; the real-schema proof now asserts both.
 - CodeRabbit follow-ups: the page-wide "All clear!" banner is also suppressed when the delivery
   scan hit its cap; the proof asserts the exact INVOICE_DELIVERY_LINEAGE_INVALID refusal.
+- The page-wide "All clear!" banner now also requires every tracked check (delivered-not-invoiced,
+  shortfalls, planned bookings, watchdog) to have loaded; a failed check no longer reads as clear
+  (CodeRabbit).

@@ -1134,8 +1134,11 @@ export default function OfficeCockpit() {
       />
 
       {/* All-clear banner when nothing is wrong */}
-      {/* A capped delivery scan that found nothing has not proved the older deliveries clear. */}
-      {totalExceptions === 0 && !data.deliveredNotInvoicedHitLimit && (
+      {/* Only after every tracked check loaded: a failed check, or a capped delivery scan that
+          found nothing, has not proved anything clear. */}
+      {totalExceptions === 0
+        && data.deliveredNotInvoicedLoadOk && !data.deliveredNotInvoicedHitLimit
+        && data.shortfallsLoadOk && data.plannedBookingAttentionLoadOk && data.watchdogLoadOk && (
         <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-4">
           <CheckCircle className="w-6 h-6 text-crx-green shrink-0" />
           <div>
