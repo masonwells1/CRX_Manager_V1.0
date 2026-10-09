@@ -291,6 +291,14 @@ function contractFailures(lib) {
     "an added or kept file's folder is read at the head");
   check(folderArgs.includes(`${BASE}:docs/plans`), "a deleted file's folder is read at the base, where the file still exists");
   check(kindCall.includes("owner=masonwells1") && kindCall.includes("name=CRX_Manager_V1.0"), "in the pull request's repository");
+  // Without --repo the guards pass "repos/{owner}/{repo}". gh fills those in only
+  // for typed -F fields; a raw -f would reach GitHub literally (Sol, 2026-10-09).
+  const placeholderCalls = [];
+  lib.solExemptionOnGitHub({ baseSha: BASE, headSha: HEAD, gh: fakeGh(compareAnswer(), placeholderCalls) });
+  const placeholderCall = placeholderCalls.find((args) => args[1] === "graphql") || [];
+  const typedField = (value) => placeholderCall.some((arg, i) => arg === value && placeholderCall[i - 1] === "-F");
+  check(typedField("owner={owner}") && typedField("name={repo}"),
+    "with no --repo, owner and name go as typed -F fields so gh fills in the current repository");
   const removalOnly = compareAnswer({ files: [{ filename: "docs/plans/old.md", previous_filename: null, status: "removed" }] });
   check(viaGitHub(removalOnly), "a pull request that only deletes a plain documentation file is exempt");
   check(!viaGitHub(removalOnly, {}, { "docs/plans/old.md": SYMLINK }), "deleting a symlink named like a docs file needs Sol (Luna, round 2)");
@@ -427,6 +435,7 @@ const MUTANTS = [
   ["deleted files not kind-checked", `if (status === "removed" || status === "modified") lookups.push`, `if (status === "modified") lookups.push`],
   ["edited files not kind-checked at the base (Luna, round 5)", `if (status === "removed" || status === "modified") lookups.push`, `if (status === "removed") lookups.push`],
   ["added files looked for at the base", `if (status === "removed" || status === "modified") lookups.push`, `if (status !== "renamed" && status !== "copied") lookups.push`],
+  ["repository sent as raw fields gh does not fill in (Sol, 2026-10-09)", '"-F", `owner=${owner}`, "-F", `name=${name}`', '"-f", `owner=${owner}`, "-f", `name=${name}`'],
   ["base commit id unchecked", `if (!SHA_RE.test(String(rawBase || "")) || !SHA_RE.test(String(rawHead || ""))) {`, "if (false) {"],
 ];
 const mutantDir = mkdtempSync(path.join(tmpdir(), "sol-exempt-mutants-"));

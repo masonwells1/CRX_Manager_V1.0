@@ -195,6 +195,10 @@ function treeProblem({ files, baseSha, headSha, repoPath, gh }) {
   // A file at the repository root lives in the root tree, "<sha>:".
   const folderOf = ({ commit, file }) => `${commit}:${file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : ""}`;
   const expressions = [...new Set(lookups.map(folderOf))];
+  // Without --repo, repoPath is "repos/{owner}/{repo}". owner and name MUST stay
+  // typed fields (-F): gh fills "{owner}"/"{repo}" in -F values from the current
+  // repository (`gh api --help`), but sends a raw -f value literally, and GitHub
+  // then finds no repository (checked live 2026-10-09; that only needs Sol).
   const [, owner, name] = repoPath.split("/");
   const args = ["api", "graphql", "-f", `query=${solExemptTreeQuery(expressions.length)}`, "-F", `owner=${owner}`, "-F", `name=${name}`];
   expressions.forEach((expression, i) => args.push("-f", `e${i}=${expression}`));
