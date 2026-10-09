@@ -312,6 +312,18 @@ async function main() {
     UPDATE public.invoices SET deleted_at = NULL WHERE invoice_number = 'PROVER-INV-R1';`), /DELIVERY_BILLED_OUTSIDE_CRX: this delivery was billed outside CRX/, 'restore an invoice for a recorded delivery');
   console.log('[prover] GUARD: CRX refuses to bill a recorded delivery or its whole order; other billing still works');
 
+  // A recorded delivery cannot leave its order (Sol, 2026-10-09): a move would hide it from the
+  // whole-order check on the original order.
+  expectRefused(probe(`UPDATE public.deliveries SET order_id = '${R}' WHERE id = '${P1}';`, MASON), /BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED/, 'move a recorded delivery to another order');
+  expectRefused(probe(`UPDATE public.deliveries SET order_id = '${R}' WHERE id = '${P1}';`), /BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED/, 'move a recorded delivery as postgres');
+  expectRefused(probe(`UPDATE public.deliveries SET order_id = NULL WHERE id = '${P1}';`), /BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED/, 'detach a recorded delivery from its order');
+  assert.equal(probe(`UPDATE public.deliveries SET order_id = order_id WHERE id = '${P1}'; SELECT 'updated';`).last, 'updated', 'an update that keeps the order must still work');
+  const reparentMutant = probe(`DROP TRIGGER guard_billed_outside_delivery_order_locked ON public.deliveries;
+    UPDATE public.deliveries SET order_id = '${R}' WHERE id = '${P1}';
+    ${invoiceInsert(P, null)}`);
+  assert.equal(reparentMutant.last, 'inserted', `MUTATION: without the order lock a moved delivery should let the original order be billed whole:\n${reparentMutant.error}`);
+  console.log('[prover] ORDER LOCK: a recorded delivery cannot be moved or detached; without the lock the original order bills whole again');
+
   const dashboard = probe(`SELECT (SELECT string_agg(x->>'primary_text', ',' ORDER BY x->>'primary_text') FROM jsonb_array_elements(public.get_dashboard_action_items(500)->'unbilled_deliveries') x);`, MASON).last;
   assert.ok(!dashboard.split(',').includes('PROVER-P1'), `the dashboard still lists the recorded delivery: ${dashboard}`);
   assert.ok(dashboard.split(',').includes('PROVER-P2') && dashboard.split(',').includes('PROVER-R1'), `the dashboard dropped an unbilled delivery: ${dashboard}`);
@@ -397,7 +409,7 @@ ${lf(LOCK)}`);
   assert.ok(Number(mutantCancel.last) < Number(afterRelease), 'MUTATION: without the lock the cancel should release reservations again');
   console.log('[prover] LOCK: cancelling a released deleted order is refused (reservations unchanged); live orders still cancel; without the lock it double-releases');
 
-  console.log('BILLED_OUTSIDE_CRX_PROOF_PASS recording=guarded guard=refuses_double_bill dashboard=excludes mutation=detected mark=53 release=reconciled rerun=safe deleted_order_lock=enforced');
+  console.log('BILLED_OUTSIDE_CRX_PROOF_PASS recording=guarded guard=refuses_double_bill order_lock=enforced dashboard=excludes mutation=detected mark=53 release=reconciled rerun=safe deleted_order_lock=enforced');
 }
 
 try { await main(); }

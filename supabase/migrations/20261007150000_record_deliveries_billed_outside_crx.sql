@@ -50,6 +50,12 @@
 --      the order lock itself before checking, so a concurrent recording is always seen.)
 --      A recorded delivery that is later voided still blocks whole-order billing of its
 --      order — fail-closed; remove the record by migration if that is ever wanted.
+--   3b. refuse_billed_outside_delivery_reparent (BEFORE UPDATE OF order_id on deliveries): a
+--      recorded delivery can never be moved to another order or detached from its order
+--      (BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED). Guard 3 finds recorded deliveries through their
+--      CURRENT order, so a move would let a whole-order invoice on the original order bill those
+--      goods again (Sol exact-SHA review, 2026-10-09). The delivery row is already locked by the
+--      UPDATE, so a recording committed meanwhile is seen.
 --   4. get_dashboard_action_items: the dashboard's "Delivered, not invoiced" list skips recorded
 --      deliveries (live body re-emitted with one added predicate; preflight-pinned).
 --
@@ -60,6 +66,8 @@
 --      table below is gone.
 --   DROP TRIGGER IF EXISTS zz_guard_invoice_delivery_billed_outside_crx ON public.invoices;
 --   DROP FUNCTION IF EXISTS public.guard_invoice_delivery_billed_outside_crx();
+--   DROP TRIGGER IF EXISTS guard_billed_outside_delivery_order_locked ON public.deliveries;
+--   DROP FUNCTION IF EXISTS public.refuse_billed_outside_delivery_reparent();
 --   DROP TABLE IF EXISTS public.delivery_external_billings;
 --   DROP FUNCTION IF EXISTS public.guard_delivery_external_billing();
 --
@@ -239,6 +247,32 @@ DROP TRIGGER IF EXISTS zz_guard_invoice_delivery_billed_outside_crx ON public.in
 CREATE TRIGGER zz_guard_invoice_delivery_billed_outside_crx
   BEFORE INSERT OR UPDATE OF delivery_id, order_id, invoice_type, deleted_at, status ON public.invoices
   FOR EACH ROW EXECUTE FUNCTION public.guard_invoice_delivery_billed_outside_crx();
+
+-- 3b. A recorded delivery stays on its order. SECURITY DEFINER so the check sees every record
+--     whatever the caller's RLS (drivers cannot read delivery_external_billings).
+CREATE OR REPLACE FUNCTION public.refuse_billed_outside_delivery_reparent()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  IF NEW.order_id IS DISTINCT FROM OLD.order_id
+     AND EXISTS (SELECT 1 FROM public.delivery_external_billings b WHERE b.delivery_id = OLD.id) THEN
+    RAISE EXCEPTION 'BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED: delivery % was billed outside CRX, so it cannot be moved to another order', OLD.delivery_number
+      USING DETAIL = format('delivery_id=%s', OLD.id);
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+ALTER FUNCTION public.refuse_billed_outside_delivery_reparent() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.refuse_billed_outside_delivery_reparent() FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS guard_billed_outside_delivery_order_locked ON public.deliveries;
+CREATE TRIGGER guard_billed_outside_delivery_order_locked
+  BEFORE UPDATE OF order_id ON public.deliveries
+  FOR EACH ROW EXECUTE FUNCTION public.refuse_billed_outside_delivery_reparent();
 
 -- 4. The dashboard's "Delivered, not invoiced" list (section 9) skips deliveries billed outside
 --    CRX. Body copied verbatim from live (preflight-pinned above); the only change is the
@@ -517,6 +551,28 @@ BEGIN
            = ARRAY['deleted_at', 'delivery_id', 'invoice_type', 'order_id', 'status']
   ) THEN
     RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: invoice guard trigger missing or not firing on the intended columns';
+  END IF;
+  -- The delivery reparent lock: right function, right column, owner, security mode, no API EXECUTE.
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'refuse_billed_outside_delivery_reparent'
+         AND p.prosecdef AND p.proowner = 'postgres'::regrole
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']) <> 1
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'refuse_billed_outside_delivery_reparent') <> 1
+     OR has_function_privilege('authenticated', 'public.refuse_billed_outside_delivery_reparent()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.refuse_billed_outside_delivery_reparent()', 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+        WHERE t.tgrelid = 'public.deliveries'::regclass
+          AND t.tgname = 'guard_billed_outside_delivery_order_locked'
+          AND t.tgenabled = 'O' AND NOT t.tgisinternal
+          AND t.tgfoid = 'public.refuse_billed_outside_delivery_reparent()'::regprocedure
+          AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+                 FROM pg_attribute a
+                WHERE a.attrelid = t.tgrelid AND a.attnum = ANY (t.tgattr::int2[]))
+              = ARRAY['order_id']
+     ) THEN
+    RAISE EXCEPTION 'EXTERNAL_BILLING_POSTFLIGHT: the recorded-delivery order lock is missing or not as intended';
   END IF;
   IF (SELECT count(*) FROM pg_proc p
        WHERE p.oid = 'public.get_dashboard_action_items(integer)'::regprocedure

@@ -56,6 +56,12 @@ describe('sanitizeError', () => {
     expect(shown).toBe('No invoice was created. This delivery (or a delivery on this order) was already billed outside CRX, so CRX will not bill it again');
   });
 
+  it('explains a refused move of a delivery billed outside CRX', () => {
+    const shown = sanitizeError('BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED: delivery DEL-00060 was billed outside CRX, so it cannot be moved to another order');
+    expect(shown).not.toContain('BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED');
+    expect(shown).toBe('Nothing was changed. This delivery was billed outside CRX, so it cannot be moved to another order');
+  });
+
   it('explains a refused change to a deleted order', () => {
     expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so it cannot be restored or have its status changed'))
       .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
