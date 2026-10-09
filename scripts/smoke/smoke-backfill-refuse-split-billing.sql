@@ -25,7 +25,10 @@
 -- change must delete the pre-gate branch below (v_split_pre_gate and its
 -- SMOKE_NOTE) so only the strict check remains, and drop the matching
 -- SPLIT_PRE_GATE_NOTE checks in prove-order-invoice-rep-scope-real-schema.mjs.
--- Tracked as an OPEN line in docs/manual/KNOWN_ISSUES.md (rep-scope entry).
+-- It must ALSO fix prove-order-invoice-type-gate-real-schema.mjs, which reads
+-- this chain from disk against the pre-gate split body and passes only because
+-- of this carve-out (re-pin its split chain to 342135561 or expect the strict
+-- failure). Tracked as an OPEN line in docs/manual/KNOWN_ISSUES.md (rep-scope entry).
 --
 -- One DO block, terminal exception -> nothing commits.
 CREATE OR REPLACE FUNCTION pg_temp.convert_quote_to_order_smoke(

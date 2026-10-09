@@ -239,7 +239,11 @@ carries a TEMPORARY pre-apply carve-out: for the exact pre-candidate split wrapp
 `SMOKE_NOTE`, so the registered chain stays runnable against live before the apply. Once
 `20261008120000` is applied, a follow-up change must delete that branch (`v_split_pre_gate`) so the
 chain only accepts the new refusal with no number drawn, and drop the matching `SPLIT_PRE_GATE_NOTE`
-checks in `prove-order-invoice-rep-scope-real-schema.mjs`; until then a restored old wrapper body would
+checks in `prove-order-invoice-rep-scope-real-schema.mjs`. The same follow-up must also fix
+`prove-order-invoice-type-gate-real-schema.mjs` (`npm run proof:order-invoice-type-gate`): it reads this
+chain from disk, replays only up to `20261006200000` (the pre-gate split body), and passes today only
+because of the carve-out, so re-pin its split chain to commit `342135561` or make it expect the strict
+failure. Until then a restored old wrapper body would
 pass that chain with a note instead of failing it. This entry moves to the archive once the migration
 is applied, its post-apply checks pass, and that carve-out is removed.
 
