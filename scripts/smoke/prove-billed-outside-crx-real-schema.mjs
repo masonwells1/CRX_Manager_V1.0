@@ -297,7 +297,7 @@ async function main() {
   expectRefused(probe(`INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
       VALUES ('PROVER-INV-NO-ORDER', '${MASON}', '${CUSTOMER}', NULL, '${P2}', 'chemical_sale', 'draft');`), /INVOICE_DELIVERY_ORDER_REQUIRED/, 'a delivery invoice that names no order');
   expectRefused(probe(`INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
-      VALUES ('PROVER-INV-WRONG-ORDER', '${MASON}', '${CUSTOMER}', '${R}', '${P2}', 'chemical_sale', 'draft');`), /INVOICE_DELIVERY|ORDER/, 'a delivery invoice that names another order');
+      VALUES ('PROVER-INV-WRONG-ORDER', '${MASON}', '${CUSTOMER}', '${R}', '${P2}', 'chemical_sale', 'draft');`), /INVOICE_DELIVERY_LINEAGE_INVALID/, 'a delivery invoice that names another order');
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${P1}', '   ');`), /delivery_external_billings_reason_chk/, 'blank reason');
   expectRefused(probe(`INSERT INTO public.delivery_external_billings (delivery_id, reason) VALUES ('${P1}', 'x');`, MASON), /permission denied/, 'admin API write');
   psql(`INSERT INTO public.delivery_external_billings (delivery_id, reason, recorded_by) VALUES ('${P1}', '[PROVER] billed elsewhere', '${MASON}');`);

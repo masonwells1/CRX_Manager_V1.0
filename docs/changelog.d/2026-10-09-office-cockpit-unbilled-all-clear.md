@@ -14,3 +14,5 @@
 - Luna MED (recording guard misses an invoice naming the delivery but no order) refuted: the
   existing invoice guard refuses such an invoice (INVOICE_DELIVERY_ORDER_REQUIRED) and one naming
   another order; the real-schema proof now asserts both.
+- CodeRabbit follow-ups: the page-wide "All clear!" banner is also suppressed when the delivery
+  scan hit its cap; the proof asserts the exact INVOICE_DELIVERY_LINEAGE_INVALID refusal.
