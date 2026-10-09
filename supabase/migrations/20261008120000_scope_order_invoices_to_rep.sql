@@ -40,6 +40,18 @@
 --      misc_charge, ORDER_INVOICE_TYPE_NOT_ALLOWED / 23514) right after its role gate, so
 --      a refused split no longer draws an invoice number (nextval in the invoice_number
 --      default is not rolled back) before the invoices CHECK refuses it.
+--   4. The split wrapper now REQUIRES its idempotency key (Codex P1 on PR #891; CRX hard
+--      rule: mutating RPCs accept AND enforce p_idempotency_key). Its first statement is
+--      the exact check create_invoice_from_order already makes first: a NULL, empty or
+--      all-whitespace key is IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order
+--      (22023), before the role gate, any lock, claim, invoice number or write. Before this,
+--      a NULL key skipped the claim (and _bind_completed_lifecycle_idempotency returns at
+--      once for NULL) and still created invoices, so a caller that lost the response could
+--      not replay safely. Every caller already sends a key (read live 2026-10-09: the one
+--      SQL caller, _complete_delivery_authorized_impl, passes
+--      COALESCE(p_idempotency_key, p_delivery_id::text) || ':autosplit' after finding the
+--      delivery by id, so never NULL or blank; the one app caller, OrderDetail.tsx, passes a
+--      useIdempotencyKey key; no edge function or cron job calls it).
 -- complete_delivery is not re-emitted: its one call into the split wrapper is inside
 -- BEGIN ... EXCEPTION WHEN OTHERS, so a refusal there flags the order for split billing and
 -- notifies admins; the delivery itself always completes. The idempotency request shapes
@@ -49,8 +61,8 @@
 -- either wrapper, so a rep completing another rep's customer's last delivery still gets a
 -- draft for that customer. This file does not by itself enforce the rule system-wide.
 --
--- idempotency-body-check: exempt - both wrappers keep their existing, unchanged idempotency:
--- create_invoice_from_order requires the key and delegates to
+-- idempotency-body-check: exempt - both wrappers require the key as their first statement
+-- and keep their existing idempotency: create_invoice_from_order delegates to
 -- _create_invoice_from_order_idem_impl_20260721 (check_idempotency before any write,
 -- save_idempotency after); create_split_invoices_from_order claims the key with
 -- _claim_bound_lifecycle_idempotency before any write and binds the result with
@@ -313,6 +325,10 @@ DECLARE
   v_order_customer_id uuid;
   v_order_salesman_id uuid;
 BEGIN
+  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'
+      USING ERRCODE = '22023';
+  END IF;
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'Not authenticated';
   END IF;
@@ -590,7 +606,7 @@ BEGIN
         AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
         AND pg_get_function_arguments(p.oid) =
           'p_order_id uuid, p_salesman_id uuid DEFAULT NULL::uuid, p_invoice_type text DEFAULT ''chemical_sale''::text, p_idempotency_key text DEFAULT NULL::text'
-        AND md5(replace(p.prosrc, chr(13), '')) = 'adf183df988ab9507f845fbccd91a8ee'
+        AND md5(replace(p.prosrc, chr(13), '')) = '0ff1b8aee5be9d885b5d4c55253b03e9'
         AND ARRAY(SELECT DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END
             FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE' ORDER BY 1)
            IS NOT DISTINCT FROM ARRAY['authenticated', 'postgres', 'service_role']::text[]
@@ -643,7 +659,13 @@ BEGIN
           > position('_claim_bound_lifecycle_idempotency' IN v_split_src) THEN
     RAISE EXCEPTION 'POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: the split wrapper must refuse a disallowed type before its idempotency claim';
   END IF;
+  -- Codex P1 on PR #891: the key is required, and checked before anything else.
+  IF position('IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order' IN v_split_src) = 0
+     OR position('IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order' IN v_split_src)
+          > position('Not authenticated' IN v_split_src) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: the split wrapper must require its idempotency key before anything else';
+  END IF;
 
-  RAISE NOTICE 'POSTFLIGHT_OK: order invoices are scoped to the calling rep (customer + salesman); split invoices refuse non-order types before any number is drawn';
+  RAISE NOTICE 'POSTFLIGHT_OK: order invoices are scoped to the calling rep (customer + salesman); split invoices require a key and refuse non-order types before any number is drawn';
 END
 $postflight$;

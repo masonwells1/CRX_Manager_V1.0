@@ -8,7 +8,9 @@
 --
 -- FAIL-FIRST CONTRACT: against the pre-fix wrappers a sales rep's create_invoice_from_order on
 -- another rep's customer SUCCEEDS and this chain raises its step-1 SMOKE_FAIL. Against the fix,
--- steps 1-7 (with 5a, 5b and 6b) refuse with NO invoice number drawn and nothing left behind; steps 8-9 (the rep's
+-- steps 1-7 (with 5a, 5b and 6b) refuse with NO invoice number drawn and nothing left behind;
+-- step 7b refuses a split with a NULL, empty or all-whitespace key (IDEMPOTENCY_KEY_REQUIRED,
+-- 22023, Codex P1 on PR #891) with no number drawn; steps 8-9 (the rep's
 -- own customer, with exact replay) still work; a replay after the customer is reassigned is
 -- re-scoped by the pre-check (10); admins are unrestricted (11); and a rep completing the last
 -- delivery of another rep's allocated order still completes it, with the auto-split falling
@@ -300,6 +302,49 @@ BEGIN
        OR EXISTS (SELECT 1 FROM public.idempotency_keys WHERE idempotency_key = v_key)
        OR EXISTS (SELECT 1 FROM public.split_invoice_creation_claims WHERE order_id = v_order) THEN
       RAISE EXCEPTION 'SMOKE_FAIL: step %: a refused call left an invoice, key or creation claim behind', v_label;
+    END IF;
+  END LOOP;
+
+  -- 7b. The split key is REQUIRED (Codex P1 on PR #891): rep A's own allocated order, which
+  -- every scope and type check allows, called with a NULL, an empty and an all-whitespace key,
+  -- is IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order (22023) with no number drawn.
+  -- Against a wrapper without the check the NULL-key call skips the claim and bills the order.
+  FOR v_i IN 1..3 LOOP
+    v_key := (ARRAY[NULL, '', E'\t\n ']::text[])[v_i];
+    v_label := (ARRAY['NULL', 'empty', 'whitespace'])[v_i];
+    SELECT string_agg(sequencename || '=' || COALESCE(last_value::text, 'none'), ',' ORDER BY sequencename)
+      INTO v_seq_before
+      FROM pg_sequences
+     WHERE schemaname = 'public'
+       AND sequencename IN ('invoice_number_seq', 'cs_invoice_number_seq',
+                            'mc_invoice_number_seq', 'cm_invoice_number_seq');
+    v_err := NULL;
+    v_state := NULL;
+    BEGIN
+      PERFORM public.create_split_invoices_from_order(v_s_own, v_rep_a, 'chemical_sale', v_key);
+      RAISE EXCEPTION 'SMOKE_FAIL: step 7b: a split with a % key created invoices', v_label;
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS v_err = MESSAGE_TEXT, v_state = RETURNED_SQLSTATE;
+      IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    END;
+    SELECT string_agg(sequencename || '=' || COALESCE(last_value::text, 'none'), ',' ORDER BY sequencename)
+      INTO v_seq_after
+      FROM pg_sequences
+     WHERE schemaname = 'public'
+       AND sequencename IN ('invoice_number_seq', 'cs_invoice_number_seq',
+                            'mc_invoice_number_seq', 'cm_invoice_number_seq');
+    IF v_seq_after IS DISTINCT FROM v_seq_before THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: step 7b: a split with a % key drew an invoice number (% -> %): %',
+        v_label, v_seq_before, v_seq_after, v_err;
+    END IF;
+    IF v_err IS DISTINCT FROM 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'
+       OR v_state <> '22023' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: step 7b: wrong refusal of a split with a % key (SQLSTATE %): %',
+        v_label, v_state, v_err;
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.invoices WHERE order_id = v_s_own)
+       OR EXISTS (SELECT 1 FROM public.split_invoice_creation_claims WHERE order_id = v_s_own) THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: step 7b: a split with a % key left an invoice or creation claim behind', v_label;
     END IF;
   END LOOP;
 

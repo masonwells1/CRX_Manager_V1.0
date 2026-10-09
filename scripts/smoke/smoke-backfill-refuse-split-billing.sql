@@ -21,7 +21,7 @@
 -- says so with a SMOKE_NOTE, so a run against live before the apply is not
 -- read as a regression. Any other wrapper body gets the strict check.
 -- TEMPORARY CARVE-OUT - REMOVE AFTER THE APPLY: once 20261008120000 is applied
--- live (live split wrapper LF md5 adf183df988ab9507f845fbccd91a8ee), a follow-up
+-- live (live split wrapper LF md5 0ff1b8aee5be9d885b5d4c55253b03e9), a follow-up
 -- change must delete the pre-gate branch below (v_split_pre_gate and its
 -- SMOKE_NOTE) so only the strict check remains, and drop the matching
 -- SPLIT_PRE_GATE_NOTE checks in prove-order-invoice-rep-scope-real-schema.mjs.

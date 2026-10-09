@@ -263,14 +263,26 @@ deferred to this decision). Recommended option: keep deliveries always completin
 completing rep is not the customer's assigned rep, skip the automatic draft and flag the order for an
 admin to bill, the same fallback the allocated-order auto-split already uses.
 
-## OPEN 2026-10-09 — `create_split_invoices_from_order` does not require an idempotency key on an allocated order
+## FIXED, PENDING APPLY (in the `20261008120000` candidate, 2026-10-09; NOT applied) — `create_split_invoices_from_order` did not require an idempotency key
 
-Pre-existing (live body `20260719060256`, kept byte-identical by `20261008120000`): with a NULL
-`p_idempotency_key` the split wrapper skips the claim and still creates invoices; only the
-implementation's "active invoice already exists" guard stops a duplicate. `create_invoice_from_order`
-refuses a NULL key. The only app caller (`OrderDetail.tsx`) always sends a key, and
-`complete_delivery`'s internal call passes `key || ':autosplit'`. Fix shape: a separate migration that
-raises `IDEMPOTENCY_KEY_REQUIRED` before the claim, after checking every caller.
+Pre-existing on live (body `20260719060256`): with a NULL `p_idempotency_key` the split wrapper skips
+the claim (and `_bind_completed_lifecycle_idempotency` returns at once for NULL) and still creates
+invoices, with no receipt, so a caller that loses the response cannot replay safely; a key of only
+tabs or newlines also got past the claim helper's `btrim` check. `create_invoice_from_order` already
+refuses both. First deferred as pre-existing; fixed in the same candidate after the Codex GitHub
+reviewer raised it as a P1 on PR #891 (the candidate re-emits this wrapper, and the CRX hard rule says
+mutating RPCs must accept AND enforce the key). The wrapper's first statement is now the exact check
+`create_invoice_from_order` makes first: a NULL, empty or all-whitespace key is
+`IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order` (22023), before the role gate, any lock,
+claim, invoice number or write. Callers checked before the change (live read-only 2026-10-09): the only
+SQL caller, `_complete_delivery_authorized_impl`, passes `COALESCE(p_idempotency_key,
+p_delivery_id::text) || ':autosplit'` after finding the delivery by id, so never NULL or blank; the
+only app caller, `OrderDetail.tsx`, always sends a `useIdempotencyKey` key; no edge function or cron
+job calls it. Proof (container): the rep-scope prover reproduces the bug before (a NULL-key split
+bills with no receipt and its retry cannot return it), refuses NULL, empty and whitespace keys after
+(as a rep, an admin and a driver, and with the order row and claim lock held), chain step 7b, and
+mutation (y) shows removing the check brings the bug back. Live behaviour is unchanged until
+`20261008120000` is applied; this entry closes with that apply.
 
 ## OPEN 2026-10-08 (latent; never fired live) — invoices created through the order RPCs would be numbered `INV-` instead of `CS-` / `MC-`
 

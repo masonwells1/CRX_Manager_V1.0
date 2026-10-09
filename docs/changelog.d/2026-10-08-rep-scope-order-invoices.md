@@ -17,7 +17,7 @@ bodies (read-only md5s re-read 2026-10-09: `a1a91643…` and `398030fb…`):
 - The split wrapper gets the CRX-LIFE-001 type allow-list (`ORDER_INVOICE_TYPE_NOT_ALLOWED`) before
   its claim, so a refused `field_application` split no longer draws an invoice number.
 - No rows changed, no GRANT/REVOKE (same OIDs, owner, `search_path`, ACL; the postflight proves it).
-  New wrapper md5s: `78c3444e301aec889d39dac8dceeb11c` / `adf183df988ab9507f845fbccd91a8ee`.
+  New wrapper md5s: `78c3444e301aec889d39dac8dceeb11c` / `0ff1b8aee5be9d885b5d4c55253b03e9` (split md5 after the Codex P1 fix below; was `adf183df988ab9507f845fbccd91a8ee`).
 - `complete_delivery` is unchanged: a rep's refused auto-split falls back to `needs_split_billing` +
   admin notification and the delivery still completes.
 
@@ -121,7 +121,7 @@ test: `src/lib/orderInvoiceRepScopeMigration.test.ts`.
   post-check covers every invoice written; a zero-share owner gets no invoice, and the lineage guard
   refuses any order invoice whose customer is not the order's, so no unassigned customer can be
   billed. Mason's rule is about who is billed.
-- **Deferred:** the split wrapper not requiring an idempotency key (pre-existing; KNOWN_ISSUES), a rep
+- **Deferred:** the split wrapper not requiring an idempotency key (pre-existing; KNOWN_ISSUES; later fixed, see the Codex P1 section below), a rep
   replacing an order's named salesman with themselves (a Mason decision; KNOWN_ISSUES), the
   `CRX_REP_SCOPE_NOT_IN_TRANSACTION` transaction-id branch (not reachable: a leftover marker table makes
   the file's own `CREATE TEMP TABLE` fail first), the NULL-uid path, and a scope column changing type
@@ -154,6 +154,33 @@ test: `src/lib/orderInvoiceRepScopeMigration.test.ts`.
 - Proof: `node scripts/smoke/prove-order-invoice-rep-scope-real-schema.mjs` PASS
   (`ORDER_INVOICE_REP_SCOPE_PROOF_PASS ... mutations=a-x_detected`), `npm run
   proof:order-invoice-type-gate` PASS, plus the vitest, typecheck, lint and doc-drift checks.
+
+**Codex P1 on PR #891 (2026-10-09): the split wrapper now requires its idempotency key.** The Codex
+GitHub reviewer flagged that the re-emitted `create_split_invoices_from_order` still accepted a NULL
+or blank `p_idempotency_key`: it skipped the claim (`_bind_completed_lifecycle_idempotency` returns at
+once for NULL) and still created invoices with no receipt, so a caller that lost the response could
+not replay safely. Earlier reviewers (rls-security, compliance, Luna) raised the same item and it was
+deferred as pre-existing; it is fixed now because this migration re-emits the function and the CRX
+hard rule requires mutating RPCs to enforce the key.
+- **Callers checked first (live read-only, 2026-10-09).** Live `pg_proc` has one SQL caller,
+  `_complete_delivery_authorized_impl`, which passes `COALESCE(p_idempotency_key,
+  p_delivery_id::text) || ':autosplit'` after locating the delivery by id (never NULL or blank). The
+  one app caller, `OrderDetail.tsx` `handleCreateInvoice`, passes a `useIdempotencyKey` key. No edge
+  function or `cron.job` calls it. No real caller changes behaviour.
+- **Change.** The split wrapper's first statement is the exact check `create_invoice_from_order`
+  makes first (same condition, `22023`): `IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order`
+  for a NULL, empty or all-whitespace key, before the role gate, any lock, claim, invoice number or
+  write. The rest of the body is unchanged. The postflight now also refuses a split body whose key
+  check is missing or not first. New split wrapper md5: `0ff1b8aee5be9d885b5d4c55253b03e9` (was
+  `adf183df…`); the cifo md5 is unchanged (`78c3444e…`).
+- **Proof.** Prover BEFORE: rep A's NULL-key split of their own order bills it (one invoice, a number
+  drawn, no receipt, no claim) and the NULL-key retry cannot return it. FIX: NULL, empty and
+  whitespace keys are refused for rep A, an admin and a driver (so before the role gate), and with the
+  order row and the key's claim lock held (so before any lock or claim), with no number, receipt or
+  claim. New chain step 7b. New postflight mutant (key check moved after the scope pre-check, pin
+  matched). Mutation (y): without the check the NULL-key split bills again, the chain fails at step 7b
+  and FIX's NULL-key check fails; restored, refused first. The `KNOWN_ISSUES` entry is now FIXED,
+  PENDING APPLY.
 
 **Found on the way and recorded as open in KNOWN_ISSUES (not fixed here):** `complete_delivery`'s
 non-allocated auto-invoice is not rep-scoped; order-RPC invoices would be numbered `INV-` (latent);

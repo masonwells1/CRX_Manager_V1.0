@@ -96,6 +96,36 @@ describe('order-invoice rep scope migration (20261008120000)', () => {
       .toBeGreaterThan(at(split, '_create_split_invoices_from_order_provenance_impl_20260719('));
   });
 
+  it('requires the split key as its first statement, worded exactly like create_invoice_from_order (Codex P1 on PR #891)', () => {
+    const keyCheck = (fn: string) =>
+      `  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN\n`
+      + `    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: ${fn}'\n`
+      + `      USING ERRCODE = '22023';\n`
+      + '  END IF;\n';
+    // the cifo wrapper's live check, re-emitted unchanged, is the template
+    expect(cifo).toContain(`BEGIN\n${keyCheck('create_invoice_from_order')}`);
+    // the split wrapper's first statement after BEGIN is the same check
+    expect(split).toContain(`BEGIN\n${keyCheck('create_split_invoices_from_order')}  IF v_actor IS NULL THEN`);
+    expect(priorSplit).not.toContain('IDEMPOTENCY_KEY_REQUIRED');
+    const keyRequired = at(split, "RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'");
+    for (const later of [
+      "RAISE EXCEPTION 'Not authenticated'",
+      'public.is_admin()',
+      "RAISE EXCEPTION 'ORDER_INVOICE_TYPE_NOT_ALLOWED",
+      "RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'",
+      '_claim_bound_lifecycle_idempotency(',
+      'FOR UPDATE',
+      'INSERT INTO public.split_invoice_creation_claims',
+      '_create_split_invoices_from_order_provenance_impl_20260719(',
+    ]) {
+      expect(keyRequired, later).toBeLessThan(at(split, later));
+    }
+    // and the postflight refuses a body whose key check is missing or not first
+    const postflight = sql.slice(at(sql, 'DO $postflight$'), at(sql, '$postflight$;'));
+    expect(postflight).toContain("position('IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order' IN v_split_src) = 0");
+    expect(postflight).toContain("> position('Not authenticated' IN v_split_src)");
+  });
+
   it('keeps the split idempotency contract and request shape byte-identical', () => {
     const contract = "v_contract CONSTANT text := 'create_split_invoices_from_order_v1';";
     expect(priorSplit).toContain(contract);

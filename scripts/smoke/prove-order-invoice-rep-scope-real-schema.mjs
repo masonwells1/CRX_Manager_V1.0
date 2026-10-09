@@ -16,33 +16,38 @@
  *   1. BEFORE (the bug): a rep invoices another rep's customer; a rep names
  *      another rep as salesman and that rep can then read the invoice; a rep
  *      splits another rep's allocated order; an admin field_application split
- *      is refused but draws an invoice number; the new chain fails at step 1
- *      and the updated split chain fails on the burned number;
+ *      is refused but draws an invoice number; a split with a NULL key bills
+ *      with no idempotency receipt, so its retry cannot return it (Codex P1 on
+ *      PR #891); the new chain fails at step 1 and the updated split chain fails
+ *      on the burned number;
  *   2. AUTOCOMMIT: run statement by statement the file stops at its preflight;
  *      PREFLIGHT: a drifted split wrapper in the same transaction blocks it, and
  *      so does a drift of every other pin group (delegates, role helper,
  *      complete_delivery, the wrapper ACLs and attributes, the scope columns,
- *      PR #889 missing from the ledger); POSTFLIGHT: a wrong body pin or a
- *      late split type gate makes the postflight roll the apply back;
+ *      PR #889 missing from the ledger); POSTFLIGHT: a wrong body pin, a late
+ *      split type gate or a late split key check makes the postflight roll the
+ *      apply back;
  *   3. APPLY: POSTFLIGHT_OK, the new md5s, OIDs, ACLs and delegates;
  *   4. FIX: every refusal of chain steps 1-7 as `authenticated`, with no
  *      invoice number drawn; the same refusals again while a second session
  *      holds the order row lock and the key's idempotency advisory lock, which
  *      proves they come before the claim and the lock (a refused call's own
  *      writes roll back with its subtransaction, so row counts alone cannot);
- *      the allowed cases (incl. misc_charge splits and an admin split replay);
- *      anon denied;
+ *      a split with a NULL, empty or all-whitespace key refused first
+ *      (IDEMPOTENCY_KEY_REQUIRED, 22023) for a rep, an admin and a driver, and
+ *      with the locks held; the allowed cases (incl. misc_charge splits and an
+ *      admin split replay); anon denied;
  *   5. DELIVERIES: complete_delivery by an admin, a rep (own / other rep's /
  *      mixed-owner order), the assigned driver and on a non-allocated order,
  *      plus the exact auto-split call repeated directly to show WHY it fell back;
  *   6. CHAINS: the registered chains around these RPCs;
  *   7. RE-APPLY: refused on its own pins, nothing changed;
- *   8. MUTATIONS (a)-(x): each removed or moved layer or pre-check leg makes its
+ *   8. MUTATIONS (a)-(y): each removed or moved layer or pre-check leg makes its
  *      check fail for the stated reason, including four real two-session
  *      interleavings that show what the post-checks (customer and salesman legs)
  *      catch, a replay whose salesman changed, the split salesman fallback (w) and
- *      a split replay after the customer was reassigned (x); each restored body
- *      re-passes.
+ *      a split replay after the customer was reassigned (x) and the split's
+ *      required-key check (y); each restored body re-passes.
  * Two registered chains (financial-scope, split jsonb) fail on main before
  * reaching any changed RPC: they assert nothing about this change, and are only
  * checked to fail identically before and after.
@@ -140,7 +145,7 @@ const PR889_HEAD = '6f05ddbe37f807b1c763d470b1651809dacfc0ff';
 const PR889_SCHEMA = ['20261007150000_record_deliveries_billed_outside_crx', '20261007150050_lock_soft_deleted_orders'];
 const PR889_DATA = ['20261007150100_mark_spring_2026_deliveries_billed_in_chem_man', '20261007150200_release_reservations_of_deleted_spring_orders'];
 const NEW_CIFO_MD5 = '78c3444e301aec889d39dac8dceeb11c';
-const NEW_SPLIT_MD5 = 'adf183df988ab9507f845fbccd91a8ee';
+const NEW_SPLIT_MD5 = '0ff1b8aee5be9d885b5d4c55253b03e9';
 // The image's auth.uid() reads only request.jwt.claim.sub. Live's (md5 below, read
 // 2026-10-08) falls back to request.jwt.claims ->> 'sub', which the registered chains
 // rely on; install live's exact body so they resolve the caller the way production does.
@@ -363,12 +368,18 @@ function probeAs(uid, sql, role = 'authenticated') {
   const lines = r.stdout.trim().split(/\r?\n/).filter(Boolean);
   return { ok: r.status === 0, lines, last: lines.at(-1) ?? '', error: r.stderr.trim() };
 }
+/** A key as a SQL literal: NULL::text for null, else an E'' string (so tabs and newlines survive). */
+function sqlKey(key) {
+  if (key === null) return 'NULL::text';
+  const escaped = key.replaceAll('\\', '\\\\').replaceAll("'", "\\'").replaceAll('\t', '\\t').replaceAll('\n', '\\n');
+  return `E'${escaped}'`;
+}
 function call(kind, order, salesman, type, key) {
   const s = salesman ? `'${salesman}'::uuid` : 'NULL::uuid';
   const t = type === null ? 'NULL::text' : `'${type}'`;
   return kind === 'cifo'
-    ? `public.create_invoice_from_order('${order}'::uuid, ${s}, ${t}, '${key}')`
-    : `public.create_split_invoices_from_order('${order}'::uuid, ${s}, ${t}, '${key}')`;
+    ? `public.create_invoice_from_order('${order}'::uuid, ${s}, ${t}, ${sqlKey(key)})`
+    : `public.create_split_invoices_from_order('${order}'::uuid, ${s}, ${t}, ${sqlKey(key)})`;
 }
 /**
  * One call as `uid`, its outcome caught in the same transaction (RESULT|ok or
@@ -388,7 +399,7 @@ END
 $attempt$;
 RESET ROLE;
 SELECT 'ROWS|' || (SELECT count(*) FROM public.invoices WHERE order_id = '${order}')
-  || '|' || (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = '${key}')
+  || '|' || (SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = ${sqlKey(key)})
   || '|' || (SELECT count(*) FROM public.split_invoice_creation_claims WHERE order_id = '${order}')
   || '|' || COALESCE((SELECT string_agg(customer_id::text || ':' || COALESCE(salesman_id::text, 'none') || ':' || created_by::text, ',' ORDER BY customer_id)
                         FROM public.invoices WHERE order_id = '${order}'), '');`);
@@ -463,6 +474,42 @@ SELECT 'FIRST|' || :'first';`);
   const first = /^FIRST\|(.+)$/.exec(r.last)?.[1];
   assert.ok(first, `the split reassignment replay probe's first call returned no invoices: ${r.last}`);
   return { first, result };
+}
+
+/**
+ * The Codex P1 on PR #891, as a caller who loses the response: `uid` splits `order` with a NULL
+ * key (NULL salesman, chemical_sale), then "retries" the same NULL-key call, in one rolled-back
+ * transaction. Reports the first call's outcome (ok|<ids> or <sqlstate>|<message>), the retry's,
+ * and - after the first call, as the owner - the order's invoices, every split idempotency
+ * receipt and the creation claims, plus whether an invoice number was drawn. A wrapper that
+ * accepts a NULL key bills with no receipt, so the retry cannot return the first call's ids.
+ */
+function nullKeySplit(uid, order) {
+  const receiptsBefore = scalar("SELECT count(*) FROM public.idempotency_keys WHERE operation = 'create_split_invoices_from_order';");
+  const before = sequences();
+  const once = (tag) => `DO $${tag}$
+DECLARE v_ids uuid[];
+BEGIN
+  v_ids := ${call('split', order, null, 'chemical_sale', null)};
+  RAISE NOTICE '${tag.toUpperCase()}|ok|%', array_to_string(v_ids, ',');
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE '${tag.toUpperCase()}|%|%', SQLSTATE, SQLERRM;
+END
+$${tag}$;`;
+  const r = probeAs(uid, `${once('first')}
+RESET ROLE;
+SELECT 'AFTER_FIRST|' || (SELECT count(*) FROM public.invoices WHERE order_id = '${order}')
+  || '|' || (SELECT count(*) FROM public.idempotency_keys WHERE operation = 'create_split_invoices_from_order')
+  || '|' || (SELECT count(*) FROM public.split_invoice_creation_claims WHERE order_id = '${order}');
+${asUser(uid)}
+${once('retry')}`);
+  assert.ok(r.ok, `the NULL-key split probe failed to run:\n${r.error}`);
+  const first = /FIRST\|([^\n]*)/.exec(r.error)?.[1];
+  const retry = /RETRY\|([^\n]*)/.exec(r.error)?.[1];
+  const facts = r.lines.find((line) => line.startsWith('AFTER_FIRST|'));
+  assert.ok(first && retry && facts, `the NULL-key split probe printed no result:\n${r.error}\n${r.lines.join('\n')}`);
+  const [, invoices, receipts, claims] = facts.split('|');
+  return { first, retry, invoices: Number(invoices), receipts: Number(receipts) - Number(receiptsBefore), claims: Number(claims), drew: sequences() !== before };
 }
 
 function runChain(file, name, source = lf(file)) {
@@ -738,7 +785,8 @@ ROLLBACK;
  * its own error; one placed after either of them waits and ends in 55P03 (lock timeout).
  * `hold` = 'claim' or 'order' holds only that one lock, so an ordering mutation can be shown to
  * be caught by the order lock on its own (the claim comes first, so holding both would always
- * stop a late check at the claim).
+ * stop a late check at the claim). A NULL key has no claim lock to hold (a wrapper without the
+ * key check skips the claim for it), so for a NULL key only the order row is held.
  */
 async function heldAttempt(uid, kind, order, salesman, type, key, label, { hold = 'both' } = {}) {
   assert.ok(['both', 'claim', 'order'].includes(hold), `heldAttempt: unknown hold ${hold}`);
@@ -746,7 +794,7 @@ async function heldAttempt(uid, kind, order, salesman, type, key, label, { hold 
   const holder = session(`crx_scope_hold_${tag}`);
   holder.child.stdin.write(`BEGIN;
 ${hold !== 'claim' ? `SELECT 1 FROM public.orders WHERE id = '${order}' FOR UPDATE;` : ''}
-${hold !== 'order' ? `SELECT pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || '${key}', 0));` : ''}
+${hold !== 'order' && key !== null ? `SELECT pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || ${sqlKey(key)}, 0));` : ''}
 \\echo HOLDING
 `);
   try {
@@ -759,6 +807,11 @@ ${hold !== 'order' ? `SELECT pg_advisory_xact_lock(hashtextextended('crx:idempot
   }
 }
 const LOCK_TIMEOUT = /^55P03\|/;
+// The split wrapper's required-key check (Codex P1 on PR #891): its exact span, and its refusal.
+const SPLIT_KEY_CHECK = ["  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN\n    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order'", "      USING ERRCODE = '22023';\n  END IF;\n"];
+const SPLIT_KEY_REQUIRED = /^22023\|IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order$/;
+// NULL, empty and all-whitespace (tab, newline, space) keys.
+const MISSING_KEYS = [['NULL', null], ['empty', ''], ['whitespace', '\t\n ']];
 
 async function main() {
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
@@ -827,6 +880,13 @@ SELECT 'VISIBLE_TO_B|' || (SELECT count(*) FROM public.invoices WHERE id = :'inv
   const fallbackSplit = attempt(REP_A, 'split', O.S_SALES_B, null, 'chemical_sale', 'prover-before-split-fallback');
   assert.equal(fallbackSplit.result, 'ok', `before: rep A's split of their order recorded under rep B was refused: ${fallbackSplit.result}`);
   assert.equal(fallbackSplit.detail, `${C_A}:${REP_B}:${REP_A}`, `before: the split did not record the order's salesman (rep B) through the fallback: ${fallbackSplit.detail}`);
+  // The Codex P1 on PR #891: the live split wrapper accepts a NULL key, skips the claim and still
+  // bills - with no receipt, so a retry after a lost response cannot return the first call's ids.
+  const nullKeyBefore = nullKeySplit(REP_A, O.S_OWN);
+  assert.match(nullKeyBefore.first, /^ok\|[0-9a-f-]{36}$/, `before: the NULL-key split did not bill, so the P1 did not reproduce: ${nullKeyBefore.first}`);
+  assert.deepEqual([nullKeyBefore.invoices, nullKeyBefore.receipts, nullKeyBefore.claims, nullKeyBefore.drew], [1, 0, 0, true],
+    `before: expected the NULL-key split to write one invoice and draw a number with no receipt and no claim left: ${JSON.stringify(nullKeyBefore)}`);
+  assert.notEqual(nullKeyBefore.retry, nullKeyBefore.first, 'before: the NULL-key retry returned the first call\'s invoices');
   const mixedAdmin = attempt(ADMIN, 'split', O.S_MIXED, ADMIN, 'chemical_sale', 'prover-before-mixed');
   assert.match(mixedAdmin.result, /^P0001\|INVOICE_ORDER_CUSTOMER_LINEAGE_INVALID/, `before: the mixed-owner split's pre-existing lineage refusal changed: ${mixedAdmin.result}`);
   deliveries('before');
@@ -849,6 +909,7 @@ SELECT 'VISIBLE_TO_B|' || (SELECT count(*) FROM public.invoices WHERE id = :'inv
   const maskSuffix = (error) => error.replace(/E2E-LIFE-DELETED-[0-9a-f]+/g, 'E2E-LIFE-DELETED-<suffix>');
   const lifecycleBefore = maskSuffix(firstError(lifecycleBeforeOutput));
   expectChainPass(CHAINS.lifecycle, 'lifecycle-before-unlocked.sql', withoutPr889Locks(lf(CHAINS.lifecycle)));
+  console.log(`[prover] BEFORE (Codex P1 on PR #891): rep A's split of their own order with a NULL key billed it (1 invoice, a number drawn, no receipt, no claim) and the NULL-key retry did not return it: ${nullKeyBefore.retry}`);
   console.log('[prover] BEFORE: rep A invoiced rep B\'s customer, recorded rep B as salesman (rep B can then read it), split rep B\'s allocated order, split their own order under rep B through the orders.salesman_id fallback, and auto-billed rep B\'s customer by completing a delivery; an admin field_application split was refused but drew a number; the new chain fails at step 1; the split chain passes on its pre-candidate branch (SMOKE_NOTE) so it stays runnable against live before the apply');
 
   // 2a. AUTOCOMMIT.
@@ -924,11 +985,14 @@ $drift$;`;
   assert.equal(statementBodyMd5(reviewedCifoStatement), NEW_CIFO_MD5, 'NEW_CIFO_MD5 is not the md5 of the candidate cifo body');
   assert.equal(statementBodyMd5(reviewedSplitStatement), NEW_SPLIT_MD5, 'NEW_SPLIT_MD5 is not the md5 of the candidate split body');
   const lateGateSplit = move(reviewedSplitStatement, '  -- CRX-LIFE-001 type allow-list, before any claim, lock or insert', '      USING ERRCODE = \'check_violation\';\n  END IF;\n\n', '  PERFORM 1\n    FROM public.orders o\n   WHERE o.id = p_order_id\n   FOR UPDATE;', 'postflight late gate');
+  const lateKeySplit = move(reviewedSplitStatement, ...SPLIT_KEY_CHECK, '  v_request := jsonb_build_object(', 'postflight late key check');
   const postflightMutants = [
     ['cifo pin', candidateText.replace(`= '${NEW_CIFO_MD5}'`, `= '${'0'.repeat(32)}'`), /POSTFLIGHT_ORDER_INVOICE_WRAPPER_CONTRACT: public create_invoice_from_order body/],
     ['split pin', candidateText.replace(`= '${NEW_SPLIT_MD5}'`, `= '${'0'.repeat(32)}'`), /POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: public create_split_invoices_from_order body/],
     ['split type gate after the claim', candidateText.replace(reviewedSplitStatement.trimEnd(), lateGateSplit.trimEnd()).replace(`= '${NEW_SPLIT_MD5}'`, `= '${statementBodyMd5(lateGateSplit)}'`),
       /POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: the split wrapper must refuse a disallowed type before its idempotency claim/],
+    ['split key check after the scope pre-check', candidateText.replace(reviewedSplitStatement.trimEnd(), lateKeySplit.trimEnd()).replace(`= '${NEW_SPLIT_MD5}'`, `= '${statementBodyMd5(lateKeySplit)}'`),
+      /POSTFLIGHT_SPLIT_INVOICE_WRAPPER_CONTRACT: the split wrapper must require its idempotency key before anything else/],
   ];
   for (const [label, text, code] of postflightMutants) {
     assert.notEqual(text, candidateText, `POSTFLIGHT (${label}): the mutant is the candidate`);
@@ -939,7 +1003,7 @@ $drift$;`;
     assert.doesNotMatch(r.output, /POSTFLIGHT_OK/, `POSTFLIGHT (${label}): printed POSTFLIGHT_OK`);
     wrappersUnchanged(LIVE_BODY_MD5[CIFO], LIVE_BODY_MD5[SPLIT], `POSTFLIGHT (${label})`);
   }
-  console.log('[prover] POSTFLIGHT: a wrong cifo or split body pin, and a split type gate moved after the claim (with its md5 pin matched), each make the postflight refuse and roll the whole apply back');
+  console.log('[prover] POSTFLIGHT: a wrong cifo or split body pin, a split type gate moved after the claim, and a split key check moved after the scope pre-check (each with its md5 pin matched), each make the postflight refuse and roll the whole apply back');
 
   // 3. APPLY.
   const applied = apply('candidate.sql', true);
@@ -974,6 +1038,20 @@ $drift$;`;
     // Ordering: the same refusal while the order row and the key's claim lock are held.
     expectRefused(await heldAttempt(REP_A, kind, order, salesman, type, `prover-held-${label.split(' ')[0]}`, `held ${label}`), expected, `FIX step ${label} (order and claim locks held)`);
   }
+  // The split key is required (Codex P1 on PR #891), checked first exactly as
+  // create_invoice_from_order checks it: rep A's own allocated order passes every other check,
+  // so only the key check can refuse it; the driver shows it comes before the role gate; and the
+  // held attempt (order row held, plus the key's claim lock for a non-NULL key) shows it comes
+  // before any lock or claim. No number drawn, no receipt, no claim row.
+  for (const [label, key] of MISSING_KEYS) {
+    for (const [who, uid] of [['rep A', REP_A], ['admin', ADMIN], ['driver', DRIVER]]) {
+      expectRefused(attempt(uid, 'split', O.S_OWN, null, 'chemical_sale', key), SPLIT_KEY_REQUIRED, `FIX split with a ${label} key as ${who}`);
+    }
+    expectRefused(await heldAttempt(REP_A, 'split', O.S_OWN, null, 'chemical_sale', key, `held key ${label}`), SPLIT_KEY_REQUIRED, `FIX split with a ${label} key (order and claim locks held)`);
+  }
+  const nullKeyAfter = nullKeySplit(REP_A, O.S_OWN);
+  assert.equal(nullKeyAfter.first, '22023|IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order', `FIX: the NULL-key split was not refused: ${nullKeyAfter.first}`);
+  assert.deepEqual([nullKeyAfter.invoices, nullKeyAfter.receipts, nullKeyAfter.claims, nullKeyAfter.drew], [0, 0, 0, false], `FIX: the refused NULL-key split left something behind: ${JSON.stringify(nullKeyAfter)}`);
   expectRefused(attempt(ADMIN, 'split', O.S_OWN, ADMIN, 'field_application', 'prover-fix-admin-field'), /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED:/, 'FIX admin field_application split');
   expectRefused(attempt(REP_A, 'split', O.S_OWN, REP_A, 'credit_memo', 'prover-fix-credit'), /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED:/, 'FIX split credit_memo');
   expectRefused(attempt(REP_A, 'split', O.S_OWN, REP_A, null, 'prover-fix-null'), /^23514\|ORDER_INVOICE_TYPE_NOT_ALLOWED:/, 'FIX split NULL type');
@@ -1028,6 +1106,7 @@ SELECT (:'first' = :'second') || '|' || string_agg(customer_id || ':' || COALESC
   }
   console.log('[prover] FIX: steps 1-7 (and 5a-5e: rep B\'s order on rep A\'s field, a missing order for both wrappers; 6b: a split naming no salesman on rep A\'s order recorded under rep B) refused as authenticated with no number drawn, and refused the same way while a second session held the order row and the key\'s claim lock (so before the claim and the lock); admin/credit_memo/NULL split types refused with no number; rep A\'s own invoice and split replay exactly; a field billed to rep A\'s customer through field_billing_defaults is rep A\'s to split; a replay of an invoice whose salesman became rep B is SALESMAN_SCOPE_DENIED; a split replay after the customer was reassigned to rep B is CUSTOMER_SCOPE_DENIED; an admin\'s split replays exactly; misc_charge splits unchanged; admins unrestricted; anon denied');
   console.log(`[prover] FIX: misc_charge split outcome (admin before = admin after = rep A after): ${miscBefore.result}`);
+  console.log('[prover] FIX (Codex P1 on PR #891): a split with a NULL, empty or all-whitespace key is IDEMPOTENCY_KEY_REQUIRED: create_split_invoices_from_order (22023) for rep A on their own order, an admin and a driver (so before the role gate), and the same while the order row and the key\'s claim lock are held (so before any lock or claim); no number drawn, no receipt, no claim');
 
   // 5. DELIVERIES.
   deliveries('after');
@@ -1271,10 +1350,24 @@ INSERT INTO public.field_billing_defaults (field_id, customer_id, split_pct, is_
   assert.equal(x2.result, `ok|${x2.first}`, `MUTATION (x2): without the owner pre-check and the post-check the replay should return the reassigned customer's invoices: ${x2.result}`);
   restore('x');
   assert.equal(splitReplayAfterReassign('prover-restored-x').result, 'P0001|CUSTOMER_SCOPE_DENIED', 'RESTORED (x): the reassigned split replay was not refused');
+
+  // (y) Codex P1 on PR #891: without the required-key check, rep A's NULL-key split of their own
+  // order skips the claim and bills it (a number drawn, no receipt), the retry cannot return it,
+  // the chain fails at step 7b, and FIX's NULL-key assertion would fail; restored, refused first.
+  applyText('mutant-y.sql', cut(reviewedSplit, ...SPLIT_KEY_CHECK, 'mutant y'));
+  expectChainFail(CHAINS.repScope, 'mutant-y.sql', /SMOKE_FAIL: step 7b: a split with a NULL key created invoices/, 'MUTATION (y)');
+  const y = nullKeySplit(REP_A, O.S_OWN);
+  assert.match(y.first, /^ok\|[0-9a-f-]{36}$/, `MUTATION (y): without the key check the NULL-key split should have billed: ${y.first}`);
+  assert.deepEqual([y.invoices, y.receipts, y.claims, y.drew], [1, 0, 0, true], `MUTATION (y): expected one invoice, a number drawn, no receipt and no claim: ${JSON.stringify(y)}`);
+  assert.notEqual(y.retry, y.first, 'MUTATION (y): the NULL-key retry returned the first call\'s invoices');
+  assert.throws(() => expectRefused(attempt(REP_A, 'split', O.S_OWN, null, 'chemical_sale', null), SPLIT_KEY_REQUIRED, 'mutant y'), 'MUTATION (y): FIX\'s NULL-key assertion would still pass');
+  restore('y');
+  expectRefused(await heldAttempt(REP_A, 'split', O.S_OWN, null, 'chemical_sale', null, 'restored y'), SPLIT_KEY_REQUIRED, 'RESTORED (y) NULL key with the order row held');
+  console.log(`[prover] MUTATION (y): without the required-key check rep A's NULL-key split of their own order bills it (1 invoice, a number drawn, no receipt, no claim), the retry cannot return it (${y.retry}), the chain fails at step 7b and FIX's NULL-key check fails; restored, refused first with no number`);
   wrappersUnchanged(NEW_CIFO_MD5, NEW_SPLIT_MD5, 'final');
   console.log('[prover] MUTATION (x): a split replay after the order\'s customer was reassigned to rep B is refused by the post-check alone when the owner pre-check is removed, and returns that customer\'s invoices when the post-check is removed as well (with only the post-check removed the pre-check still refuses it)');
 
-  console.log('ORDER_INVOICE_REP_SCOPE_PROOF_PASS pr889=replayed_and_required before=bug_reproduced autocommit=refused preflight=blocks_every_pin_group postflight=refuses_wrong_body fix=refused_no_number,before_claim_and_lock,split_salesman_fallback,replay_salesman_rescoped,split_replay_customer_rescoped allowed=own_customer,billing_default_override,admin,misc_charge deliveries=complete(mono_auto_invoice_gap_open) chains=5_pass,lifecycle_pass_with_pr889_locks_off,financialScope+splitJsonb_stale_assert_nothing reapply=refused mutations=a-x_detected split_chain_pre_apply_carve_out=temporary_remove_after_apply');
+  console.log('ORDER_INVOICE_REP_SCOPE_PROOF_PASS pr889=replayed_and_required before=bug_reproduced autocommit=refused preflight=blocks_every_pin_group postflight=refuses_wrong_body fix=refused_no_number,before_claim_and_lock,split_salesman_fallback,replay_salesman_rescoped,split_replay_customer_rescoped,split_key_required_first allowed=own_customer,billing_default_override,admin,misc_charge deliveries=complete(mono_auto_invoice_gap_open) chains=5_pass,lifecycle_pass_with_pr889_locks_off,financialScope+splitJsonb_stale_assert_nothing reapply=refused mutations=a-y_detected split_chain_pre_apply_carve_out=temporary_remove_after_apply');
 }
 
 try { await main(); }
