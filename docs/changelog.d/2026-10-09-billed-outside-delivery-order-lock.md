@@ -11,3 +11,9 @@
 - `npm run proof:billed-outside-crx` proves the move is refused (as an admin and as postgres), an
   update that keeps the order still works, and, with the lock dropped, the moved delivery lets the
   original order be billed whole again.
+- Review follow-ups: the postflight also pins the lock's trigger type (BEFORE UPDATE, per row) and
+  its function's volatility (VOLATILE, so its check sees a recording committed while it waited);
+  the proof shows an assigned driver, who cannot read the records, is refused too, and that the
+  lock would let the driver through if it ran with the driver's rights instead of its owner's.
+- Checked on live, read-only: order lines cannot be re-pointed by the app (no UPDATE grant on
+  order_items.order_id), and delivery lines on a completed delivery are already locked.

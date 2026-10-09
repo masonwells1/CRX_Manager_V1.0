@@ -556,6 +556,8 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'refuse_billed_outside_delivery_reparent'
          AND p.prosecdef AND p.proowner = 'postgres'::regrole
+         -- VOLATILE: its EXISTS must take a fresh snapshot after waiting on the row lock.
+         AND p.provolatile = 'v'
          AND p.proconfig = ARRAY['search_path=public, pg_temp']) <> 1
      OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public' AND p.proname = 'refuse_billed_outside_delivery_reparent') <> 1
@@ -566,6 +568,7 @@ BEGIN
         WHERE t.tgrelid = 'public.deliveries'::regclass
           AND t.tgname = 'guard_billed_outside_delivery_order_locked'
           AND t.tgenabled = 'O' AND NOT t.tgisinternal
+          AND t.tgtype = 19  -- ROW | BEFORE | UPDATE
           AND t.tgfoid = 'public.refuse_billed_outside_delivery_reparent()'::regprocedure
           AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
                  FROM pg_attribute a
