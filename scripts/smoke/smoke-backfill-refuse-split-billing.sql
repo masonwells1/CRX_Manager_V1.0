@@ -14,7 +14,12 @@
 -- matching forged field-acre audit row: the old guard trusts it and posts,
 -- while the fixed guard trusts only the private canonical-RPC claim.
 -- A field_application split is refused by the split wrapper's type allow-list
--- (20261008120000) before it draws an invoice number.
+-- (20261008120000) before it draws an invoice number. Against the exact split
+-- wrapper live runs until that migration is applied (LF body md5 398030fb...),
+-- the chain instead accepts that wrapper's known refusal (the
+-- invoices_field_application_has_no_order CHECK, after a number is drawn) and
+-- says so with a SMOKE_NOTE, so a run against live before the apply is not
+-- read as a regression. Any other wrapper body gets the strict check.
 --
 -- One DO block, terminal exception -> nothing commits.
 CREATE OR REPLACE FUNCTION pg_temp.convert_quote_to_order_smoke(
@@ -91,6 +96,7 @@ DECLARE
   v_constraint text;
   v_invoice_count integer;
   v_seq_before text;
+  v_split_pre_gate boolean;
   v_pricing  jsonb;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
@@ -419,10 +425,17 @@ BEGIN
   -- (nextval in the invoice_number default is not rolled back). 20261008120000 puts
   -- the same ORDER_INVOICE_TYPE_NOT_ALLOWED allow-list in the split wrapper itself,
   -- before any claim, lock or insert. FAIL-FIRST: before 20261006200000 this call
-  -- creates order-backed field invoices; between the two migrations it is refused by
-  -- the CHECK but draws a number. The number check runs before the error-text check,
-  -- so a wrapper without the gate fails on the burned number. Nothing the refused call
+  -- creates order-backed field invoices. The exact pre-20261008120000 wrapper (the
+  -- one live runs until that apply, LF md5 398030fbb64006b4750e7e89a61b6cb9) is
+  -- refused by the CHECK after drawing a number, which this chain accepts for that
+  -- one body only, with a SMOKE_NOTE. Every other wrapper body must refuse before
+  -- drawing a number: the number check runs before the error-text check, so a
+  -- wrapper without the gate fails on the burned number. Nothing the refused call
   -- wrote (invoices, claim, provenance) survives.
+  SELECT md5(replace(p.prosrc, chr(13), '')) = '398030fbb64006b4750e7e89a61b6cb9'
+    INTO v_split_pre_gate
+    FROM pg_proc p
+   WHERE p.oid = to_regprocedure('public.create_split_invoices_from_order(uuid,uuid,text,text)');
   SELECT count(*) INTO v_invoice_count FROM public.invoices WHERE order_id = v_order;
   SELECT last_value::text || '/' || is_called::text INTO v_seq_before FROM public.invoice_number_seq;
   v_err := NULL;
@@ -438,15 +451,23 @@ BEGIN
                             v_constraint = CONSTRAINT_NAME;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
   END;
-  IF (SELECT last_value::text || '/' || is_called::text FROM public.invoice_number_seq)
-       IS DISTINCT FROM v_seq_before THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: a refused field_application split drew an invoice number (SQLSTATE %, constraint %): %',
-      v_state, v_constraint, v_err;
-  END IF;
-  IF v_err NOT LIKE 'ORDER_INVOICE_TYPE_NOT_ALLOWED:%' OR v_state <> '23514'
-     OR NULLIF(v_constraint, '') IS NOT NULL THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
-      v_state, v_constraint, v_err;
+  IF v_split_pre_gate IS TRUE THEN
+    IF v_state <> '23514' OR v_constraint IS DISTINCT FROM 'invoices_field_application_has_no_order' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
+        v_state, v_constraint, v_err;
+    END IF;
+    RAISE NOTICE 'SMOKE_NOTE: the split wrapper predates 20261008120000; its field_application refusal came from the invoices CHECK after an invoice number was drawn';
+  ELSE
+    IF (SELECT last_value::text || '/' || is_called::text FROM public.invoice_number_seq)
+         IS DISTINCT FROM v_seq_before THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: a refused field_application split drew an invoice number (SQLSTATE %, constraint %): %',
+        v_state, v_constraint, v_err;
+    END IF;
+    IF v_err NOT LIKE 'ORDER_INVOICE_TYPE_NOT_ALLOWED:%' OR v_state <> '23514'
+       OR NULLIF(v_constraint, '') IS NOT NULL THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong field_application split refusal (SQLSTATE %, constraint %): %',
+        v_state, v_constraint, v_err;
+    END IF;
   END IF;
   IF (SELECT count(*) FROM public.invoices WHERE order_id = v_order) <> v_invoice_count
      OR EXISTS (SELECT 1 FROM public.split_invoice_creation_claims WHERE order_id = v_order) THEN

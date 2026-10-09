@@ -49,6 +49,8 @@ supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
 supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql text eol=lf
 # Its postflight pins the LF md5 of the create_invoice_from_order body it installs.
 supabase/migrations/20261006200000_refuse_field_invoice_through_order_rpcs.sql text eol=lf
+# Its postflight pins the LF md5s of the two order-invoice wrapper bodies it installs.
+supabase/migrations/20261008120000_scope_order_invoices_to_rep.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
 # next_invoice_number year -> Chicago (2026-09-05). PARKED, not yet applied, but

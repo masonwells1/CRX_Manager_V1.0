@@ -30,14 +30,45 @@ passes (`ORDER_INVOICE_REP_SCOPE_PROOF_PASS`): baseline + 103 replayed migration
 fidelity; the bug reproduced before (a rep invoices another rep's customer, names another rep who can
 then read the invoice, splits another rep's allocated order, auto-bills another rep's customer by
 completing a delivery; an admin `field_application` split burns a number); autocommit and drifted-
-preflight refusals; every refusal with no number drawn and nothing written; own-customer and admin
-cases still work with exact replay; deliveries by admin, rep, driver; the related chains; re-apply
-refused; seven mutations, including two real two-session races that show what the post-checks catch.
+preflight refusals; every refusal with no number drawn, and (held-lock check) before the
+idempotency claim and the order lock; own-customer and admin cases still work with exact replay;
+deliveries by admin, rep, driver; the related chains; re-apply refused; sixteen mutations (a)-(p),
+including four real two-session races that show what the post-checks' customer and salesman legs
+catch.
 New container-only chain `scripts/smoke/smoke-order-invoice-rep-scope.sql` (spec
 `order_invoice_rep_scope`); `smoke-backfill-refuse-split-billing.sql` now also fails if a refused
-`field_application` split draws an invoice number. The CRX-LIFE-001 prover
-(`npm run proof:order-invoice-type-gate`) reads that chain as it stood at `342135561`, so it still
-passes. Static test: `src/lib/orderInvoiceRepScopeMigration.test.ts`.
+`field_application` split draws an invoice number, except against the exact pre-candidate split
+wrapper (LF md5 `398030fb…`, what live runs until the apply), where it accepts the old CHECK refusal
+and prints a `SMOKE_NOTE` - so the registered chain stays runnable against live before the apply, and
+the CRX-LIFE-001 prover (`npm run proof:order-invoice-type-gate`) runs it from disk unchanged. Static
+test: `src/lib/orderInvoiceRepScopeMigration.test.ts`.
+
+**Review round 1 (2026-10-09) fixes.**
+- **Apply order is a hard manual gate (HIGH).** PR #889's `20261007150000`..`20261007150200` must be
+  applied live BEFORE this file; applying this one first raises the high-water above them and strands
+  them. The pending-set guard reads only files on `origin/main`, so it cannot enforce this while #889
+  is unmerged. Stated in the migration's ORDERING header, migration-history row 938, KNOWN_ISSUES and
+  CURRENT_STATE. Re-read the live ledger immediately before applying.
+- **Live pins re-read** (read-only, 2026-10-09 08:29:43 UTC): all seven preflight pins, both wrapper
+  ACLs and overload counts match (recorded in row 938).
+- **Accepted residual corrected:** a post-check refusal draws an invoice number, and a sales rep (not
+  only an admin) can open that window by editing `field_billing_defaults` (live RLS allows any rep).
+  Impact: numbering gaps only. Documented in the migration header, rpc-functions and KNOWN_ISSUES.
+- Migration: status-neutral first line (apply status lives only in migration-history), a comment
+  next to each `CREATE OR REPLACE` pointing at the postflight ACL proof, and a `.gitattributes`
+  `text eol=lf` pin. Function bodies are unchanged, so both postflight md5s are unchanged.
+- Prover: a held-lock ordering check (a second session holds the order row and the key's claim
+  advisory lock; every refusal still returns its own error under a 3 s `lock_timeout`), with four
+  mutations that move the scope pre-check or the type gate after the claim or the order locks and
+  are caught as lock timeouts; a new fixture (rep A's order allocated to a field owned by rep B's
+  customer, step 5b) plus mutations removing each owner branch of the split pre-check; salesman-leg
+  races and mutations for both post-checks; a misc_charge allow check plus a narrowed-gate mutation;
+  every preflight pin group shown to refuse on its own drift; the exact auto-split call repeated
+  directly after each delivery fallback to show it was refused for the right reason; a negative
+  control for the read-leak probe; an admin split replay. Deviations recorded in the prover: the two
+  stale chains are not repaired here (the admin split replay is asserted directly instead), and
+  mutation (g) is an order-customer race, because a landlord-only race cannot create an invoice
+  under the lineage guard.
 
 **Found on the way and recorded as open in KNOWN_ISSUES (not fixed here):** `complete_delivery`'s
 non-allocated auto-invoice is not rep-scoped; order-RPC invoices would be numbered `INV-` (latent);

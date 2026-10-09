@@ -1,4 +1,4 @@
--- STATUS: NOT APPLIED. Written 2026-10-08; it waits for Mason's explicit approval to apply.
+-- Written 2026-10-08. Apply status is tracked only in docs/reference/migration-history.md (row 938).
 -- Rep scoping for order invoices (Mason 2026-10-06): a sales rep bills only customers
 -- assigned to them, and only under their own name. Admins are unrestricted.
 --
@@ -24,7 +24,12 @@
 --      text save_invoice raises.
 --   2. Each wrapper re-checks the invoices it actually returns (created or replayed): this
 --      closes the window between the unlocked pre-check read and the implementation's
---      order lock, and scopes an idempotent replay the way save_invoice does.
+--      order lock, and scopes an idempotent replay the way save_invoice does. A refusal
+--      here comes after the implementation drew its invoice number: the invoice rows roll
+--      back, the number does not. Only a change committed inside that window reaches it
+--      (an admin moving the order's customer or salesman, or anyone allowed to edit
+--      field_billing_defaults - sales reps included - re-pointing a field's billing owner),
+--      and the result is a gap in invoice numbering, never an out-of-scope invoice.
 --   3. The split wrapper also gets the CRX-LIFE-001 type allow-list (chemical_sale or
 --      misc_charge, ORDER_INVOICE_TYPE_NOT_ALLOWED / 23514) right after its role gate, so
 --      a refused split no longer draws an invoice number (nextval in the invoice_number
@@ -43,7 +48,12 @@
 --
 -- No rows are changed. No GRANT or REVOKE: CREATE OR REPLACE keeps the live OID, owner
 -- and exact ACL, and the postflight proves it.
--- ORDERING: strict. Apply after every older pending migration.
+-- ORDERING: strict. Apply after every older pending migration. In particular PR #889's
+-- 20261007150000, 20261007150050, 20261007150100 and 20261007150200 MUST be applied live
+-- first: applying this file before them raises the ledger high-water above their stamps and
+-- strands them (they would then need renumbering). The pending-set guard reads only files on
+-- origin/main, so it cannot enforce this while #889 is unmerged - re-read the live ledger
+-- immediately before applying.
 
 SET LOCAL lock_timeout = '5s';
 
@@ -161,6 +171,8 @@ BEGIN
 END
 $preflight$;
 
+-- No GRANT/REVOKE on purpose: CREATE OR REPLACE keeps this OID's owner and ACL; the postflight
+-- asserts EXECUTE is exactly {authenticated, postgres, service_role} and anon cannot execute.
 CREATE OR REPLACE FUNCTION public.create_invoice_from_order(
   p_order_id uuid,
   p_salesman_id uuid DEFAULT NULL,
@@ -237,6 +249,8 @@ BEGIN
 END;
 $function$;
 
+-- No GRANT/REVOKE on purpose: CREATE OR REPLACE keeps this OID's owner and ACL; the postflight
+-- asserts EXECUTE is exactly {authenticated, postgres, service_role} and anon cannot execute.
 CREATE OR REPLACE FUNCTION public.create_split_invoices_from_order(
   p_order_id uuid,
   p_salesman_id uuid DEFAULT NULL::uuid,

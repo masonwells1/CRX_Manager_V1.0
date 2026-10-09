@@ -203,7 +203,18 @@ lookup or claim, invoice number or write: the rep must be the assigned rep of th
 record, `COALESCE(p_salesman_id, orders.salesman_id)`, must be NULL or the rep. Refusals are bare
 `CUSTOMER_SCOPE_DENIED` / `SALESMAN_SCOPE_DENIED`; the app shows "You can only work with customers
 assigned to you" / "You can only create invoices under your own name". Each wrapper re-checks the
-invoices it actually returns (race and idempotent replay). The split wrapper gets the CRX-LIFE-001
+invoices it actually returns (race and idempotent replay). **Accepted residual (2026-10-09):** that
+re-check runs after the implementation has drawn its invoice number, so a refusal there rolls back the
+invoice but leaves a gap in invoice numbering. Only a change committed between the unlocked pre-check
+and the order lock reaches it, and a sales rep can cause one, not only an admin: live RLS lets any rep
+insert, update or delete `field_billing_defaults` rows for any field (`fbd_insert`/`fbd_update`/
+`fbd_delete` = `is_admin() OR is_sales_rep()`, read-only 2026-10-09). The impact is numbering gaps
+only, never an out-of-scope invoice. **Strict on purpose:** the split pre-check always requires the
+rep to own the order's own customer, even when every line is allocated and the split would bill only
+field owners, so a rep's delivery completion of such an order whose header customer is not theirs
+always falls back to `needs_split_billing` plus an admin notification, even if the rep owns every field
+owner. This is intended, not a bug. **Apply order:** PR #889's four migrations (`20261007150000`..
+`20261007150200`) must be applied live first, or this file strands them. The split wrapper gets the CRX-LIFE-001
 type allow-list before its claim, so a refused split draws no number. `complete_delivery` is not
 changed: its auto-split call is inside `EXCEPTION WHEN OTHERS`, so when a rep completes the last
 delivery of an allocated order that is not fully theirs the delivery still completes and the order is
@@ -265,7 +276,16 @@ asserts the same first error both times):
   governed-pricing trigger refuses (`PRODUCT_PRICING_GOVERNED_PATH_REQUIRED`).
 Both are stale fixtures/expectations, not product bugs; they need their own small repair (decide
 which refusal `save_invoice` should give a cross-actor replay, and price the product through the
-governed RPCs).
+governed RPCs). Because both stop before their `complete_delivery` and
+`create_split_invoices_from_order` steps, they currently prove nothing about those RPCs; the
+rep-scope prover covers the admin split replay path directly instead (a deviation from its design,
+recorded in the prover).
+
+**Expected pre-apply behavior, not a regression:** `scripts/smoke/smoke-backfill-refuse-split-billing.sql`
+(spec `create_invoice_for_unbilled_delivery`) accepts the old `field_application` split refusal (the
+`invoices_field_application_has_no_order` CHECK, which draws an invoice number) only for the exact
+split wrapper live runs until `20261008120000` is applied, and prints a `SMOKE_NOTE` saying so. After
+the apply it requires the new refusal with no number drawn.
 
 ## OPEN (carried over 2026-09-26) — findings whose only record was a doc removed in the docs cleanup
 
