@@ -34,7 +34,8 @@
 > `main` unless CodeRabbit's latest verdict (`gh pr view --json reviews`) is APPROVED on the exact `headRefOid`
 > (`coderabbitApprovedHead`), the NEWEST run of every reported check is green with `mergeStateStatus` CLEAN
 > (`newestCheckRollup` — an older failed run no longer outvotes a later green one), and a fresh `gpt-6-sol`/`high`
-> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones. Every agent merge must
+> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones, except a documentation-only
+> change (the block above, Mason 2026-10-07), which still needs every other gate here. Every agent merge must
 > carry `--match-head-commit <the head the gate checked>` (put it before any free-text `--body`), so GitHub refuses a
 > head that moved in between; REST and connector merges cannot carry it and are refused. `--auto` into `main` is
 > refused outright; `--admin` and `CHANGES_REQUESTED` still are. A repeated StatusContext counts its WORSE state. (2) `migration-apply-lib.mjs` applies its former

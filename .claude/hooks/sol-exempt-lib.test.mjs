@@ -241,6 +241,9 @@ function contractFailures(lib) {
   check(!viaGitHub(compareAnswer({ status: "identical", ahead_by: 0 })), "an identical comparison needs Sol");
   check(!viaGitHub(compareAnswer({ status: "behind" })), "status behind needs Sol");
   check(!viaGitHub(compareAnswer({ ahead_by: 0 })), "ahead_by 0 needs Sol");
+  check(!viaGitHub(compareAnswer({ ahead_by: "2" })), "ahead_by must be a number, not text (Luna, round 6)");
+  check(!viaGitHub(compareAnswer({ ahead_by: 1.5 })), "ahead_by must be a whole number");
+  check(!viaGitHub(compareAnswer({ ahead_by: null })), "a missing ahead_by needs Sol");
   check(!viaGitHub(compareAnswer({ merge_base: "c".repeat(40) })), "a comparison that does not start at the base needs Sol");
   check(!viaGitHub(compareAnswer({ merge_base: undefined })), "a comparison with no merge base needs Sol");
   check(!viaGitHub(compareAnswer({ files: null })), "a comparison with no file list needs Sol");
@@ -403,6 +406,7 @@ const MUTANTS = [
   ["comparison status unchecked", `answer.status !== "ahead" || `, ""],
   ["head behind its base accepted", "answer.behind_by !== 0", "false"],
   ["empty comparison accepted", "answer.ahead_by < 1", "false"],
+  ["ahead_by not required to be a whole number (Luna, round 6)", "!Number.isInteger(answer.ahead_by) || ", ""],
   ["merge base unchecked", `if (String(answer.merge_base || "").toLowerCase() !== String(baseSha).toLowerCase()) {`, "if (false) {"],
   ["GitHub failure read as exempt", "return { exempt: false, reason: `GitHub's file list could not be read", "return { exempt: true, reason: `GitHub's file list could not be read"],
   // Luna round 1: status, head binding and file kind.
