@@ -309,7 +309,12 @@ async function main() {
   expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET deleted_at = now() WHERE id = ${inv1Id};\nUPDATE public.invoices SET deleted_at = NULL WHERE id = ${inv1Id};`), /bills 9\.0+ of/, 'restore an over-billed invoice');
   expectAllowed(probe(`${overBilled}\nUPDATE public.invoice_items SET quantity = 8 WHERE invoice_id = ${inv1Id};`), 'lowering an over-billed draft');
   expectRefused(probe(`${overBilled}\nUPDATE public.invoice_items SET quantity = 10 WHERE invoice_id = ${inv1Id};`), /bills 10\.0+ of/, 'raising an over-billed draft further');
-  console.log('[prover] HEADER: posting or restoring an over-billed delivery invoice is refused; lowering it is allowed');
+  // The cap relies on a delivery invoice never leaving its delivery or order (trg_guard_invoice_terminal_order).
+  expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET delivery_id = NULL, status = 'posted', posted_at = now(), posted_by = '${ADMIN}' WHERE id = ${inv1Id};`),
+    /INVOICE_SOURCE_LINEAGE_IMMUTABLE/, 'detach an over-billed invoice from its delivery and post it');
+  expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET order_id = NULL WHERE id = ${inv1Id};`),
+    /INVOICE_SOURCE_LINEAGE_IMMUTABLE/, 'detach a delivery invoice from its order');
+  console.log('[prover] HEADER: posting or restoring an over-billed delivery invoice is refused, and it cannot be detached from its delivery or order to dodge the check; lowering it is allowed');
 
   // ALLOWED.
   expectSaved(probe(saveInvoice(INV1, REP)), 'a rep saves the invoice unchanged');
@@ -421,7 +426,7 @@ async function main() {
   expectSecondRefused(await race('C'), 'with only the candidate\'s order lock');
   // MUTATION: without any order lock both transactions check before either commits.
   const lockStatement = `    PERFORM 1 FROM public.orders o
-     WHERE o.id = (SELECT i.order_id FROM public.invoices i WHERE i.id = v_invoice_id)
+     WHERE o.id = (SELECT d.order_id FROM public.deliveries d WHERE d.id = v_delivery_id)
        FOR UPDATE;`;
   assert.equal(lf(CAP).split(lockStatement).length, 2, 'the candidate must take the order lock exactly once');
   stageText('cap-no-lock.sql', lf(CAP).replace(lockStatement, '    NULL;'));

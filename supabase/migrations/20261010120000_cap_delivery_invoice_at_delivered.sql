@@ -34,6 +34,8 @@
 --      labels vary in spelling only, e.g. "Gal"/"Gallon"). Each delivery line's allowance is rounded to
 --      4 decimals, the scale of invoice_items.quantity, so a copied quantity never rounds past it
 --      (delivery quantities are unscaled numeric; live has none past 4 decimals, checked 2026-10-10).
+--      Rounding each line, not the total, can allow at most 0.00005 of a unit per delivery line more
+--      than a sub-4-decimal recording — accepted; the other way would refuse a faithful copy.
 --   2. enforce_delivery_invoice_within_delivered: the trigger function that raises
 --      DELIVERY_INVOICE_EXCEEDS_DELIVERED with that reason. Before checking a write that can add
 --      billing it takes the ORDER row lock that every invoice-line writer already holds, so two
@@ -75,8 +77,12 @@
 --     (20260721014858), so nothing changes for it.
 -- Not covered here (unchanged behavior): order-level invoices (delivery_id NULL) — every delivery
 -- invoice writer refuses to bill a delivery an order-level invoice already covers; unit prices; and a
--- delivery whose items are changed after its invoice was posted — the monthly integrity report's
--- delivery-invoice quantity check flags that.
+-- delivery whose items are changed after its invoice was posted (a posted delivery invoice now needs
+-- a completed delivery, and enforce_delivery_items_parent_lock already freezes a completed delivery's
+-- items) — the monthly integrity report's delivery-invoice quantity check flags any that exists.
+-- The cap relies on trg_guard_invoice_terminal_order (20260721014858): a delivery invoice keeps
+-- exactly its delivery's order, and neither delivery_id nor order_id can change after creation, so
+-- an invoice cannot be detached from its delivery to dodge this check.
 --
 -- Rollback (new reviewed migration):
 --   DROP TRIGGER IF EXISTS zz_cap_delivery_invoice_items ON public.invoice_items;
@@ -288,8 +294,10 @@ BEGIN
                    AND NEW.invoice_type IS NOT DISTINCT FROM OLD.invoice_type);
   END IF;
   IF v_lock THEN
+    -- The delivery's own order (trg_guard_invoice_terminal_order already keeps a delivery invoice on
+    -- exactly that order and refuses any later change of delivery_id or order_id).
     PERFORM 1 FROM public.orders o
-     WHERE o.id = (SELECT i.order_id FROM public.invoices i WHERE i.id = v_invoice_id)
+     WHERE o.id = (SELECT d.order_id FROM public.deliveries d WHERE d.id = v_delivery_id)
        FOR UPDATE;
   END IF;
 
