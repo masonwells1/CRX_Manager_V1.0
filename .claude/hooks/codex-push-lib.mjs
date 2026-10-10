@@ -860,9 +860,9 @@ const RISKY_PATH_RES = [
   // changes require the same independent verdict (Codex round-7, PR #142).
   /(^|\/)\.claude\/agents\//i,
   /(^|\/)scripts\/write-apply-proofs\.mjs$/i,
-  // The live-apply door and Mason's Windows Hello approval commands (2026-09-29):
-  // the door decides whether a parked migration may look for his signature and
-  // uses it up; the commands build what he is shown and signs.
+  // The live-apply door and Mason's owner-approval command (2026-09-29; by chat
+  // reply since 2026-10-09): the door decides whether a parked migration may look
+  // for his approval and uses it up; the command builds what he is shown.
   /(^|\/)scripts\/apply-migration-file\.mjs$/i,
   /(^|\/)scripts\/owner-approv[a-z-]*\.mjs$/i,
   // The hook-REGISTRATION surfaces: every guard is only active because it is

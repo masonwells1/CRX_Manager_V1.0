@@ -19,9 +19,12 @@ export const PROMPT_DEDUPE_BLOCKS = [
 // reports as often as on Mason's words. Without autopilot-intent-reminder the
 // OVERNIGHT-INTENT flag is never written, so the overnight handshake no longer
 // blocks work.
+// owner-approval-prompt (Mason, 2026-10-09) records his `approve <code>` reply
+// for a parked migration; it replaced the Windows Hello signature.
 export const SHARED_PROMPT_MODULES = [
   "./ship-intent-reminder.mjs",
   "./hold-latch-prompt.mjs",
+  "./owner-approval-prompt.mjs",
 ];
 
 export const CLAUDE_ONLY_PROMPT_MODULES = [];

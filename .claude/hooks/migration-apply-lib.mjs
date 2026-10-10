@@ -30,7 +30,6 @@ import { readMigrationHistory } from "./migration-access-lib.mjs";
 import {
   approvalFileName,
   assertOwnerTrustFilesReviewed,
-  defaultOwnerKeys,
   findOwnerApprovals,
   parkedCategories,
   readUsedNonces,
@@ -330,17 +329,15 @@ export function evaluateMigrationApply({
   // still matching by substring. Flipping the default closes that; both known callers
   // are the PreToolUse hook and apply-migration-file.mjs, and both want exact.
   requireExactProofName = true,
-  // (No approval FLAG exists, deliberately: an agent-run command cannot prove
-  // Mason approved an exact migration — Sol HIGH, 2026-09-26. What can is his
-  // Windows Hello signature — owner-approval-lib.mjs, Mason 2026-09-29.)
+  // (No approval FLAG exists, deliberately: an agent-run command cannot assert
+  // Mason approved an exact migration — Sol HIGH, 2026-09-26. What counts is his
+  // own `approve <code>` reply, recorded by the owner-approval-prompt hook —
+  // owner-approval-lib.mjs; Windows Hello until Mason 2026-10-09.)
   // `ownerApprovalDoor` only says which door is asking: scripts/apply-migration-file.mjs
-  // sets it, so a parked migration may go on to look for that signature; the MCP
+  // sets it, so a parked migration may go on to look for that approval; the MCP
   // hook leaves it unset and a parked migration is refused there as before. It
-  // proves nothing by itself — without a valid signature the refusal stands.
+  // proves nothing by itself — without a valid approval the refusal stands.
   ownerApprovalDoor = false,
-  // Test injection point: returns { pinned, live } public keys. Real callers
-  // leave it unset and get the committed key plus the key Windows holds.
-  ownerApprovalKeys,
   // Test injection point: throws unless the approval files on disk are the
   // reviewed commit's bytes. Real callers leave it unset and get
   // assertOwnerTrustFilesReviewed (Sol HIGH, PR #857).
@@ -870,14 +867,15 @@ export function evaluateMigrationApply({
   // fresh content-bound gpt-6-sol/high Codex proof applies with no per-migration
   // ask. That is what Mason confirmed; the proof checks below are unchanged, they
   // simply stopped being optional outside autopilot. A DESTRUCTIVE migration is
-  // still Mason's: refused for agents in every session unless Mason signed THIS
-  // exact migration with Windows Hello (owner-approval-lib.mjs, Mason 2026-09-29).
-  // An approval flag, label, comment or review an agent could produce is not
+  // still Mason's: refused for agents in every session unless Mason approved THIS
+  // exact migration by replying `approve <code>` in the chat (owner-approval-lib.mjs;
+  // Mason 2026-09-29, by reply instead of Windows Hello since 2026-10-09). An
+  // approval flag, label, comment or review an agent could produce is not
   // approval. The same holds for the two other parked kinds below.
   //
-  // With a signature the migration is not waved through: it goes on to the SAME
+  // With an approval the migration is not waved through: it goes on to the SAME
   // reviewer proofs, Sol proof and landing gate as every other migration, and the
-  // signature itself is checked last, against the landing gate's PR and head.
+  // approval itself is checked last, against the landing gate's PR and head.
   let ownerApprovalCandidates = null;
   let parked = [];
   if (migQuery) {
@@ -890,11 +888,12 @@ export function evaluateMigrationApply({
     // Fail CLOSED inside parkedCategories: a classifier error counts as a hit.
     parked = parkedCategories(migQuery, { history });
     const OWNER_ROUTE =
-      `\n\nTHE ONE WAY THROUGH (Mason, 2026-09-29): once every other proof for this exact file is fresh, ` +
-      `get Mason's explicit yes in this conversation (AGENTS.md), then ask him to approve it with Windows Hello — run \`node scripts/owner-approve-migration.mjs ` +
-      `supabase/migrations/${migName || "<file>"}.sql\` from the PR's checkout while he is at the PC — ` +
-      `then apply within 30 minutes through \`node scripts/apply-migration-file.mjs\` (the MCP apply tool ` +
-      `never accepts it). Do NOT write, copy or edit the approval file yourself; only his signature counts.`;
+      `\n\nTHE ONE WAY THROUGH (Mason, 2026-09-29; by chat reply since 2026-10-09): once every other proof for ` +
+      `this exact file is fresh, run \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName || "<file>"}.sql\` ` +
+      `from the PR's checkout, show Mason the plain-English summary it prints and ask him to reply exactly ` +
+      `\`approve <code>\` (he can do it from his phone), then apply within 30 minutes of his reply through ` +
+      `\`node scripts/apply-migration-file.mjs\` (the MCP apply tool never accepts it). Do NOT write, copy or ` +
+      `edit an approval or request file yourself, and never send the reply on his behalf; only his own message counts.`;
     const refusals = {
       // Deleted data has no point-in-time recovery on this Supabase plan
       // (settled 2026-07-13, kept by the autonomous-landing rule 2026-09-26).
@@ -1132,18 +1131,13 @@ export function evaluateMigrationApply({
     if (!landing || landing.ok !== true) {
       return block(landing?.reason || "MIGRATION LANDING GATE: the pull-request landing check did not pass (fail closed).");
     }
-    // LAST OF ALL, for a parked migration: Mason's Windows Hello signature, bound
+    // LAST OF ALL, for a parked migration: Mason's `approve <code>` reply, bound
     // to this exact SQL and to the PR and head the landing gate just confirmed.
     if (ownerApprovalCandidates) {
-      // The key, the Windows Hello helper and the code that checks them are read
-      // from this checkout: they must be the bytes reviewed at the head the landing
-      // gate just confirmed, or a local edit could stand in for Mason's signature.
+      // The reply hook and the code that checks the approval are read from this
+      // checkout: they must be the bytes reviewed at the head the landing gate
+      // just confirmed, or a local edit could stand in for Mason's reply.
       try { (ownerTrustCheck || assertOwnerTrustFilesReviewed)({ head: landing.head }); }
-      catch (error) {
-        return block(`OWNER APPROVAL GUARD: ${error?.message || error}. Refusing "${migName}" (fail closed).`);
-      }
-      let keys;
-      try { keys = (ownerApprovalKeys || defaultOwnerKeys)(); }
       catch (error) {
         return block(`OWNER APPROVAL GUARD: ${error?.message || error}. Refusing "${migName}" (fail closed).`);
       }
@@ -1164,7 +1158,7 @@ export function evaluateMigrationApply({
       for (const candidate of ownerApprovalCandidates) {
         let verdict;
         try {
-          verdict = verifyOwnerApproval({ approval: candidate.approval, expect, keys, appliedNames, usedNonces, now });
+          verdict = verifyOwnerApproval({ approval: candidate.approval, expect, appliedNames, usedNonces, now });
         } catch (error) {
           verdict = { ok: false, reason: `the check itself failed (${error?.message || error})` };
         }
@@ -1175,17 +1169,17 @@ export function evaluateMigrationApply({
               file: candidate.file,
               dir: candidate.dir,
               payload: candidate.approval.payload,
-              expiresAt: verdict.payload.expiresAt,
+              expiresAt: verdict.expiresAt,
             },
           };
         }
         reasons.push(`${candidate.file}: ${verdict.reason}`);
       }
       return block(
-        `OWNER APPROVAL GUARD: "${migName}" needs Mason's Windows Hello approval of this exact file, pull ` +
-        `request and head, and none found is valid:\n${reasons.map((r) => `  - ${r}\n`).join("")}` +
-        `Ask Mason again with \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName}.sql\`. ` +
-        `Do NOT edit or copy an approval file; only his signature counts.`);
+        `OWNER APPROVAL GUARD: "${migName}" needs Mason's approval of this exact file, pull request and ` +
+        `head (his \`approve <code>\` reply), and none found is valid:\n${reasons.map((r) => `  - ${r}\n`).join("")}` +
+        `Ask Mason again: run \`node scripts/owner-approve-migration.mjs supabase/migrations/${migName}.sql\` for a fresh code. ` +
+        `Do NOT edit or copy an approval file; only his own reply counts.`);
     }
     return allow();
   }

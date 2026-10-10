@@ -153,7 +153,7 @@ Docs updated:
     scripts/apply-migration-file.mjs, after the PR's final CodeRabbit and
     Sol reviews are clean (Mason's autonomous-landing rule, 2026-09-26:
     non-destructive = no per-migration ask once the full proof + Sol gate
-    passes; destructive, data-overwriting or access-changing = only after Mason's explicit yes in chat (a procedural requirement the gate cannot verify) AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`; the part the apply gate enforces)). NEVER `supabase db push` and
+    passes; destructive, data-overwriting or access-changing = only after Mason's own `approve <code>` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply)). NEVER `supabase db push` and
     NEVER the dashboard SQL editor — both bypass the review gate and are blocked.
     After a live apply that changes tables, columns, constraints, or
     status values, refresh the schema registry (/regen-schema-registry).
@@ -162,7 +162,7 @@ Docs updated:
 ## Important Safety Rules
 
 - NEVER modify an existing migration file — only create new ones
-- NEVER apply the migration automatically from this skill — this skill only writes the file. Applying goes through `/migration-review` + migration-apply-guard under Mason's autonomous-landing rule (2026-09-26): non-destructive = full proof + Sol gate, no per-migration ask, after the PR's final reviews are clean; destructive, data-overwriting or access-changing = only after Mason's explicit yes in chat (a procedural requirement the gate cannot verify) AND his Windows Hello approval of that exact file (`scripts/owner-approve-migration.mjs`; the part the apply gate enforces). The gate cannot see the chat, so asking first is the agent's obligation; a signature without it is still a violation.
+- NEVER apply the migration automatically from this skill — this skill only writes the file. Applying goes through `/migration-review` + migration-apply-guard under Mason's autonomous-landing rule (2026-09-26): non-destructive = full proof + Sol gate, no per-migration ask, after the PR's final reviews are clean; destructive, data-overwriting or access-changing = only after Mason's own `approve <code>` chat reply for that exact file (`scripts/owner-approve-migration.mjs` builds the request; the apply gate enforces the recorded reply). Never send or relay that reply yourself; only Mason's own message counts.
 - NEVER commit automatically — the user decides when to commit
 - NEVER report a migration verified on `npm run typecheck` alone — typecheck does not read SQL
 - NEVER create a new table without RLS, real policies, and the `updated_at` trigger in the same file

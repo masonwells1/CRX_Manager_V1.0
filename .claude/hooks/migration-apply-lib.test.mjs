@@ -23,8 +23,14 @@ import path from "node:path";
 import { evaluateMigrationApply, normalizeMigName, resolveMigrationSource, originFetchAgeMs } from "./migration-apply-lib.mjs";
 import { checkWrappable } from "./migration-wrappability-lib.mjs";
 import { evaluateLandingGate } from "./migration-landing-gate-lib.mjs";
-import { generateKeyPairSync, sign as signWith } from "node:crypto";
-import { OWNER_APPROVAL_MAX_AGE_MS, buildApprovalPayload, parkedCategories } from "./owner-approval-lib.mjs";
+import { generateKeyPairSync } from "node:crypto";
+import {
+  OWNER_APPROVAL_MAX_AGE_MS,
+  OWNER_APPROVAL_VIA,
+  OWNER_REQUEST_MAX_AGE_MS,
+  buildApprovalPayload,
+  parkedCategories,
+} from "./owner-approval-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // .claude/hooks/ → repo root → scripts/
@@ -1686,8 +1692,8 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     "overwrites-data": "UPDATE public.invoices SET total_amount_cents = 0;\n",
     "changes-access": "GRANT SELECT ON public.customers TO anon;\n",
   };
-  const approvalFor = (sql, over = {}, signer = mason) => {
-    const issued = Date.now() - 60_000;
+  const approvalFor = (sql, over = {}, approval = {}) => {
+    const issued = Date.now() - 60 * 60_000;
     const payload = buildApprovalPayload({
       project: "rhyzpcqhnizqbxphqdkr",
       migration: MIG,
@@ -1696,11 +1702,12 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
       prHead: OWNER_HEAD,
       categories: parkedCategories(sql),
       issuedAt: new Date(issued).toISOString(),
-      expiresAt: new Date(issued + OWNER_APPROVAL_MAX_AGE_MS).toISOString(),
+      expiresAt: new Date(issued + OWNER_REQUEST_MAX_AGE_MS).toISOString(),
       nonce: `nonce-${Math.random().toString(16).slice(2)}`,
+      code: "482913",
       ...over,
     });
-    return { payload, signature: signWith("sha256", Buffer.from(payload, "utf8"), signer.privateKey).toString("base64") };
+    return { payload, approvedAt: new Date(Date.now() - 60_000).toISOString(), via: OWNER_APPROVAL_VIA, reply: "approve 482913", ...approval };
   };
   const ownerFixture = (sql, { approval, proofs = true, used = null } = {}) => {
     const h = createHash("sha256").update(sql).digest("hex");
@@ -1715,14 +1722,16 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     return root;
   };
   const scriptDoor = (root, sql, over = {}) => evaluate(root, {
-    query: sql, ownerApprovalDoor: true, ownerApprovalKeys: masonKeys, ownerTrustCheck: () => {}, landingGate: readyLanding, ...over,
+    query: sql, ownerApprovalDoor: true, ownerTrustCheck: () => {}, landingGate: readyLanding, ...over,
   });
 
   for (const [category, sql] of Object.entries(parkedSql)) {
     const approval = approvalFor(sql);
     const v = scriptDoor(ownerFixture(sql, { approval }), sql);
-    allows(v, `${category}: Mason's valid Windows Hello approval lets it through the apply script's door`);
+    allows(v, `${category}: Mason's valid chat-reply approval lets it through the apply script's door`);
     ok(v.ownerApproval && v.ownerApproval.payload === approval.payload, `${category}: the allow carries the approval to be used up`);
+    ok(Date.parse(v.ownerApproval.expiresAt) === Date.parse(approval.approvedAt) + OWNER_APPROVAL_MAX_AGE_MS,
+      `${category}: the allow carries the 30-minute expiry counted from Mason's reply`);
     denies(evaluate(ownerFixture(sql, { approval }), { query: sql, landingGate: readyLanding }),
       "THE ONE WAY THROUGH", `${category}: the MCP door (no ownerApprovalDoor) refuses even with a valid approval`);
   }
@@ -1735,8 +1744,10 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
     { landingGate: () => ({ ok: false, reason: "MIGRATION LANDING GATE: CodeRabbit has not APPROVED" }) }),
   "CodeRabbit has not APPROVED", "an approval never skips the pull-request landing gate");
-  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, other) }), ACCESS),
-    "not Mason's", "an approval signed by any other key is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, { via: undefined }) }), ACCESS),
+    "malformed", "an approval file not written by the reply hook's shape is refused");
+  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, {}, { approvedAt: new Date(Date.now() - OWNER_APPROVAL_MAX_AGE_MS - 60_000).toISOString() }) }), ACCESS),
+    "30 minutes after Mason replied", "an approval more than 30 minutes after his reply is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, { prHead: "f".repeat(40) }) }), ACCESS),
     "not the pull request's current head", "an approval for another head is refused");
   denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS, { categories: [{ category: "changes-access", reason: "adds a comment" }] }) }), ACCESS),
@@ -1755,29 +1766,19 @@ denies(evaluate(fixture({ codexProof: null }), { landingGate: () => ({ ok: false
     denies(scriptDoor(ownerFixture(DROP, { approval }), DROP), "file changed",
       "an approval of different SQL under the same name is refused");
   }
-  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
-    { ownerApprovalKeys: () => { throw new Error("could not read Mason's approval key from Windows (NotFound)"); } }),
-  "could not read Mason's approval key", "an unreadable Windows key fails closed");
-  denies(scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS,
-    { ownerApprovalKeys: () => ({ pinned: spki(other), live: spki(mason) }) }),
-  "not the Windows Hello key", "a pinned key that is not the Windows Hello key is refused");
-  // The approval files must be the reviewed bytes at the landing gate's head, checked
-  // before the key is read (Sol HIGH, PR #857).
+  // The approval files must be the reviewed bytes at the landing gate's head
+  // (Sol HIGH, PR #857).
   {
     let seenHead = null;
-    let keysRead = false;
     const v = scriptDoor(ownerFixture(ACCESS, { approval: approvalFor(ACCESS) }), ACCESS, {
-      ownerTrustCheck: ({ head }) => { seenHead = head; throw new Error("these approval files differ from the reviewed commit eeeeeeeeeeee: .claude/hooks/owner-approval-key.json"); },
-      ownerApprovalKeys: () => { keysRead = true; return masonKeys(); },
+      ownerTrustCheck: ({ head }) => { seenHead = head; throw new Error("these approval files differ from the reviewed commit eeeeeeeeeeee: .claude/hooks/owner-approval-prompt.mjs"); },
     });
     denies(v, "differ from the reviewed commit", "a locally edited approval file refuses even a valid approval");
     ok(seenHead === OWNER_HEAD, "the approval files are compared against the head the landing gate confirmed");
-    ok(!keysRead, "the key is never read when the approval files are not the reviewed bytes");
   }
   // A routine migration needs no approval and is unaffected by the door.
-  allows(evaluate(fixture(), { ownerApprovalDoor: true, ownerApprovalKeys: () => { throw new Error("must not be read"); },
-    ownerTrustCheck: () => { throw new Error("must not be run"); } }),
-    "a routine migration through the apply script's door never reads the owner key");
+  allows(evaluate(fixture(), { ownerApprovalDoor: true, ownerTrustCheck: () => { throw new Error("must not be run"); } }),
+    "a routine migration through the apply script's door never runs the owner-approval check");
 }
 
 for (const r of roots) { try { rmSync(r, { recursive: true, force: true }); } catch { /* best effort */ } }

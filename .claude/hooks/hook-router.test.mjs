@@ -118,8 +118,8 @@ try {
   rmSync(temp, { recursive: true, force: true });
 }
 
-eq(promptModulesFor("codex").length, 2, "Codex prompt router has two shared modules");
-eq(promptModulesFor("claude").length, 2, "Claude prompt router has no Claude-only modules");
+eq(promptModulesFor("codex").length, 3, "Codex prompt router has three shared modules (ship reminder, hold latch, owner-approval reply)");
+eq(promptModulesFor("claude").length, 3, "Claude prompt router has no Claude-only modules");
 eq(postToolModulesFor({ tool_name: "Edit" }, "claude"), ["./posttooluse-migration.mjs", "./eslint-autofix.mjs", "./session-heartbeat.mjs"], "write/edit path is explicit");
 eq(postToolModulesFor({ tool_name: "mcp__supabase__apply_migration" }, "codex"), ["./registry-freshness.mjs", "./applied-snapshot-invalidate.mjs"], "Codex apply path is explicit");
 

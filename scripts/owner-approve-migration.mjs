@@ -1,42 +1,44 @@
 #!/usr/bin/env node
-// Ask Mason to approve ONE parked migration with Windows Hello (Mason, 2026-09-29).
+// Ask Mason to approve ONE parked migration by chat reply (Mason, 2026-09-29;
+// by reply instead of Windows Hello since 2026-10-09, so he can do it from his phone).
 //
 // A migration that deletes data, overwrites existing rows or changes who can
 // access what is refused by .claude/hooks/migration-apply-lib.mjs until Mason
-// signs it. This script builds what he signs — computed here from the file
-// itself, never from text an agent supplies — shows it to him, and asks Windows
-// Hello for his PIN or fingerprint. The signed approval is written to this
-// checkout's .claude/session-state/ and is good for ONE install of this exact
-// file, from this exact pull-request head, for 30 minutes.
+// approves it. This script builds the REQUEST he approves — computed here from the
+// file itself, never from text an agent supplies — saves it in this checkout's
+// .claude/session-state/, and prints the plain-English summary and a 6-digit code.
+// Show him the summary and ask him to reply exactly `approve <code>`. His reply is
+// recorded by .claude/hooks/owner-approval-prompt.mjs and is good for ONE install
+// of this exact file, from this exact pull-request head, for 30 minutes.
 //
-// It never replaces Mason's explicit yes in the current conversation (AGENTS.md;
-// Codex P1, PR #845): ask him in chat first, then run this. The signature is the
-// part the apply gate can verify; the chat yes is the part it cannot.
+// Never send the reply yourself, in any session: only a message Mason sends counts.
 //
-// Run it from the pull request's own checkout, with Mason at the PC, only once
-// every other proof for the file is fresh — the approval expires in 30 minutes:
+// Run it from the pull request's own checkout, in the session that will apply it,
+// only once every other proof for the file is fresh. Mason must reply in THAT
+// session: the reply hook only looks in the folders of the session he replies in.
 //   node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql
-// then apply with:
+// then, after his reply, apply with:
 //   node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql [--confirm]
+//
+// To check the reply path works (approves nothing):
+//   node scripts/owner-approve-migration.mjs --selftest
 
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { CRX_PRODUCTION_REF } from "../.claude/hooks/migration-apply-lib.mjs";
 import { readMigrationHistory } from "../.claude/hooks/migration-access-lib.mjs";
 import {
-  OWNER_APPROVAL_MAX_AGE_MS,
+  OWNER_REQUEST_MAX_AGE_MS,
   PARKED_LABELS,
-  approvalFileName,
   assertOwnerTrustFilesReviewed,
   buildApprovalPayload,
+  buildSelfTestPayload,
+  newApprovalCode,
+  ownerApprovalSummary,
   parkedCategories,
-  readLiveOwnerKey,
-  readPinnedOwnerKey,
-  runHello,
-  verifyOwnerApproval,
+  writeApprovalRequest,
 } from "../.claude/hooks/owner-approval-lib.mjs";
 
 function die(code, msg) {
@@ -44,13 +46,41 @@ function die(code, msg) {
   process.exit(code);
 }
 
-const argv = process.argv.slice(2);
-const filePath = argv.find((a) => !a.startsWith("--"));
-if (!filePath || argv.length !== 1) {
-  die(1, "owner-approve-migration: give exactly one migration file.\n  node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql");
+const checkout = process.cwd();
+const stateDir = path.join(checkout, ".claude", "session-state");
+
+/** Save the request under a fresh code; retry if that code is already pending here. */
+function saveRequest(build) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = newApprovalCode();
+    const payload = build(code);
+    try { return { code, payload, file: writeApprovalRequest(stateDir, payload) }; }
+    catch (err) { if (err?.code !== "EEXIST") die(1, `owner-approve-migration: could not save the request (${err?.message || err}).`); }
+  }
+  return die(1, "owner-approve-migration: could not find a free code; try again.");
 }
 
-const checkout = process.cwd();
+const argv = process.argv.slice(2);
+
+if (argv.length === 1 && argv[0] === "--selftest") {
+  const now = Date.now();
+  const { code, payload } = saveRequest((c) => buildSelfTestPayload({
+    issuedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + OWNER_REQUEST_MAX_AGE_MS).toISOString(),
+    nonce: randomBytes(16).toString("hex"),
+    code: c,
+  }));
+  console.log("Show Mason this, word for word:\n");
+  for (const line of ownerApprovalSummary(JSON.parse(payload))) console.log(`  ${line}`);
+  console.log(`\nWhen he replies "approve ${code}", the approval hook confirms in the next turn that the reply path works.`);
+  process.exit(0);
+}
+
+const filePath = argv.find((a) => !a.startsWith("--"));
+if (!filePath || argv.length !== 1) {
+  die(1, "owner-approve-migration: give exactly one migration file (or --selftest).\n  node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql");
+}
+
 const real = (p) => { try { return realpathSync(p); } catch { return null; } };
 const key = (p) => (process.platform === "win32" ? String(p).toLowerCase() : String(p));
 const absFile = path.resolve(checkout, filePath);
@@ -63,7 +93,6 @@ if (!realFile || !migDir || key(path.dirname(realFile)) !== key(migDir) || !/\.s
 const sql = readFileSync(realFile, "utf8").replace(/\r\n/g, "\n");
 const migName = path.basename(realFile).replace(/\.sql$/i, "");
 const queryHash = createHash("sha256").update(sql).digest("hex");
-const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
 
 // What the safety check parks — the same classifiers, the same history.
 let history;
@@ -72,7 +101,7 @@ const categories = parkedCategories(sql, { history });
 if (!categories.length) {
   die(1,
     `owner-approve-migration: ${migName} does not need Mason's approval — the safety check does not park it. ` +
-    `It applies through the normal proofs; do not ask him to sign it.`);
+    `It applies through the normal proofs; do not ask him to approve it.`);
 }
 
 // The pull request the approval is bound to: this checkout's branch, open, at this exact head.
@@ -106,22 +135,14 @@ if (String(pr?.state).toUpperCase() !== "OPEN" || String(pr?.baseRefName) !== "m
     `(GitHub: state ${pr?.state}, base ${pr?.baseRefName}, head ${String(pr?.headRefOid || "?").slice(0, 12)}). Push first.`);
 }
 
-// The key, the Windows Hello helper and the code building what Mason signs must be
-// the reviewed bytes at this head, so he never signs through a locally edited
-// helper or summary (Sol HIGH, PR #857). The apply checks the same again.
+// The reply hook and the code building what Mason reads must be the reviewed
+// bytes at this head, so he never approves through a locally edited summary or
+// hook (Sol HIGH, PR #857). The apply checks the same again.
 try { assertOwnerTrustFilesReviewed({ head }); }
 catch (err) { die(1, `owner-approve-migration: ${err?.message || err}. Refusing.`); }
 
-// Both halves of the key must agree before Mason is asked anything.
-let keys;
-try { keys = { pinned: readPinnedOwnerKey(), live: readLiveOwnerKey() }; }
-catch (err) { die(1, `owner-approve-migration: ${err?.message || err}.`); }
-if (!keys.pinned.equals(keys.live)) {
-  die(1, "owner-approve-migration: the committed approval key is not the Windows Hello key on this PC. Refusing.");
-}
-
 const now = Date.now();
-const payload = buildApprovalPayload({
+const { code, payload } = saveRequest((c) => buildApprovalPayload({
   project: CRX_PRODUCTION_REF,
   migration: migName,
   queryHash,
@@ -129,42 +150,14 @@ const payload = buildApprovalPayload({
   prHead: head,
   categories,
   issuedAt: new Date(now).toISOString(),
-  expiresAt: new Date(now + OWNER_APPROVAL_MAX_AGE_MS).toISOString(),
+  expiresAt: new Date(now + OWNER_REQUEST_MAX_AGE_MS).toISOString(),
   nonce: randomBytes(16).toString("hex"),
-});
+  code: c,
+}));
 
-console.log(`Asking Mason to approve ${migName} (PR #${pr.number}, head ${head.slice(0, 12)}):`);
+console.log(`Approval request saved for ${migName} (PR #${pr.number}, head ${head.slice(0, 12)}):`);
 for (const c of categories) console.log(`  - ${PARKED_LABELS[c.category]}`);
-console.log("A window will open on his screen, then Windows Hello will ask for his PIN or fingerprint.");
-
-const tmp = mkdtempSync(path.join(os.tmpdir(), "crx-owner-approval-"));
-const payloadFile = path.join(tmp, "payload.json");
-let result;
-try {
-  writeFileSync(payloadFile, payload, "utf8");
-  result = runHello("Sign", { payloadFile, timeoutMs: 10 * 60 * 1000 });
-} finally {
-  rmSync(tmp, { recursive: true, force: true });
-}
-if (!result?.ok || !result.signature) {
-  die(3, `NOT APPROVED — ${result?.status === "Declined" ? "Mason clicked No" : `Windows Hello did not sign (${result?.status || "no answer"}${result?.message ? `: ${result.message}` : ""})`}. Nothing was written.`);
-}
-
-const approval = { payload, signature: result.signature };
-const check = verifyOwnerApproval({
-  approval,
-  expect: { project: CRX_PRODUCTION_REF, migration: migName, queryHash, pullRequest: pr.number, prHead: head, categories },
-  keys,
-  now: Date.now(),
-});
-if (!check.ok) die(2, `owner-approve-migration: the signature did not verify (${check.reason}). Nothing was written.`);
-
-const stateDir = path.join(checkout, ".claude", "session-state");
-mkdirSync(stateDir, { recursive: true });
-const out = path.join(stateDir, approvalFileName(safeName));
-if (existsSync(out)) rmSync(out);
-writeFileSync(out, `${JSON.stringify(approval, null, 2)}\n`, "utf8");
-console.log("");
-console.log(`APPROVED by Mason with Windows Hello. Valid once, until ${check.payload.expiresAt}.`);
-console.log(`Saved: ${out}`);
-console.log(`Next: node scripts/apply-migration-file.mjs ${rel} (dry run), then again with --confirm.`);
+console.log("\nShow Mason this, word for word, with a one-line plain-English note on what the change does:\n");
+for (const line of ownerApprovalSummary(JSON.parse(payload))) console.log(`  ${line}`);
+console.log(`\nThen wait for HIS reply "approve ${code}" in this session — never send or relay it for him. The approval hook confirms it in the next turn.`);
+console.log(`After that: node scripts/apply-migration-file.mjs ${rel} (dry run), then again with --confirm, within 30 minutes.`);

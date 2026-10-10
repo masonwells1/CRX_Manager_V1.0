@@ -25,13 +25,18 @@
 > hands-free-only proof set (content binding, both reviewer names, fresh content-bound Sol proof) in EVERY session,
 > and refuses DESTRUCTIVE, data-overwriting and access-changing SQL for agents in every session with no agent
 > override (an agent-passed approval flag cannot prove Mason approved that exact migration; `apply-migration-file.mjs`
-> rejects `--mason-approved-destructive` as unknown). Since 2026-09-29 the one way through is Mason's Windows Hello
-> signature (`owner-approval-lib.mjs`, `owner-approval-hello.ps1`; commands `scripts/owner-approval-setup.mjs` and
-> `scripts/owner-approve-migration.mjs`). It binds the migration's sha256, the PR number and exact head, the flagged
-> categories, a 30-minute window and a nonce. It is checked LAST, after the landing gate, against the PR and head that
-> gate confirmed. Only `apply-migration-file.mjs` (the `ownerApprovalDoor` caller) honours it, and it uses the approval
-> up before transmitting. The pinned public key (`owner-approval-key.json`) must equal the key Windows Hello holds on
-> the PC. Autonomous applies are Claude-only: Codex's
+> rejects `--mason-approved-destructive` as unknown). The one way through is Mason's own approval (2026-09-29), given
+> since 2026-10-09 by chat reply instead of a Windows Hello signature so he can approve from his phone
+> (`owner-approval-lib.mjs`; request command `scripts/owner-approve-migration.mjs`; reply hook
+> `owner-approval-prompt.mjs`, wired in `prompt-router.mjs`). The request binds the migration's sha256, the PR number
+> and exact head, the flagged categories, a nonce and a 6-digit code, with a 24-hour reply deadline. Only a WHOLE
+> message of exactly `approve <code>` (a trailing `.` or `!` is accepted) turns it into an approval, valid 30 minutes
+> from the reply. Requests are found only in the folders of the session Mason replies in, so the request must be
+> built, and answered, in the session that applies it. It is checked LAST,
+> after the landing gate, against the PR and head that gate confirmed. Only `apply-migration-file.mjs` (the
+> `ownerApprovalDoor` caller) honours it, and it uses the approval up before transmitting. Residual risk Mason
+> accepted: an agent that deliberately writes the approval file itself is not stopped (the file sits in the
+> review-proof-guarded `.claude/session-state`). Autonomous applies are Claude-only: Codex's
 > `production-action-guard` blocks every live apply. The "flag absent → Mason's in-chat OK is the prose gate" rule-set in the `migration-apply-guard.mjs`
 > row below no longer exists. As its LAST check it runs `migration-landing-gate-lib.mjs`: the apply must come from a
 > clean checkout of the PR's branch (migration committed at HEAD, HEAD = the open PR's head into `main`) whose head
@@ -115,7 +120,7 @@ Runs on Codex's `*` (all-tools) PreToolUse matcher through portable POSIX and Wi
 ### UserPromptSubmit Hooks (`.claude/hooks/`)
 These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording or nudged toward the right workflow.
 
-`prompt-router.mjs` is the single registered command for this event. It reads the prompt once and invokes only `ship-intent-reminder.mjs` and `hold-latch-prompt.mjs` on both Claude and Codex. Since 2026-10-02 (Mason) the other reminder modules below, and `autopilot-intent-reminder.mjs`, are unwired: the router does not call them, so the overnight handshake never fires.
+`prompt-router.mjs` is the single registered command for this event. It reads the prompt once and invokes only `ship-intent-reminder.mjs`, `hold-latch-prompt.mjs` and (since 2026-10-09) `owner-approval-prompt.mjs` on both Claude and Codex; the last records Mason's `approve <code>` reply for a parked migration and does nothing on any other message. Since 2026-10-02 (Mason) the other reminder modules below, and `autopilot-intent-reminder.mjs`, are unwired: the router does not call them, so the overnight handshake never fires.
 
 | Hook | What it warns on / reminds | Why |
 |------|------------------|-----|

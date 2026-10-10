@@ -1,37 +1,42 @@
-// OWNER APPROVAL (Mason, 2026-09-29: "approved all three").
+// OWNER APPROVAL (Mason, 2026-09-29: "approved all three"; by chat reply since
+// 2026-10-09: "remove the windows hello thing ... I do a lot of work from phone",
+// then "go - i accept the trade off" once the trade-off below was put to him).
 //
 // migration-apply-lib.mjs parks three kinds of migration for Mason: one that
 // DELETES data, one that OVERWRITES existing rows, and one that CHANGES WHO CAN
-// ACCESS WHAT. Until now nothing could apply them — no agent, and no route Mason
-// could use either, short of pasting SQL into the Supabase Dashboard, which
-// DATABASE_CHANGE_CHECKLIST forbids. An approval flag, label, comment or GitHub
-// review cannot fix that: agents act through Mason's own GitHub token, so any of
-// those can be forged (Sol HIGH, PR #804, 2026-09-26).
+// ACCESS WHAT. This module is how he approves one of them.
 //
-// This module is the one thing an agent cannot forge: a signature made by a key
-// that lives in this PC's security chip and that Windows Hello releases only
-// after Mason's PIN or fingerprint (owner-approval-hello.ps1). Each signature
-// covers ONE payload:
-//   * the exact migration (its name and the sha256 of its LF-normalized SQL),
-//   * the pull request number and its exact head commit,
-//   * what the safety check flagged (the categories below),
-//   * a 30-minute window and a one-time nonce,
-//   * the plain-English summary Mason was shown — recomputed here from the
-//     payload's own fields, so what he read is what he signed.
+// Until 2026-10-09 he approved with a Windows Hello signature, which needed him
+// at the PC. He works mostly from his phone, so the approval is now his reply in
+// the chat:
+//   1. scripts/owner-approve-migration.mjs builds a REQUEST from the file itself:
+//      the exact migration (its name and the sha256 of its LF-normalized SQL), the
+//      pull request and its exact head, what the safety check flagged, and a
+//      6-digit code. It is saved beside the checkout's other proofs.
+//   2. The agent shows Mason the plain-English summary and the exact reply.
+//   3. He replies `approve <code>` from anywhere. owner-approval-prompt.mjs, a
+//      UserPromptSubmit hook, turns that request into an APPROVAL good for 30
+//      minutes. A hook runs on a message sent into the session, never on a tool
+//      call, so no command an agent runs produces one through it.
+//   4. scripts/apply-migration-file.mjs checks it LAST, after the reviewer proofs,
+//      the Sol proof and the landing gate, and uses it up once.
+//
+// THE TRADE-OFF MASON ACCEPTED. The reply must be the WHOLE message, so a peer
+// session's message (always wrapped in an envelope or preamble), a subagent's
+// report or a quoted line never matches. That stops a parked migration being
+// applied by mistake, on a misread handoff, or on a relayed "Mason said yes". It
+// does not stop an agent that deliberately writes the approval file itself:
+// agents run on Mason's PC with his permissions, and only Windows Hello could
+// rule that out. The file lives in .claude/session-state, which the review proof
+// guard protects like every other proof.
 //
 // It is NOT a general override. It only lets a parked migration continue to the
-// SAME checks every other migration must pass (reviewer proofs, the Sol proof,
-// the pull-request landing gate); it only works through
+// SAME checks every other migration must pass; it only works through
 // scripts/apply-migration-file.mjs; and it works once.
-//
-// The key is checked twice: the public key pinned in owner-approval-key.json
-// (reviewed, committed) must equal the one Windows holds under OWNER_KEY_NAME
-// right now. A software key an agent generated and pinned would not match the
-// Windows Hello key; replacing that key needs Mason's Windows Hello prompt.
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash, randomInt } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -39,13 +44,16 @@ import { accessChangeCheck, dataRewriteCheck } from "./migration-access-lib.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export const OWNER_KEY_NAME = "CRX-Owner-Migration-Approval";
-export const OWNER_KEY_FILE = path.join(HERE, "owner-approval-key.json");
-export const OWNER_HELLO_SCRIPT = path.join(HERE, "owner-approval-hello.ps1");
-export const OWNER_APPROVAL_PURPOSE = "crx-owner-migration-approval-v1";
-export const OWNER_SELFTEST_PURPOSE = "crx-owner-approval-selftest-v1";
+// v2 = approved by chat reply. A v1 (Windows Hello) payload is refused by purpose.
+export const OWNER_APPROVAL_PURPOSE = "crx-owner-migration-approval-v2";
+export const OWNER_SELFTEST_PURPOSE = "crx-owner-approval-selftest-v2";
+export const OWNER_APPROVAL_VIA = "chat-reply";
+// Once Mason replies, the agent has 30 minutes to apply.
 export const OWNER_APPROVAL_MAX_AGE_MS = 30 * 60 * 1000;
-// Mason works in Central time; the window he is shown uses it on every machine.
+// He may reply up to a day after the request. Anything that changed meanwhile
+// (the file, the pull request head, what the safety check finds) still refuses it.
+export const OWNER_REQUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// Mason works in Central time; the deadline he is shown uses it on every machine.
 const OWNER_TIME_ZONE = "America/Chicago";
 
 export const PARKED_LABELS = {
@@ -78,7 +86,14 @@ export function parkedCategories(query, { history } = {}) {
   return out;
 }
 
+/** The same file-safe form of a migration name migration-apply-lib uses. */
+export const safeMigrationName = (migName) => String(migName).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
 export const approvalFileName = (safeName) => `owner-approval-${safeName}.json`;
+export const requestFileName = (code) => `owner-approval-request-${code}.json`;
+export const selfTestResultName = (code) => `owner-approval-selftest-${code}.json`;
+
+/** A fresh 6-digit code: short enough to type on a phone. */
+export const newApprovalCode = () => String(randomInt(0, 1_000_000)).padStart(6, "0");
 
 function centralTime(iso) {
   return `${new Date(iso).toLocaleString("en-US", { timeZone: OWNER_TIME_ZONE, dateStyle: "medium", timeStyle: "short" })} Central`;
@@ -86,14 +101,14 @@ function centralTime(iso) {
 
 const clip = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 3)}...` : String(s));
 
-/** The lines Mason sees before he signs. Derived only from payload fields. */
+/** The lines Mason sees before he replies. Derived only from payload fields. */
 export function ownerApprovalSummary(p) {
   if (p.purpose === OWNER_SELFTEST_PURPOSE) {
     return [
-      "This is a one-time TEST of your new approval key.",
+      "This is a TEST of approving by chat reply.",
       "It approves nothing and changes nothing.",
       "",
-      `Test code: ${String(p.nonce).slice(0, 8)}`,
+      `To answer it, reply exactly: approve ${p.code}`,
     ];
   }
   return [
@@ -106,13 +121,14 @@ export function ownerApprovalSummary(p) {
     "The safety check stopped it for you because it:",
     ...(p.categories || []).map((c) => `- ${PARKED_LABELS[c.category] || c.category}: ${c.reason}`),
     "",
-    `This approval works once, only for this exact file and version, until ${centralTime(p.expiresAt)}.`,
+    `To approve, reply exactly: approve ${p.code} (before ${centralTime(p.expiresAt)}).`,
+    "It then works once, for 30 minutes, only for this exact file and version.",
     "Every other safety check still has to pass before it runs.",
   ];
 }
 
-/** The exact text Mason signs. Field order is fixed. */
-export function buildApprovalPayload({ project, migration, queryHash, pullRequest, prHead, categories, issuedAt, expiresAt, nonce }) {
+/** The request Mason approves. Field order is fixed; expiresAt is his reply deadline. */
+export function buildApprovalPayload({ project, migration, queryHash, pullRequest, prHead, categories, issuedAt, expiresAt, nonce, code }) {
   const p = {
     purpose: OWNER_APPROVAL_PURPOSE,
     project,
@@ -124,65 +140,90 @@ export function buildApprovalPayload({ project, migration, queryHash, pullReques
     issuedAt,
     expiresAt,
     nonce,
+    code,
   };
   return JSON.stringify({ ...p, summary: ownerApprovalSummary(p) }, null, 2);
 }
 
-export function buildSelfTestPayload({ issuedAt, nonce }) {
-  const p = { purpose: OWNER_SELFTEST_PURPOSE, issuedAt, nonce };
+export function buildSelfTestPayload({ issuedAt, expiresAt, nonce, code }) {
+  const p = { purpose: OWNER_SELFTEST_PURPOSE, issuedAt, expiresAt, nonce, code };
   return JSON.stringify({ ...p, summary: ownerApprovalSummary(p) }, null, 2);
 }
 
-/** True when `signature` (base64) is the owner key's signature of `payload`. */
-export function signatureValid(payload, signature, spkiDer) {
+/** Save a request where the reply hook will look. "wx": a code already pending in this checkout throws. */
+export function writeApprovalRequest(stateDir, payloadText) {
+  const p = JSON.parse(payloadText);
+  if (!/^\d{6}$/.test(String(p.code || ""))) throw new Error("the request has no usable code");
+  mkdirSync(stateDir, { recursive: true });
+  const file = path.join(stateDir, requestFileName(p.code));
+  writeFileSync(file, `${JSON.stringify({ payload: payloadText }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  return file;
+}
+
+// The WHOLE message must be the reply. A phone may capitalise the first letter
+// and Mason may end with a period; anything more (other words, a quote, a peer's
+// envelope or preamble) is not an approval.
+const REPLY_RE = /^\s*approve\s+(\d{6})\s*[.!]?\s*$/i;
+
+/** The code in Mason's reply, or null when the message is not exactly `approve <code>`. */
+export function approvalCodeFromReply(prompt) {
+  const m = REPLY_RE.exec(String(prompt ?? ""));
+  return m ? m[1] : null;
+}
+
+/**
+ * The session-state directories a request may be in: ONLY the folders of the
+ * session Mason is replying in. A request another session built in another
+ * worktree is never found, so his reply in one conversation cannot approve an
+ * apply that a different conversation runs (Codex P1, PR #894: AGENTS.md wants
+ * his approval in the applying conversation).
+ */
+export function ownerRequestDirs(sessionFolders) {
+  return [...new Set((sessionFolders || []).filter(Boolean).map((s) => path.resolve(s)))]
+    .map((r) => path.join(r, ".claude", "session-state"));
+}
+
+/**
+ * Turn Mason's reply into an approval: the pending request with this code becomes
+ * an approval file beside it, stamped with when he replied. Only the reply hook
+ * calls this.
+ *
+ * @returns {{ok: true, kind: "migration"|"selftest", payload: object, file: string, requestLeft: boolean}|{ok: false, reason: string}}
+ */
+export function recordReplyApproval({ code, dirs, reply, now = Date.now(), removeRequest = (f) => rmSync(f, { force: true }) }) {
+  const no = (reason) => ({ ok: false, reason });
+  const hits = [];
+  for (const dir of new Set(dirs || [])) {
+    const file = path.join(dir, requestFileName(code));
+    if (existsSync(file)) hits.push({ dir, file });
+  }
+  if (!hits.length) return no(`no pending approval request has the code ${code}`);
+  if (hits.length > 1) return no(`${hits.length} pending requests share the code ${code}, so it is ambiguous`);
+  const { dir, file } = hits[0];
+  let payloadText;
+  let p;
   try {
-    const key = createPublicKey({ key: spkiDer, format: "der", type: "spki" });
-    return cryptoVerify("sha256", Buffer.from(String(payload), "utf8"), key, Buffer.from(String(signature), "base64"));
+    payloadText = JSON.parse(readFileSync(file, "utf8")).payload;
+    p = JSON.parse(payloadText);
   } catch {
-    return false;
+    return no(`the request for code ${code} is unreadable`);
   }
-}
-
-/** The committed public key. Throws with a plain reason when it is missing or inconsistent. */
-export function readPinnedOwnerKey(file = OWNER_KEY_FILE) {
-  if (!existsSync(file)) throw new Error(`Mason's approval key is not set up yet (no ${path.basename(file)}); run node scripts/owner-approval-setup.mjs with Mason at the PC`);
-  const data = JSON.parse(readFileSync(file, "utf8"));
-  if (data?.keyName !== OWNER_KEY_NAME) throw new Error(`${path.basename(file)} names key "${data?.keyName}", not ${OWNER_KEY_NAME}`);
-  const der = Buffer.from(String(data?.spki || ""), "base64");
-  if (!der.length) throw new Error(`${path.basename(file)} holds no public key`);
-  const fingerprint = createHash("sha256").update(der).digest("hex");
-  if (fingerprint !== String(data?.fingerprint || "").toLowerCase()) {
-    throw new Error(`${path.basename(file)}'s fingerprint does not match its public key`);
-  }
-  createPublicKey({ key: der, format: "der", type: "spki" });
-  return der;
-}
-
-/** Run the Windows Hello helper. Returns its parsed JSON line. */
-export function runHello(mode, { payloadFile, timeoutMs = 60_000 } = {}) {
-  if (process.platform !== "win32") {
-    return { ok: false, status: "NotWindows", message: "Windows Hello is only available on Mason's Windows PC" };
-  }
-  const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", OWNER_HELLO_SCRIPT, "-Mode", mode];
-  if (payloadFile) args.push("-PayloadFile", payloadFile);
-  const run = spawnSync("powershell.exe", args, { encoding: "utf8", timeout: timeoutMs, windowsHide: false });
-  if (run.error) return { ok: false, status: "Error", message: String(errText(run.error)) };
-  const line = String(run.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop() || "";
-  try { return JSON.parse(line); }
-  catch { return { ok: false, status: "Error", message: `unreadable helper output: ${clip(line || run.stderr || "(none)", 200)}` }; }
-}
-
-/** The public key Windows holds for Mason right now. Throws when it cannot be read. */
-export function readLiveOwnerKey() {
-  const r = runHello("PublicKey", { timeoutMs: 30_000 });
-  if (!r?.ok || !r.publicKey) {
-    throw new Error(`could not read Mason's approval key from Windows (${r?.status || "no answer"}${r?.message ? `: ${r.message}` : ""})`);
-  }
-  return Buffer.from(String(r.publicKey), "base64");
-}
-
-export function defaultOwnerKeys() {
-  return { pinned: readPinnedOwnerKey(), live: readLiveOwnerKey() };
+  if (String(p?.code) !== code) return no(`the request file does not carry the code ${code}`);
+  const selftest = p.purpose === OWNER_SELFTEST_PURPOSE;
+  if (!selftest && p.purpose !== OWNER_APPROVAL_PURPOSE) return no(`the request for code ${code} is not a migration approval request`);
+  const deadline = Date.parse(p.expiresAt);
+  if (!Number.isFinite(deadline) || now > deadline) return no(`the request for code ${code} expired at ${p.expiresAt}`);
+  const approval = { payload: payloadText, approvedAt: new Date(now).toISOString(), via: OWNER_APPROVAL_VIA, reply: clip(String(reply ?? "").trim(), 40) };
+  const out = path.join(dir, selftest ? selfTestResultName(code) : approvalFileName(safeMigrationName(p.migration)));
+  try { writeFileSync(out, `${JSON.stringify(approval, null, 2)}\n`, "utf8"); }
+  catch (e) { return no(`the approval could not be saved (${errText(e)})`); }
+  // Once the approval file exists it IS the authorization, so a failure to remove
+  // the request afterwards (a Windows file lock) still reports success; saying
+  // "nothing was approved" would misstate what the apply gate will accept (Codex
+  // P2, PR #894). A leftover request can only be re-approved by another reply.
+  let requestLeft = false;
+  try { removeRequest(file); } catch { requestLeft = true; }
+  return { ok: true, kind: selftest ? "selftest" : "migration", payload: p, file: out, requestLeft };
 }
 
 // One marker FILE per used approval, created exclusively ("wx"): two applies
@@ -239,17 +280,15 @@ export function ownerOnceGuardSql({ tag, migName, sql }) {
     `END ${guardTag};\n`;
 }
 
-/** The approval must still be inside its window at the moment of transmission. */
 // The files an owner approval is created and verified with, repo-relative. They
-// are read from this checkout, so an uncommitted edit to any of them (a software
-// key pinned in place of Mason's, a helper that signs without Windows Hello, a
-// classifier that stops parking) could forge or launder an approval while the
-// migration and PR head stay reviewed (Sol HIGH, PR #857). They must match the
-// reviewed commit byte for byte before an approval is requested or honoured.
+// are read from this checkout, so an uncommitted edit to any of them (a reply
+// hook that approves any message, a classifier that stops parking) could launder
+// an approval while the migration and PR head stay reviewed (Sol HIGH, PR #857).
+// They must match the reviewed commit byte for byte before a request is built or
+// an approval honoured.
 export const OWNER_TRUST_FILES = Object.freeze([
-  ".claude/hooks/owner-approval-key.json",
-  ".claude/hooks/owner-approval-hello.ps1",
   ".claude/hooks/owner-approval-lib.mjs",
+  ".claude/hooks/owner-approval-prompt.mjs",
   ".claude/hooks/live-testdata-lib.mjs",
   ".claude/hooks/migration-access-lib.mjs",
   ".claude/hooks/migration-apply-lib.mjs",
@@ -296,10 +335,10 @@ export function assertOwnerTrustFilesReviewed({
   }
 }
 
-export function assertApprovalStillValid(payloadText, now = Date.now()) {
-  const p = JSON.parse(payloadText);
-  const expires = Date.parse(p.expiresAt);
-  if (!Number.isFinite(expires) || now > expires) throw new Error(`Mason's approval expired at ${p.expiresAt}`);
+/** The approval must still be inside its 30 minutes at the moment of transmission. */
+export function assertApprovalStillValid(expiresAt, now = Date.now()) {
+  const expires = Date.parse(expiresAt);
+  if (!Number.isFinite(expires) || now > expires) throw new Error(`Mason's approval expired at ${expiresAt}`);
 }
 
 /** Every approval file for this migration in the given directories. */
@@ -316,28 +355,21 @@ export function findOwnerApprovals(dirs, safeName) {
  * Check one approval against what is about to be applied.
  *
  * @param {object} args
- * @param {{payload: string, signature: string}} args.approval
+ * @param {{payload: string, approvedAt: string, via: string}} args.approval
  * @param {object} args.expect  project, migration, queryHash, pullRequest, prHead,
  *   categories ([{category, reason}] exactly as parkedCategories returns them now)
- * @param {{pinned: Buffer, live: Buffer}} args.keys
  * @param {string[]|null} [args.appliedNames]  the live ledger snapshot; null skips that check
  * @param {Set<string>} [args.usedNonces]
- * @returns {{ok: true, payload: object}|{ok: false, reason: string}}
+ * @returns {{ok: true, payload: object, expiresAt: string}|{ok: false, reason: string}}
  */
-export function verifyOwnerApproval({ approval, expect, keys, appliedNames = null, usedNonces = new Set(), now = Date.now() }) {
+export function verifyOwnerApproval({ approval, expect, appliedNames = null, usedNonces = new Set(), now = Date.now() }) {
   const no = (reason) => ({ ok: false, reason });
   const payloadText = approval?.payload;
-  if (typeof payloadText !== "string" || typeof approval?.signature !== "string") return no("the approval file is malformed");
-  const pinned = keys?.pinned;
-  const live = keys?.live;
-  if (!Buffer.isBuffer(pinned) || !pinned.length) return no("the committed approval key is missing");
-  if (!Buffer.isBuffer(live) || !live.length) return no("Windows holds no approval key for Mason");
-  if (!pinned.equals(live)) return no("the committed approval key is not the Windows Hello key on this PC");
-  if (!signatureValid(payloadText, approval.signature, pinned)) return no("the signature is not Mason's (or the approval was edited after he signed it)");
+  if (typeof payloadText !== "string" || approval?.via !== OWNER_APPROVAL_VIA) return no("the approval file is malformed");
 
   let p;
-  try { p = JSON.parse(payloadText); } catch { return no("the signed approval is unreadable"); }
-  if (p.purpose !== OWNER_APPROVAL_PURPOSE) return no(`the signature is for "${p.purpose}", not a migration approval`);
+  try { p = JSON.parse(payloadText); } catch { return no("the approval is unreadable"); }
+  if (p.purpose !== OWNER_APPROVAL_PURPOSE) return no(`the approval is for "${p.purpose}", not a migration approval`);
   if (p.project !== expect.project) return no(`it approves project ${p.project}, not ${expect.project}`);
   if (p.migration !== expect.migration) return no(`it approves ${p.migration}, not ${expect.migration}`);
   if (p.queryHash !== expect.queryHash) return no("the migration file changed after Mason approved it (different fingerprint)");
@@ -350,7 +382,7 @@ export function verifyOwnerApproval({ approval, expect, keys, appliedNames = nul
   }
   // What Mason was told the check found must be EXACTLY what it finds now — the
   // categories and their reasons, in order. Comparing names alone would let a
-  // hand-built payload keep the category and soften the reason he reads.
+  // hand-built request keep the category and soften the reason he reads.
   const shown = (p.categories || []).map((c) => `${c?.category}\u0000${c?.reason}`);
   const actual = (expect.categories || []).map((c) => `${c?.category}\u0000${c?.reason}`);
   const missing = (expect.categories || []).filter((c) => !shown.includes(`${c?.category}\u0000${c?.reason}`));
@@ -363,15 +395,19 @@ export function verifyOwnerApproval({ approval, expect, keys, appliedNames = nul
   if (JSON.stringify(p.summary) !== JSON.stringify(ownerApprovalSummary(p))) return no("what Mason was shown does not match what the approval covers");
 
   const issued = Date.parse(p.issuedAt);
-  const expires = Date.parse(p.expiresAt);
-  if (!Number.isFinite(issued) || !Number.isFinite(expires)) return no("the approval has no usable time window");
-  if (expires <= issued || expires - issued > OWNER_APPROVAL_MAX_AGE_MS) return no("the approval window is longer than 30 minutes");
-  if (now < issued) return no("the approval is dated in the future");
-  if (now > expires) return no(`the approval expired at ${p.expiresAt}; ask Mason again`);
+  const deadline = Date.parse(p.expiresAt);
+  const approved = Date.parse(approval.approvedAt);
+  if (!Number.isFinite(issued) || !Number.isFinite(deadline) || !Number.isFinite(approved)) return no("the approval has no usable time window");
+  if (deadline <= issued || deadline - issued > OWNER_REQUEST_MAX_AGE_MS) return no("the request gave Mason more than 24 hours to reply");
+  if (approved < issued) return no("the approval is dated before the request was made");
+  if (approved > deadline) return no(`Mason replied after the request expired at ${p.expiresAt}`);
+  if (now < approved) return no("the approval is dated in the future");
+  const expires = approved + OWNER_APPROVAL_MAX_AGE_MS;
+  if (now > expires) return no(`the approval expired at ${new Date(expires).toISOString()}, 30 minutes after Mason replied; ask him again`);
   if (!/^[0-9A-Za-z_-]{1,128}$/.test(String(p.nonce || ""))) return no("the approval has no usable one-time code");
   if (usedNonces.has(String(p.nonce))) return no("this approval was already used; each one works once");
   if (Array.isArray(appliedNames) && appliedNames.includes(expect.migration)) {
     return no(`${expect.migration} is already in the live ledger; an approval covers one install`);
   }
-  return { ok: true, payload: p };
+  return { ok: true, payload: p, expiresAt: new Date(expires).toISOString() };
 }

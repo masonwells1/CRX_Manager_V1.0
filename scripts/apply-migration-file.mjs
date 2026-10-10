@@ -49,8 +49,9 @@
 //   A migration that DELETES data, OVERWRITES existing rows or CHANGES WHO CAN
 //   ACCESS WHAT stays Mason's. There is deliberately no override flag — a flag the
 //   agent can pass itself cannot prove Mason approved that exact migration (Sol
-//   HIGH, 2026-09-26). What can is his Windows Hello signature of this exact file,
-//   pull request and head (scripts/owner-approve-migration.mjs; Mason, 2026-09-29).
+//   HIGH, 2026-09-26). What counts is his own `approve <code>` chat reply to a request
+//   for this exact file, pull request and head (scripts/owner-approve-migration.mjs;
+//   Mason, 2026-09-29; by reply instead of Windows Hello since 2026-10-09).
 //   This script is the only door that accepts it: the rule book checks it LAST,
 //   after every other proof, and this script marks it used before transmitting,
 //   so each approval installs one migration once.
@@ -123,7 +124,7 @@ if (!filePath) {
 const confirm = argv.includes("--confirm");
 rejectedFlag("--mason-approved-destructive",
   "apply-migration-file: --mason-approved-destructive does not exist. A flag the agent can pass itself cannot " +
-  "prove Mason approved that exact migration. Ask Mason to approve it with Windows Hello instead:\n" +
+  "prove Mason approved that exact migration. Ask Mason to approve it by chat reply instead:\n" +
   "  node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql");
 const createdBy = flagValue(argv, "--created-by") || DEFAULT_CREATED_BY;
 
@@ -326,8 +327,8 @@ try {
     // The proof must name THIS migration exactly. Substring matching is what let an
     // aliased filename inherit another migration's proof; see the note in the lib.
     requireExactProofName: true,
-    // This door may carry Mason's Windows Hello approval for a parked migration.
-    // It proves nothing alone: the rule book still needs his valid signature.
+    // This door may carry Mason's chat-reply approval for a parked migration.
+    // It proves nothing alone: the rule book still needs his valid approval.
     ownerApprovalDoor: true,
   });
 } catch (err) {
@@ -344,14 +345,14 @@ if (verdict?.decision !== "allow") {
 console.log("APPLY GATE PASSED — ordering, autopilot state, destructive-content, reviewer proof and Codex gate all satisfied.");
 const ownerApproval = verdict.ownerApproval || null;
 if (ownerApproval) {
-  console.log(`OWNER APPROVAL: Mason approved this exact file, pull request and head with Windows Hello (valid until ${ownerApproval.expiresAt}; one use).`);
+  console.log(`OWNER APPROVAL: Mason approved this exact file, pull request and head by chat reply (valid until ${ownerApproval.expiresAt}; one use).`);
 }
 
 if (!confirm) {
   console.log("");
   console.log("DRY RUN — nothing was transmitted. Re-run with --confirm to apply for real.");
   console.log(ownerApproval
-    ? "Gate passed with Mason's Windows Hello approval. --confirm uses it up; it expires 30 minutes after he approved."
+    ? "Gate passed with Mason's chat-reply approval. --confirm uses it up; it expires 30 minutes after he replied."
     : "Gate passed. Under Mason's 2026-09-26 landing rule this non-destructive migration, whose PR's final Sol and CodeRabbit reviews are clean, may now be applied with --confirm.");
   process.exit(0);
 }
@@ -455,7 +456,7 @@ if (ownerApproval) {
       `install this migration twice.`);
   }
   // Last moment before transmission: still inside his 30-minute window?
-  try { assertApprovalStillValid(ownerApproval.payload); }
+  try { assertApprovalStillValid(ownerApproval.expiresAt); }
   catch (err) { die(2, `apply-migration-file: ${err?.message || err}. Refusing to transmit; ask Mason again.`); }
 }
 
