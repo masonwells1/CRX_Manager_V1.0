@@ -156,8 +156,9 @@ function saveInvoice(number, uid, { qty = 'ii.quantity', price = 'ii.unit_price_
     SELECT 'saved=' || (public.save_invoice(inv, items, gen_random_uuid()::text) IS NOT NULL) FROM save_args;`;
 }
 /**
- * Two transactions each add a 3-unit invoice for D1 and commit: A holds its transaction open for
- * four seconds after writing; B starts while A is open. Returns both exit codes and B's errors.
+ * Two transactions each add a 3-unit invoice for D1 and commit. A writes, reports 'A-written', then
+ * holds its transaction open for 20 seconds; B starts only once A has written (so on a slow,
+ * loaded machine B still overlaps A). Returns both exit codes and B's errors.
  */
 async function race(tag) {
   const invoice = (n) => `INSERT INTO public.invoices (id, invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
@@ -165,12 +166,23 @@ async function race(tag) {
     INSERT INTO public.invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents)
       VALUES ('6f200000-0000-4000-8000-${String(n).padStart(12, '0')}', '${PRODUCT_A}', '[PROVER] race', 3, 1000, 3000, 600);`;
   const base = { R: 901, C: 911, M: 921 }[tag];
-  const a = spawn('docker', [...psqlArgs(), '-A', '-t'], { cwd: ROOT });
-  const aDone = new Promise((resolve) => a.on('close', resolve));
-  a.stdin.end(`BEGIN;\n${invoice(base)}\nSELECT pg_sleep(4);\nCOMMIT;\n`);
-  wait(1500);
-  const b = docker([...psqlArgs(), '-A', '-t'], { input: `BEGIN;\n${invoice(base + 1)}\nCOMMIT;\n`, allowFailure: true });
-  return { a: await aDone, b: b.status, bError: b.stderr };
+  const run = (input) => {
+    const child = spawn('docker', [...psqlArgs(), '-A', '-t'], { cwd: ROOT });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.stdin.end(input);
+    return { child, out: () => stdout, done: new Promise((resolve) => child.on('close', (code) => resolve({ code, stderr }))) };
+  };
+  const a = run(`BEGIN;\n${invoice(base)}\nSELECT 'A-written';\nSELECT pg_sleep(20);\nCOMMIT;\n`);
+  for (let i = 0; !a.out().includes('A-written'); i += 1) {
+    assert.ok(i < 600, 'transaction A never wrote its invoice');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const b = await run(`BEGIN;\n${invoice(base + 1)}\nCOMMIT;\n`).done;
+  const aResult = await a.done;
+  return { a: aResult.code, b: b.code, bError: b.stderr };
 }
 function expectSaved(result, label) {
   expectAllowed(result, label);
