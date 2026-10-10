@@ -32,6 +32,8 @@ assert.match(startup, /Every hard-gated live action listed in AGENTS\.md/);
 assert.match(startup, /each destructive migration.*current approval immediately beforehand/);
 // Mason's autonomous-landing rule (2026-09-26) — the conditions travel with it.
 assert.match(startup, /NON-destructive migration and the merge need no ask once CodeRabbit approved the exact head, the exact-SHA Sol proof is clean and checks are green/);
+// The documentation-only exception (Mason, 2026-10-07) travels with it.
+assert.match(startup, /A documentation-only change \(docs\/reference\/sol-exempt-paths\.md\) needs no Sol proof/);
 assert.doesNotMatch(startup, /armed hands-free migration path waives/);
 // Keep the full rulebook task-routed instead of injecting it into every session.
 assert.doesNotMatch(startup, /SAFE_DEVELOPMENT_RULES/);
