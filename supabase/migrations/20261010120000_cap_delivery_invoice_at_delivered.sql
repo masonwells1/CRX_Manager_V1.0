@@ -62,6 +62,18 @@
 --          (draft/unposted -> posted/paid/overdue, including an admin-override jump). Paid/overdue
 --          marking of a posted invoice and voiding are never re-checked, so existing posted invoices
 --          keep working.
+--   4. refuse_overlapping_order_and_delivery_invoices (BEFORE INSERT OR UPDATE OF delivery_id, order_id,
+--      invoice_type, deleted_at, status ON invoices, zz_refuse_overlapping_order_delivery_invoices):
+--      an order is billed EITHER per delivery OR by whole-order invoices, never both — the cap above
+--      cannot see an order-level invoice (delivery_id NULL), so an order-level invoice made after a
+--      delivery invoice (save_invoice can create one) would bill the same goods twice. Refuses, with
+--      ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE, an active non-credit invoice of one kind while the
+--      order has an active non-credit invoice of the other kind; checked when an invoice is created,
+--      or becomes active or billing again, under the order lock every invoice writer already takes
+--      (so two concurrent creations of opposite kinds cannot both pass). Every delivery-invoice
+--      writer already refused the other direction; split billing (create_split_invoices_from_order)
+--      bills only orders with field allocations, which never get delivery invoices. Checked live
+--      2026-10-10: no order-level invoices exist at all.
 --   The preflight locks invoices and invoice_items, then refuses to install if any active delivery
 --   invoice already breaks a rule (checked live 2026-10-10: 12 active delivery invoices on 12
 --   completed deliveries, none over).
@@ -76,10 +88,8 @@
 --   * consolidate_draft_invoices would also be refused here (it moves one delivery's lines onto
 --     another delivery's invoice), but INVOICE_ITEM_LINEAGE_IMMUTABLE already refuses every line move
 --     (20260721014858), so nothing changes for it.
--- Not covered here (unchanged behavior): order-level invoices (delivery_id NULL) are not capped —
--- every delivery-invoice writer refuses to bill a delivery an order-level invoice already covers, but
--- nothing yet refuses a manual order-level invoice made after delivery invoices (tracked in
--- KNOWN_ISSUES); unit prices, and the unit label of a manually added line; two delivery_items rows
+-- Not covered here (unchanged behavior): the quantities on an order-level invoice (one can no longer
+-- share an order with delivery invoices, item 4); unit prices, and the unit label of a manually added line; two delivery_items rows
 -- for one order line on one delivery (none live, 2026-10-10; complete_delivery's trim would then be
 -- checked in full rather than exempted); and a delivery whose items are changed after its invoice was posted (a posted delivery invoice now needs
 -- a completed delivery, and enforce_delivery_items_parent_lock already freezes a completed delivery's
@@ -93,6 +103,8 @@
 --   DROP TRIGGER IF EXISTS zz_cap_delivery_invoice_header ON public.invoices;
 --   DROP FUNCTION IF EXISTS public.enforce_delivery_invoice_within_delivered();
 --   DROP FUNCTION IF EXISTS public._delivery_invoice_overbilling(uuid);
+--   DROP TRIGGER IF EXISTS zz_refuse_overlapping_order_delivery_invoices ON public.invoices;
+--   DROP FUNCTION IF EXISTS public.refuse_overlapping_order_and_delivery_invoices();
 -- ORDERING: after 20261007150200, which the preflight requires in the ledger (applying this first
 -- would leave that owner-approved file below the high-water mark, where the apply gate refuses it).
 
@@ -318,6 +330,61 @@ $function$;
 ALTER FUNCTION public.enforce_delivery_invoice_within_delivered() OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.enforce_delivery_invoice_within_delivered() FROM PUBLIC, anon, authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION public.refuse_overlapping_order_and_delivery_invoices()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_conflict text;
+BEGIN
+  -- Only an active, billing invoice on an order counts (credit memos credit, never bill).
+  IF NEW.order_id IS NULL
+     OR NEW.invoice_type = 'credit_memo'
+     OR NEW.deleted_at IS NOT NULL
+     OR NEW.status IN ('voided', 'cancelled') THEN
+    RETURN NEW;
+  END IF;
+  -- On UPDATE, check only when the invoice changes kind or order, or becomes active/billing again.
+  IF TG_OP = 'UPDATE'
+     AND NEW.delivery_id IS NOT DISTINCT FROM OLD.delivery_id
+     AND NEW.order_id IS NOT DISTINCT FROM OLD.order_id
+     AND OLD.invoice_type <> 'credit_memo'
+     AND OLD.deleted_at IS NULL
+     AND OLD.status NOT IN ('voided', 'cancelled') THEN
+    RETURN NEW;
+  END IF;
+
+  -- The order lock every invoice writer takes (trg_guard_invoice_terminal_order on INSERT): an
+  -- invoice of the other kind committed meanwhile is seen by the fresh-snapshot read below.
+  PERFORM 1 FROM public.orders o WHERE o.id = NEW.order_id FOR UPDATE;
+
+  SELECT i.invoice_number INTO v_conflict
+    FROM public.invoices i
+   WHERE i.order_id = NEW.order_id
+     AND i.id <> NEW.id
+     AND i.invoice_type <> 'credit_memo'
+     AND i.deleted_at IS NULL
+     AND i.status NOT IN ('voided', 'cancelled')
+     AND (i.delivery_id IS NULL) = (NEW.delivery_id IS NOT NULL)
+   ORDER BY i.invoice_number
+   LIMIT 1;
+  IF FOUND THEN
+    IF NEW.delivery_id IS NULL THEN
+      RAISE EXCEPTION 'ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order is already billed per delivery (invoice %), so a whole-order invoice would bill those goods again; invoice each remaining delivery instead', v_conflict
+        USING DETAIL = format('order_id=%s', NEW.order_id);
+    END IF;
+    RAISE EXCEPTION 'ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order already has a whole-order invoice (%), so a delivery invoice would bill those goods again', v_conflict
+      USING DETAIL = format('order_id=%s', NEW.order_id);
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+ALTER FUNCTION public.refuse_overlapping_order_and_delivery_invoices() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.refuse_overlapping_order_and_delivery_invoices() FROM PUBLIC, anon, authenticated, service_role;
+
 -- Nothing may write an invoice or line between the check below and the triggers taking effect.
 LOCK TABLE public.invoices, public.invoice_items IN SHARE ROW EXCLUSIVE MODE;
 
@@ -332,6 +399,17 @@ BEGIN
    WHERE r IS NOT NULL;
   IF v_reasons IS NOT NULL THEN
     RAISE EXCEPTION 'DELIVERY_INVOICE_CAP_PREFLIGHT: active delivery invoices already break the delivery cap: %', v_reasons;
+  END IF;
+  SELECT string_agg(DISTINCT o.order_number, ', ') INTO v_reasons
+    FROM public.invoices a
+    JOIN public.invoices b ON b.order_id = a.order_id
+    JOIN public.orders o ON o.id = a.order_id
+   WHERE a.delivery_id IS NULL AND b.delivery_id IS NOT NULL
+     AND a.invoice_type <> 'credit_memo' AND b.invoice_type <> 'credit_memo'
+     AND a.deleted_at IS NULL AND b.deleted_at IS NULL
+     AND a.status NOT IN ('voided', 'cancelled') AND b.status NOT IN ('voided', 'cancelled');
+  IF v_reasons IS NOT NULL THEN
+    RAISE EXCEPTION 'DELIVERY_INVOICE_CAP_PREFLIGHT: orders already billed both per delivery and whole-order: %', v_reasons;
   END IF;
 END
 $preflight$;
@@ -356,6 +434,11 @@ CREATE TRIGGER zz_cap_delivery_invoice_header
              OR (NEW.status IN ('posted', 'paid', 'overdue') AND OLD.status IN ('draft', 'unposted'))))
   EXECUTE FUNCTION public.enforce_delivery_invoice_within_delivered();
 
+DROP TRIGGER IF EXISTS zz_refuse_overlapping_order_delivery_invoices ON public.invoices;
+CREATE TRIGGER zz_refuse_overlapping_order_delivery_invoices
+  BEFORE INSERT OR UPDATE OF delivery_id, order_id, invoice_type, deleted_at, status ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public.refuse_overlapping_order_and_delivery_invoices();
+
 DO $postflight$
 DECLARE
   v_role text;
@@ -372,9 +455,21 @@ BEGIN
             AND NOT t.tgisinternal) <> 2 THEN
     RAISE EXCEPTION 'DELIVERY_INVOICE_CAP_POSTFLIGHT: exactly the two cap triggers must be installed, enabled and immediate on their tables';
   END IF;
+  IF (SELECT count(*) FROM pg_trigger t
+       WHERE t.tgfoid = 'public.refuse_overlapping_order_and_delivery_invoices()'::regprocedure
+         AND NOT t.tgisinternal) <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+        WHERE t.tgname = 'zz_refuse_overlapping_order_delivery_invoices'
+          AND t.tgrelid = 'public.invoices'::regclass
+          AND t.tgfoid = 'public.refuse_overlapping_order_and_delivery_invoices()'::regprocedure
+          AND t.tgenabled = 'O') THEN
+    RAISE EXCEPTION 'DELIVERY_INVOICE_CAP_POSTFLIGHT: the order/delivery overlap trigger must be installed and enabled on invoices';
+  END IF;
   FOREACH v_role IN ARRAY ARRAY['public', 'anon', 'authenticated', 'service_role'] LOOP
     IF has_function_privilege(v_role, 'public._delivery_invoice_overbilling(uuid)', 'EXECUTE')
-       OR has_function_privilege(v_role, 'public.enforce_delivery_invoice_within_delivered()', 'EXECUTE') THEN
+       OR has_function_privilege(v_role, 'public.enforce_delivery_invoice_within_delivered()', 'EXECUTE')
+       OR has_function_privilege(v_role, 'public.refuse_overlapping_order_and_delivery_invoices()', 'EXECUTE') THEN
       RAISE EXCEPTION 'DELIVERY_INVOICE_CAP_POSTFLIGHT: % can execute a cap helper', v_role;
     END IF;
   END LOOP;

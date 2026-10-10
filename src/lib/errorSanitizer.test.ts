@@ -64,12 +64,19 @@ describe('sanitizeError', () => {
 
   it('explains a delivery invoice that bills beyond its delivery', () => {
     expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6'))
-      .toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6)');
+      .toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6)');
     expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed'))
       .toBe('Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed)');
     const unknown = sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: relation "x" 6f000000-0000-4000-8000-000000000001');
-    expect(unknown).toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
+    expect(unknown).toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
     expect(unknown).not.toContain('DELIVERY_INVOICE_EXCEEDS_DELIVERED');
+  });
+
+  it('explains an order billed both per delivery and whole-order', () => {
+    expect(sanitizeError('ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order is already billed per delivery (invoice CS-2026-0055), so a whole-order invoice would bill those goods again; invoice each remaining delivery instead'))
+      .toBe('Nothing was saved. This order is already billed delivery by delivery, so a whole-order invoice would bill those goods twice. Invoice each remaining delivery instead');
+    expect(sanitizeError('ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order already has a whole-order invoice (CS-2026-0300), so a delivery invoice would bill those goods again'))
+      .toBe('Nothing was saved. This order already has a whole-order invoice, so a delivery invoice would bill those goods twice');
   });
 
   it('explains a refused change to a deleted order', () => {

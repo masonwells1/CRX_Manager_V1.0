@@ -167,9 +167,15 @@ export function sanitizeError(error: unknown): string {
     return `Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (${deliveryCap[1]})`;
   }
   if (deliveryCap || /^DELIVERY_INVOICE_EXCEEDS_DELIVERED(?::|$)/.test(message)) {
-    return 'Nothing was saved. This invoice is for one delivery, so it can bill only the products and '
+    return 'Nothing was changed. This invoice is for one delivery, so it can bill only the products and '
       + 'quantities that delivery delivered'
       + (deliveryCap ? ` (${deliveryCap[1]})` : '');
+  }
+  // 20261010120000: an order is billed either per delivery or by whole-order invoices, never both.
+  if (/^ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE(?::|$)/.test(message)) {
+    return message.includes('already billed per delivery')
+      ? 'Nothing was saved. This order is already billed delivery by delivery, so a whole-order invoice would bill those goods twice. Invoice each remaining delivery instead'
+      : 'Nothing was saved. This order already has a whole-order invoice, so a delivery invoice would bill those goods twice';
   }
   if (/^ORDER_DELETED_(STATUS|LINES|DELIVERIES)_LOCKED(?::|$)/.test(message)) {
     return 'Nothing was changed. This order has been deleted, so it cannot be changed or restored';

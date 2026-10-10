@@ -301,6 +301,32 @@ async function main() {
   assert.equal(lineQty(INV1), '6.00', 'the refused write persisted');
   console.log('[prover] TABLE: no product-less or negative lines, no second invoice past the delivery, and a direct write is refused');
 
+  // An order is billed per delivery OR whole-order, never both (the cap cannot see an order-level invoice).
+  const wholeOrderSave = `CREATE TEMP TABLE save_args ON COMMIT DROP AS SELECT
+      jsonb_build_object('customer_id', '${CUSTOMER}', 'invoice_type', 'chemical_sale', 'order_id', '${ORDER}',
+        'invoice_date', current_date::text) AS inv,
+      ${newLine(PRODUCT_A, 6)} AS items;
+    GRANT SELECT ON save_args TO authenticated;
+    ${asUser(ADMIN)}
+    SELECT 'saved=' || (public.save_invoice(inv, items, gen_random_uuid()::text) IS NOT NULL) FROM save_args;`;
+  expectRefused(probe(wholeOrderSave), /ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order is already billed per delivery/, 'save a whole-order invoice on an order billed per delivery');
+  const orderLevel = (orderId, number) => `INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, invoice_type, status)
+      VALUES ('${number}', '${ADMIN}', '${CUSTOMER}', '${orderId}', 'chemical_sale', 'draft');`;
+  expectRefused(probe(orderLevel(ORDER, 'PROVER-CAP-WHOLE')), /already billed per delivery \(invoice /, 'insert a whole-order invoice on an order billed per delivery');
+  const otherOrder = '6f200000-0000-4000-8000-0000000000e9';
+  const otherDelivery = '6f200000-0000-4000-8000-0000000000f9';
+  expectRefused(probe(`INSERT INTO public.orders (id, order_number, customer_id, order_date, status, booking_draw, salesman_id)
+      VALUES ('${otherOrder}', 'PROVER-CAP-ORDER-2', '${CUSTOMER}', current_date, 'fulfilled', false, '${REP}');
+    INSERT INTO public.deliveries (id, delivery_number, order_id, customer_id, created_by, status, completed_at, signed_by, scheduled_date)
+      VALUES ('${otherDelivery}', 'PROVER-CAP-D9', '${otherOrder}', '${CUSTOMER}', '${ADMIN}', 'completed', now(), '[PROVER]', current_date);
+    ${orderLevel(otherOrder, 'PROVER-CAP-WHOLE-2')}
+    INSERT INTO public.invoices (invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
+      VALUES ('PROVER-CAP-PER-DELIVERY-2', '${ADMIN}', '${CUSTOMER}', '${otherOrder}', '${otherDelivery}', 'chemical_sale', 'draft');`),
+    /already has a whole-order invoice \(PROVER-CAP-WHOLE-2\)/, 'insert a delivery invoice on an order with a whole-order invoice');
+  const overlapMutant = probe(`DROP TRIGGER zz_refuse_overlapping_order_delivery_invoices ON public.invoices;\n${orderLevel(ORDER, 'PROVER-CAP-WHOLE-M')}\nSELECT 'inserted';`);
+  assert.equal(overlapMutant.last, 'inserted', `MUTATION: without the overlap trigger the whole-order invoice should go through:\n${overlapMutant.error}`);
+  console.log('[prover] OVERLAP: an order billed per delivery cannot get a whole-order invoice (save_invoice or direct), nor the reverse; without the trigger it can');
+
   // Posting and restoring re-check; an invoice that got over-billed with the guard off cannot be posted.
   const overBilled = `ALTER TABLE public.invoice_items DISABLE TRIGGER zz_cap_delivery_invoice_items;
     UPDATE public.invoice_items SET quantity = 9 WHERE invoice_id = ${inv1Id};
@@ -439,7 +465,7 @@ async function main() {
   assert.match(reinstall.output, /DELIVERY_INVOICE_CAP_PREFLIGHT: active delivery invoices already break the delivery cap: .*invoice PROVER-CAP-RACE-M921 bills 8\.0+ of/, `wrong preflight refusal:\n${reinstall.output}`);
   console.log('[prover] CONCURRENCY: two transactions over-billing one delivery at once - the second is refused, also with only the candidate\'s order lock; without any order lock both commit (and the preflight then refuses to install)');
 
-  console.log('DELIVERY_INVOICE_CAP_PROOF_PASS defect=reproduced save_invoice=capped table=capped header=rechecked allowed=unchanged quick_delivery=ok complete_delivery=ok ordering=enforced batch=isolated concurrency=serialized mutation=detected');
+  console.log('DELIVERY_INVOICE_CAP_PROOF_PASS defect=reproduced save_invoice=capped table=capped header=rechecked allowed=unchanged quick_delivery=ok complete_delivery=ok ordering=enforced overlap=refused batch=isolated concurrency=serialized mutation=detected');
 }
 
 try { await main(); }

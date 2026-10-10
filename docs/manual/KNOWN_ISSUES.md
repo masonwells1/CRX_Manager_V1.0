@@ -56,13 +56,11 @@ leave these open:
 - **The Order page and Orders list still offer whole-order invoicing on those 33 orders.** The server
   refuses with `DELIVERY_BILLED_OUTSIDE_CRX`, now shown in plain English, so no double bill.
 - **A delivery invoice is capped at what its delivery delivered** (`20261010120000`, Sol HIGH on
-  PR #889, NOT APPLIED when written). Still open by design: order-level invoices (no delivery) are
-  not capped by it (every delivery-invoice writer refuses a delivery an order-level invoice covers,
-  but nothing yet refuses a manual order-level invoice saved AFTER delivery invoices exist — none live
-  2026-10-10);
-  unit prices are not capped; and a delivery shortened after its invoice was POSTED leaves that
-  posted invoice over — the integrity report's delivery-invoice quantity check flags it. A delivery
-  recorded short cannot be billed for more on its own invoice. If a scheduled delivery loses a product
+  PR #889, NOT APPLIED when written); an order is billed either per delivery or whole-order, never
+  both. Still open by design: the quantities on a whole-order invoice are not capped, and unit prices
+  are not capped. A posted delivery invoice now needs a completed delivery, whose items are frozen, so
+  a delivery cannot shrink under a newly posted invoice; the integrity report's delivery-invoice
+  quantity check still flags any older mismatch. A delivery recorded short cannot be billed for more on its own invoice. If a scheduled delivery loses a product
   after its up-front (quick-delivery) invoice was drafted, the delivery still completes but that draft
   cannot be posted; void it and re-create the invoice from the delivery. If a scheduled delivery's
   quantity is lowered after its up-front invoice was drafted, the draft stays over until the office
