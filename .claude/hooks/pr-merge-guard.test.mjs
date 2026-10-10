@@ -574,6 +574,49 @@ ok(
   "a head behind its base is denied before the merge's allow point",
 );
 
+// ── documentation-only exemption (Mason, 2026-10-07) ─────────────────────────
+// The behaviour is proven in sol-exempt-lib.test.mjs (the contract, with mutants)
+// and through the Codex guard, which injects gh. Here, the wiring: the exemption
+// is asked only after every other gate, with the budgeted gh, and it is the only
+// way past the missing-proof denial.
+{
+  const at = (needle) => gateRequestSource.indexOf(needle);
+  const exemptionCall = at("solExemptionOnGitHub(");
+  ok(exemptionCall > 0, "gateRequest() asks the documentation-only exemption");
+  ok(
+    /const exemption = solExemptionOnGitHub\(\{\s*baseSha,\s*headSha,\s*repo:\s*request\.repo,\s*gh:\s*hardGateGh\s*\}\);/.test(gateRequestSource),
+    "the exemption's GitHub comparison spends the shared hard-gate budget (a hook killed mid-call ALLOWS), and its answer is what is tested",
+  );
+  // The allow must be decided by THAT answer and nothing else (Luna, round 2):
+  // no second assignment, no hand-built verdict, no other reading of `.exempt`.
+  eq((guardSource.match(/\bexemption\s*=/g) || []).length, 1, "`exemption` is assigned exactly once, from the module's answer");
+  ok(!/exempt\s*:\s*true/.test(guardSource), "the guard never builds an exempt verdict of its own");
+  eq((guardSource.match(/\.exempt\b/g) || []).length, 1, "`.exempt` is read in exactly one place: the allow decision");
+  ok(!/\bexemption\.exempt\s*(?:\|\||\?\?|=)|!\s*!?\s*exemption\.exempt\s*\|\|/.test(guardSource), "the allow decision is not widened with an `||` fallback");
+  for (const [gate, needle] of [
+    ["the CHANGES_REQUESTED objection", "if (pullRequestReviewBlocked(pr))"],
+    ["the --match-head-commit pin", "if (String(request.matchHeadCommit"],
+    ["the --auto refusal", "if (request.auto)"],
+    ["CodeRabbit's exact-head approval", "if (!coderabbitApprovedHead(pr))"],
+    ["the green pipeline", "if (!pullRequestChecksGreen(pr))"],
+    ["the head-contains-base check", "if (!headContainsBase)"],
+    ["the Sol proof scan", "if (valid) {"],
+  ]) {
+    ok(at(needle) > 0 && at(needle) < exemptionCall, `${gate} is checked before the exemption is asked`);
+  }
+  eq((gateRequestSource.match(/advisoryQueue\.push\(request\)/g) || []).length, 2,
+    "exactly two allow points: a valid Sol proof, or the exemption");
+  const exemptAllow = gateRequestSource.slice(exemptionCall);
+  const guardedAllow = exemptAllow.match(/if \(exemption\.exempt\) \{([\s\S]{0,700}?)advisoryQueue\.push\(request\);\s*return;\s*\}/);
+  ok(guardedAllow && !/\bdeny\(/.test(guardedAllow[1]) && exemptAllow.indexOf("advisoryQueue.push(request)") < exemptAllow.indexOf("deny("),
+    "the exemption's allow point is guarded by exemption.exempt, ahead of the missing-proof denial");
+  ok(/documentation-only exemption does not apply: \$\{exemption\.reason\}/.test(exemptAllow),
+    "the missing-proof denial says why the exemption did not apply");
+  ok(/import \{ solExemptionOnGitHub \} from "\.\/sol-exempt-lib\.mjs";/.test(guardSource),
+    "the guard uses the shared module, not a copy of the path lists");
+  ok(!/docs\/changelog\.d|docs\/workflows/.test(guardSource), "no path list is forked into the guard itself");
+}
+
 // headContainsBaseOnGitHub / ghApiRepoPath — driven in-process with an injected gh.
 {
   const B = "b".repeat(40);
@@ -648,10 +691,13 @@ ok(/if\s*\(\s*!pullRequestChecksGreen\(\s*pr\s*\)\s*\)\s*\{\s*deny\(/.test(gateR
   "the green-pipeline denial is unconditional (no --auto exemption left)");
 ok(!/riskyFiles|contentIsRisky|advisoryQueue\.push\(request\);\s*return;\s*\}\s*\/\/[^\n]*risky/i.test(gateRequestSource),
   "no risky/non-risky split survives: there is no allow point before the Sol proof check");
-eq((gateRequestSource.match(/advisoryQueue\.push\(request\)/g) || []).length, 1,
-  "exactly one allow point, and it sits behind the proof scan");
+// Two allow points since Mason's documentation-only exemption (2026-10-07): a
+// valid Sol proof, or — only when there is none — the exemption. Both sit behind
+// the proof scan, so neither can be reached before every other gate ran.
+eq((gateRequestSource.match(/advisoryQueue\.push\(request\)/g) || []).length, 2,
+  "exactly two allow points (the Sol proof, then the documentation-only exemption), both behind the proof scan");
 ok(gateRequestSource.indexOf("advisoryQueue.push(request)") > gateRequestSource.indexOf("proofValid(data, headSha"),
-  "the single allow point comes after the exact-head Sol proof validated");
+  "the first allow point comes after the exact-head Sol proof validated");
 
 // ── every agent merge pins the checked head (Sol HIGH, 2026-09-26) ───────────
 // A push landing between this gate's checks and GitHub's merge would otherwise

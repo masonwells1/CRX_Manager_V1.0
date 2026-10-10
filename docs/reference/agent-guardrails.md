@@ -13,12 +13,29 @@
 > round must never be routed through `scripts/write-codex-push-proof.mjs`, which unlinks the existing proof for the
 > current HEAD at the start of a run. See `docs/manual/DECISION_LOG.md`, 2026-09-20.
 >
+> **Documentation-only exemption (Mason, 2026-10-07) — amends point (1) of the autonomous-landing block below.**
+> A pull request whose every changed file is documentation as defined in `docs/reference/sol-exempt-paths.md`
+> merges into `main` without the Sol proof. Every other point (1) requirement still applies: CodeRabbit APPROVED on
+> the exact head, every check green, the `--match-head-commit` pin, no `--auto`, the head containing its base. Both
+> `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` ask `.claude/hooks/sol-exempt-lib.mjs`, and only
+> when no valid proof was found. It reads GitHub's compare API for `baseRefOid...headRefOid`, then one GraphQL
+> lookup confirming each changed path is a plain file (mode `100644`, not a symlink, submodule or executable): added and
+> kept files at the head, deleted and edited files and old names at the base. Both go through the same budgeted `gh`. It is an allow-list: only `.md` files under seven `docs/` (not `docs/reference/`, Mason 2026-10-10)
+> folders qualify (matched exactly), minus the rule-defining documents, any nested agent-instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `AGENT.md`) and package files, which
+> are matched without regard to case. Any uncertainty means Sol is required: a failed or unexpected GitHub answer, a comparison
+> that is not exactly base..head (or does not end at the head), 250 or more files (GitHub silently stops listing at
+> 300), an empty list, a change status other than a plain edit, a rename or copy whose old name is not exempt, or an
+> unusual path spelling. The module is in the Codex guard's protected-file list and the `.claude/settings.json`
+> `ask` tier. `sol-exempt-lib.test.mjs` checks it against the readable list and requires every loosened mutant in its list to fail. A change to
+> the rule touches `.claude/`, so it always needs Sol.
+>
 > **Autonomous landing (Mason, 2026-09-26) — this block supersedes older wording in the rows below where they
 > differ.** (1) `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` merge route now deny any merge into
 > `main` unless CodeRabbit's latest verdict (`gh pr view --json reviews`) is APPROVED on the exact `headRefOid`
 > (`coderabbitApprovedHead`), the NEWEST run of every reported check is green with `mergeStateStatus` CLEAN
 > (`newestCheckRollup` — an older failed run no longer outvotes a later green one), and a fresh `gpt-6-sol`/`high`
-> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones. Every agent merge must
+> proof is bound to that head and GitHub's real base — for EVERY diff, not only risky ones, except a documentation-only
+> change (the block above, Mason 2026-10-07), which still needs every other gate here. Every agent merge must
 > carry `--match-head-commit <the head the gate checked>` (put it before any free-text `--body`), so GitHub refuses a
 > head that moved in between; REST and connector merges cannot carry it and are refused. `--auto` into `main` is
 > refused outright; `--admin` and `CHANGES_REQUESTED` still are. A repeated StatusContext counts its WORSE state. (2) `migration-apply-lib.mjs` applies its former
@@ -343,7 +360,8 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    change or work around it, and no document carries a step-by-step way to switch it off (a Sol review flagged such
    steps as a written bypass path, 2026-09-27).
 4. **Adversarial review:** unchanged from the autonomous-landing entry — Luna rounds and an exact-SHA Sol proof on
-   every change — plus CodeRabbit and the Codex GitHub App on every PR automatically.
+   every change (since 2026-10-07, except a documentation-only change; see the block at the top) — plus CodeRabbit
+   and the Codex GitHub App on every PR automatically.
 5. **Codex hooks re-trusted (Mason's machine).** Codex silently skips a repository hook whose definition changed since
    it was trusted; on 2026-09-26, 17 of 24 CRX Codex hooks were skipped — every Write/Edit content guard, the three MCP
    guards, `production-action-guard`, `review-proof-guard`, `hold-latch-guard` and both routers — while Codex ran with

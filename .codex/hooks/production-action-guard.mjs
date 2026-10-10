@@ -58,6 +58,7 @@ import {
   collectCodexThreads,
   evaluateCodexBotReview,
 } from "../../.claude/hooks/codex-bot-review-lib.mjs";
+import { solExemptionOnGitHub } from "../../.claude/hooks/sol-exempt-lib.mjs";
 
 // Sol HIGH finding (2026-08-14, write-scope review): with the Supabase connector
 // write-enabled, ANY mutating Supabase tool Codex can reach is a route to
@@ -103,8 +104,9 @@ const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
 // module executes at import time, an allowed edit could keep its exports intact
 // while terminating or subverting the hook at startup. Silent completion means
 // ALLOW, so that would bypass every production-action restriction, not merely
-// the Codex App review check this PR added.
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+// the Codex App review check this PR added. `sol-exempt-lib` joined 2026-10-07 for
+// the same reason: imported at startup, and it decides whether a merge needs Sol.
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|codex-bot-review-lib|review-proof-guard|live-testdata-lib|sol-exempt-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
 // The same set, spelled out, for the glob matcher below: a wildcard token has
@@ -118,6 +120,7 @@ export const PROTECTED_HARNESS_FILES = Object.freeze([
   ".claude/hooks/codex-bot-review-lib.mjs",
   ".claude/hooks/review-proof-guard.mjs",
   ".claude/hooks/live-testdata-lib.mjs",
+  ".claude/hooks/sol-exempt-lib.mjs",
   ".codex/hooks/production-action-guard.mjs",
   ".codex/hooks/codex-hook-adapter.mjs",
   "scripts/run-claude-review.mjs",
@@ -921,7 +924,7 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
     ? `FIRST run \`git fetch origin main\` so local origin/main equals ${baseSha} — ` +
       `the review wrapper reads its base from that ref and will otherwise mint a proof bound to a stale base. Then `
     : "";
-  return denied(
+  const verdict = denied(
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
     `${fetchFirst}run the exact-SHA adversarial gate with ` +
@@ -933,6 +936,10 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
     `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
     `The proof is bound to both the exact pushed SHA and that exact base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
   );
+  // `solProofMissing` marks the ONE denial a documentation-only PR merge may be
+  // excused from (gatePullRequestMerge, Mason 2026-10-07). Every other denial
+  // stays a denial.
+  return { ...verdict, solProofMissing: true };
 }
 
 // `requireProof` (PR merges into main, Mason's autonomous-landing rule of
@@ -1268,6 +1275,20 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
     runGit,
     requireProof: true,
   });
+  // Documentation-only exemption (Mason, 2026-10-07) — mirror of pr-merge-guard.mjs.
+  // Excuses ONLY the missing-or-invalid Sol proof, after every gate above and
+  // gateMainChange's head-contains-base check have passed. Same shared module and
+  // same GitHub comparison as the Claude side; any failure answers "Sol required".
+  if (mainVerdict.blocked && mainVerdict.solProofMissing) {
+    const exemption = solExemptionOnGitHub({
+      baseSha: pullRequest.baseRefOid,
+      headSha: pullRequest.headRefOid,
+      repo: request.repo,
+      gh: (args) => runGh(args, repoDir),
+    });
+    if (exemption.exempt) return { blocked: false, advisoryRequest: request };
+    return denied(`${mainVerdict.reason}\n\nThe documentation-only exemption does not apply: ${exemption.reason}.`);
+  }
   if (mainVerdict.blocked) return mainVerdict;
 
   // ALLOW point for THIS merge. Every hard denial above — objection, green

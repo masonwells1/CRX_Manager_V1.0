@@ -204,6 +204,8 @@ ok(!isMachineGenerated(""), "empty not machine");
 ok(/autonomous-landing rule \(2026-09-26\)/.test(PUSH_POLICY), "policy names the authorization");
 ok(/CodeRabbit APPROVED on the exact head/.test(PUSH_POLICY) && /exact-SHA Sol proof LAST/.test(PUSH_POLICY),
   "policy names both final reviews the rule depends on");
+ok(/exact-SHA Sol proof LAST \(except a documentation-only change as defined in docs\/reference\/sol-exempt-paths\.md\)/.test(PUSH_POLICY),
+  "policy names the documentation-only exception to the Sol proof (Mason, 2026-10-07)");
 ok(/HARD GATES/.test(PUSH_POLICY), "policy names the hard gates");
 // 2026-09-25: the injected policy once listed only three gates while AGENTS.md
 // listed twelve. It must point at AGENTS.md and name every gate category.

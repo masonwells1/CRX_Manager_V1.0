@@ -148,11 +148,14 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    `@coderabbitai resume`, post no other `@coderabbitai` commands, and reserve
    `@coderabbitai full review` for a deliberately justified complete reread.
 5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
-   `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26), then apply the change's
+   `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26, except a documentation-only
+   change as defined in `docs/reference/sol-exempt-paths.md`, which the merge gates accept without
+   it; run Sol only if a gate refuses saying "documentation-only exemption does not apply",
+   and fix any other refusal's own failing condition), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
    merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
    newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound
-   to that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
+   to that head and GitHub's real base (or the documentation-only exception). `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
    The classic protection's `enforce_admins` is off, but the `protect-main` ruleset has no bypass
    actors, so its required review binds admins too; no agent uses `--admin` either way. **The merge
    is the deploy.**

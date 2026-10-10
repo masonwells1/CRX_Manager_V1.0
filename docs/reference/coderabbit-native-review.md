@@ -44,7 +44,10 @@ check is green, the agent merges by itself. The merge gates enforce it — both
 deny a merge into `main` unless CodeRabbit's latest verdict is `APPROVED` on the
 exact `headRefOid`, the newest run of every reported check is green with
 `mergeStateStatus` CLEAN, and the Sol proof is bound to that head and to GitHub's
-real base. `--auto` and `--admin` are refused.
+real base. `--auto` and `--admin` are refused. The one exception to the Sol proof
+is a documentation-only change as defined in `docs/reference/sol-exempt-paths.md`
+(Mason, 2026-10-07): the gates read the PR's file list and accept it without the
+proof, with every other condition still required.
 
 Three plumbing changes made that loop possible without a person:
 
@@ -155,7 +158,8 @@ only its unit shrank from "the PR" to "the candidate epoch".
   `reviewDecision` is `CHANGES_REQUESTED`.
 
 The loop for a fix is therefore: fix, push to the same PR, wait for checks, run
-the exact-SHA Sol proof, apply `ready-for-coderabbit`, and merge once CodeRabbit
+the exact-SHA Sol proof (not needed for a documentation-only change), apply
+`ready-for-coderabbit`, and merge once CodeRabbit
 approves the new head. Never post `@coderabbitai` commands by hand and never use
 `@coderabbitai resume`.
 

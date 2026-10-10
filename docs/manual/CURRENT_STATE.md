@@ -405,7 +405,8 @@ PR #875) and was verified on the live site 2026-10-04.
   follows the protected path in `AGENTS.md` and `.claude/commands/ship.md`:
   branch, PR, Luna review rounds, required checks, CodeRabbit APPROVED on the
   final head, a fresh exact-SHA Sol review run last (every merge, since
-  2026-09-26), then an exact-head merge. The merge is the deploy; a
+  2026-09-26, except a documentation-only change as defined in
+  `docs/reference/sol-exempt-paths.md`, since 2026-10-07), then an exact-head merge. The merge is the deploy; a
   non-destructive migration (its grants routine, none widening access) is applied through the proof
   gate under the same conditions; one that deletes or overwrites data or widens
   access waits for Mason (`AGENTS.md` › Safety and Protected Delivery).

@@ -73,6 +73,7 @@ const SESSION_ONBOARDING =
   "Edge Function deployment, and data deletion—requires Mason's current approval immediately beforehand. " +
   "Under his autonomous-landing rule (2026-09-26) a NON-destructive migration and the merge need no ask once " +
   "CodeRabbit approved the exact head, the exact-SHA Sol proof is clean and checks are green; the gates enforce it. " +
+  "A documentation-only change as defined in docs/reference/sol-exempt-paths.md needs no Sol proof; the merge gates check its file list. " +
   "Clearly identify the rare action or business decision only Mason can make.";
 
 emit(source === "compact" ? COMPACT_REANCHOR : SESSION_ONBOARDING);

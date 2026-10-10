@@ -451,8 +451,11 @@ ok(
 // after the request loop drains the queue. Since Mason's autonomous-landing rule
 // (2026-09-26) every main merge needs the exact-SHA Sol proof, so there is ONE
 // allow point, behind that proof — the old non-risky allow point, which returned
-// before the proof section, is gone. The pins are: exactly one push, after every
-// hard gate; the one call site sits after the loop.
+// before the proof section, is gone. Mason's documentation-only exemption
+// (2026-10-07) adds the second and last: reached only when the proof scan found
+// nothing, and only for a docs-only diff (sol-exempt-lib.mjs). The pins are:
+// exactly two pushes, both after every hard gate and the proof section; the one
+// call site sits after the loop.
 const claudeQueuePushes = [...guardSource.matchAll(/advisoryQueue\.push\(request\);/g)].map((m) => m.index);
 const claudeAdvisoryCalls = [...guardSource.matchAll(/codexAdvisory\(request, advisoryDeadlineMs\);/g)].map((m) => m.index);
 const claudeGreenAt = guardSource.indexOf("green-pipeline requirement");
@@ -461,8 +464,8 @@ const claudeCodeRabbitAt = guardSource.indexOf("if (!coderabbitApprovedHead(pr))
 const claudeRequestLoopAt = guardSource.indexOf("for (const request of requests) gateRequest(request);");
 eq(
   claudeQueuePushes.length,
-  1,
-  "the Claude guard has exactly ONE allow point — a second would be a merge path that skips the Sol proof",
+  2,
+  "the Claude guard has exactly TWO allow points — the Sol proof and the documentation-only exemption; a third would be a merge path that skips both",
 );
 eq(
   claudeAdvisoryCalls.length,
@@ -486,8 +489,8 @@ ok(
 // it — and the CodeRabbit exact-head approval check — as well as the green gate.
 ok(claudeCodeRabbitAt > 0, "the Claude guard's CodeRabbit exact-head approval check is present to order");
 ok(
-  claudeQueuePushes[0] > claudeProofAt && claudeQueuePushes[0] > claudeCodeRabbitAt,
-  "MUST RUN LAST: the allow point follows the CodeRabbit approval check and the exact-SHA proof gate",
+  claudeQueuePushes.every((at) => at > claudeProofAt && at > claudeCodeRabbitAt),
+  "MUST RUN LAST: both allow points follow the CodeRabbit approval check and the exact-SHA proof gate",
 );
 
 // ── the lookup is BOUNDED, on both guards ────────────────────────────────────
