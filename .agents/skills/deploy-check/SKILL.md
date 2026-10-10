@@ -150,7 +150,8 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 5. When CodeRabbit's latest verdict is **APPROVED on the exact head**, run the exact-SHA
    `gpt-6-sol` high-effort proof LAST (every change, since 2026-09-26, except a documentation-only
    change as defined in `docs/reference/sol-exempt-paths.md`, which the merge gates accept without
-   it; run Sol if a gate refuses), then apply the change's
+   it; run Sol only if a gate refuses saying "documentation-only exemption does not apply",
+   and fix any other refusal's own failing condition), then apply the change's
    non-destructive migration if it has one, then merge with `--match-head-commit`. Both agent
    merge gates enforce Mason's autonomous-landing rule: CodeRabbit APPROVED on `headRefOid`, the
    newest run of every reported check green with `mergeStateStatus` CLEAN, and the Sol proof bound

@@ -407,7 +407,8 @@ after 30 minutes, so a later commit, a moved base or a slow CodeRabbit round voi
 **The one exception: skip Step 3B for a documentation-only change** as defined in
 `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07). Both merge gates read the PR's real file
 list and accept it without a Sol proof once CodeRabbit APPROVED the exact head and every check is
-green. If a gate refuses, the change did not qualify, so run Step 3B.
+green. Run Step 3B only if a gate refuses saying "documentation-only exemption does not
+apply"; any other refusal names its own failing condition, which Sol cannot fix, so fix that.
 
 > ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
 >
@@ -537,7 +538,8 @@ Notes:
 
 `/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
 clean, hand back to the landing flow in `.claude/commands/ship.md` (summarized in `AGENTS.md`): **push a branch → open a PR → finish checks →
-freeze the candidate commit → CodeRabbit APPROVED → Step 3B Sol proof LAST →
+freeze the candidate commit → CodeRabbit APPROVED → Step 3B Sol proof LAST (unless the
+documentation-only exemption in Step 3B applies) →
 apply the non-destructive migration, if any → merge with `--match-head-commit <reviewed-head-sha>`**.
 Direct pushes to `main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
 
