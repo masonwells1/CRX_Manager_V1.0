@@ -335,7 +335,6 @@ function buildHealthChecks(root = ROOT) {
     ".claude/commands/agent-pr-comment.md",
     ".claude/skills/agent-pr-comment/SKILL.md",
     ".agents/skills/agent-pr-comment/SKILL.md",
-    ".claude/hooks/agent-pair-review-reminder.mjs",
     ".codex/config.toml",
     ".codex/hooks.json",
     ".codex/hooks/codex-hook-adapter.mjs",
