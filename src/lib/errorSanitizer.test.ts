@@ -62,6 +62,14 @@ describe('sanitizeError', () => {
     expect(shown).toBe('Nothing was changed. This delivery was billed outside CRX, so it cannot be moved to another order');
   });
 
+  it('explains a delivery invoice that bills beyond its delivery', () => {
+    expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6'))
+      .toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6)');
+    const unknown = sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: relation "x" 6f000000-0000-4000-8000-000000000001');
+    expect(unknown).toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
+    expect(unknown).not.toContain('DELIVERY_INVOICE_EXCEEDS_DELIVERED');
+  });
+
   it('explains a refused change to a deleted order', () => {
     expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so it cannot be restored or have its status changed'))
       .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');

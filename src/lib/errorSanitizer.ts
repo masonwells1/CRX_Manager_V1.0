@@ -159,6 +159,15 @@ export function sanitizeError(error: unknown): string {
   if (/^BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED(?::|$)/.test(message)) {
     return 'Nothing was changed. This delivery was billed outside CRX, so it cannot be moved to another order';
   }
+  // Delivery-invoice cap (20261010120000): a delivery's invoice billed more than, or something other
+  // than, what that delivery delivered. The server reason names only invoice/delivery numbers,
+  // product names and quantities, so it is shown; any other shape gets the generic sentence.
+  const deliveryCap = message.match(/^DELIVERY_INVOICE_EXCEEDS_DELIVERED:\s*(invoice \S+ (?:bills|has a line|names) [^\n]*?)\s*$/);
+  if (deliveryCap || /^DELIVERY_INVOICE_EXCEEDS_DELIVERED(?::|$)/.test(message)) {
+    return 'Nothing was saved. This invoice is for one delivery, so it can bill only the products and '
+      + 'quantities that delivery delivered'
+      + (deliveryCap ? ` (${deliveryCap[1]})` : '');
+  }
   if (/^ORDER_DELETED_(STATUS|LINES|DELIVERIES)_LOCKED(?::|$)/.test(message)) {
     return 'Nothing was changed. This order has been deleted, so it cannot be changed or restored';
   }

@@ -55,6 +55,12 @@ leave these open:
   recorded delivery still blocks whole-order CRX billing of its order (fail-closed).
 - **The Order page and Orders list still offer whole-order invoicing on those 33 orders.** The server
   refuses with `DELIVERY_BILLED_OUTSIDE_CRX`, now shown in plain English, so no double bill.
+- **A delivery invoice is capped at what its delivery delivered** (`20261010120000`, Sol HIGH on
+  PR #889, NOT APPLIED when written). Still open by design: order-level invoices (no delivery) are
+  not capped by it (every delivery-invoice writer refuses a delivery an order-level invoice covers);
+  unit prices are not capped; and a delivery shortened after its invoice was POSTED leaves that
+  posted invoice over (complete_delivery only cuts drafts) — the integrity report's delivery-invoice
+  quantity check flags it, and the invoice cannot be re-posted or edited upward.
 - **The integrity checks page by offset, not by a snapshot.** Their reads (and the
   `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
   inserted between two pages can shift the next page by one, so a single run can miss or repeat a
