@@ -2,6 +2,10 @@
 
 Two fixes to the invoice screens. Both are app-only; no database change.
 
+Delivered as PR #893, which replaces PR #892 with the same code. CodeRabbit kept a stale "changes
+requested" on #892 after the requested doc fix landed, and would not re-review a commit it had
+already reviewed.
+
 ### 1. Last season's open invoices show again on the invoice lists
 
 **What staff will notice:** since October 1, the Chemical Sales invoice list and the Field
