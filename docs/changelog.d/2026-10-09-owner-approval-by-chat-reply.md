@@ -13,8 +13,10 @@ less." He was told the trade-off below and replied "go - i accept the trade off"
 - `.claude/hooks/owner-approval-prompt.mjs` (new, wired in `prompt-router.mjs`): when Mason's WHOLE
   message is `approve <code>` (a trailing `.` or `!` is accepted, since phones add punctuation), the
   pending request with that code becomes an approval file stamped with the reply time. Requests are
-  looked up in every worktree `git worktree list` reports for this clone; a separate clone is not
-  searched, so a reply for a request there is refused. Any other message does nothing.
+  looked up ONLY in the folders of the session Mason replies in, so his reply in one conversation
+  never approves an apply another conversation runs (Codex P1 on this PR). If the approval is saved
+  but the used request cannot be removed (a Windows file lock), the hook still reports it recorded,
+  because the approval file is what the gate accepts (Codex P2). Any other message does nothing.
   A peer session's message (envelope or preamble), a subagent report, a quote, inline code, or a
   sentence around the reply never matches. A code pending in two checkouts approves neither.
 - `owner-approval-lib.mjs`: the key, Windows Hello helper and signature checks are gone (purpose

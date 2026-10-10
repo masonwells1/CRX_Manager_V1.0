@@ -27,6 +27,7 @@ if (!code) emit();
 
 let result;
 try {
+  // Only THIS session's folders: a request another session built is never found here.
   const dirs = ownerRequestDirs([payload?.cwd, process.env.CLAUDE_PROJECT_DIR, process.cwd()]);
   result = recordReplyApproval({ code, dirs, reply });
 } catch (error) {
@@ -36,7 +37,8 @@ try {
 if (!result.ok) {
   emit([
     `OWNER APPROVAL NOT RECORDED — Mason replied "approve ${code}", but ${result.reason}. Nothing was approved.`,
-    "Tell him in one line. If he still wants the change, run node scripts/owner-approve-migration.mjs again for a fresh code.",
+    "Tell him in one line. If he still wants the change, run node scripts/owner-approve-migration.mjs again for a fresh code, " +
+      "from this session's own folder: a request is only found by the session it was built in.",
   ].join("\n"));
 }
 
@@ -51,4 +53,5 @@ emit([
   `OWNER APPROVAL RECORDED — Mason approved ${p.migration} (pull request #${p.pullRequest}, head ${String(p.prHead).slice(0, 12)}) ` +
     `by replying "approve ${code}". It works once, for the next 30 minutes, for that exact file and head.`,
   `Apply it now: node scripts/apply-migration-file.mjs supabase/migrations/${p.migration}.sql (dry run), then again with --confirm.`,
+  ...(result.requestLeft ? ["(The used request file could not be removed; it is harmless and needs no action.)"] : []),
 ].join("\n"));

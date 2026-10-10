@@ -13,8 +13,9 @@
 //
 // Never send the reply yourself, in any session: only a message Mason sends counts.
 //
-// Run it from the pull request's own checkout, only once every other proof for the
-// file is fresh:
+// Run it from the pull request's own checkout, in the session that will apply it,
+// only once every other proof for the file is fresh. Mason must reply in THAT
+// session: the reply hook only looks in the folders of the session he replies in.
 //   node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql
 // then, after his reply, apply with:
 //   node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql [--confirm]
@@ -158,5 +159,5 @@ console.log(`Approval request saved for ${migName} (PR #${pr.number}, head ${hea
 for (const c of categories) console.log(`  - ${PARKED_LABELS[c.category]}`);
 console.log("\nShow Mason this, word for word, with a one-line plain-English note on what the change does:\n");
 for (const line of ownerApprovalSummary(JSON.parse(payload))) console.log(`  ${line}`);
-console.log(`\nThen wait for HIS reply "approve ${code}" — never send it for him. The approval hook confirms it in the next turn.`);
+console.log(`\nThen wait for HIS reply "approve ${code}" in this session — never send or relay it for him. The approval hook confirms it in the next turn.`);
 console.log(`After that: node scripts/apply-migration-file.mjs ${rel} (dry run), then again with --confirm, within 30 minutes.`);

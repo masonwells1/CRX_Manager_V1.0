@@ -211,7 +211,7 @@ try {
   ok(existsSync(reqFile), "a refused reply leaves the request in place");
 
   const r = recordReplyApproval({ code: base.code, dirs: [other, dir, dir], reply: "Approve 482913.", now: APPROVED });
-  ok(r.ok && r.kind === "migration", `Mason's reply records an approval: ${r.reason}`);
+  ok(r.ok && r.kind === "migration" && r.requestLeft === false, `Mason's reply records an approval: ${r.reason}`);
   ok(r.file === path.join(dir, approvalFileName(safeMigrationName(base.migration))), "the approval is saved beside its request, by migration name");
   ok(!existsSync(reqFile), "the request is used up by the reply");
   const saved = JSON.parse(readFileSync(r.file, "utf8"));
@@ -243,14 +243,27 @@ try {
   ok(st.ok && st.kind === "selftest" && path.basename(st.file) === selfTestResultName("777777"), "a self-test reply is recorded as a test result");
   refuses(check(JSON.parse(readFileSync(st.file, "utf8"))), "not a migration approval", "a recorded self-test can never approve a migration");
 
-  // Where the hook looks: the given folders, plus every checkout git lists.
-  const dirs = ownerRequestDirs([path.join(tmp, "a"), undefined, path.join(tmp, "a")], () => [path.join(tmp, "a"), path.join(tmp, "b")]);
-  ok(dirs.length === 2 && dirs.includes(dir) && dirs.includes(other), "request folders are this checkout and every worktree, once each");
-  const fallback = ownerRequestDirs([path.join(tmp, "x"), path.join(tmp, "a")], (start) => {
-    if (start.endsWith("x")) throw new Error("not a git checkout");
-    return [path.join(tmp, "b")];
-  });
-  ok(fallback.includes(other), "a folder that is not a checkout falls through to the next one");
+  // Where the hook looks: ONLY the replying session's own folders (Codex P1, PR #894).
+  const dirs = ownerRequestDirs([path.join(tmp, "a"), undefined, path.join(tmp, "a")]);
+  ok(dirs.length === 1 && dirs[0] === dir, "request folders are only this session's folders, once each");
+  // Mutation guard: the pre-fix signature took a worktree lister and added every
+  // worktree it returned. Passing one must change nothing now.
+  ok(ownerRequestDirs([path.join(tmp, "a")], () => [path.join(tmp, "a"), path.join(tmp, "b")]).length === 1,
+    "no worktree listing is ever consulted");
+  const hookSource = readFileSync(path.join(HERE, "owner-approval-prompt.mjs"), "utf8") + readFileSync(path.join(HERE, "owner-approval-lib.mjs"), "utf8");
+  ok(!/worktree["']?\s*,\s*["']list/.test(hookSource), "neither the hook nor the library runs `git worktree list`");
+  writeApprovalRequest(other, buildApprovalPayload({ ...base, code: "888888" }));
+  refuses(recordReplyApproval({ code: "888888", dirs: ownerRequestDirs([path.join(tmp, "a")]), reply: "approve 888888", now: APPROVED }),
+    "no pending approval request", "a reply in one session never approves a request another session built in another folder");
+  ok(existsSync(path.join(other, requestFileName("888888"))), "the other session's request is left untouched");
+
+  // A request that cannot be removed after the approval is saved still reports
+  // success, because the approval file is what the apply gate accepts (Codex P2, PR #894).
+  writeApprovalRequest(dir, buildApprovalPayload({ ...base, migration: "20260914101200_locked", code: "999000" }));
+  const locked = recordReplyApproval({ code: "999000", dirs: [dir], reply: "approve 999000", now: APPROVED,
+    removeRequest: () => { throw new Error("EBUSY: resource busy or locked"); } });
+  ok(locked.ok && locked.requestLeft === true && existsSync(locked.file), "a locked request still reports the saved approval as recorded");
+  ok(recordReplyApproval({ code: "999001", dirs: [dir], reply: "x", now: APPROVED }).ok === false, "(control) an unknown code is still refused");
 
   // Used markers: the apply's single-use claim.
   const found = findOwnerApprovals([dir, path.join(tmp, "nope")], safeMigrationName(base.migration));

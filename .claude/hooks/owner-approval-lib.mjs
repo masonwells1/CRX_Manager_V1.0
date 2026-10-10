@@ -171,29 +171,16 @@ export function approvalCodeFromReply(prompt) {
   return m ? m[1] : null;
 }
 
-function defaultListWorktrees(cwd) {
-  const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
-    cwd, encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"],
-  });
-  return out.split(/\r?\n/).map((l) => /^worktree\s+(.+)$/.exec(l.trim())?.[1]).filter(Boolean);
-}
-
 /**
- * Every session-state directory a request may be in: the given folders, and every
- * worktree `git worktree list` reports for this clone (the agent may build the
- * request in the pull request's own worktree while Mason replies in its session).
- * A separate clone is not searched; a reply for a request there is refused, never
- * recorded against something else (Luna LOW, PR #894).
+ * The session-state directories a request may be in: ONLY the folders of the
+ * session Mason is replying in. A request another session built in another
+ * worktree is never found, so his reply in one conversation cannot approve an
+ * apply that a different conversation runs (Codex P1, PR #894: AGENTS.md wants
+ * his approval in the applying conversation).
  */
-export function ownerRequestDirs(starts, listWorktrees = defaultListWorktrees) {
-  const roots = [...new Set((starts || []).filter(Boolean).map((s) => path.resolve(s)))];
-  for (const start of [...roots]) {
-    try {
-      for (const wt of listWorktrees(start)) roots.push(path.resolve(wt));
-      break;
-    } catch { /* not a checkout; try the next folder */ }
-  }
-  return [...new Set(roots)].map((r) => path.join(r, ".claude", "session-state"));
+export function ownerRequestDirs(sessionFolders) {
+  return [...new Set((sessionFolders || []).filter(Boolean).map((s) => path.resolve(s)))]
+    .map((r) => path.join(r, ".claude", "session-state"));
 }
 
 /**
@@ -201,9 +188,9 @@ export function ownerRequestDirs(starts, listWorktrees = defaultListWorktrees) {
  * an approval file beside it, stamped with when he replied. Only the reply hook
  * calls this.
  *
- * @returns {{ok: true, kind: "migration"|"selftest", payload: object, file: string}|{ok: false, reason: string}}
+ * @returns {{ok: true, kind: "migration"|"selftest", payload: object, file: string, requestLeft: boolean}|{ok: false, reason: string}}
  */
-export function recordReplyApproval({ code, dirs, reply, now = Date.now() }) {
+export function recordReplyApproval({ code, dirs, reply, now = Date.now(), removeRequest = (f) => rmSync(f, { force: true }) }) {
   const no = (reason) => ({ ok: false, reason });
   const hits = [];
   for (const dir of new Set(dirs || [])) {
@@ -228,13 +215,15 @@ export function recordReplyApproval({ code, dirs, reply, now = Date.now() }) {
   if (!Number.isFinite(deadline) || now > deadline) return no(`the request for code ${code} expired at ${p.expiresAt}`);
   const approval = { payload: payloadText, approvedAt: new Date(now).toISOString(), via: OWNER_APPROVAL_VIA, reply: clip(String(reply ?? "").trim(), 40) };
   const out = path.join(dir, selftest ? selfTestResultName(code) : approvalFileName(safeMigrationName(p.migration)));
-  try {
-    writeFileSync(out, `${JSON.stringify(approval, null, 2)}\n`, "utf8");
-    rmSync(file, { force: true });
-  } catch (e) {
-    return no(`the approval could not be saved (${errText(e)})`);
-  }
-  return { ok: true, kind: selftest ? "selftest" : "migration", payload: p, file: out };
+  try { writeFileSync(out, `${JSON.stringify(approval, null, 2)}\n`, "utf8"); }
+  catch (e) { return no(`the approval could not be saved (${errText(e)})`); }
+  // Once the approval file exists it IS the authorization, so a failure to remove
+  // the request afterwards (a Windows file lock) still reports success; saying
+  // "nothing was approved" would misstate what the apply gate will accept (Codex
+  // P2, PR #894). A leftover request can only be re-approved by another reply.
+  let requestLeft = false;
+  try { removeRequest(file); } catch { requestLeft = true; }
+  return { ok: true, kind: selftest ? "selftest" : "migration", payload: p, file: out, requestLeft };
 }
 
 // One marker FILE per used approval, created exclusively ("wx"): two applies
