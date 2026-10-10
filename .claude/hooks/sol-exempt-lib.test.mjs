@@ -11,7 +11,7 @@
 //      contract must fail for every one; a mutant it passes is a hole the tests
 //      would not catch.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -73,6 +73,9 @@ const NEVER_EXEMPT = [
   "docs/reference/gotchas.md",
   "docs/reference/Gotchas.md",
   "docs/reference/coding-guidelines.md",
+  "docs/audits/map-drift-audit-prompt.md",
+  "docs/audits/foundation-ultra-review-prompt.md",
+  "docs/audits/architecture-weakness-audit-prompt.md",
   // agent instructions and package manifests in ANY folder
   "docs/plans/CLAUDE.md",
   "docs/manual/AGENTS.md",
@@ -377,6 +380,23 @@ eq(realLib.classifySolExemption([modified("docs/plans/a.md")]).fileCount, 1, "an
 ok(/\.claude\/hooks\/pr-merge-guard\.mjs/.test(realLib.classifySolExemption([...DOCS_ONLY, modified(".claude/hooks/pr-merge-guard.mjs")]).reason),
   "a refusal names the file that needs Sol");
 
+// ── 1b. a command's canonical prompt file is never exempt ───────────────────
+// A .claude/commands file that hands its "full, canonical instructions" to a docs
+// file makes that file agent instructions (Codex review, 2026-10-10). Any new
+// such file must join the never list, or this fails.
+{
+  const commandsDir = path.join(REPO_ROOT, ".claude", "commands");
+  const delegated = [];
+  for (const name of readdirSync(commandsDir).filter((file) => file.endsWith(".md"))) {
+    const text = readFileSync(path.join(commandsDir, name), "utf8");
+    for (const match of text.matchAll(/canonical instructions live in \*\*`(docs\/[^`]+\.md)`\*\*/g)) delegated.push(match[1]);
+  }
+  ok(delegated.length >= 3, `the scan finds the commands that delegate to a docs prompt file (found ${delegated.length})`);
+  for (const file of delegated) {
+    ok(realLib.solExemptPathProblem(file) !== null, `${file} is a command's canonical instructions, so it needs Sol`);
+  }
+}
+
 // ── 2. the readable copy lists exactly what the module lists ────────────────
 const doc = readFileSync(path.join(REPO_ROOT, "docs", "reference", "sol-exempt-paths.md"), "utf8");
 function docList(marker) {
@@ -421,6 +441,7 @@ const MUTANTS = [
   ["never path dropped: AGENT_ONBOARDING.md", `  "docs/manual/AGENT_ONBOARDING.md",\n`, ""],
   ["never path dropped: gotchas.md", `  "docs/reference/gotchas.md",\n`, ""],
   ["never path dropped: coding-guidelines.md", `  "docs/reference/coding-guidelines.md",\n`, ""],
+  ["never path dropped: map-drift-audit-prompt.md", `  "docs/audits/map-drift-audit-prompt.md",\n`, ""],
   ["never path dropped: claude-model-tuning.md", `  "docs/reference/claude-model-tuning.md",\n`, ""],
   ["never path dropped: .claude/", `  ".claude/",\n`, ""],
   ["never path dropped: docs/workflows/", `  "docs/workflows/",\n`, ""],

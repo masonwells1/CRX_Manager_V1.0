@@ -89,9 +89,12 @@ case, because Windows treats `docs/Reference/Agent-Guardrails.md` as the same fi
 - `docs/manual/AGENT_ONBOARDING.md`
 - `docs/reference/gotchas.md`
 - `docs/reference/coding-guidelines.md`
+- `docs/audits/architecture-weakness-audit-prompt.md`
+- `docs/audits/foundation-ultra-review-prompt.md`
+- `docs/audits/map-drift-audit-prompt.md`
 <!-- /sol-exempt:never-paths -->
 
-The last six go beyond the approved proposal, and each is stricter:
+The last nine go beyond the approved proposal, and each is stricter:
 
 - `claude-model-tuning.md` sets reviewer models and prompts, as `codex-model-tuning.md` does.
 - `sol-exempt-paths.md` is this page, the rule's own definition.
@@ -102,9 +105,16 @@ The last six go beyond the approved proposal, and each is stricter:
   them in its review of #888, and Mason agreed ("add those two", 2026-10-09).
 - `coding-guidelines.md` shares `gotchas.md`'s "Any code change" row in `AGENTS.md`, so it is
   the same kind of page (Codex review of #888, 2026-10-10).
+- The three `docs/audits/*-prompt.md` files are the "full, canonical instructions" that
+  `/architecture-weakness-audit`, `/foundation-ultra-review` and `/map-drift-audit` tell agents to
+  execute exactly (Codex review of #888, 2026-10-10). A test fails if a command ever names such a
+  file that is not on this list. The gauntlet index
+  (`docs/audits/gauntlet/live-foundation-gauntlet-index.md`) stays eligible: it is the progress
+  record every gauntlet run updates, and the runner's sections are encoded in code.
 
 **Where the line is.** A page `AGENTS.md` sends agents to as rules for changing code needs Sol:
-the onboarding page, the coding guidelines, the gotchas and everything in `docs/workflows/`. A page
+the onboarding page, the coding guidelines, the gotchas, everything in `docs/workflows/` and a
+command's canonical prompt file. A page
 that describes the system or records history stays eligible, even when `AGENTS.md` routes to it:
 `ARCHITECTURE.md`, `DECISION_LOG.md` (Mason, "keep it"), `KNOWN_ISSUES.md` and `CURRENT_STATE.md`.
 

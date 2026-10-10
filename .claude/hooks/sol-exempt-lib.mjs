@@ -75,6 +75,12 @@ export const SOL_NEVER_EXEMPT_PATHS = Object.freeze([
   "docs/manual/AGENT_ONBOARDING.md",
   "docs/reference/gotchas.md",
   "docs/reference/coding-guidelines.md",
+  // A .claude/commands file says these hold its "full, canonical instructions",
+  // to be executed exactly (Codex review, 2026-10-10). sol-exempt-lib.test.mjs
+  // fails if a command names such a file that is not listed here.
+  "docs/audits/architecture-weakness-audit-prompt.md",
+  "docs/audits/foundation-ultra-review-prompt.md",
+  "docs/audits/map-drift-audit-prompt.md",
 ]);
 
 // Never exempt in ANY folder, compared case-insensitively. Claude Code and Codex
