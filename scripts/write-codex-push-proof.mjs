@@ -14,7 +14,12 @@
 //   tool command. This script is that wrapper. It:
 //     * resolves the newest REAL Codex binary from its fixed install location
 //       (never a PATH shim / env override — a fake `codex` on PATH must not be
-//       able to impersonate the reviewer and print a clean verdict);
+//       able to impersonate the reviewer and print a clean verdict). On Windows,
+//       if that build's sandbox cannot even START (non-zero exit, no model output,
+//       a sandbox-setup error on stderr) it retries ONCE with the npm-installed
+//       Codex at its fixed install path — same args, model, effort, profile and
+//       prompt. Any run that produced output, timed out, or failed otherwise is
+//       final; see runCodexWithSandboxFallback();
 //     * ACTUALLY runs a read-only `codex exec` review of `origin/main...HEAD`
 //       whose fixed prompt REQUIRES Codex to end with exactly one machine token
 //       (CODEX_PROOF_VERDICT: CLEAN|BLOCKERS) — it never accepts a caller-supplied
@@ -548,6 +553,100 @@ export function codexExecutable({
   return candidates[0].candidate;
 }
 
+// ── sandbox-startup fallback (one retry, one fixed binary) ───────────────────
+// 2026-10-07: the Codex desktop app auto-installed 0.162.0-alpha.2 into the bin
+// root above. Its elevated Windows sandbox cannot apply ANY deny-read entry, so
+// every review exits 1 in about a second with "Failed to create session: ...
+// windows sandbox failed" and empty stdout — nothing is reviewed and the gate is
+// stuck. The npm-installed Codex (0.156.1 when this was written) runs the
+// identical profile fine. Mason approved this narrow fallback on 2026-10-08.
+//
+// The fallback is a FIXED install path derived from the home directory, exactly
+// like defaultCodexBinRoot(): no PATH lookup and no environment override, so a
+// caller still cannot choose which program acts as the reviewer.
+export function fallbackCodexExecutable({
+  platform = process.platform,
+  home = homedir(),
+  pathExists = existsSync,
+  statFn = statSync,
+} = {}) {
+  if (platform !== "win32") return null;
+  const candidate = path.win32.join(
+    home, "AppData", "Roaming", "npm", "node_modules", "@openai", "codex", "node_modules",
+    "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe",
+  );
+  try {
+    if (!pathExists(candidate) || !statFn(candidate).isFile()) return null;
+  } catch {
+    return null;
+  }
+  return candidate;
+}
+
+// The ONLY result that may be retried: the session never started. Every clause
+// must hold — a launch error or timeout (result.error), a signal kill (status
+// null), a zero exit, ANY stdout (the model said something), or a stderr without
+// both the session-creation failure and a sandbox-setup error keeps the run final.
+// Retrying anything else would let a caller re-roll a review until it liked the
+// answer.
+const SESSION_START_FAILURE_RE = /Failed to create session/i;
+const SANDBOX_SETUP_FAILURE_RE = /windows sandbox failed|fs sandbox helper failed|sandbox provisioning/i;
+export function isCodexSandboxStartupFailure(result) {
+  if (!result || result.error) return false;
+  if (typeof result.status !== "number" || result.status === 0) return false;
+  // Exact emptiness, not trim(): even whitespace on stdout means the session
+  // got far enough to write something, so the run is final.
+  if (String(result.stdout ?? "") !== "") return false;
+  const stderr = String(result.stderr ?? "");
+  return SESSION_START_FAILURE_RE.test(stderr) && SANDBOX_SETUP_FAILURE_RE.test(stderr);
+}
+
+function sameExecutable(a, b, platform = process.platform) {
+  const norm = (p) => {
+    const resolved = (platform === "win32" ? path.win32 : path.posix).resolve(String(p));
+    return platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return norm(a) === norm(b);
+}
+
+// Runs the review on the primary binary and, ONLY for a sandbox startup failure,
+// once more on the fallback with the identical args and spawn options. The
+// fallback's result is final whatever it is: there is never a third run. Shared
+// by write-codex-push-proof.mjs and write-apply-proofs.mjs.
+export function runCodexWithSandboxFallback({
+  primaryBin,
+  args,
+  spawnOptions,
+  platform = process.platform,
+  spawn = spawnSync,
+  resolveFallback = () => fallbackCodexExecutable({ platform }),
+  notify = (message) => process.stderr.write(`${message}\n`),
+}) {
+  const primary = spawn(primaryBin, args, spawnOptions);
+  if (!isCodexSandboxStartupFailure(primary)) {
+    return { result: primary, codexBin: primaryBin, fallbackUsed: false, primaryResult: null };
+  }
+  let fallbackBin = null;
+  try {
+    fallbackBin = resolveFallback();
+  } catch {
+    fallbackBin = null;
+  }
+  if (!fallbackBin || sameExecutable(fallbackBin, primaryBin, platform)) {
+    notify(
+      `Codex at ${primaryBin} could not start its sandbox, and no separate installed Codex fallback ` +
+      "was found. No review ran; nothing is minted.",
+    );
+    return { result: primary, codexBin: primaryBin, fallbackUsed: false, primaryResult: primary };
+  }
+  notify(
+    `NOTICE: Codex at ${primaryBin} could not start its sandbox (exit ${primary.status}); ` +
+    `re-running the same review once with the installed Codex at ${fallbackBin}.`,
+  );
+  const fallback = spawn(fallbackBin, args, spawnOptions);
+  return { result: fallback, codexBin: fallbackBin, fallbackUsed: true, primaryResult: primary };
+}
+
 export const CODEX_REVIEW_MODEL = "gpt-6-sol";
 export const CODEX_REVIEW_EFFORT = "high";
 export const CODEX_REVIEW_PERMISSION_PROFILE = "packet-review";
@@ -942,13 +1041,24 @@ export function safeReviewCaptureText(value, label) {
   return `[${label} omitted because it contained secret-shaped text; SHA-256 ${sha256Bytes(Buffer.from(text, "utf8"))}]`;
 }
 
-export function captureReviewOutput(root, result) {
+export function captureReviewOutput(root, result, runInfo = {}) {
   const outPath = path.join(root, ".claude", "session-state", "codex-review-latest.txt");
   mkdirSync(path.dirname(outPath), { recursive: true });
+  const runLines = [];
+  if (runInfo.codexBin) runLines.push(`Codex binary: ${runInfo.codexBin}`);
+  if (runInfo.fallbackUsed && runInfo.primaryResult) {
+    runLines.push(
+      `Fallback: used — the primary Codex at ${runInfo.primaryBin} failed to start its sandbox ` +
+      `(exit ${runInfo.primaryResult.status ?? "unknown"}).`,
+      "Primary STDERR:",
+      safeReviewCaptureText(runInfo.primaryResult.stderr, "PRIMARY STDERR"),
+    );
+  }
   const body = [
     "# Codex Push-Proof Review Capture",
     "",
     `Generated: ${new Date().toISOString()}`,
+    ...runLines,
     `Exit code: ${result.status ?? "unknown"}`,
     "",
     "## STDOUT",
@@ -1021,6 +1131,10 @@ function usage() {
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
+// Deliberately NOT injectable (Sol, 2026-10-08): a run() that accepted a caller's
+// spawn or binary resolver would let any script mint a guard-accepted proof from
+// a fake Codex. The binaries and the spawn are hard-wired here; the fallback
+// logic is tested through runCodexWithSandboxFallback(), which mints nothing.
 export function run(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
@@ -1046,7 +1160,12 @@ export function run(argv = process.argv.slice(2)) {
 
   if (options.dryRun) {
     const args = buildCodexExecArgs({ root: "<sanitized-review-workspace>", prompt });
+    let fallbackBin = null;
+    try { fallbackBin = fallbackCodexExecutable(); } catch { fallbackBin = null; }
     process.stdout.write(`[dry-run] Codex binary: ${codexBin}\n`);
+    process.stdout.write(
+      `[dry-run] Sandbox-startup fallback: ${fallbackBin || "none found (a sandbox startup failure fails closed)"}\n`,
+    );
     process.stdout.write(`[dry-run] Command: codex ${args.slice(0, -1).join(" ")} <review-prompt>\n`);
     process.stdout.write(`[dry-run] Review base (pinned): ${GUARDED_BASE}\n`);
     process.stdout.write(`[dry-run] Would mint proof at: ${codexPushProofPath(root, "<HEAD>")}\n`);
@@ -1068,6 +1187,7 @@ export function run(argv = process.argv.slice(2)) {
 
   let reviewWorkspace;
   let result;
+  let codexRun = { codexBin, fallbackUsed: false, primaryResult: null };
   try {
     reviewWorkspace = createSanitizedReviewWorkspace({
       sourceRoot: root,
@@ -1082,21 +1202,28 @@ export function run(argv = process.argv.slice(2)) {
       prompt,
       permissionConfig: codexReviewPermissionConfig(codexReviewDenyReadPaths({ sourceRoot: root })),
     });
-    result = spawnSync(codexBin, args, {
-      cwd: reviewWorkspace.root,
-      encoding: "utf8",
-      // Codex CLI 0.145 on Windows waits for "additional input" when a prompt is
-      // supplied as argv while stdin is redirected. Supplying the fixed prompt as
-      // the complete stdin payload (`codex exec -`) gives it one stream plus EOF.
-      // Native binary + shell:false still prevents shell interpretation.
-      stdio: ["pipe", "pipe", "pipe"],
-      input: `${prompt}\n`,
-      shell: false,
-      timeout: options.timeoutSec * 1000,
-      maxBuffer: 64 * 1024 * 1024,
-      windowsHide: true,
-      env: codexReviewerEnvironment(process.env, reviewWorkspace.root),
+    codexRun = runCodexWithSandboxFallback({
+      primaryBin: codexBin,
+      args,
+      spawnOptions: {
+        cwd: reviewWorkspace.root,
+        encoding: "utf8",
+        // Codex CLI 0.145 on Windows waits for "additional input" when a prompt is
+        // supplied as argv while stdin is redirected. Supplying the fixed prompt as
+        // the complete stdin payload (`codex exec -`) gives it one stream plus EOF.
+        // Native binary + shell:false still prevents shell interpretation.
+        stdio: ["pipe", "pipe", "pipe"],
+        input: `${prompt}\n`,
+        shell: false,
+        timeout: options.timeoutSec * 1000,
+        maxBuffer: 64 * 1024 * 1024,
+        windowsHide: true,
+        env: codexReviewerEnvironment(process.env, reviewWorkspace.root),
+      },
+      spawn: spawnSync,
+      resolveFallback: () => fallbackCodexExecutable(),
     });
+    result = codexRun.result;
   } catch (error) {
     process.stderr.write(`Could not build or run the sanitized Codex review workspace: ${error.message}\n`);
     clearCodexPushProof({ root, headSha: headBefore });
@@ -1105,14 +1232,14 @@ export function run(argv = process.argv.slice(2)) {
     if (reviewWorkspace?.root) removeSanitizedReviewWorkspace(reviewWorkspace.root);
   }
 
-  const capturePath = captureReviewOutput(root, result);
-  process.stdout.write(`Codex review captured to ${capturePath}\n`);
+  const capturePath = captureReviewOutput(root, result, { ...codexRun, primaryBin: codexBin });
+  process.stdout.write(`Codex review captured to ${capturePath} (binary: ${codexRun.codexBin})\n`);
 
   if (result.error) {
     if (result.error.code === "ETIMEDOUT") {
       process.stderr.write(`${timeoutMessage(options.timeoutSec)}\n`);
     } else {
-      process.stderr.write(`Failed to launch Codex (${codexBin}): ${result.error.message}\n`);
+      process.stderr.write(`Failed to launch Codex (${codexRun.codexBin}): ${result.error.message}\n`);
     }
     clearCodexPushProof({ root, headSha: headBefore });
     return 2;
@@ -1141,7 +1268,10 @@ export function run(argv = process.argv.slice(2)) {
 
   if (verdict && contextStable) {
     const proofPath = writeCodexPushProof({ root, headSha: headAfter, baseSha: baseAfter, verdict });
-    process.stdout.write(`Codex push proof written to ${proofPath} (verdict: ${verdict}, head ${headAfter}, base ${baseAfter}).\n`);
+    process.stdout.write(
+      `Codex push proof written to ${proofPath} (verdict: ${verdict}, head ${headAfter}, base ${baseAfter}, ` +
+      `reviewer binary ${codexRun.codexBin}${codexRun.fallbackUsed ? " — sandbox-startup fallback" : ""}).\n`,
+    );
     return 0;
   }
 
