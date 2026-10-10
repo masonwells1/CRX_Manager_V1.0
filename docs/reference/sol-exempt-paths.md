@@ -88,9 +88,10 @@ case, because Windows treats `docs/Reference/Agent-Guardrails.md` as the same fi
 - `docs/reference/migration-history.md`
 - `docs/manual/AGENT_ONBOARDING.md`
 - `docs/reference/gotchas.md`
+- `docs/reference/coding-guidelines.md`
 <!-- /sol-exempt:never-paths -->
 
-The last five go beyond the approved proposal, and each is stricter:
+The last six go beyond the approved proposal, and each is stricter:
 
 - `claude-model-tuning.md` sets reviewer models and prompts, as `codex-model-tuning.md` does.
 - `sol-exempt-paths.md` is this page, the rule's own definition.
@@ -99,6 +100,13 @@ The last five go beyond the approved proposal, and each is stricter:
 - `AGENT_ONBOARDING.md` and `gotchas.md` are pages `AGENTS.md` sends agents to before they
   change code, including security-sensitive code, so they work as instructions. Sol suggested
   them in its review of #888, and Mason agreed ("add those two", 2026-10-09).
+- `coding-guidelines.md` shares `gotchas.md`'s "Any code change" row in `AGENTS.md`, so it is
+  the same kind of page (Codex review of #888, 2026-10-10).
+
+**Where the line is.** A page `AGENTS.md` sends agents to as rules for changing code needs Sol:
+the onboarding page, the coding guidelines, the gotchas and everything in `docs/workflows/`. A page
+that describes the system or records history stays eligible, even when `AGENTS.md` routes to it:
+`ARCHITECTURE.md`, `DECISION_LOG.md` (Mason, "keep it"), `KNOWN_ISSUES.md` and `CURRENT_STATE.md`.
 
 ## Never eligible: file names anywhere
 

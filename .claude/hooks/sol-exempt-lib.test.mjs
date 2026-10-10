@@ -72,6 +72,7 @@ const NEVER_EXEMPT = [
   "docs/manual/AGENT_ONBOARDING.md",
   "docs/reference/gotchas.md",
   "docs/reference/Gotchas.md",
+  "docs/reference/coding-guidelines.md",
   // agent instructions and package manifests in ANY folder
   "docs/plans/CLAUDE.md",
   "docs/manual/AGENTS.md",
@@ -419,6 +420,7 @@ const MUTANTS = [
   ["never path dropped: migration-history.md", `  "docs/reference/migration-history.md",\n`, ""],
   ["never path dropped: AGENT_ONBOARDING.md", `  "docs/manual/AGENT_ONBOARDING.md",\n`, ""],
   ["never path dropped: gotchas.md", `  "docs/reference/gotchas.md",\n`, ""],
+  ["never path dropped: coding-guidelines.md", `  "docs/reference/coding-guidelines.md",\n`, ""],
   ["never path dropped: claude-model-tuning.md", `  "docs/reference/claude-model-tuning.md",\n`, ""],
   ["never path dropped: .claude/", `  ".claude/",\n`, ""],
   ["never path dropped: docs/workflows/", `  "docs/workflows/",\n`, ""],
