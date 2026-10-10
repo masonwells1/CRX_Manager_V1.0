@@ -75,9 +75,12 @@
 --   * consolidate_draft_invoices would also be refused here (it moves one delivery's lines onto
 --     another delivery's invoice), but INVOICE_ITEM_LINEAGE_IMMUTABLE already refuses every line move
 --     (20260721014858), so nothing changes for it.
--- Not covered here (unchanged behavior): order-level invoices (delivery_id NULL) — every delivery
--- invoice writer refuses to bill a delivery an order-level invoice already covers; unit prices; and a
--- delivery whose items are changed after its invoice was posted (a posted delivery invoice now needs
+-- Not covered here (unchanged behavior): order-level invoices (delivery_id NULL) are not capped —
+-- every delivery-invoice writer refuses to bill a delivery an order-level invoice already covers, but
+-- nothing yet refuses a manual order-level invoice made after delivery invoices (tracked in
+-- KNOWN_ISSUES); unit prices, and the unit label of a manually added line; two delivery_items rows
+-- for one order line on one delivery (none live, 2026-10-10; complete_delivery's trim would then be
+-- checked in full rather than exempted); and a delivery whose items are changed after its invoice was posted (a posted delivery invoice now needs
 -- a completed delivery, and enforce_delivery_items_parent_lock already freezes a completed delivery's
 -- items) — the monthly integrity report's delivery-invoice quantity check flags any that exists.
 -- The cap relies on trg_guard_invoice_terminal_order (20260721014858): a delivery invoice keeps
@@ -280,8 +283,8 @@ BEGIN
   -- order lock every line writer already holds here (trg_guard_terminal_order_invoice_items locks it
   -- on every invoice_items write; complete_delivery takes it after the delivery), so re-taking it is
   -- free and adds no new lock order. A concurrent write to another invoice of the same delivery waits
-  -- for this transaction, and the check below (a new statement, so a fresh snapshot) sees whatever
-  -- committed meanwhile. Posting adds no quantity — every line it counts was itself checked, under
+  -- for this transaction, and the check below (a new statement, so a fresh snapshot under READ
+  -- COMMITTED, the isolation every PostgREST call uses) sees whatever committed meanwhile. Posting adds no quantity — every line it counts was itself checked, under
   -- this lock, against all active invoices — and post_invoice locks the invoice before the order is
   -- ever touched, so posting skips the lock rather than invert that order. A restore, un-void or
   -- re-point brings billing back and takes it.

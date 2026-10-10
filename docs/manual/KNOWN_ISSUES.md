@@ -57,7 +57,9 @@ leave these open:
   refuses with `DELIVERY_BILLED_OUTSIDE_CRX`, now shown in plain English, so no double bill.
 - **A delivery invoice is capped at what its delivery delivered** (`20261010120000`, Sol HIGH on
   PR #889, NOT APPLIED when written). Still open by design: order-level invoices (no delivery) are
-  not capped by it (every delivery-invoice writer refuses a delivery an order-level invoice covers);
+  not capped by it (every delivery-invoice writer refuses a delivery an order-level invoice covers,
+  but nothing yet refuses a manual order-level invoice saved AFTER delivery invoices exist — none live
+  2026-10-10);
   unit prices are not capped; and a delivery shortened after its invoice was POSTED leaves that
   posted invoice over — the integrity report's delivery-invoice quantity check flags it. A delivery
   recorded short cannot be billed for more on its own invoice. If a scheduled delivery loses a product

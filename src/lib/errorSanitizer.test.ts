@@ -66,7 +66,7 @@ describe('sanitizeError', () => {
     expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6'))
       .toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6)');
     expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed'))
-      .toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed)');
+      .toBe('Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed)');
     const unknown = sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: relation "x" 6f000000-0000-4000-8000-000000000001');
     expect(unknown).toBe('Nothing was saved. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
     expect(unknown).not.toContain('DELIVERY_INVOICE_EXCEEDS_DELIVERED');

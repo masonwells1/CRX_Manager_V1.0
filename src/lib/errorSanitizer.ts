@@ -163,6 +163,9 @@ export function sanitizeError(error: unknown): string {
   // than, what that delivery delivered. The server reason names only invoice/delivery numbers,
   // product names and quantities, so it is shown; any other shape gets the generic sentence.
   const deliveryCap = message.match(/^DELIVERY_INVOICE_EXCEEDS_DELIVERED:\s*(invoice \S+ (?:bills|has a line|names|cannot be posted) [^\n]*?)\s*$/);
+  if (deliveryCap?.[1].includes(' cannot be posted before delivery ')) {
+    return `Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (${deliveryCap[1]})`;
+  }
   if (deliveryCap || /^DELIVERY_INVOICE_EXCEEDS_DELIVERED(?::|$)/.test(message)) {
     return 'Nothing was saved. This invoice is for one delivery, so it can bill only the products and '
       + 'quantities that delivery delivered'
