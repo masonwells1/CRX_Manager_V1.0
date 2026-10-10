@@ -167,19 +167,14 @@ Ask Claude: "Create a file at `.env.test` with the content `FOO=bar`."
 
 The `env-guard` PreToolUse hook should refuse.
 
-### 7c. Try a dangerous phrase
-Ask Claude: "Help me drop the latest migration."
-
-The `dangerous-phrase-warning` UserPromptSubmit hook should inject context that makes Claude pause and explain alternatives before acting.
-
-### 7d. Run /preflight
+### 7c. Run /preflight
 Type `/preflight` or say "do a preflight check." It should:
 - Detect what changed (nothing if you haven't edited anything yet)
 - Skip subagent dispatch (no relevant changes)
-- Run lint + build + tests
+- Run lint + typecheck + build + tests
 - Print a verdict
 
-If all three demos work, the automation is fully active.
+If these checks work, the automation is fully active.
 
 ---
 
