@@ -24,7 +24,14 @@
 // sol-exempt-lib.test.mjs fails if the two lists drift apart, and it mutation-checks
 // that widening any list or loosening any check here makes the tests fail.
 
-import { ghApiRepoPath } from "./codex-push-lib.mjs";
+import { ghApiRepoPath, sanitizeForMessage } from "./codex-push-lib.mjs";
+
+// File names, statuses and GitHub error text come from the pull request, so an
+// attacker can choose them. Both merge guards put every reason below into a
+// denial an agent reads, so each such value passes through here first: control
+// characters, line breaks and invisible marks are shown as escapes, never as
+// themselves (the prompt-injection class sanitizeForMessage documents).
+const show = (value) => sanitizeForMessage(value, 160);
 
 // Folders whose plain `.md` files are documentation. Case-sensitive, from the repo root.
 export const SOL_EXEMPT_PREFIXES = Object.freeze([
@@ -105,18 +112,18 @@ export function solExemptPathProblem(file) {
   for (const entry of SOL_NEVER_EXEMPT_PATHS) {
     const rule = entry.toLowerCase();
     if (rule.endsWith("/") ? lower.startsWith(rule) : lower === rule) {
-      return `${name} is never exempt (${entry})`;
+      return `${show(name)} is never exempt (${entry})`;
     }
   }
   const base = lower.slice(lower.lastIndexOf("/") + 1);
   if (SOL_NEVER_EXEMPT_NAMES.some((entry) => entry.toLowerCase() === base)) {
-    return `${name} is never exempt (${base} anywhere in the tree)`;
+    return `${show(name)} is never exempt (${show(base)} anywhere in the tree)`;
   }
   if (!PLAIN_MARKDOWN_PATH_RE.test(name)) {
-    return `${name} is not a plainly named .md file`;
+    return `${show(name)} is not a plainly named .md file`;
   }
   if (!SOL_EXEMPT_PREFIXES.some((prefix) => name.startsWith(prefix))) {
-    return `${name} is outside the documentation folders`;
+    return `${show(name)} is outside the documentation folders`;
   }
   return null;
 }
@@ -140,11 +147,11 @@ export function classifySolExemption(files) {
     // file's KIND changed (a file became a symlink, say); a missing or unknown
     // status is not something this check understands.
     if (!SOL_EXEMPT_STATUSES.includes(status)) {
-      return { exempt: false, reason: `${entry.filename || "a file"} has change status "${entry.status}", which is not a plain edit` };
+      return { exempt: false, reason: `${show(entry.filename || "a file")} has change status ${show(entry.status)}, which is not a plain edit` };
     }
     if (status === "renamed" || status === "copied" || (entry.previous_filename !== undefined && entry.previous_filename !== null)) {
       if (typeof entry.previous_filename !== "string" || !entry.previous_filename) {
-        return { exempt: false, reason: `${entry.filename || "a file"} was ${status || "moved"} but GitHub did not say from where` };
+        return { exempt: false, reason: `${show(entry.filename || "a file")} was ${show(status || "moved")} but GitHub did not say from where` };
       }
       names.push(entry.previous_filename);
     }
@@ -210,16 +217,16 @@ function treeProblem({ files, baseSha, headSha, repoPath, gh }) {
   try {
     repository = JSON.parse(String(gh(args)))?.data?.repository;
   } catch (error) {
-    return `GitHub could not confirm what kind of files changed (${String(error?.message || error).split(/\r?\n/)[0].slice(0, 160)})`;
+    return `GitHub could not confirm what kind of files changed (${show(String(error?.message || error).split(/\r?\n/)[0])})`;
   }
   for (const lookup of lookups) {
     const entries = repository?.[`d${expressions.indexOf(folderOf(lookup))}`]?.entries;
     const leaf = lookup.file.slice(lookup.file.lastIndexOf("/") + 1);
     const where = lookup.commit === headSha ? "the head" : "the base";
     const entry = Array.isArray(entries) ? entries.find((candidate) => candidate?.name === leaf) : undefined;
-    if (!entry) return `GitHub did not show ${lookup.file} at ${where} (${lookup.commit.slice(0, 12)})`;
+    if (!entry) return `GitHub did not show ${show(lookup.file)} at ${where} (${lookup.commit.slice(0, 12)})`;
     if (entry.type !== "blob" || entry.mode !== PLAIN_FILE_MODE) {
-      return `${lookup.file} is not a plain file at ${where} (git type ${entry.type}, mode ${Number(entry.mode).toString(8)})`;
+      return `${show(lookup.file)} is not a plain file at ${where} (git type ${show(entry.type)}, mode ${Number(entry.mode).toString(8)})`;
     }
   }
   return null;
@@ -241,7 +248,7 @@ export function solExemptionOnGitHub({ baseSha: rawBase, headSha: rawHead, repo,
   try {
     answer = JSON.parse(String(gh(["api", `${repoPath}/compare/${baseSha}...${headSha}`, "--jq", SOL_EXEMPT_COMPARE_JQ])));
   } catch (error) {
-    return { exempt: false, reason: `GitHub's file list could not be read (${String(error?.message || error).split(/\r?\n/)[0].slice(0, 160)})` };
+    return { exempt: false, reason: `GitHub's file list could not be read (${show(String(error?.message || error).split(/\r?\n/)[0])})` };
   }
   if (answer === null || typeof answer !== "object" || Array.isArray(answer)) {
     return { exempt: false, reason: "GitHub's comparison answer is unreadable" };
@@ -249,7 +256,7 @@ export function solExemptionOnGitHub({ baseSha: rawBase, headSha: rawHead, repo,
   // Exactly base..head: the head is ahead of the base, not behind it, and the
   // comparison starts AT the base. Anything else is not this pull request's diff.
   if (answer.status !== "ahead" || answer.behind_by !== 0 || !Number.isInteger(answer.ahead_by) || answer.ahead_by < 1) {
-    return { exempt: false, reason: `GitHub's comparison is not a clean base..head diff (status ${answer.status}, behind by ${answer.behind_by})` };
+    return { exempt: false, reason: `GitHub's comparison is not a clean base..head diff (status ${show(answer.status)}, behind by ${show(answer.behind_by)})` };
   }
   if (String(answer.merge_base || "").toLowerCase() !== String(baseSha).toLowerCase()) {
     return { exempt: false, reason: "GitHub's comparison does not start at the pull request's base" };
@@ -263,6 +270,6 @@ export function solExemptionOnGitHub({ baseSha: rawBase, headSha: rawHead, repo,
     const problem = treeProblem({ files: answer.files, baseSha, headSha, repoPath, gh });
     return problem ? { exempt: false, reason: problem } : verdict;
   } catch (error) {
-    return { exempt: false, reason: `GitHub's file list could not be classified (${String(error?.message || error).slice(0, 160)})` };
+    return { exempt: false, reason: `GitHub's file list could not be classified (${show(String(error?.message || error))})` };
   }
 }
