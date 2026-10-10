@@ -20,4 +20,7 @@
 - `scripts/write-codex-push-proof.test.mjs` covers all five cases through the shared runner, the real verdict parser, and the proof builder. A startup failure gets exactly one fallback run, with the same arguments and prompt, and its CLEAN result passes `proofValid`. Findings, partial output, a timeout, and an auth error get no retry. A missing or same-path fallback, or a fallback that also fails, produces no proof.
 - `--dry-run` picks the app alpha as the primary and the npm `codex.exe` as the fallback.
 
+**Luna round (2026-10-09, head 5d888d45f after merging main): one HIGH, declined with reason.**
+- Luna: the fallback is trusted because a file exists at a fixed path, with no identity or version check, so a stub planted there could print a CLEAN verdict. Declined: the primary is chosen the same way on `main` (the newest `codex.exe` by modified time under `%LOCALAPPDATA%\OpenAI\Codex\bin`, also user-writable and unverified), so anyone able to plant the fallback stub could plant a newer primary stub instead, with no sandbox failure needed. The fallback adds no capability an attacker lacks today. Checking binary identity is a change to the gate's trust model for both binaries, outside this fix and inside the 30-day guard freeze.
+
 **Owner note.** This changes which program the gate trusts, so Sol cannot review its own fix while the app build is broken. Mason merges this PR by hand.
