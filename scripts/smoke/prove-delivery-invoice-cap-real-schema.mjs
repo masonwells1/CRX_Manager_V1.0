@@ -10,22 +10,26 @@
  * ordered units of product A; D2 delivered product B), creates D1's draft invoice through the real
  * create_invoice_for_unbilled_delivery, and then proves, through the real save_invoice as an admin
  * and as the customer's sales rep:
- *   REFUSED  raising D1's line above 6; adding product B (delivered by D2, so a double bill);
- *            adding a second unlinked line of A; linking D2's order line; a line with no product;
- *            a negative line; a second invoice for D1; posting or restoring an over-billed invoice;
- *            a direct table write that really COMMITs.
+ *   REFUSED  applying the candidate before 20261007150200; raising D1's line above 6; adding product B (delivered by D2, so a double bill);
+ *            adding a second unlinked line of A; linking D2's order line (even at quantity 0); a
+ *            line with no product; a negative line; a second invoice for D1; a direct table write;
+ *            posting or restoring an over-billed invoice; posting a quick delivery's invoice before
+ *            the delivery is completed; the second of two concurrent transactions that together over-bill one delivery.
  *   ALLOWED  saving unchanged, lowering the quantity, changing the price; posting the valid invoice;
- *            marking an already over-billed posted invoice overdue (never re-checked); a quick
- *            delivery's up-front invoice and its partial completion (cut down to what was delivered).
- *   MUTATION without the two triggers the over-bill and the double bill go through.
- * Probes end with SET CONSTRAINTS ALL IMMEDIATE, which runs the deferred checks exactly as COMMIT
- * would, and then roll back; one probe COMMITs for real. Never touches live: the container has no
- * network and is removed at the end.
+ *            lowering an over-billed draft; marking an already over-billed posted invoice overdue
+ *            (never re-checked); batch_post_invoices posting the good invoice and reporting the bad
+ *            one; a quick delivery's up-front invoice and its partial completion (cut down to what
+ *            was delivered), even when the office split its line first (the driver is never
+ *            blocked; posting is); complete_delivery's automatic invoice for an ordinary delivery.
+ *   MUTATION without the two triggers the over-bill and the double bill go through; without the
+ *            order lock, the concurrent over-bill goes through.
+ * Every probe runs in one transaction that is rolled back; the concurrency proof commits. Never
+ * touches live: the container has no network and is removed at the end.
  */
 import assert from 'node:assert/strict';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -116,13 +120,10 @@ function restoreLiveCrLfCloseRemainder() {
 function asUser(uid, role = 'authenticated') {
   return `SELECT set_config('request.jwt.claims', '{"sub":"${uid}","role":"${role}"}', true);\nSELECT set_config('request.jwt.claim.sub', '${uid}', true);\nSET LOCAL ROLE ${role};`;
 }
-/**
- * Run `sql` (optionally as a user) in one transaction, fire the deferred checks as COMMIT would,
- * report the last value, and always ROLL BACK.
- */
+/** Run `sql` (optionally as a user) in one transaction, report the last value, and always ROLL BACK. */
 function probe(sql, uid = null) {
   const prefix = uid ? asUser(uid) : '';
-  const r = docker([...psqlArgs(), '-A', '-t'], { input: `BEGIN;\n${prefix}\n${sql}\nSET CONSTRAINTS ALL IMMEDIATE;\nSELECT 'committed-ok';\nROLLBACK;\n`, allowFailure: true });
+  const r = docker([...psqlArgs(), '-A', '-t'], { input: `BEGIN;\n${prefix}\n${sql}\nSELECT 'committed-ok';\nROLLBACK;\n`, allowFailure: true });
   const lines = r.stdout.trim().split(/\r?\n/).filter(Boolean);
   return { ok: r.status === 0 && lines.at(-1) === 'committed-ok', last: lines.at(-2) ?? '', error: r.stderr.trim() };
 }
@@ -140,6 +141,7 @@ function expectAllowed(result, label) {
  * always happens; a successful save reports 'saved=true'.
  */
 function saveInvoice(number, uid, { qty = 'ii.quantity', price = 'ii.unit_price_cents', extra = "'[]'::jsonb" } = {}) {
+  const where = number.includes(' ') ? number : `i.invoice_number = '${number}'`;
   return `CREATE TEMP TABLE save_args ON COMMIT DROP AS SELECT
       jsonb_build_object('id', i.id, 'customer_id', i.customer_id, 'invoice_type', i.invoice_type,
         'order_id', i.order_id, 'delivery_id', i.delivery_id, 'invoice_date', i.invoice_date::text) AS inv,
@@ -148,10 +150,27 @@ function saveInvoice(number, uid, { qty = 'ii.quantity', price = 'ii.unit_price_
           'unit_price_cents', ${price}, 'extended_cents', round((${qty}) * (${price}))::bigint,
           'cost_cents', ii.cost_cents, 'sort_order', ii.sort_order, 'unit_size', ii.unit_size) ORDER BY ii.sort_order)
         FROM public.invoice_items ii WHERE ii.invoice_id = i.id), '[]'::jsonb) || ${extra} AS items
-    FROM public.invoices i WHERE i.invoice_number = '${number}';
+    FROM public.invoices i WHERE ${where};
     GRANT SELECT ON save_args TO authenticated;
     ${asUser(uid)}
     SELECT 'saved=' || (public.save_invoice(inv, items, gen_random_uuid()::text) IS NOT NULL) FROM save_args;`;
+}
+/**
+ * Two transactions each add a 3-unit invoice for D1 and commit: A holds its transaction open for
+ * four seconds after writing; B starts while A is open. Returns both exit codes and B's errors.
+ */
+async function race(tag) {
+  const invoice = (n) => `INSERT INTO public.invoices (id, invoice_number, created_by, customer_id, order_id, delivery_id, invoice_type, status)
+      VALUES ('6f200000-0000-4000-8000-${String(n).padStart(12, '0')}', 'PROVER-CAP-RACE-${tag}${n}', '${ADMIN}', '${CUSTOMER}', '${ORDER}', '${D1}', 'chemical_sale', 'draft');
+    INSERT INTO public.invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents)
+      VALUES ('6f200000-0000-4000-8000-${String(n).padStart(12, '0')}', '${PRODUCT_A}', '[PROVER] race', 3, 1000, 3000, 600);`;
+  const base = { R: 901, C: 911, M: 921 }[tag];
+  const a = spawn('docker', [...psqlArgs(), '-A', '-t'], { cwd: ROOT });
+  const aDone = new Promise((resolve) => a.on('close', resolve));
+  a.stdin.end(`BEGIN;\n${invoice(base)}\nSELECT pg_sleep(4);\nCOMMIT;\n`);
+  wait(1500);
+  const b = docker([...psqlArgs(), '-A', '-t'], { input: `BEGIN;\n${invoice(base + 1)}\nCOMMIT;\n`, allowFailure: true });
+  return { a: await aDone, b: b.status, bError: b.stderr };
 }
 function expectSaved(result, label) {
   expectAllowed(result, label);
@@ -239,6 +258,12 @@ async function main() {
   console.log('[prover] DEFECT: before the candidate a rep can bill 10 of 6 delivered and add a product another delivery carried');
 
   stageText('cap.sql', lf(CAP));
+  // ORDERING: refused until the owner-approved 20261007150200 is in the ledger (one-shot data files
+  // are not replayed here, so its ledger row is recorded by hand).
+  const early = apply('cap.sql');
+  assert.notEqual(early.status, 0, 'the candidate applied before 20261007150200');
+  assert.match(early.output, /apply 20261007150200_release_reservations_of_deleted_spring_orders first/, `wrong ordering refusal:\n${early.output}`);
+  psql("INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20261007150200', '20261007150200_release_reservations_of_deleted_spring_orders');");
   const applied = apply('cap.sql');
   assert.equal(applied.status, 0, `the candidate did not apply:\n${applied.output}`);
   assert.equal(apply('cap.sql').status, 0, 'the candidate must re-apply cleanly');
@@ -254,6 +279,9 @@ async function main() {
   expectRefused(probe(`INSERT INTO public.invoice_items (invoice_id, order_item_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents)
       SELECT i.id, '${LINE_B}', '${PRODUCT_B}', '[PROVER] linked', 1, 1000, 1000, 600 FROM public.invoices i WHERE i.invoice_number = '${INV1}';`),
     /bills \[PROVER\] linked from an order line delivery PROVER-CAP-D1 did not carry/, 'link D2\'s order line');
+  expectRefused(probe(`INSERT INTO public.invoice_items (invoice_id, order_item_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents)
+      SELECT i.id, '${LINE_B}', '${PRODUCT_B}', '[PROVER] linked', 0, 1000, 0, 600 FROM public.invoices i WHERE i.invoice_number = '${INV1}';`),
+    /did not carry/, 'link D2\'s order line at quantity 0');
   assert.equal(lineQty(INV1), '6.00', 'refused saves changed nothing');
   console.log('[prover] SAVE_INVOICE: admin and rep cannot raise the quantity, add another delivery\'s product, add a second line, or link another delivery\'s order line');
 
@@ -266,12 +294,12 @@ async function main() {
       VALUES ('6f200000-0000-4000-8000-0000000000d2', 'PROVER-CAP-SECOND', '${ADMIN}', '${CUSTOMER}', '${ORDER}', '${D1}', 'chemical_sale', 'draft');
     INSERT INTO public.invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents)
       VALUES ('6f200000-0000-4000-8000-0000000000d2', '${PRODUCT_A}', '[PROVER] second', 1, 1000, 1000, 600);`), /bills 7\.0+ of \[PROVER\] Product A/, 'a second invoice for the same delivery');
-  // A real COMMIT, not a forced check: the write is refused and nothing persists.
+  // A real transaction that tries to COMMIT: the write is refused and nothing persists.
   const committed = docker([...psqlArgs(), '-A', '-t'], { input: `BEGIN;\nUPDATE public.invoice_items SET quantity = 9 WHERE invoice_id = ${inv1Id};\nCOMMIT;\n`, allowFailure: true });
-  assert.notEqual(committed.status, 0, 'a direct over-billing write must fail at COMMIT');
-  assert.match(committed.stderr, CAP_ERROR, `the COMMIT failed for a different reason:\n${committed.stderr}`);
-  assert.equal(lineQty(INV1), '6.00', 'the refused COMMIT persisted');
-  console.log('[prover] TABLE: no product-less or negative lines, no second invoice past the delivery, and a direct write is refused at a real COMMIT');
+  assert.notEqual(committed.status, 0, 'a direct over-billing write must be refused');
+  assert.match(committed.stderr, CAP_ERROR, `the write failed for a different reason:\n${committed.stderr}`);
+  assert.equal(lineQty(INV1), '6.00', 'the refused write persisted');
+  console.log('[prover] TABLE: no product-less or negative lines, no second invoice past the delivery, and a direct write is refused');
 
   // Posting and restoring re-check; an invoice that got over-billed with the guard off cannot be posted.
   const overBilled = `ALTER TABLE public.invoice_items DISABLE TRIGGER zz_cap_delivery_invoice_items;
@@ -279,7 +307,9 @@ async function main() {
     ALTER TABLE public.invoice_items ENABLE TRIGGER zz_cap_delivery_invoice_items;`;
   expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET status = 'posted', posted_at = now(), posted_by = '${ADMIN}' WHERE id = ${inv1Id};`), /bills 9\.0+ of/, 'post an over-billed invoice');
   expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET deleted_at = now() WHERE id = ${inv1Id};\nUPDATE public.invoices SET deleted_at = NULL WHERE id = ${inv1Id};`), /bills 9\.0+ of/, 'restore an over-billed invoice');
-  console.log('[prover] HEADER: posting or restoring an over-billed delivery invoice is refused');
+  expectAllowed(probe(`${overBilled}\nUPDATE public.invoice_items SET quantity = 8 WHERE invoice_id = ${inv1Id};`), 'lowering an over-billed draft');
+  expectRefused(probe(`${overBilled}\nUPDATE public.invoice_items SET quantity = 10 WHERE invoice_id = ${inv1Id};`), /bills 10\.0+ of/, 'raising an over-billed draft further');
+  console.log('[prover] HEADER: posting or restoring an over-billed delivery invoice is refused; lowering it is allowed');
 
   // ALLOWED.
   expectSaved(probe(saveInvoice(INV1, REP)), 'a rep saves the invoice unchanged');
@@ -300,7 +330,6 @@ async function main() {
     CREATE TEMP TABLE quick ON COMMIT DROP AS
       SELECT public.create_quick_delivery('${CUSTOMER}', jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT_A}', 'quantity', 8)),
         NULL, current_date, '[PROVER] quick', '${ADMIN}', 'prover-cap-quick', false) AS r;
-    SET CONSTRAINTS ALL IMMEDIATE;
     SELECT public.confirm_delivery((SELECT (r->>'delivery_id')::uuid FROM quick), '${ADMIN}', 'prover-cap-quick-confirm') IS NOT NULL;
     SELECT public.complete_delivery(d.id, '[PROVER] signer', '${ADMIN}',
         jsonb_build_object((SELECT di.id FROM public.delivery_items di WHERE di.delivery_id = d.id)::text, 3),
@@ -310,7 +339,47 @@ async function main() {
       JOIN public.invoices i ON i.id = ii.invoice_id WHERE i.delivery_id = (SELECT (r->>'delivery_id')::uuid FROM quick));`);
   expectAllowed(quick, 'a quick delivery and its partial completion');
   assert.equal(quick.last, 'quick=3.00', `a partial completion must cut the quick invoice to the 3 delivered: ${quick.last}`);
-  console.log('[prover] QUICK DELIVERY: billed 8 up front while scheduled, cut to the 3 delivered on completion');
+  const quickDelivery = (key) => `${asUser(ADMIN)}
+    CREATE TEMP TABLE quick ON COMMIT DROP AS
+      SELECT public.create_quick_delivery('${CUSTOMER}', jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT_A}', 'quantity', 8)),
+        NULL, current_date, '[PROVER] quick', '${ADMIN}', '${key}', false) AS r;
+    GRANT SELECT ON quick TO authenticated;`;
+  const quickInvoice = "(SELECT i.id FROM public.invoices i WHERE i.delivery_id = (SELECT (r->>'delivery_id')::uuid FROM quick))";
+  expectRefused(probe(`${quickDelivery('prover-cap-quick-post')}
+    SELECT public.post_invoice(${quickInvoice}, 'prover-cap-quick-early-post') IS NOT NULL;`), /cannot be posted before delivery \S+ is completed/, 'post a quick delivery\'s invoice before the delivery is completed');
+  // The office splits the up-front line (5 linked + 3 unlinked = 8 planned); the driver delivers 6.
+  const split = probe(`${quickDelivery('prover-cap-quick-split')}
+    ${saveInvoice(`i.id = ${quickInvoice}`, ADMIN, { qty: '5', extra: newLine(PRODUCT_A, 3) })}
+    SELECT public.confirm_delivery((SELECT (r->>'delivery_id')::uuid FROM quick), '${ADMIN}', 'prover-cap-split-confirm') IS NOT NULL;
+    SELECT public.complete_delivery(d.id, '[PROVER] signer', '${ADMIN}',
+        jsonb_build_object((SELECT di.id FROM public.delivery_items di WHERE di.delivery_id = d.id)::text, 6),
+        NULL, NULL, 'prover-cap-split-complete', NULL) IS NOT NULL
+      FROM public.deliveries d WHERE d.id = (SELECT (r->>'delivery_id')::uuid FROM quick);
+    SELECT 'split=' || (SELECT d.status FROM public.deliveries d WHERE d.id = (SELECT (r->>'delivery_id')::uuid FROM quick))
+      || ':' || (SELECT string_agg(ii.quantity::numeric(12,2)::text, ',' ORDER BY ii.sort_order) FROM public.invoice_items ii WHERE ii.invoice_id = ${quickInvoice});`);
+  expectAllowed(split, 'a driver completes a short delivery whose up-front invoice the office split');
+  assert.equal(split.last, 'split=completed:6.00,3.00', `the completion must succeed and trim the linked line to 6: ${split.last}`);
+  expectRefused(probe(`${quickDelivery('prover-cap-quick-split2')}
+    ${saveInvoice(`i.id = ${quickInvoice}`, ADMIN, { qty: '5', extra: newLine(PRODUCT_A, 3) })}
+    SELECT public.confirm_delivery((SELECT (r->>'delivery_id')::uuid FROM quick), '${ADMIN}', 'prover-cap-split2-confirm') IS NOT NULL;
+    SELECT public.complete_delivery(d.id, '[PROVER] signer', '${ADMIN}',
+        jsonb_build_object((SELECT di.id FROM public.delivery_items di WHERE di.delivery_id = d.id)::text, 6),
+        NULL, NULL, 'prover-cap-split2-complete', NULL) IS NOT NULL
+      FROM public.deliveries d WHERE d.id = (SELECT (r->>'delivery_id')::uuid FROM quick);
+    SELECT public.post_invoice(${quickInvoice}, 'prover-cap-split2-post') IS NOT NULL;`), /bills 9\.0+ of \[PROVER\] Product A, but delivery \S+ allows 6/, 'post the split invoice after the short delivery');
+  console.log('[prover] QUICK DELIVERY: billed 8 up front while scheduled and cut to the 3 delivered; not postable before completion; a split, short delivery still completes but cannot be posted over');
+
+  // Batch posting one good and one over-billed invoice.
+  const d2Invoice = `${asUser(ADMIN)}
+    SELECT public.create_invoice_for_unbilled_delivery('${D2}', '${ADMIN}', 'prover-cap-d2') IS NOT NULL;`;
+  const d2Id = `(SELECT id FROM public.invoices WHERE delivery_id = '${D2}' AND status <> 'cancelled')`;
+  const batch = probe(`${overBilled}
+    ${d2Invoice}
+    SELECT public.batch_post_invoices(ARRAY[${inv1Id}, ${d2Id}], 'prover-cap-batch') IS NOT NULL;
+    SELECT 'batch=' || (SELECT status FROM public.invoices WHERE id = ${inv1Id}) || ',' || (SELECT status FROM public.invoices WHERE id = ${d2Id});`);
+  expectAllowed(batch, 'batch posting with one over-billed invoice');
+  assert.equal(batch.last, 'batch=draft,posted', `the batch must post the good invoice and leave the over-billed one: ${batch.last}`);
+  console.log('[prover] BATCH: a batch posts the good invoice and leaves the over-billed one unposted');
 
   // An ordinary delivery: complete_delivery drafts its own invoice for what was delivered.
   const ordinary = probe(`INSERT INTO public.deliveries (id, delivery_number, order_id, customer_id, created_by, status, scheduled_date)
@@ -334,7 +403,38 @@ async function main() {
   expectSaved(mutant, 'MUTATION: without the triggers the over-bill and double bill should go through');
   console.log('[prover] MUTATION: without the triggers the over-bill and the double bill succeed - the triggers are what stop them');
 
-  console.log('DELIVERY_INVOICE_CAP_PROOF_PASS defect=reproduced save_invoice=capped table=capped commit=refused header=rechecked allowed=unchanged quick_delivery=ok complete_delivery=ok mutation=detected');
+  // CONCURRENCY: D1's invoice drops to 2 (committed); two transactions each add a 3-unit invoice for
+  // D1 at the same time. Together they would bill 8 of the 6 delivered.
+  psql(`UPDATE public.invoice_items SET quantity = 2 WHERE invoice_id = ${inv1Id};`);
+  // The other order-locking guards (they already lock the order on every invoice and line write).
+  const otherLocks = (on) => psql(`ALTER TABLE public.invoices ${on} TRIGGER trg_guard_invoice_terminal_order;
+    ALTER TABLE public.invoices ${on} TRIGGER zz_guard_invoice_delivery_billed_outside_crx;
+    ALTER TABLE public.invoice_items ${on} TRIGGER trg_guard_terminal_order_invoice_items;`);
+  const expectSecondRefused = (result, label) => {
+    assert.equal(result.a, 0, `${label}: the first concurrent invoice must commit`);
+    assert.notEqual(result.b, 0, `${label}: the second concurrent invoice must be refused`);
+    assert.match(result.bError, /bills 8\.0+ of \[PROVER\] Product A, but delivery PROVER-CAP-D1 allows 6/, `${label}: refused for a different reason:\n${result.bError}`);
+    psql(`UPDATE public.invoices SET deleted_at = now() WHERE invoice_number LIKE 'PROVER-CAP-RACE-%' AND deleted_at IS NULL;`);
+  };
+  expectSecondRefused(await race('R'), 'as deployed');
+  otherLocks('DISABLE');
+  expectSecondRefused(await race('C'), 'with only the candidate\'s order lock');
+  // MUTATION: without any order lock both transactions check before either commits.
+  const lockStatement = `    PERFORM 1 FROM public.orders o
+     WHERE o.id = (SELECT i.order_id FROM public.invoices i WHERE i.id = v_invoice_id)
+       FOR UPDATE;`;
+  assert.equal(lf(CAP).split(lockStatement).length, 2, 'the candidate must take the order lock exactly once');
+  stageText('cap-no-lock.sql', lf(CAP).replace(lockStatement, '    NULL;'));
+  assert.equal(apply('cap-no-lock.sql').status, 0, 'the no-lock mutant must apply');
+  const raced = await race('M');
+  otherLocks('ENABLE');
+  assert.deepEqual([raced.a, raced.b], [0, 0], `MUTATION: without the order lock both concurrent over-bills should commit:\n${raced.bError}`);
+  const reinstall = apply('cap.sql');
+  assert.notEqual(reinstall.status, 0, 'the preflight must refuse to re-install over the mutant\'s over-bill');
+  assert.match(reinstall.output, /DELIVERY_INVOICE_CAP_PREFLIGHT: active delivery invoices already break the delivery cap: invoice PROVER-CAP-RACE-M/, `wrong preflight refusal:\n${reinstall.output}`);
+  console.log('[prover] CONCURRENCY: two transactions over-billing one delivery at once - the second is refused, also with only the candidate\'s order lock; without any order lock both commit (and the preflight then refuses to install)');
+
+  console.log('DELIVERY_INVOICE_CAP_PROOF_PASS defect=reproduced save_invoice=capped table=capped header=rechecked allowed=unchanged quick_delivery=ok complete_delivery=ok ordering=enforced batch=isolated concurrency=serialized mutation=detected');
 }
 
 try { await main(); }
