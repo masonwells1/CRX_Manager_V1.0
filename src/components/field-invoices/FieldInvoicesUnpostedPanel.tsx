@@ -23,7 +23,8 @@ import { downloadReportPdf } from '../../lib/reportPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../../lib/emailService';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatCents as fmt } from '../../lib/money';
-import { getSeasonDates } from '../../utils/season';
+import SeasonTag from '../invoices/SeasonTag';
+import { isCurrentSeason, otherSeasonLabels } from '../../lib/invoiceSeasonWindow';
 import { SkeletonTable } from '../ui/Skeleton';
 import type { PostInvoiceGroupResult } from '../../types';
 import {
@@ -99,20 +100,19 @@ export default function FieldInvoicesUnpostedPanel() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
-    // Window on invoice_date — it is what the 'Trans. Date' filter + column use
-    // (ChemMan "Trans. Date" = the invoice/transaction date). Windowing on
-    // created_at would silently drop an invoice whose invoice_date is in range
-    // but whose created_at fell outside the season — hiding it from the list,
-    // the footer totals, AND Post All.
+    // NO season window: every row here is still to be posted, and an unposted bill
+    // must stay in the working tray, its footer totals AND Post All whatever season
+    // it was filed in. A season window hid every prior-season unposted invoice on
+    // the Oct 1 rollover (2026-10-09). Each row shows its season via SeasonTag.
+    // NOTE: post_invoice / post_invoice_group do NOT check the season (they do refuse a
+    // date in a closed accounting period). So Post All leaves other-season invoices out
+    // (see postAllPlan below); each one is posted from its own invoice page instead.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
       .eq('invoice_type', 'field_application')
       .in('status', ['draft', 'unposted'])
       .is('deleted_at', null)
-      .gte('invoice_date', seasonStart)
-      .lte('invoice_date', seasonEnd)
       .order('invoice_date', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -368,32 +368,62 @@ export default function FieldInvoicesUnpostedPanel() {
     });
   };
 
-  const postGroupCount = useMemo(
-    () => new Set(visible.map((row) => row.invoice_group_id).filter((groupId): groupId is string => !!groupId)).size,
-    [visible],
-  );
-  const postIndividualCount = visible.filter((row) => !row.invoice_group_id).length;
+  // --- POST ALL targets (2026-10-09). The list shows unposted invoices from EVERY season,
+  // but the server does not check the season when posting, so Post All posts only THIS
+  // season's work (as the Posted tab's Unpost All does). An invoice from another season
+  // (or with no season) is left out and posted from its own invoice page. A split group
+  // is a target only when EVERY loaded member is this season: post_invoice_group posts
+  // all members, including ones hidden by the current filters, so the check covers the
+  // whole loaded group (`rows`), not just the displayed members.
+  const postAllPlan = useMemo(() => {
+    const membersByGroup = new Map<string, UnpostedFieldInvoiceRow[]>();
+    for (const row of rows) {
+      if (!row.invoice_group_id) continue;
+      const members = membersByGroup.get(row.invoice_group_id) ?? [];
+      members.push(row);
+      membersByGroup.set(row.invoice_group_id, members);
+    }
+    const individualTargets: { id: string; invoice_number: string }[] = [];
+    const groupTargets = new Map<string, { group_id: string; label: string }>();
+    const skippedGroupIds = new Set<string>();
+    const skippedRows = new Map<string, UnpostedFieldInvoiceRow>();
+    for (const row of visible) {
+      const groupId = row.invoice_group_id;
+      if (!groupId) {
+        if (isCurrentSeason(row.season)) individualTargets.push({ id: row.id, invoice_number: row.invoice_number });
+        else skippedRows.set(row.id, row);
+        continue;
+      }
+      if (groupTargets.has(groupId) || skippedGroupIds.has(groupId)) continue;
+      const members = membersByGroup.get(groupId) ?? [row];
+      const otherSeasonMembers = members.filter((member) => !isCurrentSeason(member.season));
+      if (otherSeasonMembers.length === 0) {
+        groupTargets.set(groupId, { group_id: groupId, label: `split group containing ${row.invoice_number}` });
+      } else {
+        skippedGroupIds.add(groupId);
+        for (const member of otherSeasonMembers) skippedRows.set(member.id, member);
+      }
+    }
+    return {
+      individualTargets,
+      groupTargets: [...groupTargets.values()],
+      skippedRows: [...skippedRows.values()],
+      skippedGroupCount: skippedGroupIds.size,
+    };
+  }, [rows, visible]);
+  const postIndividualCount = postAllPlan.individualTargets.length;
+  const postGroupCount = postAllPlan.groupTargets.length;
+  const postTargetCount = postIndividualCount + postGroupCount;
+  const skippedSeasonCount = postAllPlan.skippedRows.length;
 
-  // --- POST ALL (posts every displayed individual invoice and each displayed split
-  // group once, after confirm). post_invoice_group intentionally posts ALL members,
-  // including siblings hidden by the current filters, so a group cannot be half-posted.
+  // --- POST ALL (posts every displayed THIS-SEASON individual invoice and each displayed
+  // this-season split group once, after confirm). post_invoice_group intentionally posts
+  // ALL members, including siblings hidden by the current filters, so a group cannot be
+  // half-posted.
   const postAll = async () => {
     setShowPostAll(false);
     if (!profile) { toast('error', 'Profile not loaded — please refresh.'); return; }
-    const individualTargets = visible
-      .filter((row) => !row.invoice_group_id)
-      .map((row) => ({ id: row.id, invoice_number: row.invoice_number }));
-    const groupTargets = Array.from(
-      visible.reduce((groups, row) => {
-        if (row.invoice_group_id && !groups.has(row.invoice_group_id)) {
-          groups.set(row.invoice_group_id, {
-            group_id: row.invoice_group_id,
-            label: `split group containing ${row.invoice_number}`,
-          });
-        }
-        return groups;
-      }, new Map<string, { group_id: string; label: string }>()).values(),
-    );
+    const { individualTargets, groupTargets } = postAllPlan;
     const targetCount = individualTargets.length + groupTargets.length;
     if (targetCount === 0) { toast('error', 'No invoices to post'); return; }
     await runCriticalAction({
@@ -615,6 +645,7 @@ export default function FieldInvoicesUnpostedPanel() {
                 <p className="mt-1 text-xs text-secondary">
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
+                <div className="mt-1"><SeasonTag season={row.season} /></div>
               </div>
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
@@ -671,6 +702,7 @@ export default function FieldInvoicesUnpostedPanel() {
                     <td className="px-3 py-2 text-right tabular-nums font-medium">{fmt(row.total_amount_cents)}</td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
                       {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}
+                      <div className="mt-0.5"><SeasonTag season={row.season} /></div>
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-1">
@@ -742,6 +774,7 @@ export default function FieldInvoicesUnpostedPanel() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-secondary">
             Bulk actions apply to all {totals.count} invoice(s) currently shown.
+            {skippedSeasonCount > 0 && ` Post All leaves out ${skippedSeasonCount} invoice(s) not from this season.`}
           </p>
           <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
@@ -753,7 +786,16 @@ export default function FieldInvoicesUnpostedPanel() {
             <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={printReport} loading={busy} disabled={visible.length === 0}>
               Print Invoice Report
             </Button>
-            <Button variant="primary" size="sm" icon={<ClipboardCheck className="w-4 h-4" />} onClick={() => setShowPostAll(true)} disabled={busy || visible.length === 0}>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<ClipboardCheck className="w-4 h-4" />}
+              onClick={() => setShowPostAll(true)}
+              disabled={busy || postTargetCount === 0}
+              title={skippedSeasonCount > 0
+                ? "Posts this season's invoices in view. Invoices from another season are left out; post each one from its invoice page."
+                : 'Post every invoice in view'}
+            >
               Post All
             </Button>
           </div>
@@ -765,8 +807,17 @@ export default function FieldInvoicesUnpostedPanel() {
         onClose={() => setShowPostAll(false)}
         onConfirm={postAll}
         title="Post all displayed invoices?"
-        message={`Post ${postIndividualCount} individual invoice(s) + ${postGroupCount} split group(s) represented in the current view? A split group always posts all of its members together, even when some members are hidden by filters. Posting commits them to accounts receivable and is logged.`}
-        confirmLabel={`Post ${postIndividualCount + postGroupCount} target(s)`}
+        message={
+          `Post ${postIndividualCount} individual invoice(s) + ${postGroupCount} split group(s) represented in the current view? A split group always posts all of its members together, even when some members are hidden by filters. Posting commits them to accounts receivable and is logged.` +
+          (skippedSeasonCount > 0
+            ? ` ${skippedSeasonCount} invoice(s) not from this season (${otherSeasonLabels(postAllPlan.skippedRows)}) are NOT included` +
+              (postAllPlan.skippedGroupCount > 0
+                ? `, nor is any split group that has one of them as a member (${postAllPlan.skippedGroupCount} group(s))`
+                : '') +
+              '. To post one, open it and post it from its invoice page.'
+            : '')
+        }
+        confirmLabel={`Post ${postTargetCount} target(s)`}
         variant="info"
         icon={ClipboardCheck}
         loading={busy}

@@ -23,7 +23,9 @@ import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { formatCents as fmt } from '../../lib/money';
-import { getSeasonDates } from '../../utils/season';
+import { isCurrentSeason, openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
+import { computeSeason, seasonStartDate } from '../../utils/season';
+import SeasonTag from '../invoices/SeasonTag';
 import { SkeletonTable } from '../ui/Skeleton';
 import {
   mapFieldInvoiceRow,
@@ -102,19 +104,17 @@ export default function FieldInvoicesPostedPanel() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
-    // Window on invoice_date — the same field the Trans. Date filter/column and
-    // the monthly batch (date_trunc('month', invoice_date)) key off. Windowing
-    // on created_at would drop an invoice whose invoice_date is in range but
-    // created_at fell outside the season.
+    // Posted / overdue invoices still have money to collect, so they show from EVERY
+    // season; paid ones stay this-season only. The season window is on invoice_date —
+    // the same field the Trans. Date filter/column and the monthly batch
+    // (date_trunc('month', invoice_date)) key off. See src/lib/invoiceSeasonWindow.ts.
     const { data, error } = await supabase
       .from('invoices')
       .select(LIST_SELECT)
       .eq('invoice_type', 'field_application')
       .in('status', [...STATUS_POSTED])
       .is('deleted_at', null)
-      .gte('invoice_date', seasonStart)
-      .lte('invoice_date', seasonEnd)
+      .or(openOrInSeasonFilter('invoice_date'))
       .order('invoice_date', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -186,9 +186,9 @@ export default function FieldInvoicesPostedPanel() {
   // Monthly batches available for the scope dropdown (derived from the loaded,
   // named-filtered rows so the option list tracks the current filter bar).
   const monthBatches = useMemo(() => deriveMonthBatches(filtered), [filtered]);
-  // The displayed set crosses more than one month-end batch — an Unpost All here
-  // would touch multiple batch totals (each must be re-reconciled / reprinted).
-  const crossesBatches = useMemo(() => spansMultipleBatches(visible), [visible]);
+  // 'YYYY-MM' of the current season's first month (October); earlier batch months
+  // belong to a prior season. 'YYYY-MM' strings compare chronologically.
+  const currentSeasonStartMonth = seasonStartDate(computeSeason()).slice(0, 7);
 
   const customerOptions: MultiSelectOption[] = useMemo(() => {
     const byId = new Map<string, string>();
@@ -353,7 +353,9 @@ export default function FieldInvoicesPostedPanel() {
       action: async () => {
         await downloadReportPdf({
           title: 'Posted Field Application Invoices',
-          subtitle: `${totals.count} invoice(s) — ${totals.totalAcres.toLocaleString()} acres — ${fmt(totals.totalAmountCents)}`,
+          // The scope wording goes on the PDF: the default scope mixes in older seasons'
+          // unpaid invoices, and an older month batch here holds only its unpaid ones.
+          subtitle: `${scopeReportLabel} — ${totals.count} invoice(s) — ${totals.totalAcres.toLocaleString()} acres — ${fmt(totals.totalAmountCents)}`,
           columns: [
             { header: 'Job #', key: 'job_number', format: (v) => String(v || '-') },
             { header: 'Invoice #', key: 'invoice_number' },
@@ -386,10 +388,34 @@ export default function FieldInvoicesPostedPanel() {
   // call respects the closed-period and money guards in the RPC; if one fails the
   // others still process and we report a clear per-invoice failure summary.
   // The button is gated behind a ConfirmModal (openable below), then refreshes.
-  const candidates = useMemo(
+  // The default scope also lists older seasons' unpaid invoices (2026-10-09). Unpost
+  // All in that scope stays limited to THIS season, as it was before those rows were
+  // listed, so one click cannot reopen last season's month batches. To unpost an older
+  // invoice, pick its month batch (an explicit choice) or open the invoice.
+  const unpostable = useMemo(
     () => visible.filter((r) => r.status === 'posted' || r.status === 'overdue'),
     [visible],
   );
+  // A row with no season counts as not this season (unknown), so it is left out too.
+  const candidates = useMemo(
+    () => (scope.kind === 'season' ? unpostable.filter((r) => isCurrentSeason(r.season)) : unpostable),
+    [unpostable, scope.kind],
+  );
+  const skippedOlderSeasonCount = unpostable.length - candidates.length;
+  // Unpost All's targets cross more than one month-end batch: it would touch multiple
+  // batch totals (each must be re-reconciled / reprinted). Based on what Unpost All
+  // would actually change, not on every row shown.
+  const crossesBatches = useMemo(() => spansMultipleBatches(candidates), [candidates]);
+  // Scope wording for the report PDF, so a printed total says what it covers.
+  const scopeReportLabel = (() => {
+    if (scope.kind === 'season') return "This season + older seasons' unpaid invoices";
+    if (scope.kind === 'mtd') return 'Month-to-date';
+    const batch = monthBatches.find((b) => b.month === scope.month);
+    const name = batch?.label ?? scope.month;
+    return scope.month < currentSeasonStartMonth
+      ? `${name} batch — unpaid invoices only (paid ones are not on this list)`
+      : `${name} batch`;
+  })();
 
   const runUnpostAll = async () => {
     setShowUnpostConfirm(false);
@@ -484,13 +510,14 @@ export default function FieldInvoicesPostedPanel() {
         </p>
       </div>
 
-      {/* Dynamic month-batch span warning (only when the shown set crosses batches) */}
+      {/* Dynamic month-batch span warning (only when Unpost All's targets cross batches) */}
       {crossesBatches && (
         <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <p>
-            The invoices shown span more than one month-end batch. A bulk action here would affect
-            multiple batch totals — narrow the scope to a single batch (below) to act on one batch at a time.
+            The invoices Unpost All would change span more than one month-end batch. Unposting them here
+            would affect multiple batch totals — narrow the scope to a single batch (below) to act on one
+            batch at a time.
           </p>
         </div>
       )}
@@ -507,12 +534,17 @@ export default function FieldInvoicesPostedPanel() {
               aria-label="Posting scope"
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20 sm:w-auto"
             >
-              <option value="season">This Season</option>
+              {/* The query also keeps older still-unpaid (posted / overdue) invoices. */}
+              <option value="season">This Season + older unpaid</option>
               <option value="mtd">Month-to-date</option>
               {monthBatches.length > 0 && (
                 <optgroup label="Monthly batches">
                   {monthBatches.map((b) => (
-                    <option key={b.month} value={b.month}>{b.label} ({b.count})</option>
+                    <option key={b.month} value={b.month}>
+                      {/* An earlier season's month holds only its still-unpaid invoices
+                          here (paid ones are season-windowed out of this list). */}
+                      {b.label} ({b.count}){b.month < currentSeasonStartMonth ? ' — unpaid only' : ''}
+                    </option>
                   ))}
                 </optgroup>
               )}
@@ -602,6 +634,7 @@ export default function FieldInvoicesPostedPanel() {
                 <p className="mt-1 text-xs text-secondary">
                   {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()} · {row.total_acres.toLocaleString()} ac
                 </p>
+                <div className="mt-1"><SeasonTag season={row.season} /></div>
               </div>
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
@@ -667,6 +700,7 @@ export default function FieldInvoicesPostedPanel() {
                     </td>
                     <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
                       {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}
+                      <div className="mt-0.5"><SeasonTag season={row.season} /></div>
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-1">
@@ -737,7 +771,10 @@ export default function FieldInvoicesPostedPanel() {
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-secondary">
-            Bulk actions apply to all {totals.count} invoice(s) currently shown.
+            Print actions apply to all {totals.count} invoice(s) currently shown.
+            {skippedOlderSeasonCount > 0
+              ? ` Unpost All applies to this season's ${candidates.length} only; ${skippedOlderSeasonCount} from another season are left out.`
+              : ' Unpost All applies to the unpaid ones.'}
           </p>
           <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
             <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => printAll('current')} loading={busy} disabled={visible.length === 0}>
@@ -756,7 +793,9 @@ export default function FieldInvoicesPostedPanel() {
               onClick={() => setShowUnpostConfirm(true)}
               loading={unposting}
               disabled={unposting || candidates.length === 0}
-              title="Return every unpaid posted invoice in view to the Unposted list"
+              title={scope.kind === 'season'
+                ? "Return this season's unpaid posted invoices in view to the Unposted list"
+                : 'Return every unpaid posted invoice in view to the Unposted list'}
             >
               Unpost All{candidates.length > 0 ? ` (${candidates.length})` : ''}
             </Button>
@@ -775,7 +814,11 @@ export default function FieldInvoicesPostedPanel() {
           `Return ${candidates.length} posted invoice(s) to the Unposted list? ` +
           `This reverses their posting so they become editable again and updates the ` +
           `affected month-end batch totals. Paid invoices are skipped. Invoices in a ` +
-          `closed accounting period cannot be unposted.`
+          `closed accounting period cannot be unposted.` +
+          (skippedOlderSeasonCount > 0
+            ? ` ${skippedOlderSeasonCount} unpaid invoice(s) in view not from this season are NOT included; ` +
+              `choose that month batch in Scope to unpost them.`
+            : '')
         }
         confirmLabel={`Unpost ${candidates.length}`}
         variant="warning"

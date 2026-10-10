@@ -432,7 +432,16 @@ export default function FieldApplicationInvoice() {
   // the engine always splits by acres-weighted per-location share.
   const [sharesBasis, setSharesBasis] = useState<CustomerSharesBasis>('location');
 
-  const blocker = useUnsavedChanges(dirty);
+  // Lets the navigation that follows a fully successful save through the leave-page
+  // guard. setDirty(false) has not reached the router's block check yet when navigate()
+  // runs in the same tick, which showed a false "Unsaved Changes" prompt (2026-10-09).
+  const skipUnsavedPromptRef = useRef(false);
+  const blocker = useUnsavedChanges(dirty, skipUnsavedPromptRef);
+  // Id of the invoice the FIRST Save on /invoices/field-app/new created. While the page
+  // is still on /new (e.g. the user chose Stay on the leave-page prompt after a partial
+  // save failure), a repeat Save must update THIS invoice — sending p_invoice_id = null
+  // again would create a duplicate invoice for the same application.
+  const createdInvoiceIdRef = useRef<string | null>(null);
 
   const isNew = !id;
   const transactionSeason = useMemo(() => {
@@ -1649,13 +1658,17 @@ export default function FieldApplicationInvoice() {
       toast('error', 'Enter a valid diluent / carrier-water rate (a number 0 or greater, gal/acre), or leave it blank.');
       return;
     }
+    // The invoice this save writes to: the routed one, or the one an earlier Save on this
+    // still-/new page already created. Only when neither exists does the save CREATE.
+    const targetInvoiceId = id || createdInvoiceIdRef.current;
+    const creating = !targetInvoiceId;
     setSaving(true);
     try {
       const key = saveIdem.getKey();
       const { data, error } = await supabase.rpc('save_field_app_invoice', {
         // save_field_app_invoice accepts NULL p_invoice_id to create a new
         // invoice (live signature is nullable; generated type narrows to string).
-        p_invoice_id: (id || null) as string,
+        p_invoice_id: (targetInvoiceId || null) as string,
         p_invoice: {
           invoice_number: invoiceNumber || null,
           invoice_date: transactionDate,
@@ -1707,6 +1720,9 @@ export default function FieldApplicationInvoice() {
       saveIdem.resetKey();
       const ids = result.invoice_ids || [];
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
+      // Record the created invoice before any later step can fail, so every repeat
+      // Save from this page updates it instead of creating a duplicate.
+      if (creating && ids[0]) createdInvoiceIdRef.current = ids[0];
 
       // §5: the save RPC committed the invoice atomically — NOW (and only now) write the
       // block-mode override audit, linked to the real saved id. If the save had failed, we
@@ -1841,21 +1857,28 @@ export default function FieldApplicationInvoice() {
       }
 
       if (appliedInfoOk && billingOk) {
-        toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
+        toast('success', creating ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
       } else if (!appliedInfoOk) {
         toast('error',
-          (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
+          (creating ? 'Invoice created' : 'Invoice saved') + groupNote +
           ', but Applied Info (wind/temp/applicator) did NOT persist. Re-enter and save again.'
         );
       } else {
         toast('error',
-          (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
+          (creating ? 'Invoice created' : 'Invoice saved') + groupNote +
           ', but the billing details (PO / terms / due date / notes / discount) did NOT persist. Re-enter and save again.'
         );
       }
 
-      if (isNew && ids[0]) {
-        navigate(`/invoices/field-app/${ids[0]}`, { replace: true });
+      // Still on /invoices/field-app/new: move to the saved invoice's own page.
+      const savedInvoiceId = ids[0] ?? createdInvoiceIdRef.current;
+      if (isNew && savedInvoiceId) {
+        // Everything saved, so nothing is unsaved: let this navigation past the
+        // leave-page guard. After a PARTIAL failure the form stays dirty and the guard
+        // still asks; "Stay" keeps the typed values, and Save again updates the same
+        // invoice (createdInvoiceIdRef), never a new one.
+        if (appliedInfoOk && billingOk) skipUnsavedPromptRef.current = true;
+        navigate(`/invoices/field-app/${savedInvoiceId}`, { replace: true });
       } else {
         // Keep the form frozen until the server copy has finished hydrating.
         // Otherwise a quick edit after the RPC but before this reload resolves
@@ -2113,6 +2136,9 @@ export default function FieldApplicationInvoice() {
       });
 
       toast('success', 'Invoice deleted');
+      // The invoice is gone, so any unsaved edits are moot: let this navigation
+      // through without the "Unsaved Changes" prompt (see useUnsavedChanges).
+      skipUnsavedPromptRef.current = true;
       navigate('/field-invoices');
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'delete_field_app_invoice' } });
@@ -2516,8 +2542,11 @@ export default function FieldApplicationInvoice() {
       transferToSchedulingIdem.resetKey();
       // The invoice is now cancelled and the form holds stale, deleted contents —
       // clear the unsaved-changes guard so leaving doesn't prompt, then go to the job.
+      // setDirty(false) alone is not seen by the router's block check before this
+      // navigate(), so the one-shot skip ref lets the navigation through.
       setDirty(false);
       toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
+      skipUnsavedPromptRef.current = true;
       navigate(`/jobs/${result.job_id}`);
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'transfer_invoice_to_job' } });

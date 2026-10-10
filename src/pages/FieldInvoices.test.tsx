@@ -12,16 +12,15 @@ const query = {
   eq: vi.fn(),
   in: vi.fn(),
   is: vi.fn(),
-  gte: vi.fn(),
-  lte: vi.fn(),
+  or: vi.fn(),
 };
 
 query.select.mockReturnValue(query);
 query.eq.mockReturnValue(query);
 query.in.mockReturnValue(query);
 query.is.mockReturnValue(query);
-query.gte.mockReturnValue(query);
-query.lte.mockResolvedValue({ count: 0, error: null });
+// The badge counts end with the open-or-this-season filter (invoiceSeasonWindow.ts).
+query.or.mockResolvedValue({ count: 0, error: null });
 
 vi.mock('../lib/db', () => ({
   supabase: { from: vi.fn(() => query) },

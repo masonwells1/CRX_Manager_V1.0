@@ -28,12 +28,18 @@ import {
 } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
-import { getSeasonDates } from '../utils/season';
+import { isCurrentSeason, openOrInSeasonFilter, otherSeasonLabels } from '../lib/invoiceSeasonWindow';
+import SeasonTag from '../components/invoices/SeasonTag';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { buildInvoicePostTargets, describeInvoicePostScope } from '../lib/invoiceBatchPosting';
+import { applyTableSearchSort } from '../lib/tableSearchSort';
 import PageHeader from '../components/ui/PageHeader';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
+
+// Only these statuses get a row checkbox, so only these can be part of a selection.
+const SELECTABLE_STATUSES: readonly InvoiceStatus[] = ['draft', 'unposted', 'posted', 'voided'];
+const SEARCH_KEYS = ['invoice_number', 'customer_name', 'salesman_name'];
 
 type InvoiceStatusFilter = InvoiceStatus | '' | 'ready_to_post';
 
@@ -103,22 +109,12 @@ export default function Invoices() {
   const [typeFilter, setTypeFilter] = useState('');
   const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
   const [balanceOnly, setBalanceOnly] = useState(false);
+  // The table's search box is lifted here so the page knows exactly which rows are
+  // on screen (a ticked row the search hides must not be acted on).
+  const [tableSearch, setTableSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
   const [showPostModal, setShowPostModal] = useState(false);
-
-  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
-  // user changes their selection. Otherwise the page-scoped keys would carry
-  // over — batch-post A succeeds, response lost, user picks different invoices
-  // and clicks Post → server replays A's cached success without posting B.
-  // Hashing the sorted selected IDs detects intent changes; identical retries
-  // still reuse the key for safe retry-on-network-error.
-  const selectedKey = Array.from(selected).sort().join(',');
-  useEffect(() => {
-    batchVoidIdem.resetKey();
-    batchDeleteIdem.resetKey();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey]);
   const [voiding, setVoiding] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);
@@ -131,7 +127,6 @@ export default function Invoices() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
     const QUERY_LIMIT = 2000;
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
@@ -142,8 +137,11 @@ export default function Invoices() {
       // own area (/field-invoices). This Chemical Sales list excludes them so a
       // field invoice no longer shows in BOTH lists.
       .neq('invoice_type', 'field_application')
-      .gte('created_at', seasonStart)
-      .lte('created_at', seasonEnd + 'T23:59:59')
+      // Open invoices (draft / unposted / posted / overdue) show from EVERY season, so a
+      // prior-season invoice still to post or collect never drops off at the Oct 1
+      // rollover; closed ones (paid / voided / cancelled) stay this-season only,
+      // windowed on created_at as before. See src/lib/invoiceSeasonWindow.ts.
+      .or(openOrInSeasonFilter('created_at'))
       .order('created_at', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -205,22 +203,71 @@ export default function Invoices() {
     return true;
   });
 
-  // Summary stats
+  // Summary stats. An overdue invoice is a posted invoice past its due date, so it
+  // counts as posted here (as the Field Invoices list's isPostedLike does). The list
+  // includes open invoices from earlier seasons, so these totals do too (noted under
+  // the cards).
   const unpostedCount = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted').length;
-  const postedTotal = invoices
-    .filter((i) => i.status === 'posted')
-    .reduce((s, i) => s + i.total_amount_cents, 0);
-  const outstandingBalance = invoices
-    .filter((i) => i.status === 'posted' && i.balance_cents > 0)
+  const postedLikeInvoices = invoices.filter((i) => i.status === 'posted' || i.status === 'overdue');
+  const postedTotal = postedLikeInvoices.reduce((s, i) => s + i.total_amount_cents, 0);
+  const outstandingBalance = postedLikeInvoices
+    .filter((i) => i.balance_cents > 0)
     .reduce((s, i) => s + i.balance_cents, 0);
 
-  // Determine what's selected for action buttons
-  const selectedInvoices = invoices.filter((i) => selected.has(i.id));
+  // What the bulk actions act on (2026-10-09): only ticked rows that are loaded AND on
+  // screen right now — passing the Status / Type / Quick Deliveries / Has-a-balance
+  // filters and the search box — AND showing a checkbox. A ticked row that a filter
+  // hides, that is no longer loaded (deleted elsewhere, or past the row cap), or whose
+  // status lost its checkbox is never posted, voided, printed, deleted or counted.
+  const visibleSelectable = applyTableSearchSort(filtered, SEARCH_KEYS, tableSearch, null, 'asc')
+    .filter((i) => SELECTABLE_STATUSES.includes(i.status));
+  const selectedInvoices = visibleSelectable.filter((i) => selected.has(i.id));
+
+  // Drop ticked rows as soon as they leave the screen (a filter or search hides them,
+  // a reload no longer returns them, or a failed batch post re-selects a row a filter
+  // now hides), so a hidden selection can never reappear later and be acted on.
+  // `selected` is a dependency on purpose: a failed batch post re-ticks the failed ids
+  // with setSelected while the visible set (visibleSelectableKey) stays the same, and one
+  // of those ids may be hidden by a filter. Re-running on selection changes prunes it at
+  // once; with only visibleSelectableKey it would linger and reappear when the filter is
+  // cleared. The updater returns `prev` when nothing is pruned, so this cannot loop.
+  const visibleSelectableKey = visibleSelectable.map((i) => i.id).join(',');
+  useEffect(() => {
+    const inView = new Set(visibleSelectableKey.split(','));
+    setSelected((prev) => {
+      const kept = [...prev].filter((id) => inView.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [visibleSelectableKey, selected]);
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
+  // user changes their selection. Otherwise the page-scoped keys would carry
+  // over — batch-post A succeeds, response lost, user picks different invoices
+  // and clicks Post → server replays A's cached success without posting B.
+  // Hashing the sorted IDs the actions will really send detects intent changes;
+  // identical retries still reuse the key for safe retry-on-network-error.
+  const selectedKey = selectedInvoices.map((i) => i.id).sort().join(',');
+  useEffect(() => {
+    batchVoidIdem.resetKey();
+    batchDeleteIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
+
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
-  const postConfirmation = describeInvoicePostScope(selectedPostable);
+  const basePostConfirmation = describeInvoicePostScope(selectedPostable);
+  // The list shows open invoices from every season, and the server does not check the
+  // season when posting, so the confirm names any selected invoice not from this season.
+  const selectedOtherSeasonPostable = selectedPostable.filter((i) => !isCurrentSeason(i.season));
+  const postConfirmation = selectedOtherSeasonPostable.length > 0
+    ? {
+        ...basePostConfirmation,
+        message:
+          `${basePostConfirmation.message} This includes ${selectedOtherSeasonPostable.length} invoice(s) not from ` +
+          `this season (${otherSeasonLabels(selectedOtherSeasonPostable)}); each posts into its own invoice-date month.`,
+      }
+    : basePostConfirmation;
   const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue'].includes(i.status));
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
-  const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 
   // Batch post — standalone invoices post independently, while split invoices
   // are deduplicated by group and posted atomically through post_invoice_group.
@@ -456,7 +503,7 @@ export default function Invoices() {
   const handleExportPDF = async () => {
     setExportingPdf(true);
     try {
-      const rows = selected.size > 0 ? selectedInvoices : filtered;
+      const rows = selectedInvoices.length > 0 ? selectedInvoices : filtered;
       await downloadReportPdf({
         title: 'Invoices',
         subtitle: `${rows.length} invoice(s)`,
@@ -491,13 +538,32 @@ export default function Invoices() {
     });
   };
 
+  // Select All picks only THIS season's rows (2026-10-09). The list also shows older
+  // seasons' open invoices (and any whose season is unknown), and one Select All +
+  // Post / Void / Delete must not reach that work by accident. An older invoice is
+  // still selectable by ticking its own box (it carries a visible "Season N" tag).
+  //
+  // The toggle works on invoice IDs, not on how many rows are selected: a hand-ticked
+  // older row counts toward the selection but is never one of the rows Select All
+  // picks, so comparing counts could clear when the button said Select All, or select
+  // when it said Deselect All. Everything here reads the on-screen selection
+  // (selectedInvoices), never ticked rows a filter hides.
+  //   - "Deselect All" shows only when something is selected AND every this-season row
+  //     in view is already selected (or none is in view); it clears the whole selection.
+  //   - Otherwise "Select All" REPLACES the selection with exactly this season's rows in
+  //     view (as before the season change), so it never carries along a row ticked
+  //     earlier. It is disabled when no this-season row in view can be selected.
+  // "Clear selection" shows whenever anything on screen is selected.
+  const selectableThisSeason = visibleSelectable.filter((i) => isCurrentSeason(i.season));
+  const toggleAllClears = selectedInvoices.length > 0 && selectableThisSeason.every((i) => selected.has(i.id));
+  const toggleAllDisabled = !toggleAllClears && selectableThisSeason.length === 0;
   const toggleAll = () => {
-    const selectable = filtered.filter((i) => selectableStatuses.includes(i.status));
-    if (selected.size === selectable.length && selectable.length > 0) {
+    if (toggleAllClears) {
       setSelected(new Set());
-    } else {
-      setSelected(new Set(selectable.map((i) => i.id)));
+      return;
     }
+    if (selectableThisSeason.length === 0) return;
+    setSelected(new Set(selectableThisSeason.map((i) => i.id)));
   };
 
   const columns: Column<InvoiceRow>[] = [
@@ -506,7 +572,7 @@ export default function Invoices() {
       header: '',
       className: 'w-10',
       render: (row) =>
-        selectableStatuses.includes(row.status) ? (
+        SELECTABLE_STATUSES.includes(row.status) ? (
           <input
             type="checkbox"
             checked={selected.has(row.id)}
@@ -588,7 +654,12 @@ export default function Invoices() {
       key: 'invoice_date',
       header: 'Date',
       sortable: true,
-      render: (row) => new Date(row.invoice_date + 'T00:00:00').toLocaleDateString(),
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>{new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}</span>
+          <SeasonTag season={row.season} />
+        </div>
+      ),
     },
     {
       key: 'total_amount_cents',
@@ -646,7 +717,7 @@ export default function Invoices() {
         title="Invoices"
         actions={
           <div className="flex gap-2 flex-wrap justify-end">
-            {selected.size > 0 && canPostInvoices && (
+            {selectedInvoices.length > 0 && canPostInvoices && (
               <>
                 {selectedPostable.length > 0 && (
                   <Button
@@ -673,7 +744,7 @@ export default function Invoices() {
                   onClick={() => setShowBatchPrintDialog(true)}
                   loading={printing}
                 >
-                  Print {selected.size} Selected
+                  Print {selectedInvoices.length} Selected
                 </Button>
                 <Button
                   variant="secondary"
@@ -759,7 +830,7 @@ export default function Invoices() {
           </div>
           <p className="text-2xl font-semibold font-heading text-crx-green">{fmt(postedTotal)}</p>
           <p className="text-xs text-secondary mt-1">
-            {invoices.filter((i) => i.status === 'posted').length} posted invoices
+            {postedLikeInvoices.length} posted invoices (including overdue)
           </p>
         </Card>
         <Card>
@@ -770,8 +841,12 @@ export default function Invoices() {
             <span className="text-sm text-secondary">Outstanding</span>
           </div>
           <p className="text-2xl font-semibold font-heading text-red-600">{fmt(outstandingBalance)}</p>
-          <p className="text-xs text-secondary mt-1">unpaid balance on posted invoices</p>
+          <p className="text-xs text-secondary mt-1">unpaid balance on posted and overdue invoices</p>
         </Card>
+        <p className="sm:col-span-3 text-xs text-secondary">
+          Shows this season&apos;s invoices plus any invoice from an earlier season that is still unposted
+          or unpaid; the totals above include those older open invoices.
+        </p>
       </div>
 
       {/* Data Table */}
@@ -782,7 +857,9 @@ export default function Invoices() {
             columns={columns}
             searchable
             searchPlaceholder="Search invoices..."
-            searchKeys={['invoice_number', 'customer_name', 'salesman_name']}
+            searchKeys={SEARCH_KEYS}
+            searchValue={tableSearch}
+            onSearchChange={setTableSearch}
             onRowClick={(row) => navigate(`/invoices/${row.id}`)}
             emptyTitle="No invoices yet"
             emptyDescription="Invoices are created from orders or blend tickets — open one to bill."
@@ -840,12 +917,30 @@ export default function Invoices() {
                 >
                   Has a balance
                 </button>
-                {filtered.some((i) => selectableStatuses.includes(i.status)) && (
+                {visibleSelectable.length > 0 && (
                   <button
+                    type="button"
                     onClick={toggleAll}
-                    className="text-xs text-crx-green hover:underline ml-2"
+                    disabled={toggleAllDisabled}
+                    className="text-xs text-crx-green hover:underline ml-2 disabled:text-gray-400 disabled:no-underline disabled:cursor-not-allowed"
+                    title={
+                      toggleAllClears
+                        ? 'Clears every selected invoice.'
+                        : toggleAllDisabled
+                          ? "No invoice from this season is in view. Tick an older-season invoice's own box to select it."
+                          : "Selects exactly this season's invoices in view, replacing any other selection. Tick an older-season invoice's own box afterwards to include it."
+                    }
                   >
-                    {selected.size > 0 ? 'Deselect All' : 'Select All'}
+                    {toggleAllClears ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
+                {selectedInvoices.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="text-xs text-secondary hover:underline ml-2"
+                  >
+                    Clear selection
                   </button>
                 )}
               </div>

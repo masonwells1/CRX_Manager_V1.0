@@ -27,7 +27,8 @@ import type { Invoice, InvoiceStatus } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
 import { SkeletonTable, SkeletonCard } from '../ui/Skeleton';
 import MobileCardList from '../ui/MobileCardList';
-import { getSeasonDates } from '../../utils/season';
+import { openOrInSeasonFilter } from '../../lib/invoiceSeasonWindow';
+import SeasonTag from '../invoices/SeasonTag';
 
 // Field / Application invoices are the SECOND, segregated sale type (the work CRX
 // applies with its own sprayer), kept separate from Chemical Sales per Mason's
@@ -129,15 +130,16 @@ export default function FieldInvoicesListPanel() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
-    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
     const QUERY_LIMIT = 2000;
     const { data, error } = await supabase
       .from('invoices')
       .select('*, customer:customers!invoices_customer_id_fkey(farm_name)')
       .eq('invoice_type', 'field_application')
       .is('deleted_at', null)
-      .gte('created_at', seasonStart)
-      .lte('created_at', seasonEnd + 'T23:59:59')
+      // Open invoices show from EVERY season; closed ones (paid / voided / cancelled)
+      // stay this-season only, windowed on created_at as before. See
+      // src/lib/invoiceSeasonWindow.ts.
+      .or(openOrInSeasonFilter('created_at'))
       .order('created_at', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -380,7 +382,12 @@ export default function FieldInvoicesListPanel() {
       key: 'invoice_date',
       header: 'Date',
       sortable: true,
-      render: (row) => new Date(row.invoice_date + 'T00:00:00').toLocaleDateString(),
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>{new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}</span>
+          <SeasonTag season={row.season} />
+        </div>
+      ),
     },
     {
       key: 'total_amount_cents',
@@ -646,7 +653,7 @@ export default function FieldInvoicesListPanel() {
       </div>
 
       <p className="text-xs text-secondary -mt-1">
-        Showing this season's field invoices (Oct 1 to Sep 30). Tap a card above to filter, or use the status menu.
+        Showing this season's field invoices (Oct 1 to Sep 30), plus any older invoice that is still unposted or unpaid. Tap a card above to filter, or use the status menu.
       </p>
 
       {/* Data Table */}
@@ -665,7 +672,7 @@ export default function FieldInvoicesListPanel() {
               <div className="min-w-0">
                 <p className="truncate font-semibold text-nav-dark">{row.customer_name}</p>
                 <p className="mt-1 text-xs text-secondary">#{row.invoice_number} · {new Date(row.invoice_date + 'T00:00:00').toLocaleDateString()}</p>
-                <div className="mt-2">{statusBadge(row.status)}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">{statusBadge(row.status)}<SeasonTag season={row.season} /></div>
               </div>
               <div className="shrink-0 text-right">
                 <p className="font-semibold text-nav-dark">{fmt(row.total_amount_cents)}</p>
