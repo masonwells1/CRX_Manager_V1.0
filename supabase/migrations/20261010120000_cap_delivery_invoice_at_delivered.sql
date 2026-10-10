@@ -27,8 +27,9 @@
 --          delivery is at most what the delivery allows: quantity_delivered once the delivery is
 --          completed; the scheduled quantity (GREATEST of quantity and quantity_delivered) while it
 --          is still scheduled or in progress — create_quick_delivery bills the planned amount up
---          front; zero once the delivery is cancelled, voided or deleted (cancel_delivery and
---          void_delivery cancel its draft invoices, so this only bites an invoice somebody reactivates).
+--          front; zero once the delivery is cancelled, voided or deleted (cancel_delivery cancels its
+--          draft and unposted invoices, void_delivery its drafts; an unposted invoice left on a voided
+--          delivery can then no longer be posted — it fails closed).
 --      Quantities are compared in the delivery's own units: every writer copies the delivery line's
 --      quantity into the invoice line unchanged, and the unit label is not part of the match (live
 --      labels vary in spelling only, e.g. "Gal"/"Gallon"). Each delivery line's allowance is rounded to
@@ -47,8 +48,8 @@
 --        * zz_cap_delivery_invoice_items: AFTER INSERT OR UPDATE OF invoice_id, product_id,
 --          order_item_id, quantity ON invoice_items. Removing a line never adds billing, so DELETE is
 --          not watched; other column updates (complete_delivery's tote_number copy) are not watched.
---          Two UPDATEs that cannot add billing are always let through, so nobody is blocked from
---          fixing or finishing work: lowering a line's quantity, and setting an order-linked line to
+--          Two UPDATEs are always let through, so nobody is blocked from fixing or finishing work:
+--          lowering a line's quantity, and — on a DRAFT only — setting an order-linked line to
 --          exactly what its completed delivery delivered on that order line (complete_delivery's
 --          partial-delivery trim — a driver finishing a short delivery is never refused). The draft
 --          can then still be over its delivery because of OTHER lines; posting refuses it until fixed.
@@ -233,6 +234,7 @@ DECLARE
   v_delivery_id uuid;
   v_reason text;
   v_lock boolean;
+  v_status text;
 BEGIN
   -- Separate branches: PL/pgSQL resolves every NEW field named in one expression, and an invoices
   -- row has no invoice_id.
@@ -242,7 +244,7 @@ BEGIN
     v_invoice_id := NEW.id;
   END IF;
 
-  SELECT i.delivery_id INTO v_delivery_id
+  SELECT i.delivery_id, i.status INTO v_delivery_id, v_status
     FROM public.invoices i
    WHERE i.id = v_invoice_id
      AND i.invoice_type <> 'credit_memo'
@@ -263,9 +265,9 @@ BEGIN
       IF NEW.quantity <= OLD.quantity THEN
         RETURN NULL;
       END IF;
-      -- An order-linked line set to exactly what its completed delivery delivered on that order line
-      -- (complete_delivery's partial-delivery trim).
-      IF NEW.order_item_id IS NOT NULL AND NEW.quantity = (
+      -- A draft's order-linked line set to exactly what its completed delivery delivered on that order
+      -- line (complete_delivery's partial-delivery trim, which touches only drafts; posting re-checks).
+      IF NEW.order_item_id IS NOT NULL AND v_status = 'draft' AND NEW.quantity = (
            SELECT SUM(ROUND(COALESCE(di.quantity_delivered, 0), 4))
              FROM public.delivery_items di
              JOIN public.deliveries d ON d.id = di.delivery_id

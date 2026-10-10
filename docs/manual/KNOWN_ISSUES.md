@@ -64,7 +64,9 @@ leave these open:
   posted invoice over — the integrity report's delivery-invoice quantity check flags it. A delivery
   recorded short cannot be billed for more on its own invoice. If a scheduled delivery loses a product
   after its up-front (quick-delivery) invoice was drafted, the delivery still completes but that draft
-  cannot be posted; void it and re-create the invoice from the delivery.
+  cannot be posted; void it and re-create the invoice from the delivery. If a scheduled delivery's
+  quantity is lowered after its up-front invoice was drafted, the draft stays over until the office
+  lowers that line on the invoice (lowering is always allowed).
 - **The integrity checks page by offset, not by a snapshot.** Their reads (and the
   `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
   inserted between two pages can shift the next page by one, so a single run can miss or repeat a
