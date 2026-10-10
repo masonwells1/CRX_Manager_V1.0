@@ -65,6 +65,11 @@ leave these open:
   cannot be posted; void it and re-create the invoice from the delivery. If a scheduled delivery's
   quantity is lowered after its up-front invoice was drafted, the draft stays over until the office
   lowers that line on the invoice (lowering is always allowed).
+- **An invoice made from scratch (no order, no delivery) can name any product and quantity**
+  (pre-existing; found in the PR #889 security review, 2026-10-10). The New Invoice page creates
+  `misc_charge` invoices with no order link, so neither the delivery cap nor the order/delivery
+  overlap guard can see them. Owner: Mason — decide whether product lines should be allowed on
+  orderless invoices at all.
 - **The integrity checks page by offset, not by a snapshot.** Their reads (and the
   `delivery_external_billings` reader) now page past the PostgREST row cap, but a row deleted or
   inserted between two pages can shift the next page by one, so a single run can miss or repeat a
