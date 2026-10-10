@@ -431,7 +431,7 @@ async function main() {
   assert.deepEqual([raced.a, raced.b], [0, 0], `MUTATION: without the order lock both concurrent over-bills should commit:\n${raced.bError}`);
   const reinstall = apply('cap.sql');
   assert.notEqual(reinstall.status, 0, 'the preflight must refuse to re-install over the mutant\'s over-bill');
-  assert.match(reinstall.output, /DELIVERY_INVOICE_CAP_PREFLIGHT: active delivery invoices already break the delivery cap: invoice PROVER-CAP-RACE-M/, `wrong preflight refusal:\n${reinstall.output}`);
+  assert.match(reinstall.output, /DELIVERY_INVOICE_CAP_PREFLIGHT: active delivery invoices already break the delivery cap: .*invoice PROVER-CAP-RACE-M921 bills 8\.0+ of/, `wrong preflight refusal:\n${reinstall.output}`);
   console.log('[prover] CONCURRENCY: two transactions over-billing one delivery at once - the second is refused, also with only the candidate\'s order lock; without any order lock both commit (and the preflight then refuses to install)');
 
   console.log('DELIVERY_INVOICE_CAP_PROOF_PASS defect=reproduced save_invoice=capped table=capped header=rechecked allowed=unchanged quick_delivery=ok complete_delivery=ok ordering=enforced batch=isolated concurrency=serialized mutation=detected');
