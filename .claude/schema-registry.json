@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-10-07",
+    "generated_at": "2026-10-10",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261007114554",
+    "migrations_high_water": "20261010014642",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -400,6 +400,8 @@
       "20260914101300_finish_generic_field_invoice_cutover",
       "20260921180000_soft_delete_customer_document_rpc",
       "20261006200000_refuse_field_invoice_through_order_rpcs",
+      "20261007150000_record_deliveries_billed_outside_crx",
+      "20261007150050_lock_soft_deleted_orders",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -3148,6 +3150,12 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "delivery_external_billings",
+      "constraint": "delivery_external_billings_reason_chk",
+      "def": "CHECK (((char_length(reason) <= 500) AND (reason ~ '[^[:space:]]'::text)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "delivery_items",
       "constraint": "chk_di_quantity",
       "def": "CHECK ((quantity > (0)::numeric))",
@@ -4665,6 +4673,16 @@
         "id",
         "scheduled_date",
         "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "delivery_external_billings": {
+      "no_default": [
+        "delivery_id",
+        "reason"
+      ],
+      "with_default": [
         "created_at",
         "updated_at"
       ]
@@ -6838,6 +6856,13 @@
       "last_edited_by",
       "last_edited_at",
       "is_quick_delivery"
+    ],
+    "delivery_external_billings": [
+      "delivery_id",
+      "reason",
+      "recorded_by",
+      "created_at",
+      "updated_at"
     ],
     "delivery_items": [
       "id",

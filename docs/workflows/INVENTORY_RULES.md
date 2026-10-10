@@ -98,7 +98,15 @@ Every inventory change creates an `inventory_transactions` record. Here are all 
   "prebooked inventory ... was missing"). Exclude those rows when recomputing
   `quantity_available`, or the recompute will be wrong by exactly their amounts
   (this caused a false-positive HIGH in the 2026-06-10 audit). New
-  prebooked-only corrections MUST use `prebook_reconciliation` instead.
+  prebooked-only corrections MUST use `prebook_reconciliation` instead. There
+  are exactly five such rows (2026-03-13/14); the integrity report's ledger
+  check skips them by id (`PREBOOK_ONLY_ADJUSTMENT_TX_IDS` in
+  `src/lib/reconciliation.ts`, 2026-10-07).
+- **Soft-deleted orders do not hold reservations.** Before 2026-07-21 an order
+  could be soft-deleted while still `confirmed`, so its `quantity_prebooked` was
+  never released; `guard_order_delivered_activity_cancel` now refuses that, and
+  `20261007150200` released the leftovers. The prebooked integrity check counts
+  only `confirmed`/`partially_fulfilled` orders that are not deleted.
 - **Early-March 2026 seeds are unledgered.** A handful of products created
   around 2026-03-04 had `quantity_available` seeded with no `received` ledger
   rows; the ledger is not a complete derivation of stock for that era.

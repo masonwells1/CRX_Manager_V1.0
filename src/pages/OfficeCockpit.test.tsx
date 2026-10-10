@@ -12,7 +12,7 @@ function emptyQuery(table: string) {
     selection = columns;
     return builder;
   });
-  for (const method of ['eq', 'is', 'order', 'limit', 'in', 'gte', 'lte', 'lt', 'gt', 'not']) {
+  for (const method of ['eq', 'is', 'order', 'limit', 'range', 'in', 'gte', 'lte', 'lt', 'gt', 'not']) {
     builder[method] = vi.fn(self);
   }
   builder.then = vi.fn((resolve: (value: unknown) => unknown) =>

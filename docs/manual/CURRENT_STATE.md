@@ -1,18 +1,20 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-10-07 (America/Chicago) for the migration ledger only (read-only ledger
-query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-07 11:47 UTC, after PR #885's apply: 1019 rows /
-1012 distinct names, `max(version)` `20261007114554`; the read before it, unchanged since PR #800's
-apply, had 1018 rows, `max(version)` `20261002230949`).
+**Last verified:** 2026-10-10 (America/Chicago) for the migration ledger only (read-only ledger
+query against project `rhyzpcqhnizqbxphqdkr`, 2026-10-10 ~14:40 UTC, after PR #889's three applies:
+1022 rows / 1015 distinct names, `max(version)` `20261010043006`; the read before it, after PR
+#885's apply on 2026-10-07, had 1019 rows, `max(version)` `20261007114554`).
 Every other section keeps its own date; nothing below was re-certified by that read.
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-## Current state at a glance (2026-10-07)
+## Current state at a glance (2026-10-10)
 
-- **Effective ordering high-water: `20261006200000_refuse_field_invoice_through_order_rpcs`**
-  (ledger version `20261007114554`, UTC; applied live 2026-10-07 from PR #885, CRX-LIFE-001). It
-  replaced `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`, PR #800). The effective ordering high-water is the
+- **Effective ordering high-water: `20261007150100_mark_spring_2026_deliveries_billed_in_chem_man`**
+  (ledger version `20261010043006`, UTC; applied live 2026-10-10 from PR #889, not yet merged). It
+  replaced `20261006200000_refuse_field_invoice_through_order_rpcs` (ledger `20261007114554`, PR
+  #885). PR #889 still carries two unapplied files above it: `20261007150200` (owner Windows Hello)
+  and `20261010120000` (which refuses to apply before `150200`). The effective ordering high-water is the
   newest applied row's effective stamp: its authored 14-digit name stamp, or, for a row registered
   under a bare name, a stamp synthesized from its ledger version. It is what the migration ordering
   guard compares, so a new migration must sort above it. Re-read live before numbering one; this
@@ -34,7 +36,10 @@ ships or quarterly, whichever comes first.
   `20260914101300_finish_generic_field_invoice_cutover` (`20261002201609`); the last four applied
   from PR #871's checkout. Then `20260921180000_soft_delete_customer_document_rpc`
   (`20261002230949`, PR #800) and `20261006200000_refuse_field_invoice_through_order_rpcs`
-  (`20261007114554`, PR #885).
+  (`20261007114554`, PR #885). Then, from PR #889 (2026-10-10 UTC):
+  `20261007150000_record_deliveries_billed_outside_crx` (`20261010014555`),
+  `20261007150050_lock_soft_deleted_orders` (`20261010014642`) and
+  `20261007150100_mark_spring_2026_deliveries_billed_in_chem_man` (`20261010043006`).
 - **Nothing from the commission cohort is parked on `main` any more.** The whole cohort
   `20260914100100`..`20260914100900` is live. (Until 2026-09-27 evening, `20260914100900` was the
   one file written but not applied.) The four field-season migrations `20260914101000`..`20260914101300`
@@ -42,10 +47,10 @@ ships or quarterly, whichever comes first.
 - **Read ordering from the authored NAME, not from `version`.** The two diverge: the ledger
   `version` is the apply-time stamp. `.claude/schema-registry.json`'s `migrations_high_water` holds
   a **version**, so a "greater than high-water" rule compared against it silently skips files.
-- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-07 by
-  PR #887 (`migrations_high_water` `20261007114554`), so it records every applied name through
-  `20261006200000_refuse_field_invoice_through_order_rpcs` and the new
-  `invoices_field_application_has_no_order` CHECK. Refresh it after the next live apply.
+- **Schema registry:** `.claude/schema-registry.json` was regenerated from live on 2026-10-10 on PR
+  #889's branch (`migrations_high_water` `20261010014642`), after `20261007150000` and
+  `20261007150050`; the later `20261007150100` changed only data, so the registry's schema is still
+  current. Refresh it after the next live apply.
 - **Customer documents:** the `customer-document-files` Edge Function went live as v1 on
   2026-09-22 UTC, the Documents tab that calls it merged in PR #764 (2026-09-23 UTC, the evening
   of 2026-09-22 Chicago), and migration

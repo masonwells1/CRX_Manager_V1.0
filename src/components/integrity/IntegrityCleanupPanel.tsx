@@ -10,6 +10,7 @@ import { activeInvoiceCoversDelivery, fetchActiveInvoiceCoveragePages } from '..
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { useUnresolvedIntent, UNRESOLVED_INTENT_MESSAGE } from '../../hooks/useUnresolvedIntent';
 import { fetchSplitBillingOrderIds, SPLIT_BILLING_BLOCK_REASON } from '../../lib/deliverySplitBilling';
+import { fetchBilledOutsideCrxDeliveryIds } from '../../lib/deliveryExternalBilling';
 
 interface NegativeInvRow {
   id: string;
@@ -296,7 +297,16 @@ export default function IntegrityCleanupPanel() {
           // (delivery_id IS NULL) covers the whole order. An invoice tied to a DIFFERENT
           // delivery on the same order must NOT hide this delivery — mirrors the
           // complete_delivery auto-invoice guard.
-          const { data: invoiceRows, error: invoiceCoverageError } = await fetchActiveInvoiceCoveragePages(orderIds);
+          //
+          // A delivery recorded in delivery_external_billings was billed outside CRX
+          // (e.g. in Chem Man); offering "Create draft invoice" on it would bill the
+          // customer twice, so it is not listed. If that list cannot be read, hide
+          // the section rather than risk showing those rows.
+          const [{ data: invoiceRows, error: coverageError }, externalBillingRes] = await Promise.all([
+            fetchActiveInvoiceCoveragePages(orderIds),
+            fetchBilledOutsideCrxDeliveryIds(),
+          ]);
+          const invoiceCoverageError = coverageError ?? externalBillingRes.error;
           if (invoiceCoverageError) {
             Sentry.captureException(invoiceCoverageError);
             toast('error', 'Failed to verify invoice coverage. Unbilled delivery results are hidden; refresh to try again.');
@@ -305,7 +315,8 @@ export default function IntegrityCleanupPanel() {
             setSplitBillingOrderIds(new Set());
           } else {
             const invRows = invoiceRows || [];
-            const filtered = allCompleted.filter((d) => !invRows.some((invoice) =>
+            const billedOutsideCrx = externalBillingRes.data ?? new Set<string>();
+            const filtered = allCompleted.filter((d) => !billedOutsideCrx.has(d.id) && !invRows.some((invoice) =>
               activeInvoiceCoversDelivery(invoice, d.id, d.order_id)
             ));
             setUnbilled(
@@ -753,7 +764,7 @@ export default function IntegrityCleanupPanel() {
         <p className="text-xs text-gray-500 ml-7 max-w-3xl">
           Historical completions that pre-date Phase 15's auto-invoice restoration. Each
           row's button creates a draft invoice from the delivered quantities — same logic
-          new completions use today.
+          new completions use today. Deliveries recorded as billed outside CRX are not listed.
         </p>
         {invoiceCoverageFailed ? (
           <p className="text-sm text-amber-700 ml-7">Could not verify invoice coverage — refresh to try again.</p>

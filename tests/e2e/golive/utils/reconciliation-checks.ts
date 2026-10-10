@@ -36,7 +36,18 @@ export interface InventoryRow {
   quantity_available: number;
 }
 
+// Mirror of src/lib/reconciliation.ts: historical prebooked-only `adjusted` rows the ledger
+// recompute must skip (docs/workflows/INVENTORY_RULES.md).
+export const PREBOOK_ONLY_ADJUSTMENT_TX_IDS: ReadonlySet<string> = new Set([
+  '14880dd6-9324-4a6e-a1fb-f951b87ad090',
+  '23a36a20-db16-42a1-8346-ba9bd97894eb',
+  'd6b92523-5bc2-43d5-a566-2b8399596a9b',
+  '86fc5133-776e-463c-ac6b-f67bbf1f76ae',
+  '386a1ce0-1cf7-422e-86f9-55cd105cc93f',
+]);
+
 export interface InventoryTransactionRow {
+  id?: string;
   product_id: string;
   transaction_type: 'received' | 'booked' | 'delivered' | 'returned' | 'adjusted' | 'transferred';
   quantity: number;
@@ -85,6 +96,9 @@ export interface DeliveryItemCheckRow {
   order_id: string;
   product_id: string;
   quantity_delivered: number;
+  delivery_id?: string;
+  delivery_status?: string;
+  delivery_deleted_at?: string | null;
 }
 
 export interface InvoiceItemCheckRow {
@@ -92,6 +106,8 @@ export interface InvoiceItemCheckRow {
   product_id: string;
   quantity: number;
   invoice_type: string;
+  invoice_status?: string;
+  invoice_deleted_at?: string | null;
 }
 
 export interface InventoryPrebookRow {
@@ -167,6 +183,7 @@ export function checkInventoryLedger(
 ): Discrepancy[] {
   const expectedByProduct = new Map<string, number>();
   for (const tx of transactions) {
+    if (tx.id && PREBOOK_ONLY_ADJUSTMENT_TX_IDS.has(tx.id)) continue;
     const current = expectedByProduct.get(tx.product_id) ?? 0;
     let delta: number;
     switch (tx.transaction_type) {
@@ -317,13 +334,19 @@ export function checkQuoteHoldParity(
   return issues;
 }
 
+// Mirror of src/lib/reconciliation.ts: completed deliveries only, active invoices only, and
+// deliveries billed outside CRX (delivery_external_billings) are not expected to have a CRX invoice.
 export function checkDeliveryInvoiceQuantityParity(
   deliveryItems: DeliveryItemCheckRow[],
   invoiceItems: InvoiceItemCheckRow[],
+  externallyBilledDeliveryIds: ReadonlySet<string> = new Set(),
 ): Discrepancy[] {
   const deliveredByKey = new Map<string, number>();
   for (const di of deliveryItems) {
     if (!di.order_id || !di.product_id) continue;
+    if (di.delivery_status !== undefined && di.delivery_status !== 'completed') continue;
+    if (di.delivery_deleted_at) continue;
+    if (di.delivery_id && externallyBilledDeliveryIds.has(di.delivery_id)) continue;
     const key = `${di.order_id}::${di.product_id}`;
     deliveredByKey.set(key, (deliveredByKey.get(key) ?? 0) + di.quantity_delivered);
   }
@@ -331,6 +354,8 @@ export function checkDeliveryInvoiceQuantityParity(
   const invoicedByKey = new Map<string, number>();
   for (const ii of invoiceItems) {
     if (ii.invoice_type === 'credit_memo') continue;
+    if (ii.invoice_deleted_at) continue;
+    if (ii.invoice_status === 'voided' || ii.invoice_status === 'cancelled') continue;
     if (!ii.order_id || !ii.product_id) continue;
     const key = `${ii.order_id}::${ii.product_id}`;
     invoicedByKey.set(key, (invoicedByKey.get(key) ?? 0) + ii.quantity);

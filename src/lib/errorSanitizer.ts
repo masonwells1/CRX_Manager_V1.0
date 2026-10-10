@@ -97,6 +97,32 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
    'An internal error occurred. Please try again.'],
 ];
 
+// The exact reasons 20261010120000 writes after `DELIVERY_INVOICE_EXCEEDS_DELIVERED: `.
+const DOC_NUMBER = String.raw`[A-Za-z0-9][A-Za-z0-9-]{0,40}`;
+const QUANTITY = String.raw`\d{1,12}(?:\.\d{1,8})?`;
+const DELIVERY_CAP_REASONS: Array<{ shape: RegExp; labelGroup?: number }> = [
+  { shape: new RegExp(`^invoice ${DOC_NUMBER} bills ${QUANTITY} of (.{1,120}), but delivery ${DOC_NUMBER} allows ${QUANTITY}$`), labelGroup: 1 },
+  { shape: new RegExp(`^invoice ${DOC_NUMBER} bills (.{1,120}) from an order line delivery ${DOC_NUMBER} did not carry$`), labelGroup: 1 },
+  { shape: new RegExp(`^invoice ${DOC_NUMBER} has a line with no product or a negative quantity; a delivery invoice bills only the products delivery ${DOC_NUMBER} delivered$`) },
+  { shape: new RegExp(`^invoice ${DOC_NUMBER} cannot be posted before delivery ${DOC_NUMBER} is completed$`) },
+  { shape: new RegExp(`^invoice ${DOC_NUMBER} names a delivery that does not exist$`) },
+];
+
+/** The delivery-cap reason when it is one of the known shapes and its product label is plain text; else null. */
+function deliveryCapReason(message: string): string | null {
+  const reason = /^DELIVERY_INVOICE_EXCEEDS_DELIVERED:\s*(.+?)\s*$/.exec(message)?.[1];
+  if (!reason) return null;
+  for (const { shape, labelGroup } of DELIVERY_CAP_REASONS) {
+    const match = shape.exec(reason);
+    if (!match) continue;
+    const label = labelGroup ? match[labelGroup] : '';
+    const hasControl = [...label].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127);
+    const unsafe = /[<>]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|relation "|column "|constraint "|table "/i;
+    return hasControl || unsafe.test(label) ? null : reason;
+  }
+  return null;
+}
+
 export function sanitizeError(error: unknown): string {
   if (!error) return 'An unexpected error occurred';
 
@@ -149,6 +175,37 @@ export function sanitizeError(error: unknown): string {
   // The server text here names the invoice by id rather than by number, so it is not appended.
   if (/^INVOICE_FILED_SEASON_CHANGE_NOT_ALLOWED(?::|$)/.test(message)) {
     return 'No invoice was changed. The filed season of a field-application invoice cannot be changed';
+  }
+  // delivery_external_billings guard (20261007150000): the delivery, or a delivery on this order,
+  // was already billed outside CRX (e.g. in Chem Man), so a CRX invoice would bill it twice.
+  if (/^DELIVERY_BILLED_OUTSIDE_CRX(?::|$)/.test(message)) {
+    return 'No invoice was created. This delivery (or a delivery on this order) was already billed '
+      + 'outside CRX, so CRX will not bill it again';
+  }
+  if (/^BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED(?::|$)/.test(message)) {
+    return 'Nothing was changed. This delivery was billed outside CRX, so it cannot be moved to another order';
+  }
+  // Delivery-invoice cap (20261010120000): a delivery's invoice billed more than, or something other
+  // than, what that delivery delivered. The server reason is shown only when it is exactly one of the
+  // shapes the database writes, with plain document numbers, quantities and a product label that
+  // carries no identifier; anything else gets the generic sentence.
+  const deliveryCapDetail = deliveryCapReason(message);
+  if (deliveryCapDetail?.includes(' cannot be posted before delivery ')) {
+    return `Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (${deliveryCapDetail})`;
+  }
+  if (deliveryCapDetail || /^DELIVERY_INVOICE_EXCEEDS_DELIVERED(?::|$)/.test(message)) {
+    return 'Nothing was changed. This invoice is for one delivery, so it can bill only the products and '
+      + 'quantities that delivery delivered'
+      + (deliveryCapDetail ? ` (${deliveryCapDetail})` : '');
+  }
+  // 20261010120000: an order is billed either per delivery or by whole-order invoices, never both.
+  if (/^ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE(?::|$)/.test(message)) {
+    return message.includes('already billed per delivery')
+      ? 'Nothing was saved. This order is already billed delivery by delivery, so a whole-order invoice would bill those goods twice. Invoice each remaining delivery instead'
+      : 'Nothing was saved. This order already has a whole-order invoice, so a delivery invoice would bill those goods twice';
+  }
+  if (/^ORDER_DELETED_(STATUS|LINES|DELIVERIES)_LOCKED(?::|$)/.test(message)) {
+    return 'Nothing was changed. This order has been deleted, so it cannot be changed or restored';
   }
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {

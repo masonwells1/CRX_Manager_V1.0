@@ -15,7 +15,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
@@ -206,6 +206,11 @@ export default function DeliveryDetail() {
   // fetchSplitBillingOrderIds.
   const [orderNeedsSplitBilling, setOrderNeedsSplitBilling] = useState(false);
 
+  // The reason this delivery was billed outside CRX (delivery_external_billings,
+  // admin/sales-rep readable), or null. The server refuses to invoice such a delivery; on a
+  // read failure this stays null and that refusal still applies.
+  const [billedOutsideCrxReason, setBilledOutsideCrxReason] = useState<string | null>(null);
+
   // Sibling deliveries + quote context for transaction thread
   const [siblingDeliveries, setSiblingDeliveries] = useState<{ id: string; delivery_number: string }[]>([]);
   const [parentQuote, setParentQuote] = useState<{ id: string; quote_number: string } | null>(null);
@@ -228,14 +233,18 @@ export default function DeliveryDetail() {
   const canCreateInvoice = isAdmin
     && delivery?.status === 'completed'
     && !hasActiveRelatedInvoice
-    && !orderNeedsSplitBilling;
+    && !orderNeedsSplitBilling
+    && billedOutsideCrxReason === null;
   // Only worth explaining where the button would otherwise have been offered.
   const splitBillingBlocksInvoice = isAdmin
     && delivery?.status === 'completed'
     && !hasActiveRelatedInvoice
-    && orderNeedsSplitBilling;
+    && orderNeedsSplitBilling
+    && billedOutsideCrxReason === null;
 
   const fetchDelivery = useCallback(async () => {
+    // Never carry the previous delivery's billed-outside-CRX badge onto this one.
+    setBilledOutsideCrxReason(null);
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*')
@@ -291,7 +300,7 @@ export default function DeliveryDetail() {
           // same question. `order_item_field_allocations` is admin/sales_rep
           // readable (RLS `oifa_select`); a driver never sees the button anyway.
           const orderIdForSplitCheck = del.order_id;
-          const [oiRes, orderRes, invRes, splitRes] = await Promise.all([
+          const [oiRes, orderRes, invRes, splitRes, externalBillingRes] = await Promise.all([
             supabase
               .from('order_items')
               .select('id, total_units_needed, quantity_delivered, quantity_remaining')
@@ -308,7 +317,23 @@ export default function DeliveryDetail() {
               .is('deleted_at', null)
               .order('invoice_date', { ascending: false }),
             fetchSplitBillingOrderIds([orderIdForSplitCheck]),
+            // Not yet in the generated types; admin/sales-rep readable under RLS.
+            supabaseUntyped
+              .from('delivery_external_billings')
+              .select('reason')
+              .eq('delivery_id', del.id)
+              .maybeSingle(),
           ]);
+          if (externalBillingRes.error) {
+            // Fail OPEN like the split-billing read above: keep the button; the server's
+            // DELIVERY_BILLED_OUTSIDE_CRX guard still refuses, in plain English.
+            Sentry.captureException(externalBillingRes.error, {
+              extra: { context: 'load_delivery_external_billing', deliveryId: del.id },
+            });
+          } else if (signatureRouteIdRef.current === id) {
+            // Publish only if this response still belongs to the delivery on screen.
+            setBilledOutsideCrxReason((externalBillingRes.data as { reason: string } | null)?.reason ?? null);
+          }
           if (splitRes.error) {
             // Fail OPEN: keep the button. The server still refuses, and this page
             // already surfaces that refusal verbatim via sanitizeError().
@@ -369,6 +394,7 @@ export default function DeliveryDetail() {
           // Orphan delivery: no order, so no split-billing state to carry over
           // from a previously viewed delivery.
           setOrderNeedsSplitBilling(false);
+          setBilledOutsideCrxReason(null);
         }
 
         // Fetch remainders for completed deliveries
@@ -1736,6 +1762,13 @@ export default function DeliveryDetail() {
                   Create Invoice
                 </Button>
                 <HelpTip text={SPLIT_BILLING_BLOCK_REASON} />
+              </div>
+            )}
+            {isAdmin && delivery?.status === 'completed' && billedOutsideCrxReason !== null && (
+              <div className="flex items-center gap-1 text-sm text-secondary">
+                <FileText className="w-4 h-4" />
+                <span>Billed outside CRX</span>
+                <HelpTip text={billedOutsideCrxReason} />
               </div>
             )}
             <Button

@@ -42,6 +42,7 @@
     "check:pricing-phase2-live-smoke": "node scripts/smoke/check-supplier-cost-basis-phase2-live.mjs",
     "proof:field-app-season": "node scripts/smoke/prove-preview-field-app-season.mjs && node scripts/smoke/prove-generic-field-cutover-receipt-gate.mjs",
     "proof:order-invoice-type-gate": "node scripts/smoke/prove-order-invoice-type-gate-real-schema.mjs",
+    "proof:billed-outside-crx": "node scripts/smoke/prove-billed-outside-crx-real-schema.mjs",
     "proof:save-field-actor": "node scripts/db-invariant-sweeps/save-field-actor-binding-predicate.test.mjs && node scripts/smoke/prove-save-field-actor-binding.mjs",
     "proof:save-job-field-acres": "node scripts/smoke/prove-save-job-field-acres-real-schema.mjs && node scripts/smoke/prove-save-job-field-acres.mjs",
     "proof:actor-forgery": "node scripts/db-invariant-sweeps/actor-forgery-predicates.test.mjs",

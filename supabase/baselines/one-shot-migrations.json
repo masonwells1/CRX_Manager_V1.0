@@ -20,6 +20,8 @@
     "and the replay plan must keep rebuilding them."
   ],
   "one_shot": {
-    "20260810025159_backfill_stale_line_profit": "Recomputed line-level profit for a 37-row population approved on 2026-08-09. Authorized by row/order/price counts, not by row identity — a different population with the same counts would satisfy that guard. Applied live; per AGENTS.md an applied migration is never edited, so containment lives here."
+    "20260810025159_backfill_stale_line_profit": "Recomputed line-level profit for a 37-row population approved on 2026-08-09. Authorized by row/order/price counts, not by row identity — a different population with the same counts would satisfy that guard. Applied live; per AGENTS.md an applied migration is never edited, so containment lives here.",
+    "20261007150100_mark_spring_2026_deliveries_billed_in_chem_man": "Records 53 named spring 2026 deliveries on 33 orders as billed outside CRX (in Chem Man), owner-approved 2026-10-07. Bound to those live delivery and order numbers; on any other population its preflight refuses.",
+    "20261007150200_release_reservations_of_deleted_spring_orders": "Releases the reservations of four orders soft-deleted while still confirmed (4,607.1 units, 27 products) and of one deleted test order (36 units), owner-approved 2026-10-07. Bound to the live per-product reservation totals; its preflight refuses unless every product reconciles exactly."
   }
 }

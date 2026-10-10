@@ -2742,6 +2742,45 @@ export type Database = {
           },
         ]
       }
+      delivery_external_billings: {
+        Row: {
+          created_at: string
+          delivery_id: string
+          reason: string
+          recorded_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          delivery_id: string
+          reason: string
+          recorded_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          delivery_id?: string
+          reason?: string
+          recorded_by?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delivery_external_billings_delivery_id_fkey"
+            columns: ["delivery_id"]
+            isOneToOne: true
+            referencedRelation: "deliveries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "delivery_external_billings_recorded_by_fkey"
+            columns: ["recorded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       delivery_items: {
         Row: {
           delivery_id: string
@@ -11011,6 +11050,10 @@ export type Database = {
         }
         Returns: Json
       }
+      _assert_field_app_invoice_date_in_filed_season: {
+        Args: { p_invoice_date: string; p_invoice_id: string }
+        Returns: undefined
+      }
       _batch_apply_prepayments_impl: {
         Args: {
           p_allocations: Json
@@ -11221,6 +11264,21 @@ export type Database = {
           p_order_date: string
           p_order_name?: string
           p_performed_by?: string
+        }
+        Returns: Json
+      }
+      _create_inventory_hold_intent_impl_20260905: {
+        Args: {
+          p_customer_id: string
+          p_expires_at: string
+          p_force?: boolean
+          p_force_reason?: string
+          p_hold_type: string
+          p_idempotency_key?: string
+          p_notes: string
+          p_performed_by: string
+          p_product_id: string
+          p_quantity: number
         }
         Returns: Json
       }
@@ -11463,6 +11521,16 @@ export type Database = {
       _post_invoice_public_impl_20260718: {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
+      }
+      _preview_field_app_invoice_split_impl_20260908: {
+        Args: {
+          p_application_service_id?: string
+          p_chemicals: Json
+          p_invoice_date?: string
+          p_invoice_id?: string
+          p_locations: Json
+        }
+        Returns: Json
       }
       _price_order_below_cost_impl_20260810: {
         Args: {
@@ -11851,6 +11919,14 @@ export type Database = {
       _sync_quote_job_reservations: {
         Args: { p_actor: string; p_quote_id: string }
         Returns: undefined
+      }
+      _transfer_job_to_invoice_intent_impl_20260908: {
+        Args: {
+          p_idempotency_key?: string
+          p_job_id: string
+          p_performed_by: string
+        }
+        Returns: Json
       }
       _unapply_return_credit_guard_impl_20260826: {
         Args: {
@@ -12924,7 +13000,7 @@ export type Database = {
           outstanding_balance: number
           paid_count: number
           pending_count: number
-          recipient_id: string | null
+          recipient_id: string
           recipient_name: string
           total_earned: number
           total_paid: number
@@ -12943,7 +13019,7 @@ export type Database = {
           payment_date: string
           payment_id: string
           payment_number: string
-          recipient_id: string | null
+          recipient_id: string
           recipient_name: string
           settled_amount: number
           source_number: string

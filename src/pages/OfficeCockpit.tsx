@@ -192,6 +192,8 @@ interface CockpitData {
   // True only when get_watchdog_flags loaded cleanly. When false we CANNOT tell which
   // invoices are flagged, so bulk-posting is disabled (fail-safe — never post on unknown).
   watchdogLoadOk: boolean;
+  // Every cockpit query loaded without error (gates the page-wide "All clear!").
+  allChecksLoadOk: boolean;
 }
 
 interface MorningSummaryRpc {
@@ -315,6 +317,63 @@ type RawProductName = {
 };
 
 const TILE_LIMIT = 50;
+// "Delivered, not invoiced" pages back through completed deliveries at most this many times.
+const DELIVERY_SCAN_PAGE_CAP = 20;
+
+type CompletedOrderDelivery = RawCompletedDelivery & { order_id: string };
+
+/**
+ * Newest-first completed deliveries that still need invoicing: no active CRX invoice covers
+ * them and they were not billed outside CRX. Deliveries are paged and filtered BEFORE the tile
+ * limit, so a page of covered or Chem-Man-billed deliveries cannot hide an older unbilled one.
+ * `hitLimit` means more may exist than were checked or shown.
+ */
+async function loadDeliveredNotInvoiced(): Promise<{
+  rows: CompletedOrderDelivery[];
+  hitLimit: boolean;
+  error: { message?: string } | null;
+}> {
+  const actionable: CompletedOrderDelivery[] = [];
+  for (let page = 0; page < DELIVERY_SCAN_PAGE_CAP; page += 1) {
+    const from = page * TILE_LIMIT;
+    const deliveriesRes = await supabase
+      .from('deliveries')
+      .select('id, delivery_number, order_id, completed_at, customer:customers(farm_name)')
+      .eq('status', 'completed')
+      .is('deleted_at', null)
+      .order('completed_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, from + TILE_LIMIT - 1);
+    if (deliveriesRes.error) return { rows: [], hitLimit: false, error: deliveriesRes.error };
+    const raw = (deliveriesRes.data || []) as RawCompletedDelivery[];
+    const candidates = raw.filter((row): row is CompletedOrderDelivery => row.order_id != null);
+
+    if (candidates.length > 0) {
+      // delivery_external_billings is readable by admins and sales reps; other roles read no rows.
+      const [invoiceCoverageRes, externalBillingRes] = await Promise.all([
+        fetchActiveInvoiceCoveragePages([...new Set(candidates.map((row) => row.order_id))]),
+        supabaseUntyped
+          .from('delivery_external_billings')
+          .select('delivery_id')
+          .in('delivery_id', candidates.map((row) => row.id)),
+      ]);
+      const coverageError = invoiceCoverageRes.error ?? externalBillingRes.error;
+      if (coverageError) return { rows: [], hitLimit: false, error: coverageError };
+      const activeInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverage[];
+      const billedOutsideCrx = new Set(
+        ((externalBillingRes.data ?? []) as Array<{ delivery_id: string }>).map((r) => r.delivery_id),
+      );
+      for (const row of candidates) {
+        if (billedOutsideCrx.has(row.id)) continue;
+        if (activeInvoices.some((invoiceRow) => activeInvoiceCoversDelivery(invoiceRow, row.id, row.order_id))) continue;
+        actionable.push(row);
+      }
+      if (actionable.length >= TILE_LIMIT) return { rows: actionable.slice(0, TILE_LIMIT), hitLimit: true, error: null };
+    }
+    if (raw.length < TILE_LIMIT) return { rows: actionable, hitLimit: false, error: null };
+  }
+  return { rows: actionable, hitLimit: true, error: null };
+}
 
 const emptyMorningSummary: MorningSummaryData = {
   activeOrdersCount: 0,
@@ -429,6 +488,7 @@ export default function OfficeCockpit() {
     plannedBookingAttention: [],
     plannedBookingAttentionLoadOk: false,
     watchdogLoadOk: false,
+    allChecksLoadOk: false,
   });
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   // §4 Post-all-clean state.
@@ -512,15 +572,8 @@ export default function OfficeCockpit() {
         .order('invoice_date', { ascending: true })
         .limit(TILE_LIMIT),
 
-      // (b3) Candidate completed deliveries. Active invoice coverage is checked
-      // in one follow-up invoices query after these order IDs are known.
-      supabase
-        .from('deliveries')
-        .select('id, delivery_number, order_id, completed_at, customer:customers(farm_name)')
-        .eq('status', 'completed')
-        .is('deleted_at', null)
-        .order('completed_at', { ascending: false })
-        .limit(TILE_LIMIT),
+      // (b3) Completed deliveries that still need invoicing (paged and filtered before the limit).
+      loadDeliveredNotInvoiced(),
 
       // (d) Upcoming scheduled jobs (next 7 days) — proxy for weather-at-risk
       supabase
@@ -593,20 +646,6 @@ export default function OfficeCockpit() {
     // counts `= await supabase.rpc(...)` captures (see assertRpcCoverage.test.ts).
     const morningSummaryRes = await supabase.rpc('operational_dashboard_summary');
     const programCompletionRes = await supabase.rpc('get_program_completion');
-
-    const rawCompletedDeliveries = (completedDeliveriesRes.data || []) as RawCompletedDelivery[];
-    const completedDeliveryCandidates = rawCompletedDeliveries.filter(
-      (row): row is RawCompletedDelivery & { order_id: string } => row.order_id != null
-    );
-    const deliveryOrderIds = [...new Set(completedDeliveryCandidates.map((row) => row.order_id))];
-    let deliveryInvoiceError: { message?: string } | null = null;
-    let activeDeliveryInvoices: DeliveryInvoiceCoverage[] = [];
-
-    if (deliveryOrderIds.length > 0) {
-      const invoiceCoverageRes = await fetchActiveInvoiceCoveragePages(deliveryOrderIds);
-      deliveryInvoiceError = invoiceCoverageRes.error;
-      activeDeliveryInvoices = (invoiceCoverageRes.data || []) as DeliveryInvoiceCoverage[];
-    }
 
     const rawLapsedPlannedHolds = (lapsedPlannedHoldsRes.data || []) as RawLapsedPlannedHold[];
     const lapsedSourceIds = [...new Set(
@@ -706,7 +745,6 @@ export default function OfficeCockpit() {
       postableInvRes.error,
       chemicalDraftsRes.error,
       completedDeliveriesRes.error,
-      deliveryInvoiceError,
       watchdogRes.error,
       shortfallsRes.error,
       expiringPlannedHoldsRes.error,
@@ -760,17 +798,12 @@ export default function OfficeCockpit() {
     }));
     const chemicalDraftsHitLimit = (chemicalDraftsRes.data || []).length === TILE_LIMIT;
 
-    const deliveredNotInvoicedLoadOk = !completedDeliveriesRes.error && !deliveryInvoiceError;
-    const deliveredNotInvoicedHitLimit = rawCompletedDeliveries.length === TILE_LIMIT;
-    // Mirrors create_invoice_for_unbilled_delivery's own precondition: an invoice
-    // covers this delivery when it is not a credit memo and targets this delivery
-    // or the whole parent order.
-    // The guarded fix action lives on DeliveryDetail, where the RPC is confirmed.
+    const deliveredNotInvoicedLoadOk = !completedDeliveriesRes.error;
+    const deliveredNotInvoicedHitLimit = completedDeliveriesRes.hitLimit;
+    // Coverage mirrors create_invoice_for_unbilled_delivery's own precondition (see
+    // loadDeliveredNotInvoiced). The guarded fix action lives on DeliveryDetail.
     const deliveredNotInvoiced: DeliveredNotInvoicedRow[] = deliveredNotInvoicedLoadOk
-      ? completedDeliveryCandidates
-        .filter((deliveryRow) => !activeDeliveryInvoices.some((invoiceRow) =>
-          activeInvoiceCoversDelivery(invoiceRow, deliveryRow.id, deliveryRow.order_id)
-        ))
+      ? completedDeliveriesRes.rows
         .map((deliveryRow) => ({
           id: deliveryRow.id,
           delivery_number: deliveryRow.delivery_number,
@@ -894,6 +927,7 @@ export default function OfficeCockpit() {
       plannedBookingAttention,
       plannedBookingAttentionLoadOk,
       watchdogLoadOk,
+      allChecksLoadOk: errors.length === 0,
     });
     setMorningSummary(nextMorningSummary);
     setMorningSummaryLoadOk(nextMorningSummaryLoadOk);
@@ -1104,7 +1138,11 @@ export default function OfficeCockpit() {
       />
 
       {/* All-clear banner when nothing is wrong */}
-      {totalExceptions === 0 && (
+      {/* Only after every check loaded: a failed query, or a capped delivery scan that found
+          nothing, has not proved anything clear. */}
+      {totalExceptions === 0 && data.allChecksLoadOk
+        && data.deliveredNotInvoicedLoadOk && !data.deliveredNotInvoicedHitLimit
+        && data.shortfallsLoadOk && data.plannedBookingAttentionLoadOk && data.watchdogLoadOk && (
         <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-xl px-5 py-4">
           <CheckCircle className="w-6 h-6 text-crx-green shrink-0" />
           <div>
@@ -1372,8 +1410,12 @@ export default function OfficeCockpit() {
           />
           {!data.deliveredNotInvoicedLoadOk ? (
             <p className="py-2 text-sm text-gray-400">Invoice coverage check unavailable right now.</p>
+          ) : data.deliveredNotInvoiced.length === 0 && data.deliveredNotInvoicedHitLimit ? (
+            <p className="py-2 text-sm text-gray-500">
+              None of the newest 1,000 completed deliveries need invoicing; older ones were not checked.
+            </p>
           ) : data.deliveredNotInvoiced.length === 0 ? (
-            <AllClear label="Every completed delivery has an active invoice." />
+            <AllClear label="No completed deliveries need invoicing." />
           ) : (
             <div className="divide-y divide-gray-100">
               {data.deliveredNotInvoiced.slice(0, 5).map((row) => (
@@ -1406,7 +1448,7 @@ export default function OfficeCockpit() {
           )}
           {data.deliveredNotInvoicedLoadOk && data.deliveredNotInvoicedHitLimit && (
             <p className="mt-2 text-xs text-gray-400">
-              Coverage checked for the newest 50 completed deliveries.
+              More deliveries may need invoicing; open Deliveries for the full list.
             </p>
           )}
         </Card>

@@ -43,6 +43,7 @@
 - `delivery_items` - Items on delivery (order_item_id, product_id, quantity, quantity_delivered, unit_size, notes, tote_number). There is no `is_non_returnable` column here; that flag is on `receiving_records`.
 - `delivery_photos` - Driver-uploaded delivery photos (delivery_id, storage_path, image_url, uploaded_by)
 - `delivery_remainders` - Partial delivery remainder items (original_delivery_id, order_id, order_item_id, customer_id, product_id, quantity_remaining, followup_delivery_id, status: pending/scheduled/fulfilled/cancelled)
+- `delivery_external_billings` - Completed deliveries billed outside CRX, e.g. in Chem Man before CRX invoicing (delivery_id PK, reason, recorded_by, created_at, updated_at). Written only by reviewed migrations; readable by admins and sales reps. A recording guard accepts only a completed, not-yet-invoiced order delivery, and `zz_guard_invoice_delivery_billed_outside_crx` on `invoices` refuses an invoice for a recorded delivery or a whole-order invoice on its order (`DELIVERY_BILLED_OUTSIDE_CRX`); `guard_billed_outside_delivery_order_locked` on `deliveries` refuses moving a recorded delivery to another order (`BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED`). Excluded from the integrity report's delivery-invoice check, Integrity Cleanup, the dashboard and Office Cockpit "Delivered, not invoiced" lists (`20261007150000`).
 
 ## Receiving
 - `receiving_records` - Per-event receiving records (purchase_order_id, po_item_id, product_id, quantity_received, condition, lot_number, notes, storage_location, received_by, is_non_returnable)
@@ -80,7 +81,7 @@
 
 ## Billing / Invoices
 - `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/unposted/posted/paid/overdue/voided/cancelled, balance_cents bigint [GENERATED, CHECK >= 0 added 2026-05-13 audit #19], due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation]; CHECK `invoices_field_application_has_no_order` [2026-10-06, CRX-LIFE-001]: a `field_application` invoice never carries an `order_id`)
-- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, quoted_price_cents, price_source)
+- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, extended_cents, cost_cents, quoted_price_cents, price_source). On an active delivery invoice (`invoices.delivery_id` set, `invoice_type` not `credit_memo`, `deleted_at` NULL, and status not `voided` or `cancelled`), lines can bill only the products and quantities that delivery allows (completed: `quantity_delivered`; scheduled/in progress: `GREATEST(quantity, quantity_delivered)`; cancelled, voided, or deleted: zero), summed over every active invoice for the delivery, with no product-less, null-quantity, or negative lines. Posting is refused for a non-deleted scheduled or in-progress delivery until it is completed. `zz_cap_delivery_invoice_items` lets through a non-negative quantity decrease with unchanged invoice, product and order-line linkage, or a draft linked-line trim to exactly the completed delivery's quantity; `zz_cap_delivery_invoice_header` checks re-pointing, restoring, un-voiding, and moves from draft or unposted to posted, paid or overdue. Both refuse with `DELIVERY_INVOICE_EXCEEDS_DELIVERED`; `zz_refuse_overlapping_order_delivery_invoices` on `invoices` keeps an order billed either per delivery or whole-order, never both (`ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE`) (`20261010120000`)
 - `allocation_sets` - Payment-to-invoice allocation groups (entity_type: order/invoice/payment, entity_id, version, is_active, created_by, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
 - `invoice_line_allocations` - Payment portions applied to invoice items
@@ -388,6 +389,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | delivery_items | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin | Admin / Sales Rep |
 | delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
 | delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| delivery_external_billings | Admin / Sales Rep | - (migrations only) | - (migrations only) | - (migrations only) |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
 | payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
 | team_notes | All authenticated | Own created_by (active profile) | Own created_by / Admin | Admin |

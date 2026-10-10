@@ -10,6 +10,8 @@ import {
   checkPrebookedInventory,
   checkReturnCreditLinkage,
   checkCustomerARConsistency,
+  PREBOOK_ONLY_ADJUSTMENT_TX_IDS,
+  fetchAllRows,
   type OrderRow,
   type OrderItemRow,
   type InventoryRow,
@@ -28,6 +30,7 @@ import {
 } from './reconciliation';
 import {
   checkDeliveryInvoiceQuantityParity as checkGoLiveDeliveryInvoiceQuantityParity,
+  PREBOOK_ONLY_ADJUSTMENT_TX_IDS as GOLIVE_PREBOOK_ONLY_ADJUSTMENT_TX_IDS,
 } from '../../tests/e2e/golive/utils/reconciliation-checks';
 
 // ── Check 1: Order Totals ───────────────────────────────────────
@@ -118,7 +121,46 @@ describe('checkOrderTotals', () => {
 
 // ── Check 2: Inventory Ledger ───────────────────────────────────
 
+describe('fetchAllRows', () => {
+  it('reads past a server row cap smaller than the page size', async () => {
+    const pages = [[1, 2], [3], []];
+    const calls: Array<[number, number]> = [];
+    const result = await fetchAllRows(async (from, to) => {
+      calls.push([from, to]);
+      return { data: pages[calls.length - 1], error: null };
+    });
+    expect(result).toEqual({ data: [1, 2, 3], error: null });
+    expect(calls).toEqual([[0, 999], [2, 1001], [3, 1002]]);
+  });
+
+  it('returns the error instead of a partial read', async () => {
+    let n = 0;
+    const result = await fetchAllRows(async () => (n++ === 0 ? { data: [1], error: null } : { data: null, error: { message: 'boom' } }));
+    expect(result).toEqual({ data: null, error: { message: 'boom' } });
+  });
+});
+
 describe('checkInventoryLedger', () => {
+  it('keeps the go-live copy of the prebooked-only row list identical', () => {
+    expect([...GOLIVE_PREBOOK_ONLY_ADJUSTMENT_TX_IDS].sort()).toEqual([...PREBOOK_ONLY_ADJUSTMENT_TX_IDS].sort());
+    expect(PREBOOK_ONLY_ADJUSTMENT_TX_IDS.size).toBe(5);
+  });
+
+  it('skips the historical prebooked-only adjusted rows when recomputing stock', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Ammonium Sulfate', quantity_available: 100 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      // Recorded a quantity_prebooked fix as 'adjusted'; on-hand never moved.
+      { id: '14880dd6-9324-4a6e-a1fb-f951b87ad090', product_id: 'p1', transaction_type: 'adjusted', quantity: 2200 },
+    ];
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+    // Any other adjusted row still counts.
+    const other = [{ ...transactions[1], id: 'some-other-row' }];
+    expect(checkInventoryLedger(inventory, [transactions[0], ...other])).toHaveLength(1);
+  });
+
   it('returns empty when inventory matches transactions', () => {
     const inventory: InventoryRow[] = [
       { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 50 },
@@ -719,6 +761,56 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
     expect(checkDeliveryInvoiceQuantityParity([], [])).toEqual([]);
   });
 
+  it('does not expect a CRX invoice for a delivery billed outside CRX', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10, delivery_id: 'd1', delivery_status: 'completed' },
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 4, delivery_id: 'd2', delivery_status: 'completed' },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 4, invoice_type: 'chemical_sale', invoice_status: 'draft' },
+    ];
+    const external = new Set(['d1']);
+    // d1 was billed in Chem Man; d2 is billed in CRX — only d2 must match.
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, external)).toEqual([]);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems, external)).toEqual([]);
+    // Without the record, d1 is still flagged as unbilled.
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toHaveLength(1);
+  });
+
+  it('still flags an unbilled delivery on an order that has another delivery billed outside CRX', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10, delivery_id: 'd1', delivery_status: 'completed' },
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 6, delivery_id: 'd2', delivery_status: 'completed' },
+    ];
+    const result = checkDeliveryInvoiceQuantityParity(deliveryItems, [], new Set(['d1']));
+    expect(result).toHaveLength(1);
+    expect(result[0].expected).toBe(6);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, [], new Set(['d1']))).toEqual(result);
+  });
+
+  it('ignores a soft-deleted delivery', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10, delivery_id: 'd1', delivery_status: 'completed', delivery_deleted_at: '2026-04-01T00:00:00Z' },
+    ];
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, [])).toEqual([]);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, [])).toEqual([]);
+  });
+
+  it('counts only completed deliveries and only active invoices', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10, delivery_id: 'd1', delivery_status: 'completed' },
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 3, delivery_id: 'd2', delivery_status: 'voided' },
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 2, delivery_id: 'd3', delivery_status: 'cancelled' },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale', invoice_status: 'paid' },
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale', invoice_status: 'voided' },
+      { order_id: 'o1', product_id: 'p1', quantity: 10, invoice_type: 'chemical_sale', invoice_status: 'draft', invoice_deleted_at: '2026-10-01T00:00:00Z' },
+    ];
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+    expect(checkGoLiveDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+  });
+
   it('flags delivery items with no matching invoice items', () => {
     const deliveryItems: DeliveryItemCheckRow[] = [
       { order_id: 'o1', product_id: 'p1', quantity_delivered: 10 },
@@ -734,6 +826,24 @@ describe('checkDeliveryInvoiceQuantityParity', () => {
 // ── Check 8: Pre-booked Inventory ───────────────────────────────
 
 describe('checkPrebookedInventory', () => {
+  it('ignores leftover quantity on deleted or closed orders', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 40 },
+    ];
+    const orderItems: OrderItemRemainingRow[] = [
+      { product_id: 'p1', quantity_remaining: 15, order_status: 'confirmed', order_deleted_at: null },
+      { product_id: 'p1', quantity_remaining: 10, order_status: 'partially_fulfilled', order_deleted_at: null },
+      // Deleted while still "confirmed": its reservation was never released.
+      { product_id: 'p1', quantity_remaining: 15, order_status: 'confirmed', order_deleted_at: '2026-04-28T00:00:00Z' },
+      { product_id: 'p1', quantity_remaining: 99, order_status: 'cancelled', order_deleted_at: null },
+    ];
+    const result = checkPrebookedInventory(inventory, orderItems);
+    // Live open orders owe 25, but 40 is reserved: the stale 15 is now visible.
+    expect(result).toHaveLength(1);
+    expect(result[0].expected).toBe(25);
+    expect(result[0].actual).toBe(40);
+  });
+
   it('returns no discrepancies when prebooked matches order remaining', () => {
     const inventory: InventoryPrebookRow[] = [
       { id: 'inv1', product_id: 'p1', quantity_prebooked: 25 },

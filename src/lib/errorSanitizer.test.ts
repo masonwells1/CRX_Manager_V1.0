@@ -50,6 +50,54 @@ describe('sanitizeError', () => {
     expect(shown).toBe('No invoice was changed. The filed season of a field-application invoice cannot be changed');
   });
 
+  it('explains a refused invoice for a delivery billed outside CRX', () => {
+    const shown = sanitizeError('DELIVERY_BILLED_OUTSIDE_CRX: this delivery was billed outside CRX, so CRX will not invoice it again');
+    expect(shown).not.toContain('DELIVERY_BILLED_OUTSIDE_CRX');
+    expect(shown).toBe('No invoice was created. This delivery (or a delivery on this order) was already billed outside CRX, so CRX will not bill it again');
+  });
+
+  it('explains a refused move of a delivery billed outside CRX', () => {
+    const shown = sanitizeError('BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED: delivery DEL-00060 was billed outside CRX, so it cannot be moved to another order');
+    expect(shown).not.toContain('BILLED_OUTSIDE_DELIVERY_ORDER_LOCKED');
+    expect(shown).toBe('Nothing was changed. This delivery was billed outside CRX, so it cannot be moved to another order');
+  });
+
+  it('explains a delivery invoice that bills beyond its delivery', () => {
+    expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6'))
+      .toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6)');
+    expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed'))
+      .toBe('Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed)');
+    expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills [PROVER] linked from an order line delivery DEL-00074 did not carry'))
+      .toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills [PROVER] linked from an order line delivery DEL-00074 did not carry)');
+    // A known shape whose product label carries an identifier, or an unknown shape, shows no detail.
+    for (const unsafe of [
+      'DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8 of 6f000000-0000-4000-8000-000000000001, but delivery DEL-00074 allows 6',
+      'DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8 of relation "invoice_items", but delivery DEL-00074 allows 6',
+      'DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills anything at all here',
+    ]) {
+      expect(sanitizeError(unsafe)).toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
+    }
+    const unknown = sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: relation "x" 6f000000-0000-4000-8000-000000000001');
+    expect(unknown).toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
+    expect(unknown).not.toContain('DELIVERY_INVOICE_EXCEEDS_DELIVERED');
+  });
+
+  it('explains an order billed both per delivery and whole-order', () => {
+    expect(sanitizeError('ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order is already billed per delivery (invoice CS-2026-0055), so a whole-order invoice would bill those goods again; invoice each remaining delivery instead'))
+      .toBe('Nothing was saved. This order is already billed delivery by delivery, so a whole-order invoice would bill those goods twice. Invoice each remaining delivery instead');
+    expect(sanitizeError('ORDER_INVOICE_OVERLAPS_DELIVERY_INVOICE: this order already has a whole-order invoice (CS-2026-0300), so a delivery invoice would bill those goods again'))
+      .toBe('Nothing was saved. This order already has a whole-order invoice, so a delivery invoice would bill those goods twice');
+  });
+
+  it('explains a refused change to a deleted order', () => {
+    expect(sanitizeError('ORDER_DELETED_STATUS_LOCKED: order ORD-1 is deleted, so it cannot be restored or have its status changed'))
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
+    expect(sanitizeError('ORDER_DELETED_DELIVERIES_LOCKED: order ORD-1 is deleted, so its deliveries cannot change'))
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
+    expect(sanitizeError('ORDER_DELETED_LINES_LOCKED: order ORD-1 is deleted'))
+      .toBe('Nothing was changed. This order has been deleted, so it cannot be changed or restored');
+  });
+
   it('does not swallow a longer token that merely starts the same way', () => {
     expect(sanitizeError('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED_SOMETHING_ELSE'))
       .toBe('INVOICE_SEASON_DATE_CHANGE_NOT_ALLOWED_SOMETHING_ELSE');
