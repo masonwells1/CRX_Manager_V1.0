@@ -440,6 +440,7 @@ async function main() {
   // The other order-locking guards (they already lock the order on every invoice and line write).
   const otherLocks = (on) => psql(`ALTER TABLE public.invoices ${on} TRIGGER trg_guard_invoice_terminal_order;
     ALTER TABLE public.invoices ${on} TRIGGER zz_guard_invoice_delivery_billed_outside_crx;
+    ALTER TABLE public.invoices ${on} TRIGGER zz_refuse_overlapping_order_delivery_invoices;
     ALTER TABLE public.invoice_items ${on} TRIGGER trg_guard_terminal_order_invoice_items;`);
   const expectSecondRefused = (result, label) => {
     assert.equal(result.a, 0, `${label}: the first concurrent invoice must commit`);
