@@ -55,10 +55,14 @@ of that PR (2026-10-09) raised a HIGH: a browser-side re-check cannot bind what 
 another save can land between the re-check and `post_invoice`, which takes only the invoice ID. That
 fix was taken out of PR #892, so the editor's Post behaves exactly as before.
 
-**Planned fix (not built).** To be built in the upcoming "invoicing admin-only" database change, together with a
-server-side posting version check: the editor sends the version of the invoice it showed, and
-`post_invoice` / `post_invoice_group` refuse, inside the same transaction, when the saved invoice
-(or a group member) no longer matches.
+**Planned fix (not built).** To be built in the upcoming "invoicing admin-only" change, in two parts
+that are both required, because neither alone covers the bug:
+1. **In the editor:** Post stays disabled while the form has unsaved edits (the version check below
+   cannot see edits that exist only in the browser), and the credit-limit and restricted-use
+   warnings are computed from the saved invoice, not the on-screen copy.
+2. **In the database:** a server-side posting version check. The editor sends the version of the
+   saved invoice it showed, and `post_invoice` / `post_invoice_group` refuse, inside the same
+   transaction, when the saved invoice (or a group member) no longer matches.
 
 ## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
 
