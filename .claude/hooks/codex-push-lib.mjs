@@ -3457,16 +3457,23 @@ const POWERSHELL_ASSIGNMENT_WORD_RE = /^\$\{?[A-Za-z_][\w:]*\}?[+\-*/%]?=/;
 // two Luna rounds on PR #882: shells disagree on where a quote ends (backticks,
 // `$'…'`, here-strings, curly quotes, quotes nested in `"$( )"`), so blanking hid
 // real programs. awk's `'{print $2}'` is therefore still refused, as before.
+//
+// Past NESTED_MAX_DEPTH a substitution is not unwrapped, so one still left there
+// counts as built at run time: reading it as plain words skipped the assignment
+// `x=$($P` and allowed `x=$(x=$(x=$(x=$(x=$($P pr merge 1 --admin)))))`
+// (CodeRabbit, PR #882).
 function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE, depth = 0) {
-  const split = depth < NESTED_MAX_DEPTH ? splitSubstitutions(String(text || "")) : null;
-  if (!split) return programWordBuiltAtRuntime(text, runtimeText);
+  const source = String(text || "");
+  if (depth >= NESTED_MAX_DEPTH) return /\$\(|`/.test(source) || programWordBuiltAtRuntime(source, runtimeText);
+  const split = splitSubstitutions(source);
   if (split.inners.some((inner) => programBuiltAtRuntime(inner, runtimeText, depth + 1))) return true;
   return programWordBuiltAtRuntime(split.outer, runtimeText);
 }
 
 // Replaces each outermost `$( … )` with `$()` and returns the inside texts.
-// Returns null when a substitution never closes, so the caller keeps the old
-// reading of the whole text.
+// A `$(` that never closes, and everything after it, stays in the outer text
+// as it was; the substitutions before it are still returned, so a quoted
+// `'$('` later in the command cannot hide an earlier one (CodeRabbit, PR #882).
 //
 // An arithmetic `$(( … ))` is not a command: reading `i=$(($i+1))` as one made
 // `$i+1` a run-time program and refused `i=$(($i+1)); git status` (Codex
@@ -3493,7 +3500,7 @@ function splitSubstitutions(text) {
       if (char === "(") depth += 1;
       else if (char === ")" && --depth === 0) { end = at; break; }
     }
-    if (end < 0) return null;
+    if (end < 0) return { outer: outer + text.slice(index), inners };
     if (text[index + 2] === "(" && text[end - 1] === ")") {
       outer += "$((";
       index += 2;

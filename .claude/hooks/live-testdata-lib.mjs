@@ -320,6 +320,13 @@ const SQL_KEYWORD_FNS = new Set([
   "cross", "inner", "outer", "full", "grouping", "window", "partition", "if",
 ]);
 
+// An unquoted identifier folds to lower case and a quoted one keeps its case, so
+// `AUTH.uid()` is auth.uid() but `"AUTH".uid()` is another schema (Luna, PR #882).
+const caseless = (word) => word.replace(/[a-z]/g, (c) => `[${c}${c.toUpperCase()}]`);
+const schemaBefore = (word) => new RegExp(`(?:^|[^\\w."])(?:${caseless(word)}|"${word}")\\s*\\.\\s*$`);
+const AUTH_SCHEMA_BEFORE_RE = schemaBefore("auth");
+const PG_CATALOG_BEFORE_RE = schemaBefore("pg_catalog");
+
 export function findNonReadFunctionCall(sqlText) {
   const text = String(sqlText || "");
   if (!/\bselect\b/i.test(text)) return null;
@@ -327,17 +334,25 @@ export function findNonReadFunctionCall(sqlText) {
   let m;
   while ((m = re.exec(text)) !== null) {
     const name = m[1].toLowerCase();
-    if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
+    const before = text.slice(0, m.index);
+    // The schema decides which function runs: `public.pg_get_triggerdef(…)` is the
+    // application's own function, so only an unqualified or pg_catalog name is a
+    // built-in (CodeRabbit, PR #882).
+    // A quoted name with capitals (`"COUNT"(…)`) is not the built-in either.
+    const quotedCaps = /"\s*\($/.test(m[0]) && m[1] !== name;
+    const otherSchema = quotedCaps || /^"?public"?\s*\./i.test(m[0]) ||
+      (/\.\s*$/.test(before) && !PG_CATALOG_BEFORE_RE.test(before));
+    if (!otherSchema && (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name))) continue;
     // auth.uid() is the caller's id, a read; a `uid` in any other schema is not vouched for.
     // The schema must be exactly `auth` or `"auth"`, not `"evil.auth"` or `x.auth` (Luna, PR #882).
-    if (name === "uid" && /(?:^|[^\w."])(?:auth|"auth")\s*\.\s*$/i.test(text.slice(0, m.index))) continue;
+    if (name === "uid" && !quotedCaps && AUTH_SCHEMA_BEFORE_RE.test(before)) continue;
     // `AS t(a, b)` names an alias's columns and `::numeric(10,2)` is a type;
     // neither is a call.
     if (/(?:\bas|::)\s*$/i.test(text.slice(0, m.index))) continue;
     if (READONLY_FN_NAMES.has(name)) continue;
     if (READONLY_FN_PREFIX_RE.test(name)) continue;
     // pg_catalog/information_schema internals are reads
-    if (name.startsWith("pg_stat") || name.startsWith("pg_ls") || name.startsWith("information_schema")) continue;
+    if (!otherSchema && (name.startsWith("pg_stat") || name.startsWith("pg_ls") || name.startsWith("information_schema"))) continue;
     return name;
   }
   return null;

@@ -3506,8 +3506,19 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
   ).computed, false, "a read-only loop with a $( ) assignment is not a run-time program");
   // Codex connector, PR #882: an arithmetic `$(( ))` is not a command, so its
   // variable is not a run-time program (the substitution split had refused it).
-  for (const command of ["i=$(($i+1)); git status", "echo $(($n*2)); git log -1"]) {
-    assert.equal(expandNestedCommands(command).computed, false, `arithmetic is not a run-time program: ${command}`);
+  for (const command of ["i=$(($i+1)); git status", "echo $(($n*2)); git log -1", "git status; echo '$('"]) {
+    assert.equal(expandNestedCommands(command).computed, false, `not a run-time program: ${command}`);
+  }
+  // CodeRabbit, PR #882: a substitution left at the depth limit, or one before a
+  // `$(` that never closes, was read as plain words and the merge was allowed.
+  for (const command of [
+    "P=gh; x=$(x=$(x=$(x=$(x=$($P pr merge 1 --admin)))))",
+    "P=git; x=$(x=$(x=$(x=$(x=$($P push origin HEAD:main --force)))))",
+    "P=gh; x=$($P pr merge 1 --admin); echo '$('",
+    "P=git; x=$($P push origin HEAD:main --force); echo '$('",
+  ]) {
+    const nested = expandNestedCommands(command);
+    assert.ok(nested.computed || nested.tooDeep, `an unread substitution is refused: ${command}`);
   }
   // ...while a program computed INSIDE a substitution is now found (it was not).
   for (const command of [

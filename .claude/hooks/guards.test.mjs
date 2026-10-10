@@ -109,6 +109,20 @@ ok(['SELECT "evil.auth".uid()', 'SELECT "x auth".uid()', "SELECT evil.auth.uid()
   .every((sql) => classifySql(sql).block), "a uid() whose schema is not exactly auth is blocked (Luna round 3, PR #882)");
 ok(classifySql("SELECT public.uid()").block && classifySql("SELECT evil.uid()").block,
   "a uid() outside the auth schema is not vouched for (Luna, PR #882)");
+ok(['SELECT public.pg_get_triggerdef(t.oid) FROM pg_trigger t', 'SELECT "public".count(*) FROM orders',
+  "SELECT evil.pg_get_triggerdef(1)", 'SELECT "evil".coalesce(1)', "SELECT public.pg_stat_reset()"]
+  .every((sql) => classifySql(sql).block), "a built-in name in an application schema is an RPC (CodeRabbit, PR #882)");
+ok(['SELECT pg_catalog.pg_get_triggerdef(t.oid) FROM pg_trigger t', 'SELECT "pg_catalog"."pg_get_triggerdef"(t.oid) FROM pg_trigger t',
+  "SELECT count(*), coalesce(max(id), 0) FROM orders"]
+  .every((sql) => !classifySql(sql).block), "an unqualified or pg_catalog built-in is still a read");
+// Luna, PR #882: a quoted identifier keeps its case, so "AUTH", "PG_CATALOG" and
+// "COUNT" are other objects; an unquoted one folds to lower case.
+ok(['SELECT "AUTH".uid()', 'SELECT "Auth".uid()', 'SELECT auth."UID"()',
+  'SELECT "PG_CATALOG".pg_get_triggerdef(1)', 'SELECT "COUNT"(*) FROM orders']
+  .every((sql) => classifySql(sql).block), "a quoted name with capitals is not the vouched-for object");
+ok(["SELECT AUTH.uid()", "SELECT auth.UID()", "SELECT PG_CATALOG.pg_get_triggerdef(1)",
+  'SELECT "count"(*) FROM orders', "SELECT COUNT(*) FROM orders"]
+  .every((sql) => !classifySql(sql).block), "an unquoted name folds to lower case and is still a read");
 ok(!classifySql("SELECT * FROM unnest(ARRAY[1,2]) AS t(x)").block, "a column-alias list is not a call");
 ok(!classifySql("SELECT total::numeric(12,2) FROM orders").block, "a typmod cast is not a call");
 eq(classifySql("SELECT * FROM unnest(ARRAY[1,2]) AS t(x), cancel_order(42)").kind, "rpc-via-select",
