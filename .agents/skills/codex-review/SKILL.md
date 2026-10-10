@@ -404,6 +404,11 @@ or not). Run it LAST: after CodeRabbit APPROVED the frozen head, immediately bef
 apply (if any) and the merge. The proof binds to that HEAD and to GitHub's real base and expires
 after 30 minutes, so a later commit, a moved base or a slow CodeRabbit round voids it.
 
+**The one exception: skip Step 3B for a documentation-only change** as defined in
+`docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07). Both merge gates read the PR's real file
+list and accept it without a Sol proof once CodeRabbit APPROVED the exact head and every check is
+green. If a gate refuses, the change did not qualify, so run Step 3B.
+
 > ### ⛔ `codex review <scope>` SELF-RECURSES IN THIS REPO — use the wrapper
 >
 > Observed twice on 2026-08-23 (PIDs 39564, 36244), identical both times. `codex review`
@@ -550,10 +555,11 @@ re-reviews the push automatically — no replacement PR. Never use `@coderabbita
 deliberately justified complete reread. Both agent merge
 gates enforce the rule: CodeRabbit's latest verdict APPROVED on the exact `headRefOid`, the newest
 run of every reported check green with `mergeStateStatus` CLEAN, and the Step 3B Sol proof bound to
-that head and GitHub's real base. `CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
+that head and GitHub's real base (not needed for a documentation-only change, Step 3B above).
+`CHANGES_REQUESTED`, `--auto` and `--admin` are refused.
 
 **Minting the merge proof** — both merge gates require a fresh, HEAD- and base-bound Codex proof
-for every merge into `main` (and `.claude/hooks/codex-push-guard.mjs` still requires one for any
+for every merge into `main` except a documentation-only change (and `.claude/hooks/codex-push-guard.mjs` still requires one for any
 risky push aimed at `main`), and block any attempt to hand-write it. Mint it the sanctioned way; do
 NOT write the JSON yourself:
 
