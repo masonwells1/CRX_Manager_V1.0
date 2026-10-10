@@ -313,7 +313,7 @@ async function main() {
   expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET delivery_id = NULL, status = 'posted', posted_at = now(), posted_by = '${ADMIN}' WHERE id = ${inv1Id};`),
     /INVOICE_SOURCE_LINEAGE_IMMUTABLE/, 'detach an over-billed invoice from its delivery and post it');
   expectRefused(probe(`${overBilled}\nUPDATE public.invoices SET order_id = NULL WHERE id = ${inv1Id};`),
-    /INVOICE_SOURCE_LINEAGE_IMMUTABLE/, 'detach a delivery invoice from its order');
+    /INVOICE_SOURCE_LINEAGE_IMMUTABLE|INVOICE_ORDER_IMMUTABLE/, 'detach a delivery invoice from its order');
   console.log('[prover] HEADER: posting or restoring an over-billed delivery invoice is refused, and it cannot be detached from its delivery or order to dodge the check; lowering it is allowed');
 
   // ALLOWED.
