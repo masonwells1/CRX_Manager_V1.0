@@ -30,7 +30,8 @@
 > (`owner-approval-lib.mjs`; request command `scripts/owner-approve-migration.mjs`; reply hook
 > `owner-approval-prompt.mjs`, wired in `prompt-router.mjs`). The request binds the migration's sha256, the PR number
 > and exact head, the flagged categories, a nonce and a 6-digit code, with a 24-hour reply deadline. Only a WHOLE
-> message of exactly `approve <code>` turns it into an approval, valid 30 minutes from the reply. It is checked LAST,
+> message of exactly `approve <code>` (a trailing `.` or `!` is accepted) turns it into an approval, valid 30 minutes
+> from the reply. Requests are looked up in every worktree `git worktree list` reports, not in separate clones. It is checked LAST,
 > after the landing gate, against the PR and head that gate confirmed. Only `apply-migration-file.mjs` (the
 > `ownerApprovalDoor` caller) honours it, and it uses the approval up before transmitting. Residual risk Mason
 > accepted: an agent that deliberately writes the approval file itself is not stopped (the file sits in the

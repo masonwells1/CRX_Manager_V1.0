@@ -162,7 +162,7 @@ The only sanctioned way to apply a migration to the live database:
    gate refuses them without it: once every proof above is fresh, run
    `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql` from the PR's
    checkout. Show Mason the plain-English summary it prints and wait for his reply, exactly
-   `approve <code>` as a whole message (he can send it from his phone). The
+   `approve <code>` as a whole message, a trailing `.` or `!` allowed (he can send it from his phone). The
    `owner-approval-prompt.mjs` hook records it; the approval covers that file, PR and head, once,
    for 30 minutes after he replies, and every other check in this list still applies. Never send
    the reply yourself or relay it from another session; a GitHub approval, label or comment is

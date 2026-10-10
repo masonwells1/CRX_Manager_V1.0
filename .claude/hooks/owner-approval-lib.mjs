@@ -180,8 +180,10 @@ function defaultListWorktrees(cwd) {
 
 /**
  * Every session-state directory a request may be in: the given folders, and every
- * checkout of the repository (the agent may build the request in the pull
- * request's own worktree while Mason replies in its session).
+ * worktree `git worktree list` reports for this clone (the agent may build the
+ * request in the pull request's own worktree while Mason replies in its session).
+ * A separate clone is not searched; a reply for a request there is refused, never
+ * recorded against something else (Luna LOW, PR #894).
  */
 export function ownerRequestDirs(starts, listWorktrees = defaultListWorktrees) {
   const roots = [...new Set((starts || []).filter(Boolean).map((s) => path.resolve(s)))];

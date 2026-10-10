@@ -11,8 +11,10 @@ less." He was told the trade-off below and replied "go - i accept the trade off"
   checkout's `.claude/session-state/` and prints the plain-English summary, which ends with the exact
   reply. `--selftest` builds a request that approves nothing, to prove the reply path.
 - `.claude/hooks/owner-approval-prompt.mjs` (new, wired in `prompt-router.mjs`): when Mason's WHOLE
-  message is `approve <code>`, the pending request with that code, searched in every checkout of the
-  repository, becomes an approval file stamped with the reply time. Any other message does nothing.
+  message is `approve <code>` (a trailing `.` or `!` is accepted, since phones add punctuation), the
+  pending request with that code becomes an approval file stamped with the reply time. Requests are
+  looked up in every worktree `git worktree list` reports for this clone; a separate clone is not
+  searched, so a reply for a request there is refused. Any other message does nothing.
   A peer session's message (envelope or preamble), a subagent report, a quote, inline code, or a
   sentence around the reply never matches. A code pending in two checkouts approves neither.
 - `owner-approval-lib.mjs`: the key, Windows Hello helper and signature checks are gone (purpose
