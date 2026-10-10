@@ -26,7 +26,7 @@ independent, and it is the one that guards money.
 | Round | Tier | Path | Mints a gate proof? |
 |---|---|---|---|
 | Every iterating review round | `gpt-6-luna` / `xhigh` | Step 3A (advisory) | **No** |
-| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit approved the frozen head | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
+| Final gate — EVERY change before it merges into `main` (Mason, 2026-09-26; before that only risky diffs), once Luna is clean and CodeRabbit approved the frozen head; the one exception is a documentation-only change as defined in `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07) | `gpt-6-sol` / `high` | Step 3B (`write-codex-push-proof.mjs`) | Yes |
 | Genuinely complex work where Luna is plainly out of its depth | `gpt-6-sol` / `high` early | Step 3A form with the Sol pin | No |
 
 The escape hatch in row 3 is a judgment call the agent may make on its own, but it must state the

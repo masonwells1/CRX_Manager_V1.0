@@ -1,6 +1,6 @@
 # Owner Playbook — how to run CRX Manager through Claude and Codex
 
-**Last verified:** 2026-09-26 (autonomous landing)
+**Last verified:** 2026-10-10 (documentation-only Sol exception added to the autonomous-landing rule)
 **Update triggers:** when commands/skills/policies change (the agent that changes them updates this file).
 
 This is your manual, Mason. You never have to remember a slash command (a typed
@@ -83,7 +83,7 @@ Helpful extras are what you saw, what you expected, and any firm limit. A few sh
 
 ## What agents do on their own, and what still needs YOUR yes
 
-**Your rule since 2026-09-26 ("Yes I approve").** When a change's two final reviews are clean — Codex **Sol** reviewed the exact final version, and **CodeRabbit** (the automatic GitHub review bot) approved that same version — and every automatic check is green, the agent **merges it by itself** (merging = putting it into the live app). If the change includes a **migration** (a change to the shape or rules of the live database) that does not delete anything, the agent **applies it to the live database by itself** too, after the same proof checks that have always guarded migrations: two specialist reviewers plus a fresh Sol review of the exact SQL, all less than 30 minutes old. This works in any session, whether or not a hands-free run is armed. Safety scripts check every one of these conditions before a merge or an apply is allowed, so an agent cannot skip them. The trade-off you accepted: every change, even a small wording fix, now gets a Sol review, which uses more Codex credits.
+**Your rule since 2026-09-26 ("Yes I approve").** When a change's two final reviews are clean — Codex **Sol** reviewed the exact final version, and **CodeRabbit** (the automatic GitHub review bot) approved that same version — and every automatic check is green, the agent **merges it by itself** (merging = putting it into the live app). If the change includes a **migration** (a change to the shape or rules of the live database) that does not delete anything, the agent **applies it to the live database by itself** too, after the same proof checks that have always guarded migrations: two specialist reviewers plus a fresh Sol review of the exact SQL, all less than 30 minutes old. This works in any session, whether or not a hands-free run is armed. Safety scripts check every one of these conditions before a merge or an apply is allowed, so an agent cannot skip them. The trade-off you accepted: every change, even a small wording fix, now gets a Sol review, which uses more Codex credits. **Since 2026-10-07 ("i appve 870"), one exception:** a change that only touches plain documentation pages (the exact list is in `docs/reference/sol-exempt-paths.md`) can merge without the Sol review, once CodeRabbit approved that exact version and every check is green. Anything else, including the safety rules, agent instructions and this playbook, still needs Sol, and the safety scripts check the file list themselves.
 
 **What you still do — the whole list:**
 
