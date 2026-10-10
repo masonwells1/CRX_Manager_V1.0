@@ -37,9 +37,10 @@ is the commit GitHub will merge onto. The exemption applies only when:
 
 **What "rule-defining documents" means here.** The rule-defining documents are the ones
 listed under "Never eligible" below: `AGENTS.md`, `CLAUDE.md`, `docs/workflows/`, the
-guardrails and model-tuning references, the owner playbook and this page. The other
-`docs/manual/` files, including `DECISION_LOG.md`, `KNOWN_ISSUES.md` and `CURRENT_STATE.md`,
-stay eligible because Mason approved `docs/manual/` with only `OWNER_PLAYBOOK.md` excluded.
+guardrails and model-tuning references, the owner playbook, the agent onboarding page, the
+gotchas page and this page. The other `docs/manual/` files, including `DECISION_LOG.md`, `KNOWN_ISSUES.md` and `CURRENT_STATE.md`,
+stay eligible because Mason approved `docs/manual/` with only `OWNER_PLAYBOOK.md` excluded
+(and later `AGENT_ONBOARDING.md`).
 When Luna twice asked for `DECISION_LOG.md` to always need Sol, Mason chose to keep it
 eligible ("keep it", 2026-10-09). A
 decision-log entry records a decision; it cannot open a gate. Approval for a gated action
@@ -85,14 +86,19 @@ case, because Windows treats `docs/Reference/Agent-Guardrails.md` as the same fi
 - `docs/reference/claude-model-tuning.md`
 - `docs/reference/sol-exempt-paths.md`
 - `docs/reference/migration-history.md`
+- `docs/manual/AGENT_ONBOARDING.md`
+- `docs/reference/gotchas.md`
 <!-- /sol-exempt:never-paths -->
 
-The last three go beyond the approved proposal, and each is stricter:
+The last five go beyond the approved proposal, and each is stricter:
 
 - `claude-model-tuning.md` sets reviewer models and prompts, as `codex-model-tuning.md` does.
 - `sol-exempt-paths.md` is this page, the rule's own definition.
 - `migration-history.md` is a ledger that hooks and the migration review packet read,
   not only prose.
+- `AGENT_ONBOARDING.md` and `gotchas.md` are pages `AGENTS.md` sends agents to before they
+  change code, including security-sensitive code, so they work as instructions. Sol suggested
+  them in its review of #888, and Mason agreed ("add those two", 2026-10-09).
 
 ## Never eligible: file names anywhere
 

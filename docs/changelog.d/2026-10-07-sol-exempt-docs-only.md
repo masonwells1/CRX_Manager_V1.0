@@ -30,7 +30,7 @@ merges it by hand**. That hand-merge is what adopts the rule; no agent merges it
   2026-10-08. A pull request whose base moved is therefore out of date, and GitHub refuses the merge.
 - **Stricter than the proposal.** Only `.md` files qualify (`docs/audits/` holds `.mjs` workflow
   scripts and draft `.sql`). `claude-model-tuning.md`, `sol-exempt-paths.md` and
-  `migration-history.md` stay excluded. A nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` (agents load these
+  `migration-history.md` stay excluded (and, from 2026-10-09, `AGENT_ONBOARDING.md` and `gotchas.md`). A nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` (agents load these
   as folder instructions) or a package file needs Sol in any folder. The never-eligible lists match
   without regard to case; the eligible folders must match exactly.
 - **Protected.** The module joined the Codex guard's protected-file list and the

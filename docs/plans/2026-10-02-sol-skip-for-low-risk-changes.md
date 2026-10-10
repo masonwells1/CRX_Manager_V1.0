@@ -4,7 +4,8 @@
 hand-merges the implementing pull request, which supersedes PR #870. The exact lists in force
 are in `docs/reference/sol-exempt-paths.md`, enforced by `.claude/hooks/sol-exempt-lib.mjs`.
 They are stricter than this proposal in four ways: only `.md` files qualify;
-`claude-model-tuning.md`, `sol-exempt-paths.md` and `migration-history.md` stay excluded; a
+`claude-model-tuning.md`, `sol-exempt-paths.md`, `migration-history.md`, `AGENT_ONBOARDING.md` and
+`gotchas.md` stay excluded; a
 nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` or package file anywhere needs Sol; and the
 never-eligible lists match without regard to case, while the eligible folders must match exactly.
 **Drafted:** 2026-10-02 by Claude, at Mason's request.

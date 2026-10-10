@@ -1709,6 +1709,8 @@ try {
       "docs/reference/agent-guardrails.md",
       "AGENTS.md",
       "docs/plans/CLAUDE.md",
+      "docs/manual/AGENT_ONBOARDING.md",
+      "docs/reference/gotchas.md",
     ]) {
       const verdict = mergeDocs({ compare: compareOf(["docs/plans/2026-10-07-note.md", extra]) });
       assert.equal(verdict.blocked, true, `adding ${extra} to a docs-only PR brings the Sol requirement back`);

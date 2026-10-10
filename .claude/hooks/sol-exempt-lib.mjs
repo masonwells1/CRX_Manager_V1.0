@@ -62,6 +62,10 @@ export const SOL_NEVER_EXEMPT_PATHS = Object.freeze([
   "docs/reference/claude-model-tuning.md",
   "docs/reference/sol-exempt-paths.md",
   "docs/reference/migration-history.md",
+  // AGENTS.md routes agents to these two before security-sensitive work, so they
+  // act as instructions (Sol, 2026-10-09; Mason: "add those two").
+  "docs/manual/AGENT_ONBOARDING.md",
+  "docs/reference/gotchas.md",
 ]);
 
 // Never exempt in ANY folder, compared case-insensitively. Claude Code and Codex
