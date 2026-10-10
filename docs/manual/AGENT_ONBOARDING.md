@@ -1,6 +1,6 @@
 # Agent Onboarding — How Not to Fail Here
 
-**Last verified: 2026-09-26**
+**Last verified: 2026-10-09**
 **Update triggers: when a new recurring failure class is identified or the guard system changes.**
 
 You are a new coding agent starting your first session in CRX Manager. This file is the front door. It assumes you've already read the short shared contract in `AGENTS.md` and exists to make you behave like a senior engineer on this codebase instead of a junior one, on your very first turn.
@@ -86,7 +86,7 @@ If a guard blocks you, the correct response is to **fix the underlying problem t
 | Situation | Entry point | What it does NOT cover |
 |---|---|---|
 | Wrote or changed a **migration** | `/migration-review` | Produces the apply-guard proof for that migration; doesn't review unrelated frontend changes or push the migration live itself |
-| Any **SQL / RLS / money / edge-fn** change, before push | `codex-review` | Two tiers, defined in `AGENTS.md` (model IDs in `docs/reference/codex-model-tuning.md`): **Luna** rounds iterate until clean; then every merge into `main` needs one fresh independent **Sol** high-effort review of the exact candidate SHA, run **last** (a later commit or moved base voids it). A clean Luna round is not the Sol proof, and a Luna round must never go through the proof wrapper. Neither replaces the migration-review proof for `apply_migration` |
+| Any **SQL / RLS / money / edge-fn** change, before push | `codex-review` | Two tiers, defined in `AGENTS.md` (model IDs in `docs/reference/codex-model-tuning.md`): **Luna** rounds iterate until clean; then every merge into `main` needs one fresh independent **Sol** high-effort review of the exact candidate SHA, run **last** (a later commit or moved base voids it), except a documentation-only change as defined in `docs/reference/sol-exempt-paths.md` (Mason, 2026-10-07). A clean Luna round is not the Sol proof, and a Luna round must never go through the proof wrapper. Neither replaces the migration-review proof for `apply_migration` |
 | A **substantive feature** end to end | `/ship` pipeline | Includes the review fan-out. Under Mason's autonomous-landing rule (2026-09-26, `AGENTS.md`), once CodeRabbit has APPROVED the frozen final head, a fresh exact-SHA Sol review of that head is clean, and every required check is green, it applies the change's NON-destructive migration (its GRANT/REVOKE lines routine, none widening access) through the migration-apply-guard proof gate and then merges the exact reviewed head by itself, in any session, no ask. It always stops for Mason before a migration that deletes rows or drops data, overwrites existing rows, or widens access, an edge-function deploy, data deletion, and every other `AGENTS.md` hard gate |
 | "**Is the whole app healthy?**" | `/audit` or `spot-check-prod` (live) | A point-in-time health read; doesn't fix anything it finds, and doesn't substitute for reviewing your specific change |
 | Broad **foundation safety** sweep | `codex-gauntlet` (foundation mode) / `review-workflow` | Wide and read-only; not scoped to your one change, so still run a focused review on what you actually touched |
