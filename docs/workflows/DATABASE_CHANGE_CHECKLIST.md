@@ -157,20 +157,21 @@ The only sanctioned way to apply a migration to the live database:
    Sol proof, each under 30 minutes), in any session, no ask. Three kinds are Mason's: a
    migration that DELETES data (rows or data-bearing tables/columns), one that OVERWRITES
    existing rows, and one that CHANGES WHO CAN ACCESS WHAT (anything beyond routine lock-down
-   lines on objects it creates). Each needs Mason's explicit yes in the current conversation
-   (`AGENTS.md`) AND his Windows Hello approval of that exact file (Mason, 2026-09-29); the apply
-   gate refuses them without the signature: once every proof above is fresh, run
+   lines on objects it creates). Each needs Mason's own approval of that exact file, given by
+   chat reply (Mason, 2026-09-29; by reply instead of Windows Hello since 2026-10-09); the apply
+   gate refuses them without it: once every proof above is fresh, run
    `node scripts/owner-approve-migration.mjs supabase/migrations/<file>.sql` from the PR's
-   checkout while he is at the PC. He sees a plain-English summary, then confirms with his
-   Windows Hello PIN or fingerprint. The signed approval covers that file, PR and head, once,
-   for 30 minutes, and every other check in this list still applies. A "yes" typed in chat,
-   a GitHub approval, label or comment is not that approval (agents act through his GitHub
-   token). See `docs/manual/OWNER_PLAYBOOK.md`.
+   checkout. Show Mason the plain-English summary it prints and wait for his reply, exactly
+   `approve <code>` as a whole message (he can send it from his phone). The
+   `owner-approval-prompt.mjs` hook records it; the approval covers that file, PR and head, once,
+   for 30 minutes after he replies, and every other check in this list still applies. Never send
+   the reply yourself or relay it from another session; a GitHub approval, label or comment is
+   not that approval (agents act through his GitHub token). See `docs/manual/OWNER_PLAYBOOK.md`.
 4. Apply through the gated file-bytes caller: dry run with
    `node scripts/apply-migration-file.mjs supabase/migrations/<file>.sql` (transmits nothing),
    then the same command with `--confirm`. It asks the same rule book as the apply-guard hook
    (`.claude/hooks/migration-apply-lib.mjs`) and transmits only on "allow". It is the only
-   door that accepts Mason's Windows Hello approval, and it uses the approval up before
+   door that accepts Mason's chat-reply approval, and it uses the approval up before
    transmitting; see
    `docs/reference/agent-guardrails.md`. The Supabase MCP `apply_migration` tool goes through
    the same gate, but the current tool sends only `{name, query}` with no `project_id`, so the

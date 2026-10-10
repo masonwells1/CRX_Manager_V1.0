@@ -1,12 +1,18 @@
 # Decision Log
 
-Last verified: 2026-10-06 (CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
+Last verified: 2026-10-09 (owner approval moved from Windows Hello to a chat reply; it supersedes rule 1 of the 2026-09-29 entry); 2026-10-06 (CRX-LIFE-001 scope decision entry added; guard-cleanup and lighter-review decision added; nested-command entries condensed, full gap list in agent-guardrails.md; owner Windows Hello approval entry added; #841's fewer-prompts entry condensed, its approval observation corrected; Mason hand-merged PR #857 over Sol's self-verifier HIGH; after #841 landed, a CORRECTION entry records that PRs do merge on CodeRabbit's approval)
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first, roughly — a few entries from the same week sit slightly out of date
 order, so search by date and title rather than position. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+## 2026-10-09 — Mason approves parked migrations by chat reply, not Windows Hello
+
+**Decision (Mason, in chat: "I want to remove the windows hello thing. I do a lot of work from phone … I want less", then "go - i accept the trade off").** A migration that deletes data, overwrites existing rows or changes who can access what still waits for Mason, but he approves it by replying `approve <code>` as a whole message, from anywhere, instead of a Windows Hello PIN or fingerprint at the PC. This supersedes rule 1 of the 2026-09-29 entry below; its other rules (checked last, apply-script door only, one install, 30 minutes) stand.
+**Why.** He works mostly from his phone, so the PC-only step blocked these changes. The trade-off put to him and accepted: a whole-message reply recorded by a UserPromptSubmit hook stops a parked migration being applied by mistake, on a misread handoff, or on a relayed "Mason said yes", but unlike Windows Hello it does not stop an agent that deliberately forges the approval file (agents run on his PC with his permissions).
+**What this forbids/implies:** agents never send, relay or paraphrase the reply on his behalf, in any session; only his own message counts. The 2026-10-01 self-verifier residual below now also covers the reply hook. Detail: `docs/changelog.d/2026-10-09-owner-approval-by-chat-reply.md`.
 
 ## 2026-10-06 — CRX-LIFE-001 lands as scoped; rep scoping of the order-invoice RPCs is the next change
 
@@ -42,6 +48,8 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 **Closing it** needs parked-migration applies in a GitHub Actions workflow on protected `main` (token as a repository secret): a separate project that needs Mason's go.
 
 ## 2026-09-29 — Mason approves parked migrations with Windows Hello, never with a chat yes or a GitHub action
+
+**Superseded in part 2026-10-09:** the approval is now his `approve <code>` chat reply, not Windows Hello (see the 2026-10-09 entry above). The rest of this entry is kept as history.
 
 **Source:** Mason, in the field-season delivery session on 2026-09-29. He was shown a plain-English
 design, then chose between covering only access-changing migrations and covering all three parked
