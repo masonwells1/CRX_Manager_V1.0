@@ -1,9 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-10-07 (America/Chicago) against the live migration ledger** (read-only, after
-PR #885's apply; the counts and high-water live only in `docs/reference/migration-history.md`). That
-read re-certified only the applied-migration list in this header and the CRX-LIFE-001 entry (fix live; two
-post-apply gates still open). Every other entry's status (open, or
+**Last verified: 2026-10-10 (America/Chicago) against the live migration ledger** (read-only, after
+PR #889's three applies; the counts and high-water live only in `docs/reference/migration-history.md`).
+That read re-certified only the applied-migration list in this header and the 2026-10-07 integrity-fix
+entry (`150000`, `150050` and `150100` live; `150200` and `20261010120000` not applied). The
+2026-10-07 read re-certified the CRX-LIFE-001 entry (fix live; two post-apply gates still open). Every other entry's status (open, or
 fixed/applied/closed) was last re-checked on 2026-09-26 against that day's ledger snapshot and
 `main`, except where an entry says otherwise; the detailed evidence inside an entry keeps its own
 date and was not all re-measured.
@@ -19,7 +20,9 @@ date and was not all re-measured.
   entries. The four field-season migrations
   `20260914101000`..`20260914101300` applied live on 2026-10-02, followed the same day by
   `20260921180000_soft_delete_customer_document_rpc` (ledger `20261002230949`), and on 2026-10-07 by
-  `20261006200000_refuse_field_invoice_through_order_rpcs` (ledger `20261007114554`, CRX-LIFE-001).
+  `20261006200000_refuse_field_invoice_through_order_rpcs` (ledger `20261007114554`, CRX-LIFE-001),
+  and on 2026-10-10 (UTC) by PR #889's `20261007150000` (ledger `20261010014555`), `20261007150050`
+  (`20261010014642`) and `20261007150100` (`20261010043006`).
 
 **Layout.** Open items come first. Everything fixed, merged, applied, retired or closed is in
 **Resolved and closed (archive)** at the end of this file, newest first, with its original text.
@@ -40,7 +43,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 ## OPEN 2026-10-07 (owner: Mason) — what the 2026-10-01 integrity-report fixes leave behind
 
 The fixes for PR #861's failing checks (`20261007150000`, `20261007150050`, `20261007150100`,
-`20261007150200`, NOT APPLIED when written; see `docs/reference/migration-history.md`) deliberately
+`20261007150200`, NOT APPLIED when written; the first three applied live 2026-10-10 UTC and `150200`
+is not yet — re-checked 2026-10-10; see `docs/reference/migration-history.md`) deliberately
 leave these open:
 
 - **Check 2 still flags five products until counted** (Mason chose no physical count on 2026-10-07):
