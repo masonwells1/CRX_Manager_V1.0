@@ -470,6 +470,7 @@ async function main() {
   assert.equal(lf(CAP).split(lockStatement).length, 2, 'the candidate must take the order lock exactly once');
   stageText('cap-no-lock.sql', lf(CAP).replace(lockStatement, '    NULL;'));
   assert.equal(apply('cap-no-lock.sql').status, 0, 'the no-lock mutant must apply');
+  otherLocks('DISABLE'); // re-applying the file re-created the overlap trigger enabled
   const raced = await race('M');
   otherLocks('ENABLE');
   assert.deepEqual([raced.a, raced.b], [0, 0], `MUTATION: without the order lock both concurrent over-bills should commit:\n${raced.bError}`);
