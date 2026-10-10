@@ -4,7 +4,7 @@
 > `list_migrations` observation is at the top of this file, immediately below.
 > Do not scroll for it, and do not treat any older dated block as the latest.
 
-**Since this capture (read-only `list_migrations`, 2026-10-10 ~13:00 UTC): `20261007150100` applied at 04:30 UTC (ledger version `20261010043006`); `20261007150200` and `20261010120000` NOT applied. Re-read the full ledger and recompute the high-water before any apply.**
+**Newer capture (read-only `list_migrations`, 2026-10-10 ~13:00 UTC; re-read ~14:40 UTC: 1022 rows / 1015 names, `max(version)` `20261010043006`): it shows `20261007150100` applied at 04:30 UTC (ledger version `20261010043006`), after the 01:47 UTC capture below; `20261007150200` and `20261010120000` NOT applied. Re-read the full ledger and recompute the high-water before any apply.**
 
 **Live capture — 2026-10-10 01:47 UTC, after PR #889 applied 20261007150000 and 20261007150050 (1021 rows, `max(version)` `20261010014642`, effective high-water `20261007150050_lock_soft_deleted_orders`). The 2026-10-07 11:47 UTC capture below was the boundary before them.**
 

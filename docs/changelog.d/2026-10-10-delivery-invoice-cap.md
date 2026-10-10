@@ -10,7 +10,7 @@
   delivery), a product the delivery did not carry, a product-less or negative line, and posting,
   restoring or un-voiding such an invoice, and posting one before its delivery is completed
   (`DELIVERY_INVOICE_EXCEEDS_DELIVERED`, shown in the app as
-  "Nothing was saved. This invoice is for one delivery, so it can bill only the products and
+  "Nothing was changed. This invoice is for one delivery, so it can bill only the products and
   quantities that delivery delivered (…)").
 - Review rounds (Luna, rls-security, migration-drift) shaped the design: the checks run at the end of
   each statement (not at commit) so batch posting and offline completions still catch a refusal;

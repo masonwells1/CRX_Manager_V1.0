@@ -67,6 +67,16 @@ describe('sanitizeError', () => {
       .toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills 8.0000 of Capreno, but delivery DEL-00074 allows 6)');
     expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed'))
       .toBe('Nothing was posted. This invoice is for one delivery, so it can be posted only after that delivery is completed (invoice CS-2026-0200 cannot be posted before delivery DEL-00090 is completed)');
+    expect(sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills [PROVER] linked from an order line delivery DEL-00074 did not carry'))
+      .toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered (invoice CS-2026-0055 bills [PROVER] linked from an order line delivery DEL-00074 did not carry)');
+    // A known shape whose product label carries an identifier, or an unknown shape, shows no detail.
+    for (const unsafe of [
+      'DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8 of 6f000000-0000-4000-8000-000000000001, but delivery DEL-00074 allows 6',
+      'DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills 8 of relation "invoice_items", but delivery DEL-00074 allows 6',
+      'DELIVERY_INVOICE_EXCEEDS_DELIVERED: invoice CS-2026-0055 bills anything at all here',
+    ]) {
+      expect(sanitizeError(unsafe)).toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
+    }
     const unknown = sanitizeError('DELIVERY_INVOICE_EXCEEDS_DELIVERED: relation "x" 6f000000-0000-4000-8000-000000000001');
     expect(unknown).toBe('Nothing was changed. This invoice is for one delivery, so it can bill only the products and quantities that delivery delivered');
     expect(unknown).not.toContain('DELIVERY_INVOICE_EXCEEDS_DELIVERED');
