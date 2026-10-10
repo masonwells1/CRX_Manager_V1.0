@@ -37,34 +37,28 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN (ACCEPTED residual) 2026-10-09 — the invoice editor's pre-Post re-check is not atomic with `post_invoice`
+## OPEN 2026-10-09 — the regular invoice editor posts the old saved amounts when Post is pressed with unsaved edits
 
-**What it is.** Since 2026-10-09 (`docs/changelog.d/2026-10-09-invoice-screen-safety.md`), Post on
-the invoice editor (`src/pages/InvoiceDetail.tsx`, `openPostConfirm`) first re-reads the SAVED
-invoice and compares it with the copy on screen (`src/lib/invoicePostRecheck.ts`): customer, total,
-invoice date, terms, due date and every line's product, description, quantity, price and amount. If
-anything differs, the page reloads and refuses that Post. That re-read happens in the browser, and
-`post_invoice` / `post_invoice_group` take only the invoice ID — nothing tells the server what the
-person posting actually looked at.
+**What it is.** On the regular invoice editor (`src/pages/InvoiceDetail.tsx`: chemical sales, misc
+charges, job/blend field invoices) the **Post** button stays clickable while there are unsaved edits on
+screen. `post_invoice` / `post_invoice_group` post what is SAVED, so the invoice posts with the old
+saved amounts, and the page then reloads, dropping the edits. The pre-Post checks run on the on-screen
+copy, not on what is posted: the credit-limit warning (`handlePost`) uses the on-screen customer and
+line total, and for a single invoice the restricted-use (RUP) license warning (`openPostConfirm`) uses
+the on-screen lines. (A split group's RUP check already reads the saved siblings.) The editor also
+has no leave-page warning, so a sidebar link, Back, or closing the tab drops unsaved edits silently.
+Found by the 2026-10-08 overnight bug hunt.
 
-**What can still happen.** Another user (or another tab) saves the same invoice in the moment
-between the re-read and the post — in practice while the Post confirm box is open. Then:
-- `post_invoice` posts what is saved at that moment, which this person never saw (for example a
-  different line or customer).
-- The client-side credit-limit warning and restricted-use (RUP) license warning ran on the saved
-  total / lines read a moment earlier, so they could describe a total or product list that has just
-  changed.
-- For a split group, only the open invoice is fingerprinted; `post_invoice_group` posts every
-  sibling as saved.
+**Why it is still open.** PR #892 first carried an app-side fix (Post greyed out while there are
+unsaved edits, plus a re-read of the saved invoice before the Post confirm). The final Codex Sol review
+of that PR (2026-10-09) raised a HIGH: a browser-side re-check cannot bind what is posted, because
+another save can land between the re-check and `post_invoice`, which takes only the invoice ID. That
+fix was taken out of PR #892, so the editor's Post behaves exactly as before.
 
-**Why it is accepted for now.** It needs two people editing the same invoice within seconds of each
-other. Closing it fully is a server change, out of scope for the app-only fix.
-
-**Real fix (not built).** An optimistic-concurrency token: the editor sends the version it checked
-(for example the invoice's `updated_at`, or a server-computed fingerprint of the invoice and its
-lines) to `post_invoice` / `post_invoice_group`, and the function refuses inside the same
-transaction when the saved invoice no longer matches. That is a new migration plus a reviewed RPC
-signature change.
+**Planned fix (not built).** To be built in the upcoming "invoicing admin-only" database change, together with a
+server-side posting version check: the editor sends the version of the invoice it showed, and
+`post_invoice` / `post_invoice_group` refuse, inside the same transaction, when the saved invoice
+(or a group member) no longer matches.
 
 ## RESOLVED 2026-10-02 (opened 2026-09-12) — filed-season date-edit guard deployed: `20260914101000`..`20260914101300` applied live
 

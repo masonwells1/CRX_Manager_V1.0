@@ -26,7 +26,6 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { retryGenericInvoiceCutover } from '../lib/genericInvoiceCutoverRetry';
 import { Sentry } from '../lib/sentry';
 import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
-import { savedInvoiceChangedSinceLoad, type PostRecheckLine } from '../lib/invoicePostRecheck';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { todayInBusinessTz, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -259,113 +258,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // B1 (deep-dive H1): RUP warning surfaced in the post-confirm when the buyer
   // has no valid applicator license — posting is the legal point of sale.
   const [rupPostWarning, setRupPostWarning] = useState<string | null>(null);
-  // Customer and total of the SAVED invoice about to be posted, read fresh in
-  // openPostConfirm and used by handlePost's credit-limit check. Null until a fresh
-  // read succeeds; handlePost refuses to post without it.
-  const savedPostRef = useRef<{ customerId: string; totalCents: number } | null>(null);
-
-  // ── Unsaved-edit tracking (2026-10-09) ──────────────────────────────────────
-  // post_invoice posts the SAVED invoice. Posting with unsaved edits on screen billed
-  // the old amounts and then silently discarded the edits, so Post is blocked until
-  // the edits are saved. A snapshot of every editable field is taken after each load
-  // (and each save, which reloads); any difference from it is an unsaved edit.
-  // Optional text fields are normalized the way handleSave sends them (`|| null`), so
-  // typing into an empty field and deleting it again is not an unsaved edit.
-  const editSnapshot = JSON.stringify({
-    customer_id: invoice.customer_id ?? null,
-    invoice_type: invoice.invoice_type ?? null,
-    invoice_date: invoice.invoice_date ?? null,
-    salesman_id: invoice.salesman_id || null,
-    purchase_order_ref: invoice.purchase_order_ref || null,
-    header_notes: invoice.header_notes || null,
-    footer_notes: invoice.footer_notes || null,
-    paymentTerms,
-    customDueDate,
-    customTermsText,
-    items,
-  });
-  const [savedEditSnapshot, setSavedEditSnapshot] = useState<string | null>(null);
-  // Bumped when a load finishes, so the snapshot is taken from the committed loaded state.
-  const [loadVersion, setLoadVersion] = useState(0);
-  useEffect(() => {
-    if (loadVersion === 0) return;
-    setSavedEditSnapshot(editSnapshot);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- capture only when a load completes
-  }, [loadVersion]);
-  const hasUnsavedChanges = !isNew && savedEditSnapshot !== null && editSnapshot !== savedEditSnapshot;
-  const UNSAVED_POST_MESSAGE = 'Save your changes before posting. Post bills the saved invoice, not unsaved edits.';
-  // Print, Email and Transfer to Scheduling also work from the saved invoice (the PDF
-  // mixes saved lines with on-screen header fields), so they wait for a save too.
-  const UNSAVED_ACTIONS_MESSAGE = 'Save your changes before posting, printing, emailing or transferring. Those use the saved invoice, not unsaved edits.';
 
   const openPostConfirm = async () => {
-    if (hasUnsavedChanges) {
-      toast('error', UNSAVED_POST_MESSAGE);
-      return;
-    }
     postIdem.resetKey();
-    savedPostRef.current = null;
-    // Run the pre-post checks against the SAVED invoice — that is what post_invoice
-    // posts. Blocking unsaved LOCAL edits does not cover a change saved from another
-    // tab or by another user, so the saved row is read fresh here, and the post is
-    // refused (never checked against the loaded copy) when that read fails.
-    // Line shape comes from the re-check helper, so the read and the fingerprint input
-    // cannot drift apart. The select must name every PostRecheckLine field.
-    type SavedInvoiceForPost = {
-      customer_id: string | null;
-      total_amount_cents: number | null;
-      invoice_date: string | null;
-      payment_terms: string | null;
-      due_date: string | null;
-      invoice_items: Array<PostRecheckLine & { id: string }> | null;
-    };
-    let saved: SavedInvoiceForPost | null = null;
-    try {
-      const { data, error } = await supabase
-        .from('invoices')
-        .select('customer_id, total_amount_cents, invoice_date, payment_terms, due_date, invoice_items(id, product_id, description, quantity, unit_price_cents, extended_cents)')
-        .eq('id', id!)
-        .maybeSingle();
-      if (error) throw error;
-      saved = data as SavedInvoiceForPost | null;
-    } catch (err) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_saved_invoice_read' } });
-    }
-    if (!saved || !saved.customer_id || saved.total_amount_cents === null || saved.total_amount_cents === undefined) {
-      toast('error', 'Could not re-check the saved invoice before posting. Nothing was posted — please try again.');
-      return;
-    }
-    // Saved somewhere else since this screen loaded: show the current invoice first, so
-    // the person posting sees what will actually post. Compares the customer, total,
-    // invoice date (the posting month), terms, due date AND every line's product,
-    // description, quantity, price and amount — a line swapped at the same total also
-    // reloads. Amounts are compared as exact text, never through a float.
-    // Not atomic with post_invoice (accepted residual, docs/manual/KNOWN_ISSUES.md).
-    // (No unsaved local edits exist here, so `invoice` / `items` are the loaded copy.)
-    const changedElsewhere = savedInvoiceChangedSinceLoad(
-      {
-        customer_id: saved.customer_id,
-        total_amount_cents: saved.total_amount_cents,
-        invoice_date: saved.invoice_date,
-        payment_terms: saved.payment_terms,
-        due_date: saved.due_date,
-        lines: saved.invoice_items ?? [],
-      },
-      {
-        customer_id: invoice.customer_id,
-        total_amount_cents: invoice.total_amount_cents,
-        invoice_date: invoice.invoice_date,
-        payment_terms: invoice.payment_terms,
-        due_date: invoice.due_date,
-        lines: items,
-      },
-    );
-    if (changedElsewhere) {
-      toast('error', 'This invoice was changed somewhere else since you opened it. It has been reloaded — check it, then post again.');
-      fetchInvoice(id!);
-      return;
-    }
-    savedPostRef.current = { customerId: saved.customer_id, totalCents: saved.total_amount_cents };
     let warning: string | null = null;
     // The RUP check must NEVER block posting — any failure falls through to the
     // plain confirm (warn+confirm by design, not a gate).
@@ -394,10 +289,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           warning = `Posting this invoice group posts every invoice in it. Restricted-use products without a valid license — ${parts.join('; ')}. These will be recorded in the RUP sales register.`;
         }
       } else {
-        const productIds = (saved.invoice_items || []).map((it) => it.product_id).filter((p): p is string => Boolean(p));
-        const customerId = saved.customer_id;
-        if (customerId && productIds.length > 0) {
-          const res = await checkRUPCompliance(customerId, productIds);
+        const productIds = items.map((it) => it.product_id).filter((p): p is string => Boolean(p));
+        if (invoice?.customer_id && productIds.length > 0) {
+          const res = await checkRUPCompliance(invoice.customer_id, productIds);
           if (res.hasRUPProducts && !res.hasValidLicense) {
             // #6: align the warning's stated disposition with what the DB actually
             // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
@@ -432,8 +326,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // in-flight fetch must not render the previous invoice's amounts.
     const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
-    // No baseline while (re)loading; the end of this load takes a fresh one.
-    setSavedEditSnapshot(null);
 
     // #3 segregation PREFLIGHT (Codex r11): resolve the route-area redirect from a
     // MINIMAL row (invoice_type/job_id/status) BEFORE the full select('*') below, so
@@ -708,8 +600,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
-    // The screen now matches the saved invoice: take a new unsaved-edit baseline.
-    setLoadVersion((v) => v + 1);
   }, [toast, navigate, routeArea]);
 
   // Fetch existing invoice
@@ -974,21 +864,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Post invoice
   const handlePost = async () => {
-    if (hasUnsavedChanges) {
-      toast('error', UNSAVED_POST_MESSAGE);
-      return;
-    }
-    // Credit-limit check on the SAVED customer and total (read in openPostConfirm) — the
-    // account and amount post_invoice will actually post. No fresh read, no post.
-    // Limitation: for a split group this checks THIS invoice's total only, although
-    // post_invoice_group posts every sibling (unchanged from before; the check is a
-    // dismissible warning, not a gate).
-    const savedPost = savedPostRef.current;
-    if (!savedPost) {
-      toast('error', 'Could not re-check the saved invoice before posting. Nothing was posted — please try again.');
-      return;
-    }
-    const creditOk = await checkCreditLimit({ customerId: savedPost.customerId, newAmountCents: savedPost.totalCents });
+    const totalCents = items.reduce((sum, i) => sum + (i.extended_cents || 0), 0);
+    const creditOk = await checkCreditLimit({ customerId: invoice.customer_id!, newAmountCents: totalCents });
     if (!creditOk && !creditWarning?.dismissed) return;
     setPosting(true);
     try {
@@ -1141,11 +1018,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // with a plain-English message (the button is only shown for an editable one).
   const handleTransferToScheduling = async () => {
     if (!id || !profile || !invoice.job_id) return;
-    if (hasUnsavedChanges) {
-      setShowTransferToSchedulingModal(false);
-      toast('error', UNSAVED_ACTIONS_MESSAGE);
-      return;
-    }
     setTransferringToScheduling(true);
     try {
       const idemKey = transferToSchedulingIdem.getKey();
@@ -1428,10 +1300,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const handlePrint = async (options?: InvoicePrintOptions) => {
     // Ref-based guard prevents multiple concurrent executions (triple-fire from click propagation)
     if (printingRef.current) return;
-    if (hasUnsavedChanges) {
-      toast('error', UNSAVED_ACTIONS_MESSAGE);
-      return;
-    }
     printingRef.current = true;
     await runCriticalAction({
       action: async () => {
@@ -1449,10 +1317,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Email invoice with PDF attachment
   const handleEmailInvoice = async () => {
-    if (hasUnsavedChanges) {
-      toast('error', UNSAVED_ACTIONS_MESSAGE);
-      return;
-    }
     if (!profile) {
       toast('error', 'Cannot email invoice — profile not loaded. Please refresh.');
       return;
@@ -1612,25 +1476,9 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdminOrRep && (
-            <Button
-              variant="secondary"
-              icon={<Send className="w-4 h-4" />}
-              onClick={openPostConfirm}
-              loading={posting}
-              disabled={hasUnsavedChanges}
-              title={hasUnsavedChanges ? UNSAVED_POST_MESSAGE : undefined}
-              aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
-            >
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
               Post
             </Button>
-          )}
-          {!isNew && hasUnsavedChanges && (
-            <span
-              id="invoice-unsaved-post-note"
-              className="inline-flex items-center text-xs bg-amber-50 text-amber-700 px-2.5 py-1 rounded-md"
-            >
-              {UNSAVED_ACTIONS_MESSAGE}
-            </span>
           )}
           {/* #27: reverse Transfer to Scheduling — only for an editable (draft/unposted)
               field invoice that came from a job. Pushes the invoice back to the job. */}
@@ -1640,9 +1488,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               icon={<RotateCcw className="w-4 h-4" />}
               onClick={() => setShowTransferToSchedulingModal(true)}
               loading={transferringToScheduling}
-              disabled={transferringToScheduling || hasUnsavedChanges}
-              title={hasUnsavedChanges ? UNSAVED_ACTIONS_MESSAGE : undefined}
-              aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
+              disabled={transferringToScheduling}
               showChevron={false}
             >
               Transfer to Scheduling
@@ -1653,9 +1499,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               variant="secondary"
               icon={<Printer className="w-4 h-4" />}
               onClick={() => setShowPrintDialog(true)}
-              disabled={hasUnsavedChanges}
-              title={hasUnsavedChanges ? UNSAVED_ACTIONS_MESSAGE : undefined}
-              aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
               showChevron={false}
             >
               Print
@@ -1679,9 +1522,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               icon={<Mail className="w-4 h-4" />}
               onClick={handleEmailInvoice}
               loading={emailing}
-              disabled={hasUnsavedChanges}
-              title={hasUnsavedChanges ? UNSAVED_ACTIONS_MESSAGE : undefined}
-              aria-describedby={hasUnsavedChanges ? 'invoice-unsaved-post-note' : undefined}
               showChevron={false}
             >
               Email
