@@ -32,7 +32,7 @@ const DOCS_ONLY = [
   modified("docs/changelog.d/2026-10-07-sol-exempt-docs-only.md"),
   modified("docs/manual/DECISION_LOG.md"),
   modified("docs/manual/CURRENT_STATE.md"),
-  modified("docs/reference/schema-notes.md"),
+  modified("docs/handoffs/2026-10-10-notes.md"),
   modified("docs/reports/a.md"),
   modified("docs/audits/2026-10/finding.md"),
   modified("docs/handoffs/README.md"),
@@ -93,6 +93,10 @@ const NEVER_EXEMPT = [
 ];
 // Not never-eligible, but still not documentation on the allow-list.
 const NOT_ON_ALLOW_LIST = [
+  // docs/reference/ left the allow-list (Mason, "Drop the reference", 2026-10-10)
+  "docs/reference/sql-canonical-patterns.md",
+  "docs/reference/database-schema.md",
+  "docs/reference/code-patterns.md",
   "README.md",
   "docs/CHANGELOG.md",
   "docs/runbooks/restore.md",
@@ -432,6 +436,7 @@ const pushLibUrl = pathToFileURL(path.join(__dirname, "codex-push-lib.mjs")).hre
 const MUTANTS = [
   ["allow-list widened to all of docs/", `  "docs/changelog.d/",\n`, `  "docs/",\n  "docs/changelog.d/",\n`],
   ["allow-list gains an unapproved folder", `  "docs/research/",\n`, `  "docs/research/",\n  "docs/runbooks/",\n`],
+  ["docs/reference/ back on the allow-list (Mason dropped it, 2026-10-10)", `  "docs/manual/",\n`, `  "docs/manual/",\n  "docs/reference/",\n`],
   ["allow-list gains the repository root", `  "docs/research/",\n`, `  "docs/research/",\n  "",\n`],
   ["never path dropped: agent-guardrails.md", `  "docs/reference/agent-guardrails.md",\n`, ""],
   ["never path dropped: OWNER_PLAYBOOK.md", `  "docs/manual/OWNER_PLAYBOOK.md",\n`, ""],

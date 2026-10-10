@@ -34,10 +34,12 @@ import { ghApiRepoPath, sanitizeForMessage } from "./codex-push-lib.mjs";
 const show = (value) => sanitizeForMessage(value, 160);
 
 // Folders whose plain `.md` files are documentation. Case-sensitive, from the repo root.
+// docs/reference/ is NOT here (Mason, "Drop the reference", 2026-10-10): most of its
+// pages are rules agents follow before changing code, and reviewers kept finding one
+// more. The never list below still names its rule pages, in case it is ever re-added.
 export const SOL_EXEMPT_PREFIXES = Object.freeze([
   "docs/changelog.d/",
   "docs/manual/",
-  "docs/reference/",
   "docs/plans/",
   "docs/reports/",
   "docs/audits/",

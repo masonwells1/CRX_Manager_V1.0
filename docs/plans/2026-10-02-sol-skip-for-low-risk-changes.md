@@ -9,6 +9,7 @@ They are stricter than this proposal in four ways: only `.md` files qualify;
 files stay excluded; a
 nested `CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/`AGENT.md` or package file anywhere needs Sol; and the
 never-eligible lists match without regard to case, while the eligible folders must match exactly.
+**Narrowed by Mason on 2026-10-10 ("Drop the reference"):** `docs/reference/` is not eligible.
 **Drafted:** 2026-10-02 by Claude, at Mason's request.
 **Decision owner:** Mason. `AGENTS.md` is hand-maintained, and its rules say an agent may never
 weaken a review gate, even on request. So an agent drafted this and built the change, and

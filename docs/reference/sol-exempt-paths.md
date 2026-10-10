@@ -53,10 +53,14 @@ Anything else, including a failed GitHub call, means the Sol review is required.
 Only `.md` files in these folders qualify. The match is case-sensitive, from the
 repository root. Other file types in them (scripts, SQL drafts, JSON) still need Sol.
 
+`docs/reference/` is not eligible (Mason, "Drop the reference", 2026-10-10). The proposal listed
+it, but most of its pages are rules agents follow before changing code (code patterns, SQL rules,
+coding guidelines, gotchas, the migration approval gate, testing rules), and five review rounds
+in a row each found one more. Every change to a reference page now gets the Sol review.
+
 <!-- sol-exempt:eligible -->
 - `docs/changelog.d/`
 - `docs/manual/`
-- `docs/reference/`
 - `docs/plans/`
 - `docs/reports/`
 - `docs/audits/`

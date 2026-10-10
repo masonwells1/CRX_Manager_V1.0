@@ -20,7 +20,7 @@
 > `pr-merge-guard.mjs` and the Codex `production-action-guard.mjs` ask `.claude/hooks/sol-exempt-lib.mjs`, and only
 > when no valid proof was found. It reads GitHub's compare API for `baseRefOid...headRefOid`, then one GraphQL
 > lookup confirming each changed path is a plain file (mode `100644`, not a symlink, submodule or executable): added and
-> kept files at the head, deleted and edited files and old names at the base. Both go through the same budgeted `gh`. It is an allow-list: only `.md` files under eight `docs/`
+> kept files at the head, deleted and edited files and old names at the base. Both go through the same budgeted `gh`. It is an allow-list: only `.md` files under seven `docs/` (not `docs/reference/`, Mason 2026-10-10)
 > folders qualify (matched exactly), minus the rule-defining documents, any nested agent-instruction file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `AGENT.md`) and package files, which
 > are matched without regard to case. Any uncertainty means Sol is required: a failed or unexpected GitHub answer, a comparison
 > that is not exactly base..head (or does not end at the head), 250 or more files (GitHub silently stops listing at
