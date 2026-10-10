@@ -120,6 +120,8 @@ ok(['SELECT pg_catalog.pg_get_triggerdef(t.oid) FROM pg_trigger t', 'SELECT "pg_
 ok(['SELECT "AUTH".uid()', 'SELECT "Auth".uid()', 'SELECT auth."UID"()',
   'SELECT "PG_CATALOG".pg_get_triggerdef(1)', 'SELECT "COUNT"(*) FROM orders']
   .every((sql) => classifySql(sql).block), "a quoted name with capitals is not the vouched-for object");
+ok(["SELECT x$auth.uid()", "SELECT x$pg_catalog.pg_get_triggerdef(1)", "SELECT my$count(1)", "SELECT my$public.count(1)"]
+  .every((sql) => classifySql(sql).block), "a `$` inside an identifier makes it another schema or function (Luna, PR #882)");
 ok(["SELECT AUTH.uid()", "SELECT auth.UID()", "SELECT PG_CATALOG.pg_get_triggerdef(1)",
   'SELECT "count"(*) FROM orders', "SELECT COUNT(*) FROM orders"]
   .every((sql) => !classifySql(sql).block), "an unquoted name folds to lower case and is still a read");
