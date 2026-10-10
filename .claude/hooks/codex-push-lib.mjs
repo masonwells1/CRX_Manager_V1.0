@@ -3467,6 +3467,11 @@ function programBuiltAtRuntime(text, runtimeText = RUNTIME_TEXT_RE, depth = 0) {
 // Replaces each outermost `$( … )` with `$()` and returns the inside texts.
 // Returns null when a substitution never closes, so the caller keeps the old
 // reading of the whole text.
+//
+// An arithmetic `$(( … ))` is not a command: reading `i=$(($i+1))` as one made
+// `$i+1` a run-time program and refused `i=$(($i+1)); git status` (Codex
+// connector, PR #882). Its text stays in place, read as it was before this split
+// existed, and only a `$( … )` nested inside it is taken out and checked.
 function splitSubstitutions(text) {
   let outer = "";
   const inners = [];
@@ -3489,6 +3494,11 @@ function splitSubstitutions(text) {
       else if (char === ")" && --depth === 0) { end = at; break; }
     }
     if (end < 0) return null;
+    if (text[index + 2] === "(" && text[end - 1] === ")") {
+      outer += "$((";
+      index += 2;
+      continue;
+    }
     inners.push(text.slice(index + 2, end));
     outer += "$()";
     index = end;
