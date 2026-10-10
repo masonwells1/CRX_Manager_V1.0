@@ -360,7 +360,8 @@ rules prompt in every mode, including `bypassPermissions`; the desktop app ignor
    change or work around it, and no document carries a step-by-step way to switch it off (a Sol review flagged such
    steps as a written bypass path, 2026-09-27).
 4. **Adversarial review:** unchanged from the autonomous-landing entry — Luna rounds and an exact-SHA Sol proof on
-   every change — plus CodeRabbit and the Codex GitHub App on every PR automatically.
+   every change (since 2026-10-07, except a documentation-only change; see the block at the top) — plus CodeRabbit
+   and the Codex GitHub App on every PR automatically.
 5. **Codex hooks re-trusted (Mason's machine).** Codex silently skips a repository hook whose definition changed since
    it was trusted; on 2026-09-26, 17 of 24 CRX Codex hooks were skipped — every Write/Edit content guard, the three MCP
    guards, `production-action-guard`, `review-proof-guard`, `hold-latch-guard` and both routers — while Codex ran with
