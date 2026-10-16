@@ -19,9 +19,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { withBelowCostReason } from '../lib/belowCostApproval';
-import { runCriticalAction } from '../lib/criticalAction';
+import { CriticalActionHandledError, runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getCommittedOrderIdFromMismatch, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
@@ -488,7 +489,23 @@ export default function NewOrder() {
             p_performed_by: profile.id,
             p_idempotency_key: rushKey,
           }, reason)));
-          if (error) throw error;
+          if (error) {
+            // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+            // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+            const bindingRejection = getIdempotencyBindingRejection(error);
+            if (bindingRejection === 'intent' || bindingRejection === 'actor') rushOrderIdem.resetKey();
+            // An intent refusal carries the order an earlier attempt under this key already created: open it
+            // instead of letting the next click, with a fresh key, create a second order.
+            const committedOrderId = getCommittedOrderIdFromMismatch(error, 'create_rush_order');
+            if (committedOrderId) {
+              clearDraft();
+              toast('warning', 'An earlier attempt with this retry already created this order. Nothing new was created — opening that order now.');
+              navigate(`/orders/${committedOrderId}`);
+              // Already reported above: no generic "created" toast on top of it.
+              throw new CriticalActionHandledError('opened the order an earlier attempt created');
+            }
+            throw error;
+          }
           const rushResult = assertRpcResult<{ order_id: string; order_number: string; warnings?: string[] }>(data, 'create_rush_order');
           const rushOrderId = rushResult.order_id;
           rushOrderIdem.resetKey();
@@ -527,7 +544,23 @@ export default function NewOrder() {
           p_customer_po_number: customerPoNumber.trim() || undefined,
         }, reason)));
 
-        if (error) throw error;
+        if (error) {
+          // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') createOrderIdem.resetKey();
+          // An intent refusal carries the order an earlier attempt under this key already created: open it
+          // instead of letting the next click, with a fresh key, create a second order.
+          const committedOrderId = getCommittedOrderIdFromMismatch(error, 'create_direct_order');
+          if (committedOrderId) {
+            clearDraft();
+            toast('warning', 'An earlier attempt with this retry already created this order. Nothing new was created — opening that order now.');
+            navigate(`/orders/${committedOrderId}`);
+            // Already reported above: no generic "created" toast on top of it.
+            throw new CriticalActionHandledError('opened the order an earlier attempt created');
+          }
+          throw error;
+        }
 
         createOrderIdem.resetKey();
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(data, 'create_direct_order');

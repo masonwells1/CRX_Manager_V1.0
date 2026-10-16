@@ -20,6 +20,18 @@ export interface CriticalActionOptions<T> {
 }
 
 /**
+ * Thrown by an action that already told the user the outcome itself (for example, it opened the
+ * order an earlier attempt created). runCriticalAction then shows no toast, reports nothing to
+ * Sentry and skips onSuccess.
+ */
+export class CriticalActionHandledError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'CriticalActionHandledError';
+  }
+}
+
+/**
  * Run a critical mutation action with standardised error handling.
  *
  * Centralises the repeated pattern found across 19+ pages:
@@ -46,7 +58,7 @@ export async function runCriticalAction<T = void>(
     onSuccess?.(result);
     return result;
   } catch (err: unknown) {
-    if (isBelowCostApprovalHandledError(err)) return undefined;
+    if (isBelowCostApprovalHandledError(err) || err instanceof CriticalActionHandledError) return undefined;
     toast('error', sanitizeError(err));
     Sentry.captureException(err, {
       tags: { source: 'critical_action', action: sentryTag ?? 'unknown' },

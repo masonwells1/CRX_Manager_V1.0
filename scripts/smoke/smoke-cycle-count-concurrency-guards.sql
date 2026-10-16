@@ -66,8 +66,11 @@ BEGIN
     WHERE oid = 'public.complete_cycle_count(uuid,uuid,text,bigint)'::regprocedure
       AND prosrc LIKE '%FOR UPDATE OF i%'
   ) OR NOT EXISTS (
+    -- Since 20261016140000 (replay-binding batch 2) the locking body is renamed
+    -- _reverse_completed_cycle_count_replay_impl_20261015 behind a binding wrapper.
     SELECT 1 FROM pg_proc
-    WHERE oid = 'public.reverse_completed_cycle_count(uuid,uuid,text)'::regprocedure
+    WHERE oid IN (to_regprocedure('public.reverse_completed_cycle_count(uuid,uuid,text)'),
+                  to_regprocedure('public._reverse_completed_cycle_count_replay_impl_20261015(uuid,uuid,text)'))
       AND prosrc LIKE '%FOR UPDATE OF i%'
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: inventory row-lock guards missing';

@@ -172,7 +172,8 @@ BEGIN
   -- synthetic row). 500 units held while drawn = 0. The draws below move the
   -- hold → prebooked (FIFO inside draw_down_quote); S4 proves a draw cancel
   -- rebuilds the hold to booked − drawn.
-  PERFORM create_planned_holds(v_q1, v_admin);
+  -- A key is required since 20261016140000 (replay-binding batch 2).
+  PERFORM create_planned_holds(v_q1, v_admin, 'smk-dlr-holds-' || gen_random_uuid()::text);
 
   -- ══ S1: partial draw 200/500 → VOID the draw order ═══════════════════════
   SELECT draw_down_quote(v_q1,

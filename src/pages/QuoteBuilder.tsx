@@ -1976,7 +1976,14 @@ export default function QuoteBuilder() {
           p_performed_by: profile.id,
           p_idempotency_key: holdIdemKey,
         });
-        if (holdError) toast('error', 'Failed to create inventory holds');
+        if (holdError) {
+          // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(holdError);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') plannedHoldsIdem.resetKey();
+          Sentry.captureException(holdError, { tags: { source: 'mutation', action: 'create_planned_holds' } });
+          toast('error', `Failed to create inventory holds: ${sanitizeError(holdError)}`);
+        }
         else {
           assertRpcResult(holdData, 'create_planned_holds');
           plannedHoldsIdem.resetKey();
@@ -2204,7 +2211,13 @@ export default function QuoteBuilder() {
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
       });
-      if (error) throw error;
+      if (error) {
+        // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+        // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+        const bindingRejection = getIdempotencyBindingRejection(error);
+        if (bindingRejection === 'intent' || bindingRejection === 'actor') closeAppliedIdem.resetKey();
+        throw error;
+      }
       closeAppliedIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
       setStatus((result.status as QuoteStatus) || 'closed_by_application');
@@ -2250,7 +2263,13 @@ export default function QuoteBuilder() {
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
       });
-      if (error) throw error;
+      if (error) {
+        // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+        // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+        const bindingRejection = getIdempotencyBindingRejection(error);
+        if (bindingRejection === 'intent' || bindingRejection === 'actor') closeShortIdem.resetKey();
+        throw error;
+      }
       closeShortIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
       setStatus((result.status as QuoteStatus) || 'closed_short');

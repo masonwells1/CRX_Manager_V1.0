@@ -188,7 +188,8 @@ BEGIN
   WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pb;
 
   -- (a) create_planned_holds: full reservation, per-item expiry
-  v_res := create_planned_holds(v_q, v_admin, NULL);
+  -- A key is required since 20261016140000 (replay-binding batch 2); each rebuild is its own request.
+  v_res := create_planned_holds(v_q, v_admin, 'smk-phds-holds-a-' || sfx);
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
          COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0), count(*)
   INTO v_pa_total, v_pb_total, v_cnt
@@ -210,7 +211,7 @@ BEGIN
   END IF;
 
   -- (c) create_planned_holds AGAIN: the reported bug would re-reserve 500
-  v_res := create_planned_holds(v_q, v_admin, NULL);
+  v_res := create_planned_holds(v_q, v_admin, 'smk-phds-holds-c-' || sfx);
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
          COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0), count(*)
   INTO v_pa_total, v_pb_total, v_cnt

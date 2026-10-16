@@ -165,7 +165,9 @@ describe('Section 9 actor-and-intent replay binding', () => {
     expect(inventoryPage).not.toContain('p_reason: adjustNote');
     expect(inventoryPage).toContain('adjustIntent.classifyFailure(error)');
     expect(inventoryPage).toContain('await adjustIntent.resolveIntent();');
-    expect(inventoryPage).toContain('if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);');
+    // Replay-binding batch 2 (20261016140000): only an intent or actor refusal retires the key.
+    expect(inventoryPage).toContain("if (bindingRejection === 'intent' || bindingRejection === 'actor') retireIdem.resetKeyFor(scope);");
+    expect(inventoryPage).not.toContain('if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);');
     expect(vendorBill).toContain('editIdem.resetKey();');
     expect(vendorBill).toContain('voidIdem.resetKeyFor(voidBillScope);');
   });

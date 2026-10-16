@@ -285,6 +285,32 @@
         "security"
       ]
     },
+    "stock_replay_binding_batch2": {
+      "chain": "smoke-stock-replay-binding-batch2.sql",
+      "container_only": true,
+      "container_prover": "prove-stock-replay-binding-batch2-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-stock-replay-binding-batch2-real-schema.mjs, never through run-smoke.mjs against the live database: create_direct_order and create_rush_order draw two customer-visible order numbers from order_number_seq, which a rollback does not return. 20261016140000 (replay-binding batch 2): thirteen stock RPCs replay a stored idempotency receipt only for the person who wrote it and the exact same request. For each of release_inventory_hold, retire_inventory_item, reconcile_negative_inventory, manual_inventory_add, create_order_from_blend_ticket, create_direct_order, create_rush_order, close_quote_as_applied, close_quote_as_short, create_application_record_from_blend_ticket (receipt operation create_app_record_from_bt), batch_cancel_deliveries, reverse_completed_cycle_count and create_planned_holds, a key reused for a different record (or a changed quantity) is refused with IDEMPOTENCY_INTENT_MISMATCH and the other record is untouched; the exact retry replays without doing the work twice; batch_cancel_deliveries treats the same delivery set in another order as the same request; a second admin presenting the first admin's key is refused with IDEMPOTENCY_ACTOR_MISMATCH; a call with no key is refused with IDEMPOTENCY_KEY_REQUIRED by all thirteen public RPCs, create_planned_holds included; revert_quote_status, its one internal caller, rebuilds a reopened planned quote's holds through the private _create_planned_holds_replay_impl_20261015 body, which the chain proves still runs and writes no create_planned_holds receipt; the four no-receipt no-op answers (already_released, already_closed twice, success false) come back unrefused and leave no receipt; every receipt is stamped with the admin and a SHA-256 fingerprint; an unbound legacy receipt is refused, never replayed; the commit-time guard refuses an unbound receipt for each of the thirteen operations. Fail-first: step 1 fails before the migration (release_inventory_hold hands hold A's receipt back as success for hold B). Uses two real active admins and [SMOKE] fixtures; borrows one real priced product unchanged; terminal rollback.",
+      "covers": [
+        "release_inventory_hold",
+        "retire_inventory_item",
+        "reconcile_negative_inventory",
+        "manual_inventory_add",
+        "create_order_from_blend_ticket",
+        "create_direct_order",
+        "create_rush_order",
+        "close_quote_as_applied",
+        "close_quote_as_short",
+        "create_application_record_from_blend_ticket",
+        "batch_cancel_deliveries",
+        "reverse_completed_cycle_count",
+        "create_planned_holds"
+      ],
+      "area": [
+        "inventory",
+        "security",
+        "idempotency"
+      ]
+    },
     "quotes_rep_own_name": {
       "chain": "smoke-quotes-rep-own-name.sql",
       "container_only": true,

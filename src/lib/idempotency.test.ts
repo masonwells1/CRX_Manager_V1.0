@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fingerprintIntentPayload, generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
+import { fingerprintIntentPayload, getCommittedOrderIdFromMismatch, generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -46,6 +46,23 @@ describe('generateIdempotencyKey', () => {
     // UUID v4 has specific version/variant bits
     expect(uuid[14]).toBe('4'); // version nibble
     expect(['8', '9', 'a', 'b']).toContain(uuid[19]); // variant nibble
+  });
+});
+
+describe('getCommittedOrderIdFromMismatch', () => {
+  const refusal = (operation: string, result: unknown) => ({
+    message: 'IDEMPOTENCY_INTENT_MISMATCH',
+    details: JSON.stringify({ operation, result }),
+  });
+  it('returns the committed order id for the expected operation', () => {
+    expect(getCommittedOrderIdFromMismatch(refusal('create_direct_order', { order_id: 'order-1' }), 'create_direct_order'))
+      .toBe('order-1');
+  });
+  it('returns null for another operation, a missing or blank id, or any other refusal', () => {
+    expect(getCommittedOrderIdFromMismatch(refusal('create_rush_order', { order_id: 'order-1' }), 'create_direct_order')).toBeNull();
+    expect(getCommittedOrderIdFromMismatch(refusal('create_direct_order', { order_id: '' }), 'create_direct_order')).toBeNull();
+    expect(getCommittedOrderIdFromMismatch(refusal('create_direct_order', { success: false }), 'create_direct_order')).toBeNull();
+    expect(getCommittedOrderIdFromMismatch({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' }, 'create_direct_order')).toBeNull();
   });
 });
 

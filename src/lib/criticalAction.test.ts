@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { runCriticalAction } from './criticalAction';
+import { CriticalActionHandledError, runCriticalAction } from './criticalAction';
 
 // Mock Sentry
 vi.mock('./sentry', () => ({
@@ -15,6 +15,22 @@ describe('runCriticalAction', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('shows no toast, reports nothing and skips onSuccess when the action already handled the outcome', async () => {
+    const onSuccess = vi.fn();
+    const result = await runCriticalAction({
+      action: async () => { throw new CriticalActionHandledError('opened the existing order'); },
+      toast,
+      successMessage: 'Order created successfully',
+      onSuccess,
+      setLoading,
+    });
+    expect(result).toBeUndefined();
+    expect(toast).not.toHaveBeenCalled();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(setLoading).toHaveBeenLastCalledWith(false);
   });
 
   // ── Happy path ──────────────────────────────────────────────

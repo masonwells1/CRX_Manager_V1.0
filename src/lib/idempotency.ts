@@ -212,6 +212,20 @@ export function getIdempotencyBindingRejection(
 }
 
 /**
+ * The order id an earlier attempt under this retry key already created, read from an
+ * IDEMPOTENCY_INTENT_MISMATCH refusal's committed receipt; null for any other error. An order screen
+ * opens that order instead of letting the next click (with a fresh key) create a second one.
+ */
+export function getCommittedOrderIdFromMismatch(
+  error: unknown,
+  expectedOperation: string,
+): string | null {
+  const committed = getIdempotencyMismatchResult(error, expectedOperation);
+  const orderId = committed?.order_id;
+  return typeof orderId === 'string' && orderId.length > 0 ? orderId : null;
+}
+
+/**
  * Extracts the committed receipt returned in an IDEMPOTENCY_INTENT_MISMATCH
  * error. PostgREST errors are plain objects, so do not use instanceof Error.
  */

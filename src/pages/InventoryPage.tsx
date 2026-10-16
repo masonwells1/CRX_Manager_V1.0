@@ -680,7 +680,13 @@ export default function InventoryPage() {
         p_performed_by: profile?.id,
         p_idempotency_key: releaseHoldIdem.getKey(),
       });
-      if (error) throw error;
+      if (error) {
+        // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+        // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+        const bindingRejection = getIdempotencyBindingRejection(error);
+        if (bindingRejection === 'intent' || bindingRejection === 'actor') releaseHoldIdem.resetKey();
+        throw error;
+      }
       assertRpcResult(data, 'release_inventory_hold');
       releaseHoldIdem.resetKey();
 
@@ -724,6 +730,10 @@ export default function InventoryPage() {
     if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
 
     if (error) {
+      // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+      // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+      const bindingRejection = getIdempotencyBindingRejection(error);
+      if (bindingRejection === 'intent' || bindingRejection === 'actor') manualAddIdem.resetKey();
       toast('error', sanitizeError(error));
     } else {
       manualAddIdem.resetKey();
@@ -994,7 +1004,10 @@ export default function InventoryPage() {
           p_idempotency_key: idemKey,
         });
         if (error) {
-          if (getIdempotencyBindingRejection(error)) retireIdem.resetKeyFor(scope);
+          // Refused as another request's or another person's retry key: nothing changed, so start the next try fresh.
+          // Only 'intent' and 'actor' prove nothing committed under this key; a 'receipt' refusal keeps it.
+          const bindingRejection = getIdempotencyBindingRejection(error);
+          if (bindingRejection === 'intent' || bindingRejection === 'actor') retireIdem.resetKeyFor(scope);
           throw error;
         }
         assertRpcResult(data, 'retire_inventory_item');
