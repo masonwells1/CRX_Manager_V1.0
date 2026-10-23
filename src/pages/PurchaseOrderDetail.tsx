@@ -35,7 +35,8 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import HelpTip from '../components/ui/HelpTip';
 import type { PurchaseOrder, PurchaseOrderItem, PurchaseOrderItemCostChange, PurchaseOrderCostChangeSource, POStatus, ReceivingRecord, ReceivingCondition, LinkedEntityType } from '../types';
 import { Sentry } from '../lib/sentry';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import { getIdempotencyMismatchResult } from '../lib/idempotency';
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
@@ -204,6 +205,11 @@ export default function PurchaseOrderDetail() {
   /* Receiving history */
   const [receivingHistory, setReceivingHistory] = useState<ReceivingRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // A failed history read says so, never "No items have been received yet."
+  const [historyFailed, setHistoryFailed] = useState(false);
+  // The PO id whose header or lines failed to load: shown as "could not be loaded",
+  // never as "Purchase order not found" or a header above an empty line list.
+  const [loadFailedId, setLoadFailedId] = useState<string | null>(null);
 
   // React Router reuses this component when only the :id param changes, so the
   // previous PO's header, lines and receiving history are still in state when
@@ -222,6 +228,7 @@ export default function PurchaseOrderDetail() {
     setPo(null);
     setItems([]);
     setReceivingHistory([]);
+    setHistoryFailed(false);
     setCostHistory([]);
     setCostHistoryStatus('loading');
     setLoading(true);
@@ -299,14 +306,22 @@ export default function PurchaseOrderDetail() {
       if (!isCurrentFetch()) return;
     }
 
+    // Fails the whole page: a PO shown from an older read, or a header over an
+    // empty line list, would let staff receive or edit against lines they cannot see.
+    const failLoad = () => {
+      setPo(null);
+      setItems([]);
+      setLoadFailedId(startedForId ?? null);
+      setLoading(false);
+    };
+
     if (poError) {
       Sentry.captureException(poError, { tags: { source: 'fetch', action: 'load_purchase_order' } });
       toast('error', 'Failed to load purchase order');
-      setLoading(false);
+      failLoad();
       return;
     }
     if (poData) {
-      setPo(poData as PurchaseOrder);
       const { data: rawItemsData, error: itemsReadError } = await supabase
         .from('purchase_order_items')
         .select(`${PURCHASE_ORDER_ITEM_COLUMNS}, product:products(${PRODUCT_COLUMNS}, product_family:product_families(name))`)
@@ -315,8 +330,9 @@ export default function PurchaseOrderDetail() {
       if (!isCurrentFetch()) return;
 
       let itemsData = (rawItemsData || []) as unknown as PurchaseOrderItem[];
-      let itemsError: unknown = itemsReadError;
-      if (!itemsReadError) {
+      // No list at all is a failed read, not a PO with no lines.
+      let itemsError: unknown = itemsReadError ?? (rawItemsData ? null : new Error('purchase order lines read returned no list'));
+      if (!itemsError) {
         try {
           itemsData = await withAdminCosts('purchase_order_items', itemsData, isAdmin);
         } catch (costErr) {
@@ -328,15 +344,17 @@ export default function PurchaseOrderDetail() {
       if (itemsError) {
         Sentry.captureException(itemsError, { tags: { source: 'fetch', action: 'load_purchase_order_items' } });
         toast('error', 'Failed to load purchase order products');
-        setLoading(false);
+        failLoad();
         return;
       }
+      setPo(poData as PurchaseOrder);
       setItems(itemsData);
     } else {
       // A missing PO must not leave the previously loaded PO's lines on screen.
       setPo(null);
       setItems([]);
     }
+    setLoadFailedId(null);
     setLoading(false);
   }, [id, toast, isAdmin]);
 
@@ -365,12 +383,15 @@ export default function PurchaseOrderDetail() {
 
     if (!isCurrentFetch()) return;
 
-    if (error) {
+    if (error || !data) {
       // Supabase RETURNS this error (doesn't throw) — surface it instead of
       // silently leaving the receiving history empty (Field Mode F6 class).
+      // No list at all is the same failure, not "nothing received yet".
+      Sentry.captureException(error ?? new Error('receiving history read returned no list'), { tags: { source: 'fetch', action: 'load_po_receiving_history' } });
       toast('error', 'Could not load receiving history.');
-    }
-    if (!error && data) {
+      setReceivingHistory([]);
+      setHistoryFailed(true);
+    } else {
       const receiverIds = [...new Set(
         (data as Array<{ received_by?: string | null }>)
           .map((r) => r.received_by)
@@ -391,6 +412,7 @@ export default function PurchaseOrderDetail() {
         received_by_name: r.received_by ? receiverMap[r.received_by] || 'Unknown' : 'Unknown',
       }));
       setReceivingHistory(rows as ReceivingRecord[]);
+      setHistoryFailed(false);
     }
     setHistoryLoading(false);
   }, [id, toast]);
@@ -404,13 +426,13 @@ export default function PurchaseOrderDetail() {
       costHistoryFetchTokenRef.current === token && routeIdRef.current === startedForId;
 
     // Paged: one request stops at the row cap, which would silently drop the oldest entries.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('purchase_order_item_cost_changes')
       .select('id, purchase_order_id, purchase_order_item_id, product_id, old_unit_cost_cents, new_unit_cost_cents, quantity_received_at_change, source, reason, changed_by, created_at', { count: 'exact' })
       .eq('purchase_order_id', id!)
       .order('created_at', { ascending: false })
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (!isCurrentFetch()) return;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_po_cost_history' } });
@@ -1266,6 +1288,15 @@ export default function PurchaseOrderDetail() {
     );
   }
 
+  if (loadFailedId === id) {
+    return (
+      <LoadFailedState
+        title="This purchase order could not be loaded"
+        onRetry={() => { setLoading(true); fetchPO(); fetchReceivingHistory(); fetchCostHistory(); }}
+      />
+    );
+  }
+
   if (!po) {
     return (
       <div className="text-center py-16">
@@ -1515,6 +1546,8 @@ export default function PurchaseOrderDetail() {
           <CardHeader title="Receiving" accent="History" />
           {historyLoading ? (
             <div className="h-20 bg-gray-50 rounded-lg animate-pulse" />
+          ) : historyFailed ? (
+            <LoadFailedState title="The receiving history could not be loaded" onRetry={fetchReceivingHistory} />
           ) : receivingHistory.length === 0 ? (
             <p className="text-sm text-secondary py-4">No items have been received yet.</p>
           ) : (

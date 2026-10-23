@@ -19,7 +19,8 @@ import {
   type CycleCountWriteIntent,
 } from '../lib/cycleCountWriteIntent';
 import { logActivity } from '../lib/activityLogger';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import HelpTip from '../components/ui/HelpTip';
 import type { CycleCount, CycleCountItem } from '../types';
 
@@ -74,6 +75,8 @@ export default function CycleCounts() {
   const cancelCycleCountIdem = useIdempotencyKey('cancel_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed list read shows "could not be loaded", never "No cycle counts yet".
+  const [countsFailed, setCountsFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
 
   // New count modal
@@ -90,6 +93,9 @@ export default function CycleCounts() {
   const [activeCount, setActiveCount] = useState<CountRow | null>(null);
   const [countItems, setCountItems] = useState<CountItemRow[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
+  // A failed line read shows "could not be loaded" and hides Complete and Cancel:
+  // an empty line list is never something to apply adjustments against.
+  const [itemsFailed, setItemsFailed] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
   // The cycle count the open "complete anyway?" confirmation was asked ABOUT.
@@ -143,7 +149,10 @@ export default function CycleCounts() {
 
   const isAdmin = role === 'admin';
 
+  // Only the newest list read may set state (a refresh after a write can overlap an older one).
+  const fetchCountsSeq = useRef(0);
   const fetchCounts = useCallback(async () => {
+    const seq = ++fetchCountsSeq.current;
     setLoading(true);
     // PR-07 follow-up: dropped initiator + completer FK embeds; resolved via profile_public_view.
     const { data, error } = await supabase
@@ -153,10 +162,13 @@ export default function CycleCounts() {
         items:cycle_count_items(id, is_counted, variance)
       `)
       .order('created_at', { ascending: false });
+    if (seq !== fetchCountsSeq.current) return;
 
-    if (error) {
-      Sentry.captureException(error);
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('cycle counts read returned no list'));
       toast('error', 'Failed to load cycle counts');
+      setCounts([]);
+      setCountsFailed(true);
       setLoading(false);
       return;
     }
@@ -171,6 +183,7 @@ export default function CycleCounts() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', profileIds);
+      if (seq !== fetchCountsSeq.current) return;
       (profs || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) profileMap[p.id] = p.full_name ?? ''; });
     }
 
@@ -183,6 +196,7 @@ export default function CycleCounts() {
       variance_count: c.items?.filter((i) => i.variance && i.variance !== 0).length || 0,
     })) as CountRow[];
     setCounts(rows);
+    setCountsFailed(false);
     setLoading(false);
   }, [toast]);
 
@@ -190,15 +204,16 @@ export default function CycleCounts() {
     // Pull unique locations from inventory + warehouses table. Inventory is read whole, page by
     // page (Goal 4, N6): one request stops at the row cap and could miss a location.
     const [invRes, whRes] = await Promise.all([
-      fetchAllRows<{ id: string; location: string | null }>((from, to) => supabase
+      fetchAllRows<{ id: string; location: string | null }>((from, to) => pageWithList(supabase
         .from('inventory')
         .select('id, location', { count: 'exact' })
         .order('id')
-        .range(from, to)),
+        .range(from, to))),
       supabase.from('warehouses').select('name').eq('is_active', true),
     ]);
-    if (invRes.error || whRes.error) {
-      Sentry.captureException(invRes.error ?? whRes.error, { tags: { source: 'fetch', action: 'load_cycle_count_locations' } });
+    // No warehouse list at all is a failed read, not "no locations".
+    if (invRes.error || whRes.error || !whRes.data) {
+      Sentry.captureException(invRes.error ?? whRes.error ?? new Error('warehouses read returned no list'), { tags: { source: 'fetch', action: 'load_cycle_count_locations' } });
       toast('error', 'Failed to load locations. Refresh before starting a count.');
       setWarehouses([]);
       setLocationsLoad('failed');
@@ -335,6 +350,7 @@ export default function CycleCounts() {
     setActiveCount(count);
     setShowDetail(true);
     setLoadingItems(true);
+    setItemsFailed(false);
 
     // Seed the reviewed-revision baseline from the server before loading items.
     // The list row this modal opened from can be minutes old, and completion now
@@ -375,13 +391,13 @@ export default function CycleCounts() {
     }
 
     // Every line of the count, page by page (one request stops at the server's row cap).
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('cycle_count_items')
       .select('*, product:products(product_name)', { count: 'exact' })
       .eq('cycle_count_id', count.id)
       .order('created_at')
       .order('id')
-      .range(from, to));
+      .range(from, to)));
 
     // Everything below writes SHARED detail state — the rows on screen, the loading
     // flag, and an error message about them. A superseded call must touch none of
@@ -393,6 +409,10 @@ export default function CycleCounts() {
     if (error) {
       Sentry.captureException(error);
       toast('error', 'Failed to load count items');
+      setCountItems([]);
+      setItemsFailed(true);
+      setLoadingItems(false);
+      return;
     }
 
     const rows: CountItemRow[] = ((data || []) as CountItemDbRow[]).map((item) => ({
@@ -413,13 +433,14 @@ export default function CycleCounts() {
     isCurrentSession: () => boolean
   ): Promise<CountItemRow[] | null> => {
     // Completion checks these lines, so every one is read (page by page).
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    // A page with no list fails the refresh: completion never checks an empty list.
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('cycle_count_items')
       .select('*, product:products(product_name)', { count: 'exact' })
       .eq('cycle_count_id', cycleCountId)
       .order('created_at')
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (!isCurrentSession()) return null;
     if (error) {
       Sentry.captureException(error);
@@ -1048,6 +1069,8 @@ export default function CycleCounts() {
               ) : undefined
             }
             loading={loading}
+            loadError={countsFailed}
+            onRetry={fetchCounts}
             filters={
               <select
                 value={statusFilter}
@@ -1161,6 +1184,8 @@ export default function CycleCounts() {
               <div className="flex items-center justify-center py-8">
                 <div className="w-6 h-6 border-2 border-crx-green border-t-transparent rounded-full animate-spin" />
               </div>
+            ) : itemsFailed ? (
+              <LoadFailedState title="This count's lines could not be loaded" onRetry={() => { void openDetail(activeCount); }} />
             ) : (
               <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg">
                 <table className="w-full text-sm">
@@ -1231,7 +1256,9 @@ export default function CycleCounts() {
               </div>
             )}
 
-            {/* Summary */}
+            {/* Summary: hidden after a failed line read (every count would read 0) and while lines
+                load (it would still show the previously opened count's totals) */}
+            {!itemsFailed && !loadingItems && (
             <div className="flex items-center gap-6 text-sm bg-gray-50 rounded-lg p-3">
               <div>
                 <span className="text-gray-500">Products:</span>{' '}
@@ -1250,9 +1277,10 @@ export default function CycleCounts() {
                 </span>
               </div>
             </div>
+            )}
 
             {/* Actions */}
-            {activeCount.status === 'in_progress' && isAdmin && (
+            {activeCount.status === 'in_progress' && isAdmin && !itemsFailed && !loadingItems && (
               <div className="flex justify-between pt-2 border-t">
                 <Button
                   variant="secondary"
@@ -1270,7 +1298,7 @@ export default function CycleCounts() {
                 </Button>
               </div>
             )}
-            {activeCount.status === 'completed' && isAdmin && (
+            {activeCount.status === 'completed' && isAdmin && !itemsFailed && !loadingItems && (
               <div className="flex justify-end pt-2 border-t">
                 <Button
                   variant="secondary"

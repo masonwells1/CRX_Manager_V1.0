@@ -14,7 +14,8 @@ import { validateInventoryPositionShape } from '../lib/inventoryPositionValidato
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { PRODUCT_COLUMNS } from '../lib/costFields';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
+import { LoadFailedState } from '../components/ui/EmptyState';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -170,6 +171,14 @@ export default function InventoryPage() {
   const [inventoryForAdmin, setInventoryForAdmin] = useState<boolean | null>(null);
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed stock read shows "could not be loaded", never zero on hand and "No inventory records".
+  const [inventoryFailed, setInventoryFailed] = useState(false);
+  // A failed holds read says so instead of hiding the Active Holds panel.
+  const [holdsFailed, setHoldsFailed] = useState(false);
+  // A failed forecast read says so instead of "No planned demand data".
+  const [forecastFailed, setForecastFailed] = useState(false);
+  // A failed open-PO read in the receive dialog says so instead of "No open purchase orders found".
+  const [receivePOsFailed, setReceivePOsFailed] = useState(false);
   const [locationFilter, setLocationFilter] = useState('');
   const [mobileSearch, setMobileSearch] = useState('');
   const [locations, setLocations] = useState<string[]>([]);
@@ -292,15 +301,24 @@ export default function InventoryPage() {
     const { data, error } = await supabase.rpc('get_inventory_position');
     if (requestId !== inventoryRequestId.current) return;
 
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
+    // An error, no list, or a malformed list all fail the grid: never stale or zero stock.
+    let positions: InventoryPositionRow[];
+    try {
+      if (error) throw error;
+      positions = assertRpcResult<InventoryPositionRow[]>(data, 'get_inventory_position');
+      validateInventoryPositionShape(positions);
+    } catch (loadErr) {
+      Sentry.captureException(loadErr, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load inventory. Please try again.');
+      setInventory([]);
+      setLocations([]);
+      setInventoryForAdmin(null);
+      // No "Adjust N Selected" over a failed grid.
+      setSelectedIds(new Set());
+      setInventoryFailed(true);
       setLoading(false);
       return;
     }
-
-    const positions = assertRpcResult<InventoryPositionRow[]>(data, 'get_inventory_position');
-    validateInventoryPositionShape(positions);
 
     const rows: InventoryRow[] = positions.map((p) => ({
       id: p.inventory_id ?? `virtual-${p.product_id}`,
@@ -336,10 +354,14 @@ export default function InventoryPage() {
     setLocations(locs.sort());
     setInventory(rows);
     setInventoryForAdmin(forAdmin);
+    setInventoryFailed(false);
     setLoading(false);
   }, [isAdmin, toast]);
 
+  // Only the newest holds read may set state (a refresh after a write can overlap an older one).
+  const holdsRequestId = useRef(0);
   const fetchHolds = useCallback(async () => {
+    const requestId = ++holdsRequestId.current;
     // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('inventory_holds')
@@ -351,9 +373,13 @@ export default function InventoryPage() {
       .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gte.${localToday()}`)
       .order('created_at', { ascending: false });
+    if (requestId !== holdsRequestId.current) return;
 
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
+    if (error || !data) {
+      Sentry.captureException(error ?? new Error('inventory holds read returned no list'), { tags: { source: 'fetch', page: 'inventory' } });
+      toast('error', 'Failed to load inventory holds.');
+      setHolds([]);
+      setHoldsFailed(true);
       return;
     }
 
@@ -368,6 +394,7 @@ export default function InventoryPage() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', creatorIds);
+      if (requestId !== holdsRequestId.current) return;
       ((creators || []) as Array<{ id: string; full_name: string }>).forEach((p) => { creatorMap[p.id] = p.full_name; });
     }
 
@@ -379,7 +406,8 @@ export default function InventoryPage() {
     })) as HoldWithRelations[];
 
     setHolds(holdRows);
-  }, []);
+    setHoldsFailed(false);
+  }, [toast]);
 
   useEffect(() => {
     const recovered = receivePoIntent.unresolvedIntent;
@@ -407,21 +435,32 @@ export default function InventoryPage() {
     fetchHolds();
   }, [fetchInventory, fetchHolds]);
 
+  // Only the newest forecast read may set state (Refresh can overlap the first load).
+  const forecastRequestId = useRef(0);
   const fetchForecast = useCallback(async () => {
+    const requestId = ++forecastRequestId.current;
     setForecastLoading(true);
     const { data, error } = await supabase.rpc('get_inventory_forecast', { p_months_ahead: 6 });
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
+    if (requestId !== forecastRequestId.current) return;
+    try {
+      if (error) throw error;
+      const rows = assertRpcResult<typeof forecastData>(data, 'get_inventory_forecast');
+      if (!Array.isArray(rows)) throw new Error('get_inventory_forecast returned no list');
+      setForecastData(rows);
+      setForecastFailed(false);
+    } catch (loadErr) {
+      Sentry.captureException(loadErr, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load forecast data');
-    } else if (data) {
-      setForecastData(assertRpcResult<typeof forecastData>(data, 'get_inventory_forecast'));
+      setForecastData([]);
+      setForecastFailed(true);
     }
     setForecastLoading(false);
   }, [toast]);
 
+  // A failed read is not retried by itself (Try again does that), so it cannot loop.
   useEffect(() => {
-    if (activeTab === 'forecast' && forecastData.length === 0) fetchForecast();
-  }, [activeTab, forecastData.length, fetchForecast]);
+    if (activeTab === 'forecast' && forecastData.length === 0 && !forecastFailed) fetchForecast();
+  }, [activeTab, forecastData.length, forecastFailed, fetchForecast]);
 
   // Both pickers below filter these lists locally and a locked hold retry shows
   // its frozen product/customer from them, so each list is read in full, page
@@ -433,13 +472,13 @@ export default function InventoryPage() {
   const fetchProducts = useCallback(async () => {
     const readId = ++productsReadRef.current;
     setProductsLoading(true);
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('products')
       .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
       .eq('is_active', true)
       .order('product_name')
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (readId !== productsReadRef.current) return;
     setProductsLoading(false);
     if (error) {
@@ -456,13 +495,13 @@ export default function InventoryPage() {
   const fetchCustomers = useCallback(async () => {
     const readId = ++customersReadRef.current;
     setCustomersLoading(true);
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('customers')
       .select('id, farm_name', { count: 'exact' })
       .eq('is_active', true)
       .order('farm_name')
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (readId !== customersReadRef.current) return;
     setCustomersLoading(false);
     if (error) {
@@ -813,7 +852,11 @@ export default function InventoryPage() {
     setAdding(false);
   };
 
+  // Only the newest receive-dialog read may fill the PO list: opening the dialog for
+  // product A then quickly for B must never offer A's purchase orders under B.
+  const receivePOsRequestId = useRef(0);
   const openReceiveModal = async (inventoryId: string) => {
+    const requestId = ++receivePOsRequestId.current;
     // Do not rotate the key here. A prior receive may have committed before a
     // lost response; reopening must retain that key so edited input fails closed.
     if (receivePoIntent.isIntentLocked) {
@@ -823,6 +866,7 @@ export default function InventoryPage() {
         setReceiveQty(String(frozen.quantity));
         setReceivePOItemId(frozen.selectedPO.id);
         setAvailablePOs([frozen.selectedPO]);
+        setReceivePOsFailed(false);
       }
       setReceiveOpen(true);
       return;
@@ -839,13 +883,15 @@ export default function InventoryPage() {
       .select('id, quantity_ordered, quantity_received, unit_size, product_id, purchase_order_id, purchase_orders!inner(po_number, status)')
       .eq('product_id', target.product_id)
       .in('purchase_orders.status', ['submitted', 'partially_received']);
+    if (requestId !== receivePOsRequestId.current) return;
 
     // Cost is admin-only (Mason, 2026-10-15). Receiving never needs it (the picker shows PO number
     // and quantities; receive_po_items takes only line and quantity), so no cost is read here and a
     // cost-read failure can never block receiving (CodeRabbit).
     type ReceivablePoRow = { id: string; quantity_ordered: number; quantity_received: number; unit_size: string | null; product_id: string; purchase_order_id: string; purchase_orders: { po_number: string; status: string } };
     const rows = error ? null : ((data || []) as unknown as ReceivablePoRow[]);
-    const loadError: unknown = error;
+    // No list at all is a failed read, not "no open purchase orders".
+    const loadError: unknown = error ?? (data ? null : new Error('receivable purchase orders read returned no list'));
 
     if (loadError) {
       // Supabase RETURNS this error (doesn't throw) — surface it instead of
@@ -865,8 +911,10 @@ export default function InventoryPage() {
         unit_size: item.unit_size,
       }));
       setAvailablePOs(pos);
+      setReceivePOsFailed(false);
     } else {
       setAvailablePOs([]);
+      setReceivePOsFailed(true);
     }
 
     setReceiveOpen(true);
@@ -1400,13 +1448,13 @@ export default function InventoryPage() {
             content: (
               <>
       <div className="flex justify-end gap-2 flex-wrap">
-        <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} onClick={handleExportCSV}>
+        <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} onClick={handleExportCSV} disabled={inventoryFailed}>
           Export CSV
         </Button>
-        <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={handleExportPDF} loading={exportingPdf}>
+        <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={handleExportPDF} loading={exportingPdf} disabled={inventoryFailed}>
           Download PDF
         </Button>
-        {isAdmin && selectedIds.size > 0 && (
+        {isAdmin && !inventoryFailed && selectedIds.size > 0 && (
           <Button
             variant="secondary"
             icon={<Pencil className="w-4 h-4" />}
@@ -1417,10 +1465,10 @@ export default function InventoryPage() {
         )}
         {isAdmin && (
           <>
-            <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary">
+            <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary" disabled={inventoryFailed}>
               Create Hold
             </Button>
-            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
+            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal} disabled={inventoryFailed}>
               Add Inventory
             </Button>
           </>
@@ -1428,6 +1476,8 @@ export default function InventoryPage() {
       </div>
 
 
+      {/* Hidden after a failed read, where every total would read 0 */}
+      {!inventoryFailed && (
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
         {summaryCards.map((c) => (
           <Card key={c.label}>
@@ -1443,6 +1493,7 @@ export default function InventoryPage() {
           </Card>
         ))}
       </div>
+      )}
 
       {/* Enhanced Reorder Alerts — grouped by vendor */}
       {(() => {
@@ -1563,6 +1614,11 @@ export default function InventoryPage() {
           </div>
         </div>
 
+        {inventoryFailed ? (
+          <div className="md:hidden">
+            <LoadFailedState onRetry={() => { setLoading(true); fetchInventory(); }} />
+          </div>
+        ) : (
         <InventoryPositionMobileCards
           rows={mobileFiltered}
           isAdmin={isAdmin}
@@ -1577,6 +1633,7 @@ export default function InventoryPage() {
           onAdjust={openAdjustModal}
           onDelete={handleDelete}
         />
+        )}
 
         <div className="hidden p-5 md:block">
           <EditableDataTable<InventoryRow>
@@ -1589,6 +1646,8 @@ export default function InventoryPage() {
             emptyTitle="No inventory records"
             emptyDescription="Inventory will appear as products are stocked"
             loading={loading}
+            loadError={inventoryFailed}
+            onRetry={() => { setLoading(true); fetchInventory(); }}
             canEdit={isAdmin}
             onSave={handleBulkSave}
             filters={
@@ -1629,6 +1688,12 @@ export default function InventoryPage() {
           />
         </div>
       </Card>
+
+      {holdsFailed && (
+        <Card>
+          <LoadFailedState title="Active holds could not be loaded" onRetry={fetchHolds} />
+        </Card>
+      )}
 
       {/* Active Holds Panel */}
       {holds.length > 0 && (
@@ -1733,6 +1798,8 @@ export default function InventoryPage() {
                   <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse" />
                 ))}
               </div>
+            ) : forecastFailed ? (
+              <LoadFailedState title="The demand forecast could not be loaded" onRetry={fetchForecast} />
             ) : forecastData.length === 0 ? (
               <p className="text-sm text-secondary py-8 text-center">
                 No planned demand data. Create planned programs (quotes with inventory holds) to see forecasts here.
@@ -2052,7 +2119,14 @@ export default function InventoryPage() {
                 : 'This saved receiving request needs reconciliation before another can be recorded. Retry it unchanged so stock cannot be received twice.'}
             </div>
           )}
-          {receivePoIntent.isForeignIntentLocked ? null : availablePOs.length === 0 ? (
+          {receivePoIntent.isForeignIntentLocked ? null : receivePOsFailed ? (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-2 text-red-700 text-sm bg-red-50 p-3 rounded">
+              <span>Open purchase orders for this product could not be loaded.</span>
+              <button type="button" onClick={() => { void openReceiveModal(selectedId); }} className="font-medium underline hover:no-underline">
+                Try again
+              </button>
+            </div>
+          ) : availablePOs.length === 0 ? (
             <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
               No open purchase orders found for this product. Create a purchase order first.
             </div>

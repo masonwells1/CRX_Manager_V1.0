@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { supabase, sanitizeError, assertRpcResult } from '../../lib/db';
-import { fetchAllRows, fetchAllRowsForIds } from '../../lib/pagedRead';
+import { fetchAllRows, fetchAllRowsForIds, pageWithList } from '../../lib/pagedRead';
 
 interface Transaction {
   id: string;
@@ -136,7 +136,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
     (async () => {
       // Every transaction, page by page: one request stops at the server's row
       // cap, which would cut a busy product's ledger short (Goal 4 M23).
-      const { data, error: err } = await fetchAllRows((from, to) => supabase
+      const { data, error: err } = await fetchAllRows((from, to) => pageWithList(supabase
         .from('inventory_transactions')
         .select(`
           *,
@@ -147,7 +147,7 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         .eq('product_id', productId)
         .order('created_at', { ascending: true })
         .order('id')
-        .range(from, to));
+        .range(from, to)));
       if (seq !== loadSeq.current) return;
       if (err) {
         setError(sanitizeError(err));
@@ -161,7 +161,16 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         setLoading(false);
         return;
       }
-      const positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+      // No position at all is a failed read: say so instead of loading forever.
+      let positionRows: InventoryPositionRow[];
+      try {
+        positionRows = assertRpcResult<InventoryPositionRow[]>(positionData, 'get_inventory_position');
+        if (!Array.isArray(positionRows)) throw new Error('get_inventory_position returned no list');
+      } catch (positionErr) {
+        setError(sanitizeError(positionErr));
+        setLoading(false);
+        return;
+      }
       setPosition(summarizeInventoryPosition(positionRows, productId));
       const performerIds = [...new Set(
         ((data || []) as Array<{ performed_by?: string | null }>)

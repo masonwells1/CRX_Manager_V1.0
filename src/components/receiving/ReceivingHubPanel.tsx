@@ -1,11 +1,11 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageCheck, Search, Truck, ArrowRight, PackagePlus, AlertTriangle } from 'lucide-react';
+import { PackageCheck, Search, Truck, ArrowRight, PackagePlus } from 'lucide-react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import { SkeletonCard } from '../ui/Skeleton';
-import EmptyState from '../ui/EmptyState';
+import EmptyState, { LoadFailedState } from '../ui/EmptyState';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { runCriticalAction } from '../../lib/criticalAction';
 import { Sentry } from '../../lib/sentry';
@@ -121,7 +121,9 @@ export default function ReceivingHubPanel() {
         // A failed PO load must NOT look like "nothing on order" — surface it.
         // (Codex P2: poRes.data || [] below would silently swallow an RLS/drift
         // error and render an empty board.)
+        // No list at all is the same failure, not an empty board.
         if (poRes.error) throw poRes.error;
+        if (!poRes.data) throw new Error('inbound purchase orders read returned no list');
 
         // get_inventory_position is its own `= await supabase.rpc(...)` (not inside a
         // Promise.all) so the assert-rpc-result lint rule tracks the destructured `data`.
@@ -179,7 +181,7 @@ export default function ReceivingHubPanel() {
         if (!cancelled) setGroups(list);
       } catch (err) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', page: 'receiving-hub' } });
-        if (!cancelled) { setLoadError(true); toast('error', 'Failed to load inbound purchase orders.'); }
+        if (!cancelled) { setGroups([]); setLoadError(true); toast('error', 'Failed to load inbound purchase orders.'); }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -319,10 +321,9 @@ export default function ReceivingHubPanel() {
     return (
       <div className="space-y-4">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">Receiving Hub</h2>
-        <EmptyState
-          icon={<AlertTriangle className="w-6 h-6" />}
-          title="Couldn't load inbound purchase orders"
-          description="Something went wrong loading the data — this does NOT mean there are no open POs. Please refresh to try again."
+        <LoadFailedState
+          title="Inbound purchase orders could not be loaded"
+          onRetry={() => setRefreshKey((k) => k + 1)}
         />
       </div>
     );

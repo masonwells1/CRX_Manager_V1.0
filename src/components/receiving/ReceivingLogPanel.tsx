@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PackageCheck,
@@ -29,6 +29,7 @@ import { exportToCSV } from '../../lib/csvExport';
 import { downloadReportPdf } from '../../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../../types';
 import ReceivingLogMobileCards from './ReceivingLogMobileCards';
+import { LoadFailedState } from '../ui/EmptyState';
 
 /* ─── Condition badge helpers ─── */
 const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default' => {
@@ -50,6 +51,10 @@ export default function ReceivingLogPanel() {
   const [records, setRecords] = useState<ReceivingRecord[]>([]);
   const [summary, setSummary] = useState<ReceivingSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  // A failed log read shows "could not be loaded", never "No receiving records" or the last filter's rows.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // A failed totals read says so instead of silently hiding the cards and the damaged-goods alert.
+  const [summaryFailed, setSummaryFailed] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -77,15 +82,23 @@ export default function ReceivingLogPanel() {
     setStaffProfiles((data || []) as Profile[]);
   }, []);
 
+  // Every filter change starts a read; only the newest may set state, so an older,
+  // slower read cannot put the previous filter's rows under the new filters.
+  const fetchSeq = useRef(0);
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     // Fetch summary
     try {
       const { data: sumData, error: sumError } = await supabase.rpc('get_receiving_summary');
-      if (!sumError && sumData) {
-        setSummary(assertRpcResult<ReceivingSummary>(sumData, 'get_receiving_summary'));
-      }
+      if (seq !== fetchSeq.current) return;
+      if (sumError) throw sumError;
+      setSummary(assertRpcResult<ReceivingSummary>(sumData, 'get_receiving_summary'));
+      setSummaryFailed(false);
     } catch (err) {
+      if (seq !== fetchSeq.current) return;
       Sentry.captureException(err);
+      setSummary(null);
+      setSummaryFailed(true);
     }
 
     // Fetch receiving log via RPC
@@ -101,23 +114,24 @@ export default function ReceivingLogPanel() {
       if (dateTo) params.p_date_to = dateTo;
 
       const { data: logData, error: logError } = await supabase.rpc('get_receiving_log', params);
+      if (seq !== fetchSeq.current) return;
 
-      if (logError) {
-        Sentry.captureException(logError);
-        toast('error', 'Failed to load receiving log');
-        setLoading(false);
-        return;
-      }
+      if (logError) throw logError;
 
       const rows = assertRpcResult<ReceivingRecord[]>(logData, 'get_receiving_log');
+      if (!Array.isArray(rows)) throw new Error('get_receiving_log returned no list');
       setRecords(rows);
+      setLoadFailed(false);
 
       // Extract unique vendors for filter dropdown
       const uniqueVendors = [...new Set(rows.map((r) => r.vendor).filter(Boolean))] as string[];
       if (uniqueVendors.length > 0) setVendors(uniqueVendors);
     } catch (err: unknown) {
+      if (seq !== fetchSeq.current) return;
       Sentry.captureException(err);
       toast('error', 'Failed to load receiving log');
+      setRecords([]);
+      setLoadFailed(true);
     }
 
     setLoading(false);
@@ -391,6 +405,15 @@ export default function ReceivingLogPanel() {
         </button>
       </div>
 
+      {summaryFailed && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <span>The receiving totals could not be loaded, including any damaged deliveries this week.</span>
+          <button type="button" onClick={() => { void fetchData(); }} className="font-medium underline hover:no-underline">
+            Try again
+          </button>
+        </div>
+      )}
+
       {/* Summary Cards */}
       {summary && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -512,6 +535,12 @@ export default function ReceivingLogPanel() {
               {allSelected ? 'Deselect All' : 'Select All'}
             </button>
           )}
+          {/* The phone cards have no loading state: show a placeholder rather than "No receiving records". */}
+          {loading ? (
+            <div className="h-20 rounded-lg bg-gray-50 animate-pulse" />
+          ) : loadFailed ? (
+            <LoadFailedState title="The receiving log could not be loaded" onRetry={() => { setLoading(true); fetchData(); }} />
+          ) : (
           <ReceivingLogMobileCards
             records={mobileRecords}
             canSelect={canBulkAction}
@@ -519,6 +548,7 @@ export default function ReceivingLogPanel() {
             onToggleSelect={toggleSelect}
             onOpen={(record) => navigate(`/purchase-orders/${record.purchase_order_id}`)}
           />
+          )}
         </div>
 
         <div className="hidden p-5 md:block" data-testid="receiving-log-desktop-table">
@@ -532,6 +562,8 @@ export default function ReceivingLogPanel() {
             emptyTitle="No receiving records"
             emptyDescription="Items received on purchase orders will appear here"
             loading={loading}
+            loadError={loadFailed}
+            onRetry={() => { setLoading(true); fetchData(); }}
             filters={
               <div className="flex gap-2 items-center flex-wrap">
                 <select

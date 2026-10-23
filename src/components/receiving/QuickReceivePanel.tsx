@@ -38,7 +38,7 @@ import type {
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
 import { PRODUCT_COLUMNS } from '../../lib/costFields';
-import { fetchAllRows } from '../../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../../lib/pagedRead';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -155,13 +155,13 @@ export default function QuickReceivePanel() {
       // Every active product, page by page: the product search filters this list
       // locally and the vendor list is built from it, so a read cut off at the
       // server's 1,000-row cap would hide products and vendors.
-      const { data, error } = await fetchAllRows((from, to) => supabase
+      const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
         .from('products')
         .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
         .eq('is_active', true)
         .order('product_name')
         .order('id')
-        .range(from, to));
+        .range(from, to)));
       if (error) {
         Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quick_receive_products' } });
         toast('error', 'Failed to load Products. Retry before receiving inventory.');

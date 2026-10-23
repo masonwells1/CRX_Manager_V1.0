@@ -24,7 +24,7 @@ import PageHeader from '../components/ui/PageHeader';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { formatUSD as fmt } from '../lib/money';
@@ -66,6 +66,8 @@ export default function PurchaseOrders() {
   const isAdmin = role === 'admin';
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed read shows "could not be loaded", never "No purchase orders" and zero counts.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
   /* Admins: purchase orders with a rep line at an unconfirmed catalog cost (20261021140000) */
   const [costReviewPoIds, setCostReviewPoIds] = useState<Set<string>>(new Set());
@@ -81,6 +83,8 @@ export default function PurchaseOrders() {
   /* ── Outstanding items state ── */
   const [outstandingItems, setOutstandingItems] = useState<OutstandingItem[]>([]);
   const [outstandingLoading, setOutstandingLoading] = useState(false);
+  // A failed read shows "could not be loaded", never "All PO items have been fully received" and $0.
+  const [outstandingFailed, setOutstandingFailed] = useState(false);
   const [vendorFilter, setVendorFilter] = useState('');
 
   const canManagePO = role === 'admin' || role === 'sales_rep';
@@ -92,12 +96,12 @@ export default function PurchaseOrders() {
   const fetchPOs = useCallback(async () => {
     const seq = ++fetchPOsSeq.current;
     // Read every page: a single request is silently cut off at the server's row cap.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('purchase_orders')
       .select(PURCHASE_ORDER_COLUMNS, { count: 'exact' })
       .order('created_at', { ascending: false })
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (seq !== fetchPOsSeq.current) return;
     let rows = (data || []) as unknown as PurchaseOrder[];
     let loadError: unknown = error;
@@ -115,13 +119,13 @@ export default function PurchaseOrders() {
     let reviewIds = new Set<string>();
     let flagsLoaded = true;
     if (!loadError && isAdmin) {
-      const { data: flagged, error: flaggedError } = await fetchAllRows((from, to) => supabase
+      const { data: flagged, error: flaggedError } = await fetchAllRows((from, to) => pageWithList(supabase
         .from('purchase_order_items')
         .select('id, purchase_order_id, purchase_orders!inner(status)', { count: 'exact' })
         .eq('cost_needs_review', true)
         .neq('purchase_orders.status', 'cancelled')
         .order('id')
-        .range(from, to));
+        .range(from, to)));
       if (seq !== fetchPOsSeq.current) return;
       if (flaggedError) {
         Sentry.captureException(flaggedError, { tags: { source: 'fetch', action: 'load_po_cost_review_flags' } });
@@ -134,9 +138,15 @@ export default function PurchaseOrders() {
     if (loadError) {
       Sentry.captureException(loadError, { tags: { source: 'fetch', action: 'load_purchase_orders' } });
       toast('error', 'Failed to load purchase orders. Please try again.');
+      setPos([]);
+      setCostReviewPoIds(new Set());
+      setCostReviewFlagsLoaded(false);
+      setCostReviewOnly(false);
+      setLoadFailed(true);
       setLoading(false);
       return;
     }
+    setLoadFailed(false);
     setPos(rows);
     setCostReviewPoIds(reviewIds);
     setCostReviewFlagsLoaded(flagsLoaded);
@@ -151,7 +161,7 @@ export default function PurchaseOrders() {
     setOutstandingLoading(true);
     // No explicit limit here still meant the server's silent row cap, and these rows
     // feed the outstanding-value totals, so read every page.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('purchase_order_items')
       .select(`
         id,
@@ -166,7 +176,7 @@ export default function PurchaseOrders() {
       `, { count: 'exact' })
       .not('purchase_orders.status', 'in', '("cancelled","fully_received")')
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     if (seq !== fetchOutstandingSeq.current) return;
     let costedRows = (data || []) as unknown as Array<Record<string, unknown> & { id: string }>;
     let loadError: unknown = error;
@@ -181,6 +191,8 @@ export default function PurchaseOrders() {
     if (loadError) {
       Sentry.captureException(loadError, { tags: { source: 'fetch', action: 'load_outstanding_items' } });
       toast('error', 'Failed to load outstanding items.');
+      setOutstandingItems([]);
+      setOutstandingFailed(true);
       setOutstandingLoading(false);
       return;
     }
@@ -214,6 +226,7 @@ export default function PurchaseOrders() {
       .filter((item) => item.quantity_remaining > 0)
       .sort((a, b) => a.vendor.localeCompare(b.vendor) || a.po_number.localeCompare(b.po_number));
     setOutstandingItems(items);
+    setOutstandingFailed(false);
     setOutstandingLoading(false);
   }, [toast, isAdmin]);
 
@@ -627,7 +640,8 @@ export default function PurchaseOrders() {
       {/* ─── All POs Tab ─── */}
       {activeTab === 'all' && (
         <>
-          {/* Summary Cards */}
+          {/* Summary Cards: hidden after a failed read, where every count would read 0 */}
+          {!loadFailed && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <button onClick={() => setStatusFilter(statusFilter === 'draft' ? '' : 'draft')} className="text-left">
               <Card>
@@ -674,6 +688,7 @@ export default function PurchaseOrders() {
               </Card>
             </button>
           </div>
+          )}
 
           {/* Data Table */}
           <Card padding={false}>
@@ -695,6 +710,8 @@ export default function PurchaseOrders() {
                   ) : undefined
                 }
                 loading={loading}
+                loadError={loadFailed}
+                onRetry={() => { setLoading(true); fetchPOs(); }}
                 filters={
                   <div className="flex gap-2 items-center flex-wrap">
                     <select
@@ -750,7 +767,8 @@ export default function PurchaseOrders() {
       {/* ─── Outstanding Items Tab ─── */}
       {activeTab === 'outstanding' && (
         <>
-          {/* Summary Cards */}
+          {/* Summary Cards: hidden after a failed read, where the totals would read 0 and $0 */}
+          {!outstandingFailed && (
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <Card>
               <div className="flex items-center gap-3 mb-2">
@@ -802,6 +820,7 @@ export default function PurchaseOrders() {
               <p className="text-2xl font-semibold font-heading text-red-500">{outstandingStats.overdue}</p>
             </Card>
           </div>
+          )}
 
           {/* Outstanding Items Table */}
           <Card padding={false}>
@@ -816,6 +835,8 @@ export default function PurchaseOrders() {
                 emptyTitle="No outstanding items"
                 emptyDescription="All PO items have been fully received"
                 loading={outstandingLoading}
+                loadError={outstandingFailed}
+                onRetry={fetchOutstandingItems}
                 filters={
                   <div className="flex gap-2 items-center flex-wrap">
                     <select

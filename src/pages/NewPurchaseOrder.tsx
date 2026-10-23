@@ -25,7 +25,7 @@ import { Sentry } from '../lib/sentry';
 import { ProductOptionDetails, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 import { PRODUCT_COLUMNS, withAdminCosts } from '../lib/costFields';
-import { fetchAllRows } from '../lib/pagedRead';
+import { fetchAllRows, pageWithList } from '../lib/pagedRead';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -101,13 +101,13 @@ export default function NewPurchaseOrder() {
   const fetchProducts = useCallback(async () => {
     const seq = ++productLoadSeqRef.current;
     // Goal 4: the catalog is read whole, page by page; one request would stop silently at the row cap.
-    const { data, error } = await fetchAllRows((from, to) => supabase
+    const { data, error } = await fetchAllRows((from, to) => pageWithList(supabase
       .from('products')
       .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`, { count: 'exact' })
       .eq('is_active', true)
       .order('product_name')
       .order('id')
-      .range(from, to));
+      .range(from, to)));
     let prods: PickerProduct[] = [];
     let loadError: unknown = error;
     if (!error) {
@@ -440,7 +440,7 @@ export default function NewPurchaseOrder() {
               Products could not be loaded. This purchase order cannot be saved until they load.
               <button
                 type="button"
-                onClick={() => fetchProducts()}
+                onClick={() => { setProductsLoading(true); fetchProducts(); }}
                 className="ml-2 font-medium text-red-700 underline hover:text-red-800"
               >
                 Retry
