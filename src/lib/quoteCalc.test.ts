@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   getTierPrice,
+  getQuoteTierPrice,
   getConversionFactor,
   recalcItem,
   catalogPricePerAcre,
@@ -126,6 +127,44 @@ describe('getTierPrice', () => {
   it('returns 0 when tier price is null', () => {
     const p = makeProduct({ tier1_price: null });
     expect(getTierPrice(p, 1)).toBe(0);
+  });
+});
+
+describe('getQuoteTierPrice', () => {
+  it('keeps a stated $0 tier-2/3 price instead of falling back to tier 1', () => {
+    const p = makeProduct({ tier1_price: 20, tier2_price: 0, tier3_price: 0 });
+    expect(getQuoteTierPrice(p, 2)).toBe(0);
+    expect(getQuoteTierPrice(p, 3)).toBe(0);
+  });
+
+  it('falls back to tier 1 only when the tier price is missing', () => {
+    const p = makeProduct({ tier1_price: 20, tier2_price: null, tier3_price: null });
+    expect(getQuoteTierPrice(p, 2)).toBe(20);
+    expect(getQuoteTierPrice(p, 3)).toBe(20);
+  });
+
+  it('returns 0 when the product has no price at all', () => {
+    const p = makeProduct({ tier1_price: null, tier2_price: null });
+    expect(getQuoteTierPrice(p, 2)).toBe(0);
+    expect(getQuoteTierPrice(p, 1)).toBe(0);
+  });
+
+  it('reads tier 3 for an unknown tier number, as save_quote does', () => {
+    const p = makeProduct({ tier1_price: 20, tier2_price: 18, tier3_price: 0 });
+    expect(getQuoteTierPrice(p, 99)).toBe(0);
+  });
+
+  it('leaves invoices on getTierPrice, which still treats a $0 tier price as missing', () => {
+    const p = makeProduct({ tier1_price: 20, tier2_price: 0 });
+    expect(getTierPrice(p, 2)).toBe(20);
+    expect(getQuoteTierPrice(p, 2)).toBe(0);
+  });
+
+  it('prices a quote line at $0 for a tier-2 customer on a stated $0 tier-2 price', () => {
+    const p = makeProduct({ tier1_price: 20, tier2_price: 0 });
+    const item = recalcItem(makeItem({ product_id: p.id, acres: 10, actual_rate: 1 }), p, 2, []);
+    expect(item.price_per_unit).toBe(0);
+    expect(item.total_price).toBe(0);
   });
 });
 
@@ -687,6 +726,13 @@ describe('catalogPricePerAcre', () => {
       tier1_price_per_acre: 16373.76, // the kind of garbage the trigger stores
     });
     expect(catalogPricePerAcre(withGarbageColumn, 1, conversions)).toBe(10); // recomputed, not 16373.76
+  });
+
+  it('shows $0/acre for a stated $0 tier-2 price, and tier 1 for a blank one', () => {
+    const zeroTwo = makeProduct({ inventory_unit: 'Gallon', rate_per_acre: 64, rate_unit: 'fl oz', tier1_price: 20, tier2_price: 0 });
+    const blankTwo = makeProduct({ inventory_unit: 'Gallon', rate_per_acre: 64, rate_unit: 'fl oz', tier1_price: 20, tier2_price: null });
+    expect(catalogPricePerAcre(zeroTwo, 2, conversions)).toBe(0);
+    expect(catalogPricePerAcre(blankTwo, 2, conversions)).toBe(10);
   });
 
   it('returns null when the product has no positive rate_per_acre', () => {

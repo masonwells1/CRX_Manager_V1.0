@@ -9,6 +9,8 @@
  * display math. They are NOT imported by QuoteBuilder's save payload, and new
  * code must NOT route persisted values through them — read the server-returned
  * values after save instead. (Foundation audit P2-E, 2026-05-28.)
+ * One exception: QuoteBuilder compares a typed price with getQuoteTierPrice to decide
+ * whether it is a price_override, which save_quote stores.
  */
 import type { Product, UnitConversion } from '../types';
 import { parseDollarsToCents } from './parseCents';
@@ -37,12 +39,20 @@ export interface CalcItem {
 }
 
 /** Get tier price from product — pure function.
- * Falls back to tier1_price when tier2/3 is missing (matches QuoteBuilder behavior). */
+ * Falls back to tier1_price when tier2/3 is missing OR $0. Used by invoices; quotes use
+ * getQuoteTierPrice, which keeps a stated $0. */
 export function getTierPrice(product: Product, tierNum: number): number {
   const t1 = product.tier1_price || 0;
   if (tierNum === 1) return t1;
   if (tierNum === 2) return product.tier2_price || t1;
   return product.tier3_price || t1;
+}
+
+/** The quote price for a tier, keeping a stated $0: only a missing (null) tier-2/3 price falls
+ * back to tier 1, matching save_quote's COALESCE and job pricing (Mason, 2026-10-23). */
+export function getQuoteTierPrice(product: Product, tierNum: number): number {
+  const own = tierNum === 1 ? product.tier1_price : tierNum === 2 ? product.tier2_price : product.tier3_price;
+  return own ?? product.tier1_price ?? 0;
 }
 
 /** The product's price for a tier in integer cents, keeping a stated $0: only a missing (null)
@@ -73,7 +83,7 @@ export function recalcItem(
   tierNum: number,
   conversions: UnitConversion[]
 ): CalcItem {
-  const pricePerUnit = getTierPrice(product, tierNum);
+  const pricePerUnit = getQuoteTierPrice(product, tierNum);
   const mode = item.calc_mode || 'rate_acres';
   // Fall back to unit_size if inventory_unit is not set on the product
   const inventoryUnitFactorOz = getConversionFactor(
@@ -173,7 +183,7 @@ export function catalogPricePerAcre(
   );
   if (!(inventoryUnitFactorOz > 0)) return null;
   const rateInOz = rate * getConversionFactor(product.rate_unit, conversions);
-  const perAcre = getTierPrice(product, tierNum) * (rateInOz / inventoryUnitFactorOz);
+  const perAcre = getQuoteTierPrice(product, tierNum) * (rateInOz / inventoryUnitFactorOz);
   return Math.round(perAcre * 100) / 100;
 }
 

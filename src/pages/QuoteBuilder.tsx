@@ -57,7 +57,7 @@ import { logActivity } from '../lib/activityLogger';
 import { PRODUCT_COLUMNS, QUOTE_COLUMNS, QUOTE_ITEM_COLUMNS, withAdminCost, withAdminCosts, withAdminNestedCosts } from '../lib/costFields';
 import { formatUSD, formatCents } from '../lib/money';
 import { BelowCostApprovalHandledError, isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
-import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
+import { catalogPricePerAcre, getQuoteTierPrice, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -1470,11 +1470,8 @@ export default function QuoteBuilder() {
 
   const getTierPrice = useCallback(
     (product: Product, tierNum: number): number => {
-      // Always fall back to tier1_price (never $0) when a tier price is missing
-      const t1 = product.tier1_price || 0;
-      if (tierNum === 1) return t1;
-      if (tierNum === 2) return product.tier2_price || t1;
-      return product.tier3_price || t1;
+      // A stated $0 tier price stays $0 (as save_quote stores it); only a missing one falls back to tier 1
+      return getQuoteTierPrice(product, tierNum);
     },
     []
   );
@@ -4763,6 +4760,8 @@ export default function QuoteBuilder() {
                                     });
                                   }}
                                   aria-label="Price per unit"
+                                  // A stated $0 tier price shows as 0.00, not as a missing price.
+                                  placeholder={prod ? '0.00' : undefined}
                                   className={`w-20 px-2 py-1 text-sm font-mono border rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green ${
                                     item.price_override != null
                                       ? 'border-amber-400 bg-amber-50'

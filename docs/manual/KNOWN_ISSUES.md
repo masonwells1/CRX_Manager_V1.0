@@ -32,7 +32,7 @@ archive. Do not re-fix something listed here as ACCEPTED without a new decision 
 | Status | Count |
 |---|---|
 | Open or partly open entries (KI-01 to KI-52 and KI-72 to KI-78; several bundle related small items; includes the entries or sub-items marked UNVERIFIED) | 48 |
-| Accepted by Mason (KI-60 to KI-71) | 12 |
+| Accepted by Mason (KI-60 to KI-71, KI-79, KI-80) | 14 |
 | Closed as FIXED during this rewrite, with proof (bottom of file) | 6 |
 
 Highest-priority open items, in order: KI-01 (field data readable by any signed-in user), KI-02 (cost and
@@ -410,6 +410,8 @@ server-side ruleset is the boundary).
 | KI-69 | Return-credit behaviours staff will see (late return credits stay in the current season; a funding invoice can't be deleted until the credit is voided) | Mason policy 2026-08-26 |
 | KI-70 | Proof-file self-attestation; migration-source provenance closes the quiet path only; shell string-reconstruction bypasses; worktree awareness is a session-start snapshot; `npm --prefix/--workspace` escapes the script-body guard; Edge Functions and ~130 legacy reads exempt from check lint rules | Accepted residuals under the "honest mistakes, not malicious agent" model |
 | KI-71 | Renaming/deactivating a profile named in a commission split fails closed; PWA needs two reloads after a deploy; ExcelJS tests slow on a cold cache; JobDetail save test must re-click | Deliberate / expected behaviour |
+| KI-79 | A saved quote line forgets whether its acres were typed or filled in from the section's field (`save_quote` stores the acres, not the source; Quote Builder's `acres_source` lives only in the browser). Totals stay correct. After reopening, switching a section's field leaves those lines' acres as they were and shows "This section's saved lines keep their acres. Check them against the new field." Options weighed 2026-10-23: (1) keep as is, no cost; (2) store a typed/field flag on `quote_items`: a migration plus changes to `save_quote` (a money RPC) and every quote-copy path (duplicate, versions, rollover, template), which fall back to today's warning if they drop it; (3) save each line's field link and have the server recompute acres: a large `save_quote` rewrite, highest risk | Mason chose option 1, keep as is (2026-10-23, #1060 follow-up); revisit if reps report wrong acres after switching fields |
+| KI-80 | A job line priced from a product's tier price is not re-checked when that tier price is later removed or the customer's tier changes; it is re-checked (`job_chemicals_price_required`, #1060) only when the line is next edited | Mason declined the re-check (2026-10-23, #1060 follow-up): rare case |
 
 ---
 
