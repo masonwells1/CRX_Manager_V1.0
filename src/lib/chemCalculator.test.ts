@@ -291,12 +291,40 @@ describe('chemCalculator — autofillPriceText', () => {
     // $0.50/GAL per oz: 50 / 128 rounds to 0.
     const r = reconcileChemAutofillUnits('GAL', 'oz/ac', 0, 50, 'liquid');
     expect(r.pricePerUnitCents).toBe(0);
-    expect(autofillPriceText(50, r.pricePerUnitCents)).toBe('');
+    expect(r.priceIsExact).toBe(false);
+    expect(autofillPriceText(50, r)).toBe('');
   });
-  it('keeps a stated $0 and a converted positive price; blanks no stated price', () => {
-    expect(autofillPriceText(0, 0)).toBe('0');
-    expect(autofillPriceText(2800, 350)).toBe('350');
-    expect(autofillPriceText(null, 0)).toBe('');
+  it('MONEY: blanks a price that loses part of a cent in the reconciled unit (150¢/GAL per oz)', () => {
+    // 150 / 128 = 1.17¢/oz: a rounded 1¢ would bill 128 oz at $1.28 instead of $1.50.
+    const oz = reconcileChemAutofillUnits('GAL', 'oz/ac', 0, 150, 'liquid');
+    expect(oz.unit).toBe('oz');
+    expect(oz.priceIsExact).toBe(false);
+    expect(autofillPriceText(150, oz)).toBe('');
+    // 2850 / 8 = 356.25¢/pt would round to 356¢ (an under-bill): blanked too.
+    const pt = reconcileChemAutofillUnits('GAL', 'pt/ac', 0, 2850, 'liquid');
+    expect(pt.priceIsExact).toBe(false);
+    expect(autofillPriceText(2850, pt)).toBe('');
+    // Dry: 450¢/LB per oz is 28.125¢.
+    expect(autofillPriceText(450, reconcileChemAutofillUnits('LB', 'oz/ac', 0, 450, 'dry'))).toBe('');
+    // The finest step (ton → oz, 1/32000): 1¢/ton is 0.00003¢/oz, never filled as $0.
+    const tonOz = reconcileChemAutofillUnits('ton', 'oz/ac', 0, 1, 'dry');
+    expect(tonOz.priceIsExact).toBe(false);
+    expect(autofillPriceText(1, tonOz)).toBe('');
+    // Past 2^53 the stated cents are already rounded, so no conversion of them counts as exact.
+    expect(reconcileChemAutofillUnits('GAL', 'oz/ac', 0, 2 ** 53 + 128, 'liquid').priceIsExact).toBe(false);
+  });
+  it('keeps a price that converts to whole cents, a stated $0, and an unconverted price', () => {
+    // 1280 / 128 = 10¢/oz exactly; 128 oz bills $12.80 = 1 GAL.
+    expect(autofillPriceText(1280, reconcileChemAutofillUnits('GAL', 'oz/ac', 0, 1280, 'liquid'))).toBe('10');
+    expect(autofillPriceText(2800, reconcileChemAutofillUnits('GAL', 'pt/ac', 0, 2800, 'liquid'))).toBe('350');
+    // Tons: 4000¢/ton per lb is 2¢ (1/2000 is not exact in binary; float noise is not a lost cent).
+    expect(autofillPriceText(4000, reconcileChemAutofillUnits('ton', 'lb/ac', 0, 4000, 'dry'))).toBe('2');
+    expect(autofillPriceText(0, reconcileChemAutofillUnits('GAL', 'oz/ac', 0, 0, 'liquid'))).toBe('0');
+    // Same unit: no conversion, any price kept as stated.
+    expect(autofillPriceText(151, reconcileChemAutofillUnits('GAL', 'gal/ac', 0, 151, 'liquid'))).toBe('151');
+  });
+  it('blanks no stated price', () => {
+    expect(autofillPriceText(null, { pricePerUnitCents: 0, priceIsExact: true })).toBe('');
   });
 });
 
@@ -376,13 +404,13 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
   it('SAFE FALLBACK: unknown / unreconcilable units keep the stock unit + per-stock cost/price', () => {
     // unknown stock unit → can't convert → keep as-is (no worse than before, no guess).
     const r1 = reconcileChemAutofillUnits('widgets', 'pt/ac', 1000, 2000, 'liquid');
-    expect(r1).toEqual({ unit: 'widgets', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+    expect(r1).toEqual({ unit: 'widgets', costPerUnitCents: 1000, pricePerUnitCents: 2000, priceIsExact: true });
     // cross-form (liquid stock, dry-only rate unit) → don't guess, keep stock.
     const r2 = reconcileChemAutofillUnits('GAL', 'lb/ac', 1000, 2000, 'liquid');
-    expect(r2).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+    expect(r2).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000, priceIsExact: true });
     // no rate unit → keep stock.
     const r3 = reconcileChemAutofillUnits('GAL', '', 1000, 2000, 'liquid');
-    expect(r3).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+    expect(r3).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000, priceIsExact: true });
   });
 });
 

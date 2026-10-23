@@ -1659,6 +1659,16 @@ export default function JobDetail() {
         // A customer-supplied line is never billed, so a blank price there (a picked product that
         // states no price) saves as 0 instead of blocking the save.
         if (side === 'price' && raw === '' && (c.customer_supplied ?? false)) return false;
+        // Neither is a quantity-0 line whose product states no price for the tier (the
+        // job_chemicals price trigger skips quantity 0 too). Raising its quantity later is refused
+        // by the no-price check below and by that trigger. A blank left by a price that is not
+        // whole cents in the line's unit still blocks: that product HAS a price, so a saved 0
+        // would pass both checks once the quantity rose and bill nothing.
+        if (side === 'price' && raw === '' && parseFloat(c.quantity) === 0) {
+          const product = allProducts.find((p) => p.id === c.product_id);
+          const tier = customerPricingTier === 2 || customerPricingTier === 3 ? customerPricingTier : 1;
+          if (product && getStatedTierPriceCents(product, tier) == null) return false;
+        }
         return !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0;
       });
       if (badCents) {
@@ -3816,9 +3826,13 @@ export default function JobDetail() {
         );
         updated[i].unit = reconciled.unit;
         updated[i].cost_per_unit_cents = reconciled.costPerUnitCents.toString();
-        // A product that states no price blanks the line's price rather than keeping the
-        // previous product's: chemRowDefects then refuses the save until a price is typed.
-        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled.pricePerUnitCents);
+        // A product that states no price, or one whose price is not whole cents in the line's
+        // unit, blanks the line's price rather than keeping the previous product's (or a rounded
+        // one): chemRowDefects then refuses the save until a price is typed.
+        updated[i].price_per_unit_cents = autofillPriceText(tierPriceCents, reconciled);
+        if (tierPriceCents != null && !reconciled.priceIsExact) {
+          toast('warning', `${p.product_name}: its price per ${p.unit_size} is not a whole number of cents per ${reconciled.unit}, so the price was left blank. Enter the price per ${reconciled.unit} to bill.`);
+        }
         // Re-derive the quantity now that a rate auto-filled.
         updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }

@@ -224,7 +224,8 @@ describe('JobDetail recipe pricing tier', () => {
 
     await pickProduct(/Unpriced Adjuvant/);
     await waitFor(() => expect(priceInput().value).toBe(''));
-    expect(screen.getByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+    fireEvent.change(screen.getByText('Total Applied').nextElementSibling as HTMLInputElement, { target: { value: '5' } });
+    expect(await screen.findByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
 
     // A customer-supplied line is never billed, so its blank price no longer blocks the save.
     fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
@@ -243,7 +244,37 @@ describe('JobDetail recipe pricing tier', () => {
 
     fireEvent.click(document.getElementById('cust-supp-0') as HTMLInputElement);
     await waitFor(() => expect(priceInput().value).toBe(''));
-    expect(screen.getByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+    fireEvent.change(screen.getByText('Total Applied').nextElementSibling as HTMLInputElement, { target: { value: '5' } });
+    expect(await screen.findByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+  });
+
+  it('MONEY: a per-gallon price that is not whole cents per oz is left blank with a warning, not rounded', async () => {
+    // $1.50/gal is 1.17¢/oz: a rounded 1¢ would bill 128 oz at $1.28.
+    const PER_GAL = { ...PRODUCT, id: 'prod-gal', product_name: 'Oz Rate Chem', rate_unit: 'oz/ac', product_form: 'liquid', tier1_price: 1.5, tier2_price: 1.5, tier3_price: 1.5 };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [PER_GAL]);
+    await openChemicalLine();
+    await pickProduct(/Oz Rate Chem/);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('is not a whole number of cents per oz')));
+    expect(priceInput().value).toBe('');
+    // Even at quantity 0 this blank blocks: the product HAS a price, so a saved $0 would pass every
+    // check once the quantity rose and bill nothing.
+    fireEvent.change(screen.getByText('Total Applied').nextElementSibling as HTMLInputElement, { target: { value: '0' } });
+    expect(await screen.findByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+  });
+
+  it('a blank price on a quantity-0 line does not block the save (it bills nothing)', async () => {
+    const UNPRICED = { ...PRODUCT, id: 'prod-unpriced', product_name: 'Unpriced Adjuvant', tier1_price: null, tier2_price: null, tier3_price: null };
+    serveTables({ data: { id: 'cust-inactive', assigned_tier: 3 }, error: null }, PRODUCT, [UNPRICED]);
+    await openChemicalLine();
+    await pickProduct(/Unpriced Adjuvant/);
+    await waitFor(() => expect(priceInput().value).toBe(''));
+    const quantityInput = screen.getByText('Total Applied').nextElementSibling as HTMLInputElement;
+    fireEvent.change(quantityInput, { target: { value: '5' } });
+    expect(await screen.findByText(/its price is blank, negative, or not a whole number of cents/)).toBeInTheDocument();
+
+    fireEvent.change(quantityInput, { target: { value: '0' } });
+    await waitFor(() => expect(screen.queryByText(/its price is blank, negative, or not a whole number of cents/)).not.toBeInTheDocument());
+    expect(priceInput().value).toBe('');
   });
 
   it('MONEY: un-ticking customer supplied on a $0 line re-prices it from the catalog at the customer tier', async () => {

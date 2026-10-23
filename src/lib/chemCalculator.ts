@@ -579,6 +579,11 @@ export interface ChemAutofillUnits {
   costPerUnitCents: number;
   /** Per-`unit` price in cents (converted from the per-stock-unit price when units differ). */
   pricePerUnitCents: number;
+  /**
+   * False when converting the price lost part of a cent (150¢/GAL is 1.17¢/oz, kept as 1¢).
+   * Such a price would bill the line wrongly, so autofillPriceText leaves it blank.
+   */
+  priceIsExact: boolean;
 }
 
 /**
@@ -605,12 +610,16 @@ export interface ChemAutofillUnits {
  */
 /**
  * The price text an autofilled chemical line gets: blank when the product states no price, or
- * when a positive stated price rounds to 0 cents in the reconciled unit (e.g. $0.50/GAL per oz).
- * A blank price makes the job's save check ask for one instead of billing the line at $0.
+ * when the stated price does not convert to whole cents in the reconciled unit (150¢/GAL per oz
+ * is 1.17¢, which would bill 128 oz at $1.28 instead of $1.50; 50¢/GAL per oz rounds to $0).
+ * A blank price makes the job's save check ask for one instead of billing a rounded price.
  */
-export function autofillPriceText(statedPriceCents: number | null, reconciledPriceCents: number): string {
-  if (statedPriceCents == null || (statedPriceCents > 0 && reconciledPriceCents === 0)) return '';
-  return reconciledPriceCents.toString();
+export function autofillPriceText(
+  statedPriceCents: number | null,
+  reconciled: Pick<ChemAutofillUnits, 'pricePerUnitCents' | 'priceIsExact'>,
+): string {
+  if (statedPriceCents == null || !reconciled.priceIsExact) return '';
+  return reconciled.pricePerUnitCents.toString();
 }
 
 /**
@@ -649,6 +658,7 @@ export function reconcileChemAutofillUnits(
     unit: stock,
     costPerUnitCents: costPerStockCents,
     pricePerUnitCents: pricePerStockCents,
+    priceIsExact: true,
   };
 
   // No rate unit, or identical units → nothing to reconcile (common case).
@@ -670,10 +680,19 @@ export function reconcileChemAutofillUnits(
   // base-units per stock-unit = stockSize / baseSize (e.g. GAL/pt = 1 / (1/8) = 8).
   // per-base cost = per-stock cost / (base-units per stock-unit) = perStock × baseSize / stockSize.
   const perBaseFactor = baseSize / stockSize;
+  const pricePerBase = pricePerStockCents * perBaseFactor;
+  const pricePerUnitCents = Math.round(pricePerBase);
   return {
     unit: baseKey,
     costPerUnitCents: Math.round(costPerStockCents * perBaseFactor),
-    pricePerUnitCents: Math.round(pricePerStockCents * perBaseFactor),
+    pricePerUnitCents,
+    // The tolerance absorbs float noise only (1/2000 for tons is not exact in binary): the finest
+    // step in the unit tables is 1/32000 (ton → oz), so a lost fraction is never under 3e-5 cents.
+    // A positive price that comes out at 0 is never exact, whatever the factor; nor is one past
+    // 2^53, where the stated cents were already rounded before this ran.
+    priceIsExact: Number.isSafeInteger(pricePerStockCents)
+      && Math.abs(pricePerBase - pricePerUnitCents) < 1e-6
+      && (pricePerStockCents === 0 || pricePerUnitCents !== 0),
   };
 }
 

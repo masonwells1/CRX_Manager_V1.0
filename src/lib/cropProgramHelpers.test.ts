@@ -68,12 +68,18 @@ describe('programItemToChemRowSeed', () => {
   });
 
   it('MONEY: reconciles per-unit cost/price when the rate unit differs from the stock unit', () => {
-    // $10/gal ÷ 128 oz/gal = 7.8125¢/oz → 8; $5/gal cost → 3.9¢ → 4. So 100ac × 4oz = 400 oz
-    // × 8¢ = $32 (correct), NOT 400 "gal" × $10 = $4000 (the 128× over-bill Codex flagged).
-    expect(programItemToChemRowSeed(item, galProduct, 1).price_per_unit_cents).toBe('8');
-    expect(programItemToChemRowSeed(item, galProduct, 3).price_per_unit_cents).toBe('6'); // 800/128→6
+    // $12.80/gal ÷ 128 oz/gal = 10¢/oz exactly. So 100ac × 4oz = 400 oz × 10¢ = $40 (correct),
+    // NOT 400 "gal" × $12.80 = $5,120 (the 128× over-bill Codex flagged). $5/gal cost → 3.9¢ → 4.
+    const exactProduct = { ...galProduct, tier1_price: 12.8 } as Product;
+    expect(programItemToChemRowSeed(item, exactProduct, 1).price_per_unit_cents).toBe('10');
     expect(programItemToChemRowSeed(item, galProduct, 1).cost_per_unit_cents).toBe('4');
     expect(programItemToChemRowSeed(item, galProduct, 1).unit).toBe('oz');
+  });
+
+  it('MONEY: leaves the price blank when the per-oz price is not whole cents', () => {
+    // $10/gal is 7.8125¢/oz and $8/gal is 6.25¢/oz: a rounded 8¢ or 6¢ would bill the line wrongly.
+    expect(programItemToChemRowSeed(item, galProduct, 1).price_per_unit_cents).toBe('');
+    expect(programItemToChemRowSeed(item, galProduct, 3).price_per_unit_cents).toBe('');
   });
 
   it('MONEY: normalizes "Dry oz" so a dry per-lb product reconciles (not 16× over-billed)', () => {
