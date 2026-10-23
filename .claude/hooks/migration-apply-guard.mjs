@@ -15,8 +15,10 @@
 // hook blocks the apply_migration call with explicit instructions.
 //
 // Setup matcher: in .claude/settings.json this hook is registered against matcher
-// "mcp__.*" (narrowed 2026-08-18); .codex/hooks.json still registers it under "*".
-// Either way it filters in-script for tool names containing "apply_migration".
+// "mcp__.*apply_migration" with onFailure "block" (2026-10-23: loading the rule
+// book cost ~250 ms on every MCP call, and a crashed or timed-out run allowed the
+// apply); .codex/hooks.json registers it under "mcp__.*". Either way it filters
+// in-script for tool names containing "apply_migration".
 //
 // THE RULES THEMSELVES LIVE IN ./migration-apply-lib.mjs (2026-08-24). This file
 // is now only the transport: read the PreToolUse payload, ask the shared rule
@@ -51,7 +53,8 @@ let payload;
 try {
   payload = JSON.parse(readFileSync(0, "utf8"));
 } catch {
-  out("allow");
+  // An unreadable call cannot be shown to be something other than a live apply.
+  out("block", "MIGRATION APPLY GUARD: the tool call could not be read, so it is refused rather than assumed harmless.");
 }
 
 const toolName = (payload?.tool_name || "").toLowerCase();

@@ -391,6 +391,77 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real insert");
 // live-testdata-guard: a REAL update on a business table (no [E2E]) → deny (FIX 5)
 r = runHook("live-testdata-guard.mjs", { tool_name: "mcp__supabase__execute_sql", tool_input: { query: "UPDATE customers SET phone = '555-0100' WHERE id = 1" } });
 ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table update (FIX 5)");
+// REAL-DATA-OK (2026-10-23): a fresh marker relaxes ordinary writes only; a stale
+// one is ignored; destructive rules never relax, even later in the same batch.
+{
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), "crx-realdata-"));
+  const stateDir = path.join(proj, ".claude", "session-state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const marker = path.join(stateDir, "REAL-DATA-OK");
+  // Every run must exit 0: an empty stdout from a crash must not pass as "allowed".
+  const sql = (query) => {
+    const res = spawnSync(process.execPath, [path.join(__dirname, "live-testdata-guard.mjs")], {
+      input: JSON.stringify({ tool_name: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql", tool_input: { query } }),
+      encoding: "utf8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    eq(res.status, 0, `live-testdata-guard exits 0 (${query.slice(0, 40)})`);
+    return res.stdout;
+  };
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "no marker: real insert denied (connector-prefixed tool name)");
+  // The real leftover marker: no leading timestamp, freshly copied (new mtime) into a worktree.
+  fs.writeFileSync(marker, "Mason OK 2026-10-19: read-only cost/margin role check\r\n");
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "legacy marker with a fresh mtime but no leading UTC time is ignored");
+  ok(sql("TRUNCATE customers").includes("deny"), "legacy marker: TRUNCATE denied");
+  const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(marker, `${hoursAgo(3)} Mason OK: smoke run\n`);
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "marker written 3 h ago is ignored even with a fresh mtime");
+  fs.writeFileSync(marker, `${new Date(Date.now() + 60 * 60 * 1000).toISOString()} Mason OK\n`);
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "marker dated an hour in the future is ignored");
+  fs.writeFileSync(marker, `\n${hoursAgo(0.1)} Mason OK\n`);
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm')").includes("deny"), "marker whose first line is blank is ignored");
+  fs.writeFileSync(marker, `${hoursAgo(0.1)} Mason OK: real customer fix\n`);
+  eq(sql("INSERT INTO customers (name) VALUES ('Real Farm')").trim(), "", "fresh marker: real insert allowed");
+  eq(sql("UPDATE customers SET phone = '555-0100' WHERE id = 1").trim(), "", "fresh marker: real update allowed");
+  ok(sql("SELECT save_customer('{}'::jsonb)").includes("deny"), "fresh marker: RPC call still denied");
+  ok(sql("TRUNCATE customers").includes("deny"), "fresh marker: TRUNCATE still denied");
+  ok(sql("DROP TABLE customers").includes("deny"), "fresh marker: DDL still denied");
+  ok(sql("GRANT ALL ON customers TO anon").includes("deny"), "fresh marker: GRANT still denied");
+  ok(sql("DELETE FROM customers WHERE id = 1").includes("deny"), "fresh marker: real delete still denied");
+  ok(sql("DELETE FROM invoices WHERE id = 1").includes("deny"), "fresh marker: financial delete still denied");
+  ok(sql("UPDATE invoices SET status = 'voided' WHERE id = 1").includes("deny"), "fresh marker: void still denied");
+  ok(sql("UPDATE orders SET status = 'cancelled' WHERE id = 1").includes("deny"), "fresh marker: cancel still denied");
+  ok(sql("SELECT setval('invoice_number_seq', 1)").includes("deny"), "fresh marker: sequence change still denied");
+  ok(sql("INSERT INTO financial_audit_log (note) VALUES ('x')").includes("deny"), "fresh marker: audit-log write still denied");
+  ok(sql("INSERT INTO customers (name) VALUES ('Real Farm'); DELETE FROM customers WHERE id = 2").includes("deny"),
+    "fresh marker: a DELETE after an allowed insert in the same batch is still denied");
+  {
+    const res = spawnSync(process.execPath, [path.join(__dirname, "live-testdata-guard.mjs")], {
+      input: "{not json", encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    eq(res.status, 0, "unreadable event: guard exits 0");
+    ok(res.stdout.includes("deny"), "unreadable execute_sql event is denied");
+  }
+  for (const call of ["SELECT cancel_order(123)", "SELECT void_invoice(1)", "SELECT delete_invoices(ARRAY[1])",
+    "SELECT public.batch_void('{}')", "SELECT reverse_write_off(5)", 'SELECT public."void_invoice"(1)',
+    "SELECT public.destroy_customer(1)"]) {
+    ok(sql(call).includes("deny"), `fresh marker: destructive RPC still denied (${call})`);
+  }
+  // [E2E] is judged per statement, and a comment never carries it (Luna round 2).
+  fs.rmSync(marker);
+  for (const query of [
+    "DELETE FROM invoices WHERE id = 7; -- [E2E]",
+    "DELETE FROM invoices WHERE id = 1 /* [E2E] */",
+    "DELETE FROM customers WHERE name = '[E2E] X'; DELETE FROM customers WHERE id = 2",
+    "UPDATE customers SET name = '[E2E] Y' WHERE id = 1; UPDATE orders SET status = 'cancelled' WHERE id = 3",
+  ]) {
+    ok(sql(query).includes("deny"), `no marker: [E2E] in a comment or another statement does not exempt a delete/cancel (${query.slice(0, 50)})`);
+  }
+  eq(sql("DELETE FROM customers WHERE name LIKE '[E2E]%'").trim(), "", "no marker: [E2E] cleanup delete still allowed");
+  eq(sql("INSERT INTO customers (name) VALUES ('[E2E] Z'); DELETE FROM customers WHERE name = '[E2E] Z'").trim(), "",
+    "no marker: [E2E] insert then [E2E] delete allowed");
+  fs.rmSync(proj, { recursive: true, force: true });
+}
 // codex-push-guard: a non-push command → silent passthrough (plain git push of a
 // non-risky file needs no proof either — covered at the riskyFiles level above;
 // this proves the hook doesn't even fire outside a push).

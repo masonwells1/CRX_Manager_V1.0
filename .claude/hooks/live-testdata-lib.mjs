@@ -643,7 +643,16 @@ export function isKnownSweepQuery(query) {
   return renderSweepQuery(name, sql, keys) === text;
 }
 
-export function classifySql(query) {
+// realDataOk: Mason authorized a real write (a fresh REAL-DATA-OK marker,
+// checked by the guard). It relaxes ONLY ordinary writes — real inserts and
+// updates and money-column updates — and classification keeps going, so a
+// later DELETE or TRUNCATE in the same batch is still caught. Audit-log writes,
+// TRUNCATE, DDL/GRANT, sequence changes, RPC calls, deletes and cancels/voids
+// stay blocked regardless (2026-10-23: a stale marker left from a smoke run had
+// switched every rule off in 15 checkouts).
+const REAL_WRITE_OVERRIDE_HINT = "If Mason explicitly asked for a REAL write in this conversation, record it in .claude/session-state/REAL-DATA-OK with the current UTC time as the first line (e.g. `2026-10-23T21:00:00Z Mason OK: <what he approved>`); it lapses after 2 hours. Delete it when done.";
+
+export function classifySql(query, { realDataOk = false } = {}) {
   // Convert ONCE and judge that one string. Converting separately for the
   // recognition check and the classifier let a value whose toString changes
   // between calls read differently to each, where base converted once (Codex,
@@ -652,10 +661,10 @@ export function classifySql(query) {
   const q = String(query || "");
   if (isKnownSweepPredicate(q)) return { block: false, kind: "known-sweep-predicate" };
   if (isKnownSweepQuery(q)) return { block: false, kind: "known-sweep-query" };
-  return classifySqlInner(q);
+  return classifySqlInner(q, realDataOk);
 }
 
-function classifySqlInner(query) {
+function classifySqlInner(query, realDataOk) {
   const q = String(query || "");
   if (!q) return { block: false };
 
@@ -666,7 +675,7 @@ function classifySqlInner(query) {
   const t = stripDollarQuoted(q);
 
   // 1. financial_audit_log is append-only, written only by triggers/RPCs — a Hard
-  //    Red Line. No [E2E] exemption; only REAL-DATA-OK (checked by the guard) overrides.
+  //    Red Line. No [E2E] exemption and no REAL-DATA-OK override.
   if (AUDIT_LOG_WRITE_RE.test(t)) {
     return {
       block: true,
@@ -707,54 +716,77 @@ function classifySqlInner(query) {
   //     PR #352): setval/nextval mutate live sequence state (e.g. invoice
   //     numbering), and the app's mutating RPCs can be invoked via a plain
   //     SELECT fn(...). Neither is a read. No [E2E] exemption — these change
-  //     shared state regardless of marker; REAL-DATA-OK (checked by the guard)
-  //     is the override. currval/lastval remain allowed (true reads).
+  //     shared state regardless of marker, and REAL-DATA-OK does not relax them:
+  //     the delete/cancel rules cannot see inside a function body, and a list
+  //     of "destructive" names never converges (Luna 2026-10-23: a quoted
+  //     "void_invoice" and destroy_customer slipped one). A real RPC call goes
+  //     through the app. A sequence change is never undone by a ROLLBACK.
+  //     currval/lastval remain allowed (true reads).
   if (/\b(?:setval|nextval)\s*\(/i.test(t)) {
     return {
       block: true,
       kind: "sequence-mutation",
-      reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead, or get Mason's explicit REAL-DATA-OK for a real sequence change.",
+      reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead; a real sequence change belongs in a reviewed migration.",
     };
   }
-  {
-    const rpc = findNonReadFunctionCall(t);
-    if (rpc) {
+  const rpc = findNonReadFunctionCall(t);
+  if (rpc) {
+    return {
+      block: true,
+      kind: "rpc-via-select",
+      reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when the statement starts with SELECT. Use the app; REAL-DATA-OK does not cover RPC calls. (Read-prefixed functions like get_/check_/list_ and SQL builtins stay allowed.)`,
+    };
+  }
+
+  // Comments removed, so `-- [E2E]` or `/* [E2E] */` cannot exempt anything below.
+  const code = stripCommentsQuoteAware(t);
+
+  let m;
+
+  // 4. Deletes and cancels/voids. The [E2E] exemption is judged PER STATEMENT:
+  //    a statement is exempt only when its own code (not a comment) carries the
+  //    marker. Before 2026-10-23 one [E2E] anywhere in the batch exempted every
+  //    statement, so `DELETE FROM invoices WHERE id = 7; -- [E2E]` was allowed
+  //    (Luna). Splitting on every `;` can cut a string literal; the piece then
+  //    lacks the marker and is refused, which is the safe direction.
+  for (const stmt of code.split(";")) {
+    if (stmt.includes("[E2E]")) continue;
+    if ((m = DELETE_RE.exec(stmt))) {
       return {
         block: true,
-        kind: "rpc-via-select",
-        reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when the statement starts with SELECT. Use the app, or get Mason's explicit REAL-DATA-OK. (Read-prefixed functions like get_/check_/list_ and SQL builtins stay allowed.)`,
+        kind: "financial-delete",
+        reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
+      };
+    }
+    if ((m = CANCEL_VOID_RE.exec(stmt))) {
+      return {
+        block: true,
+        kind: "financial-cancel",
+        reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. REAL-DATA-OK does not cover cancels or voids.`,
+      };
+    }
+    if ((m = DELETE_ANY_RE.exec(stmt))) {
+      return {
+        block: true,
+        kind: "real-delete",
+        reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. REAL-DATA-OK does not cover deletes; a real deletion goes through a reviewed migration.`,
       };
     }
   }
 
-  // 4. Clearly-fake test data is fine for ordinary data writes.
+  // 4b. Clearly-fake test data is fine for ordinary data writes. (Unchanged: a
+  //     batch-wide marker, a comment included, still exempts inserts/updates.)
   if (t.includes("[E2E]")) return { block: false };
 
-  let m;
-  if ((m = INSERT_RE.exec(t))) {
+  if (!realDataOk && (m = INSERT_RE.exec(t))) {
     return {
       block: true,
       kind: "real-insert",
-      reason: `This INSERTs into the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). If Mason explicitly asked for a REAL write, first create .claude/session-state/REAL-DATA-OK to record his authorization, then retry.`,
+      reason: `This INSERTs into the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${REAL_WRITE_OVERRIDE_HINT}`,
     };
   }
-  if ((m = DELETE_RE.exec(t))) {
-    return {
-      block: true,
-      kind: "financial-delete",
-      reason: `This DELETEs from the live financial table "${m[1]}". Deleting real financial records is Mason's call — surface the record IDs in your findings instead of acting. (Override: he authorizes via .claude/session-state/REAL-DATA-OK.)`,
-    };
-  }
-  if ((m = CANCEL_VOID_RE.exec(t))) {
-    return {
-      block: true,
-      kind: "financial-cancel",
-      reason: `This cancels/voids a real record in "${m[1]}". Cancelling/voiding live invoices/orders/payments is Mason's job — surface the IDs, don't act. (Override: .claude/session-state/REAL-DATA-OK.)`,
-    };
-  }
-
   // 5. Money-amount edits on financial tables (SET clause only, not the WHERE part).
-  if ((m = FIN_UPDATE_RE.exec(t))) {
+  if (!realDataOk && (m = FIN_UPDATE_RE.exec(t))) {
     const afterSet = t.slice(m.index).match(/\bset\b([\s\S]*)/i);
     const setClause = afterSet ? afterSet[1].split(/\bwhere\b/i)[0] : "";
     if (MONEY_COL_RE.test(setClause)) {
@@ -766,23 +798,13 @@ function classifySqlInner(query) {
     }
   }
 
-  // 5b. DELETE catch-all: any DELETE against a real (non-[E2E]) business table,
-  //     not just the financial subset (rule 4 above already handled those).
-  if ((m = DELETE_ANY_RE.exec(t))) {
-    return {
-      block: true,
-      kind: "real-delete",
-      reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. (Override: he authorizes via .claude/session-state/REAL-DATA-OK.)`,
-    };
-  }
-
   // 6. FIX 5 catch-all: any OTHER UPDATE against a real (non-[E2E]) business
   //    table — same standard already applied to INSERT above.
-  if ((m = UPDATE_ANY_RE.exec(t))) {
+  if (!realDataOk && (m = UPDATE_ANY_RE.exec(t))) {
     return {
       block: true,
       kind: "real-update",
-      reason: `This UPDATEs the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). If Mason explicitly asked for a REAL write, first create .claude/session-state/REAL-DATA-OK to record his authorization, then retry.`,
+      reason: `This UPDATEs the live business table "${m[1]}" without the [E2E] fake-data marker. On the LIVE app, use only clearly-fake [E2E]-prefixed entities for analysis (and delete them when done). ${REAL_WRITE_OVERRIDE_HINT}`,
     };
   }
 

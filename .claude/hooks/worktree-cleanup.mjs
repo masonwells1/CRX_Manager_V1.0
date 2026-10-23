@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // SessionStart hook: auto-remove FINISHED worktrees/branches (Mason, 2026-07-13:
 // "make sessions clean up their own worktree when done so we stop doing this by hand").
+// Registered with "async": true (2026-10-23): over ~200 branches the `git cherry`
+// pass took 30-35 s against its 30 s timeout, so it held up every session start
+// and was killed before finishing. In the background no timeout applies and its
+// report arrives on the next turn.
 //
 // A session can't delete its OWN active worktree (it's standing in it), so the
 // contract is: each new session sweeps away the PREVIOUS finished ones. Net
@@ -270,7 +274,13 @@ try {
     `🧹 AUTO-CLEANED ${removed.length} finished item(s) (fully merged into origin/main, clean, recoverable):\n` +
     rLines.join("\n") +
     (fLines.length ? `\n${fLines.join("\n")}` : "") +
-    (keptUnmerged.length ? `\n\nKept — real unmerged work (untouched): ${keptUnmerged.join(", ")}` : "") +
+    // In a session the kept list is a count: every branch name (179 on
+    // 2026-10-23, ~7K characters) was pasted into the session for nothing.
+    (keptUnmerged.length
+      ? (HOOK_MODE
+        ? `\n\nKept ${keptUnmerged.length} branch(es) with real unmerged work (untouched; names: --report).`
+        : `\n\nKept — real unmerged work (untouched): ${keptUnmerged.join(", ")}`)
+      : "") +
     `\n(From .claude/hooks/worktree-cleanup.mjs. Only provably-finished worktrees are removed; a session never removes its own. Dry-run: \`node .claude/hooks/worktree-cleanup.mjs --report\`.)`;
 
   done(report);

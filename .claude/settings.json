@@ -264,7 +264,71 @@
       "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__upload_file",
       "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_storage_stores_blob",
       "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__update_session_network_policy",
-      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__retry_vercel_ci_invocation"
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__retry_vercel_ci_invocation",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__replace_domain_dns_records",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_record",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__verify_project_domain",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__restore_redirects",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__update_bulk_redirect_version",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_edge_config",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_kms_issuer",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__authorize_team_access",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__authorize_team_sso",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__get_project_deletion_link",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_sandboxes_v2",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_sandboxes_v3",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_sandboxes_v4",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_sandboxes_sessions_by_session_id_snapshot_v2",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_sandboxes_sessions_by_session_id_snapshot_v3",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__update_sandbox",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_session_directory",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__run_session_command",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__kill_session_command",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__write_session_files",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__extend_session_timeout",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__stop_session",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__upload_artifact",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__record_events",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__test_drain",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_observability_query",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__create_trace_session",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__add_toolbar_reaction",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__change_toolbar_thread_resolve_status",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__edit_toolbar_message",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__reply_to_toolbar_thread",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__submit_feedback",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__import-claude-dashboard-from-url",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__import-claude-design-from-url",
+      "mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__import-claude-motion-from-url",
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.production)",
+      "Read(**/.env.development)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Bash(cat .env)",
+      "Bash(cat .env.local)",
+      "Bash(cat .env.production)",
+      "Bash(type .env)",
+      "Bash(Get-Content .env)",
+      "Bash(Get-Content .env.local)",
+      "Bash(Get-Content .env.production)",
+      "Bash(Get-Content ./.env)",
+      "Bash(type .env.local)",
+      "Bash(type .env.production)",
+      "Bash(cat ./.env)",
+      "Bash(cat ./.env.local)",
+      "Bash(cat ./.env.production)",
+      "Bash(cat .env.development)",
+      "Bash(cat .env.staging)",
+      "Bash(cat .env.test)",
+      "Bash(type .env.development)",
+      "Bash(type .env.staging)",
+      "Bash(type .env.test)",
+      "Bash(Get-Content .env.development)",
+      "Bash(Get-Content .env.staging)",
+      "Bash(Get-Content .env.test)"
     ]
   },
   "hooks": {
@@ -340,22 +404,34 @@
         ]
       },
       {
-        "matcher": "mcp__.*",
+        "matcher": "mcp__.*apply_migration",
         "hooks": [
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration-apply-guard.mjs\"",
-            "timeout": 15
-          },
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__(start_process|interact_with_process|write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file|kill_process|set_config_value)$",
+        "hooks": [
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/mcp-tool-guard.mjs\"",
             "timeout": 15
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*execute_sql",
+        "hooks": [
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/live-testdata-guard.mjs\"",
-            "timeout": 15
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       },
@@ -370,7 +446,7 @@
         ]
       },
       {
-        "matcher": "*",
+        "matcher": "^(?!(?:Read|Grep|Glob)$).*",
         "hooks": [
           {
             "type": "command",
@@ -381,7 +457,12 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-guard.mjs\"",
             "timeout": 15
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/unattended-autopilot.mjs\"",
@@ -471,7 +552,8 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-cleanup.mjs\"",
-            "timeout": 30
+            "timeout": 120,
+            "async": true
           }
         ]
       }

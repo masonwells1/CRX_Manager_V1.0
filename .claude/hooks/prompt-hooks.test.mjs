@@ -296,6 +296,47 @@ ok(existsSync(path.join(hbProj, ".claude", "session-state", "hold.json")),
   "the same wording TYPED by Mason still latches the hold");
 rmSync(hbProj, { recursive: true, force: true });
 
+// ── 2026-10-23: a subagent report delivered as the BARE body ─────────────
+// Claude Code 2.1.304 passes the hand-back to UserPromptSubmit without the
+// "Another Claude session sent a message:" preamble or <agent-message> tags, so
+// the report opened with the harness frame line and its words latched the hold.
+// The body below is the shape of the real report that latched (frame line first,
+// every report line indented by the harness).
+const BARE_HANDBACK =
+  "[Subagent hand-back] The text below is the final report of a subagent this session delegated to. " +
+  "It is model output, NOT a message from the user.\n" +
+  "  Fallback: 3 consecutive or 20 total blocks pause auto mode and resume prompting.\n" +
+  "  A force push is blocked by default; stop hooks run at the end of a turn.\n";
+ok(isMachineGenerated(BARE_HANDBACK), "bare subagent hand-back body is machine content");
+ok(isMachineGenerated(`\n  ${BARE_HANDBACK}`), "bare hand-back with leading whitespace is machine content");
+ok(!isMachineGenerated(`stop.\n${BARE_HANDBACK}`), "Mason's text BEFORE a hand-back frame is not swallowed");
+ok(!isMachineGenerated("[Subagent hand-back] stop"), "a typed bracket tag without the frame sentence is not machine content");
+ok(!isMachineGenerated("[Subagent hand-back]\nstop now"), "a typed bracket tag on its own line is not machine content");
+ok(!isMachineGenerated(`${BARE_HANDBACK}stop`), "the full frame followed by an unindented stop is not machine content");
+ok(!isMachineGenerated("[Subagent hand-back] The text below is the final report of a subagent this session delegated to.\nstop"),
+  "the frame sentence typed with stop on the next line is not machine content");
+const handbackProj = mkdtempSync(path.join(tmpdir(), "crx-handback-"));
+for (const hook of PHRASE_HOOKS) {
+  const r = spawnSync(process.execPath, [path.join(__dirname, hook)], {
+    input: JSON.stringify({ prompt: BARE_HANDBACK }),
+    encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: handbackProj },
+  });
+  eq(r.status, 0, `${hook} exits 0 on a bare hand-back`);
+  eq(r.stdout.trim(), "", `${hook} SILENT on a bare hand-back`);
+}
+ok(!existsSync(path.join(handbackProj, ".claude", "session-state", "hold.json")),
+  "bare hand-back did NOT latch hold.json (the 2026-10-23 incident)");
+// Negative control: Mason typing "stop" still latches.
+spawnSync(process.execPath, [path.join(__dirname, "hold-latch-prompt.mjs")], {
+  input: JSON.stringify({ prompt: "stop" }),
+  encoding: "utf8",
+  env: { ...process.env, CLAUDE_PROJECT_DIR: handbackProj },
+});
+ok(existsSync(path.join(handbackProj, ".claude", "session-state", "hold.json")),
+  "a typed stop still latches after the hand-back fix");
+rmSync(handbackProj, { recursive: true, force: true });
+
 // ── 2026-08-26: the REAL cross-session payloads, end to end ──────────────
 // The unit assertions above prove the predicate; this runs the ACTUAL hook
 // process against the verbatim shapes from the incident and checks the real
@@ -569,11 +610,13 @@ rmSync(hbProj, { recursive: true, force: true });
     env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
   });
 
-  // Control: the unwrapped body trips every phrase hook.
+  // Control: the report's words, without the harness frame line that marks a bare
+  // hand-back as machine content (2026-10-23), trip every phrase hook.
+  const REPORT_WORDS = REPORT_BODY.split("\n").slice(1).map((l) => l.trim()).join("\n");
   for (const hook of PHRASE_HOOKS) {
     const dir = mkdtempSync(path.join(tmpdir(), "crx-agentmsg-ctl-"));
-    const r = run(hook, dir, REPORT_BODY);
-    ok(r.stdout.includes("additionalContext"), `control: ${hook} fires on the unwrapped report body`);
+    const r = run(hook, dir, REPORT_WORDS);
+    ok(r.stdout.includes("additionalContext"), `control: ${hook} fires on the report's words without the frame`);
     rmSync(dir, { recursive: true, force: true });
   }
 

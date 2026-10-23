@@ -834,10 +834,22 @@ for (const payload of [
   { tool_name: "Grep", tool_input: { path: ".claude/hooks" } },
   { tool_name: "Glob", tool_input: { path: ".github/workflows" } },
   { tool_name: "NotebookRead", tool_input: { notebook_path: ".claude/hooks/x.ipynb" } },
+  // The review state directory too (2026-10-23): reading a marker or proof cannot forge one.
+  { tool_name: "Read", tool_input: { file_path: ".claude/session-state/REAL-DATA-OK" } },
+  { tool_name: "Grep", tool_input: { path: ".claude/session-state", pattern: "x" } },
+  { tool_name: "Glob", tool_input: { path: ".claude/session-state", pattern: "REAL-DATA-OK" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0, `hook should exit 0: ${payload.tool_name}`);
   assert.equal(result.stdout, "", `read-only tool must be allowed: ${payload.tool_name}`);
+}
+// ...while a file tool that WRITES into the state directory is still denied.
+for (const payload of [
+  { tool_name: "Write", tool_input: { file_path: ".claude/session-state/codex-review-abc.json", content: "{}" } },
+  { tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/REAL-DATA-OK" } },
+]) {
+  const result = run(payload);
+  assert.match(result.stdout, /"permissionDecision":"deny"/, `state-dir write stays denied: ${payload.tool_name}`);
 }
 
 // Native Write/Edit are deliberately NOT denied here — there is no unlock any

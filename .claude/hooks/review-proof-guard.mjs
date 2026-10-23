@@ -157,7 +157,12 @@ const isMoveOrDeleteShape =
 const isPureAckWrite = stateDirCandidates.length > 0 &&
   !isMoveOrDeleteShape &&
   stateDirCandidates.every((c) => isAckValvePath(c));
-if (stateDirCandidates.length > 0 && !isPureAckWrite) {
+// Read-only built-ins cannot create, move, or delete anything, yet this rule
+// denied Read, Grep and Glob on the state directory (2026-10-23 audit: 26 denials
+// in 14 days, plus a Glob for a marker file). Name-matched like the
+// enforcement-path exemption further down.
+const readOnlyBuiltin = /^(?:read|grep|glob|notebookread|ls)$/i.test(toolName);
+if (!readOnlyBuiltin && stateDirCandidates.length > 0 && !isPureAckWrite) {
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }
 
