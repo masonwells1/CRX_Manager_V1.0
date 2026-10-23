@@ -343,6 +343,9 @@ disappear.
 
 ## Bugs spotted along the way (not fixed: this was read-only)
 
+Update 2026-10-23: all four (B1-B4) are fixed in a follow-up PR; see
+`docs/changelog.d/2026-10-23-readability-report-b1-b4-fixes.md`.
+
 These are real defects, not readability issues. Each one was confirmed in source but **not run**.
 
 | # | Where | What | Money? |

@@ -1272,16 +1272,17 @@ describe('F1 guard — resets are verified outside the pinned files, and the pin
    * DIFFERENT record of the same type while staying mounted, must be record-scoped.
    *
    * Retaining the key across an ambiguous reply is the point of F1 — but on a detail
-   * page that does not remount when the route id changes (every `<x>/:id` route in
-   * src/App.tsx EXCEPT `jobs/:id`, which is keyed by id via `JobDetailRoute`, is
-   * rendered without a `key` prop), an unscoped retained key can replay record A's
-   * receipt against record B.
+   * page that does not remount when the route id changes (most `<x>/:id` routes in
+   * src/appPages.tsx are rendered without a `key` prop; `jobs/:id` and, since
+   * 2026-10-23, `deliveries/:id` are keyed by id via JobDetailRoute and
+   * DeliveryDetailRoute), an unscoped retained key can replay record A's receipt
+   * against record B.
    *
-   * The `jobs/:id` exception does not weaken the rationale for any key listed below:
-   * none of the record-scoped keys lives on JobDetail. Every page they DO live on --
-   * OrderDetail, DeliveryDetail, InvoiceDetail, FieldApplicationInvoice, Returns,
-   * PrepaymentManagerPanel, MonthEndClose -- is still rendered unkeyed, so the
-   * record scope is still load-bearing for all nine.
+   * The keyed routes do not weaken the rationale for any key listed below. None of the
+   * record-scoped keys lives on JobDetail. DeliveryDetail's followupIdem keeps its route
+   * scope as a second guard, and the other pages they live on -- OrderDetail,
+   * InvoiceDetail, FieldApplicationInvoice, Returns, PrepaymentManagerPanel,
+   * MonthEndClose -- are still rendered unkeyed, so the record scope stays load-bearing.
    *
    * SCOPE OF THIS PR, narrowed 2026-09-03 after the round-2 Codex review found the
    * generalisation unsafe, and narrowed AGAIN after round 4. A key is only listed here

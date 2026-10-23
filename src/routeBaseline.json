@@ -386,7 +386,7 @@
       "url": "/deliveries/id-123",
       "pageKey": "deliveries",
       "page": {
-        "type": "lazy pages/DeliveryDetail"
+        "type": "lazy components/DeliveryDetailRoute"
       },
       "access": {
         "admin": "/deliveries/id-123 shows /deliveries/:id",

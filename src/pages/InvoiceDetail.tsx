@@ -24,6 +24,7 @@ import { CHARGE_TYPE_OPTIONS, chargeTypeLabel, fromScratchLinesProblem, isFromSc
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, groupReturnCreditDisplayItems, mapInvoicePdfItem, type InvoicePdfData } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
 import { getTierPrice } from '../lib/quoteCalc';
+import { ilikeOrPattern } from '../lib/recordSearch';
 import { withBelowCostReason } from '../lib/belowCostApproval';
 import { sendEmail, pdfToBase64, buildEmailHtml, isInvoiceEmailSuppressed } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
@@ -808,7 +809,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         .from('products')
         .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
         .eq('is_active', true)
-        .or(`product_name.ilike.%${q}%,sku.ilike.%${q}%`)
+        .or(`product_name.ilike.${ilikeOrPattern(q)},sku.ilike.${ilikeOrPattern(q)}`)
         .order('product_name')
         .limit(20);
       if (requestId !== productSearchRequestRef.current) return;
@@ -1577,11 +1578,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Build PDF data object (shared by print + email)
   const buildInvoicePdfData = async (options?: InvoicePrintOptions): Promise<InvoicePdfData> => {
-    const { data: enrichedItems } = await supabase
+    const { data: enrichedItems, error: itemsError } = await supabase
       .from('invoice_items')
       .select(`${INVOICE_ITEM_COLUMNS}, product:products(product_name, epa_registration, product_form)`)
       .eq('invoice_id', id!)
       .order('sort_order');
+    // A failed line read must stop the print or email: otherwise the customer gets a PDF
+    // with no lines under the stored total. Print and Email toast this through runCriticalAction.
+    if (itemsError || !enrichedItems) {
+      throw new Error('Could not load the invoice lines, so no PDF was made. Please try again.');
+    }
 
     const cust = customers.find(c => c.id === invoice.customer_id);
 
@@ -1635,7 +1641,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         acres: s.acres,
         amount_cents: s.amount_cents,
       })) : undefined,
-      items: groupReturnCreditDisplayItems(invoice.invoice_type, (enrichedItems || []).map(mapInvoicePdfItem)),
+      items: groupReturnCreditDisplayItems(invoice.invoice_type, enrichedItems.map(mapInvoicePdfItem)),
       total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
       total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : Math.round(i.cost_cents * i.quantity)), 0),
       paid_amount_cents: invoice.paid_amount_cents ?? 0,

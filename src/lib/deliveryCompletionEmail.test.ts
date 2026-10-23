@@ -40,4 +40,22 @@ describe('sendDeliveryCompletionEmail', () => {
     expect(html).not.toMatch(/storage\/v1|supabase\.co/);
     expect(html).not.toMatch(/Delivery Photos/);
   });
+
+  it('escapes the driver-typed signer and product names (readability report B1)', async () => {
+    await sendDeliveryCompletionEmail({
+      customerEmail: 'farm@example.invalid',
+      contactName: 'Tom & <Jerry>',
+      deliveryNumber: 'DEL-2026-0002',
+      deliveryId: 'd2',
+      customerId: 'c1',
+      items: [{ name: '2,4-D Amine <4L>', qty: 1 }],
+      isPartial: false,
+      signedBy: "Pat <O'Brien> & Sons",
+    });
+    const { html } = H.sendEmail.mock.calls[0][0];
+    expect(html).toContain('2,4-D Amine &lt;4L&gt;');
+    expect(html).toContain("Signed by: <strong>Pat &lt;O'Brien&gt; &amp; Sons</strong>");
+    expect(html).toContain('Hi Tom &amp; &lt;Jerry&gt;,');
+    expect(html).not.toContain('<4L>');
+  });
 });

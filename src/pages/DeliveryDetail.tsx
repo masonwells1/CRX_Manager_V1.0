@@ -24,7 +24,8 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { sumNeedByProduct } from '../lib/inventoryShortage';
-import { sendEmail, buildEmailHtml } from '../lib/emailService';
+import { sendEmail } from '../lib/emailService';
+import { buildDeliveryReceiptHtml } from '../lib/deliveryReceiptEmail';
 import { RECEIPT_NO_EMAIL_MESSAGE, RECEIPT_NO_EMAIL_ON_FILE_MESSAGE, RECEIPT_NOT_SENT_MESSAGE } from '../lib/deliveryCompletionEmail';
 import { COMPLETED_BY_EARLIER_ATTEMPT_MESSAGE, fetchReceiptRecipient, fetchReceiptRecipientWithin, INVALID_SIGNATURE_MESSAGE, isNetworkFailure, isSignatureDataUrl, isSignatureImageMissing, latestEvidencePhoto, reconcileFailedCompletion, signatureDigest, signatureImagePathFor, storedNoProofReason, uploadSignatureImage } from '../lib/deliveryEvidence';
 import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notificationTriggers';
@@ -1350,63 +1351,26 @@ export default function DeliveryDetail() {
         toast('info', 'Recorded without proof. No receipt was emailed; the office can send one later with Email Confirmation.');
       } else if (emailOnComplete && sendTo) {
         try {
-          const deliveredItems = items
+          const deliveredLines = items
             .map((item) => {
               const qty = isPartialDelivery ? (deliveryQtys[item.id] ?? item.quantity) : item.quantity;
               return { name: item.product?.product_name || 'Product', qty };
             })
-            .filter((row) => row.qty > 0)
-            .map((row) => `<tr>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${row.name}</td>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${row.qty}</td>
-            </tr>`)
-            .join('');
-
-          // No delivery photos in the customer email (Mason, 2026-10-14): photos are
-          // private staff records and a link in an email would work for anyone holding it.
-          const signatureNote = signedBy
-            ? `<p style="color:#475569;font-size:13px;">Signed by: <strong>${signedBy}</strong></p>`
-            : '';
-          const partialNote = isPartialDelivery
-            ? '<p style="color:#d97706;font-size:13px;font-weight:600;margin-top:8px;">This was a partial delivery. Remaining items will be delivered separately.</p>'
-            : '';
+            .filter((row) => row.qty > 0);
 
           // A paper-ticket receipt shows the day on the ticket, matching the backdated delivery.
           const receiptDate = usePaperTicket && isValidPaperDeliveredOn(paperDeliveredOn)
             ? parseLocalDate(paperDeliveredOn).toLocaleDateString()
             : new Date().toLocaleDateString();
-          const html = buildEmailHtml(`
-            <h2 style="color:#1e293b;margin:0 0 12px;">Delivery Completed</h2>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Hi${sendToName ? ` ${sendToName}` : ''},
-            </p>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Your delivery <strong>${delivery.delivery_number}</strong> has been completed.
-            </p>
-            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-              <tr>
-                <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Delivery #</td>
-                <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${delivery.delivery_number}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Date</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${receiptDate}</td>
-              </tr>
-            </table>
-            <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Delivered Items</h3>
-            <table style="width:100%;border-collapse:collapse;">
-              <tr style="background:#f8fafc;">
-                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
-                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty Delivered</th>
-              </tr>
-              ${deliveredItems}
-            </table>
-            ${partialNote}
-            ${signatureNote}
-            <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
-              Thank you for your business!
-            </p>
-          `);
+          const html = buildDeliveryReceiptHtml({
+            variant: 'completed',
+            deliveryNumber: delivery.delivery_number,
+            contactName: sendToName,
+            dateText: receiptDate,
+            lines: deliveredLines,
+            signedBy: signedBy || null,
+            isPartial: isPartialDelivery,
+          });
 
           await sendEmail({
             to: sendTo,
@@ -1486,52 +1450,20 @@ export default function DeliveryDetail() {
     }
     setSendingEmail(true);
     try {
-      const deliveredItems = items
+      const deliveredLines = items
         .filter((item) => (item.quantity_delivered ?? item.quantity) > 0)
-        .map((item) =>
-          `<tr>
-            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${item.product?.product_name || 'Product'}</td>
-            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${item.quantity_delivered ?? item.quantity}</td>
-          </tr>`
-        ).join('');
+        .map((item) => ({ name: item.product?.product_name || 'Product', qty: item.quantity_delivered ?? item.quantity }));
 
-      // No delivery photos in the customer email (Mason, 2026-10-14).
       // A delivery recorded without proof has no customer signer to show (its signer is office text).
-      const signatureNote = delivery.signed_by && delivery.completion_evidence !== 'no_proof'
-        ? `<p style="color:#475569;font-size:13px;">✍️ Signed by: <strong>${delivery.signed_by}</strong></p>`
-        : '';
-
-      const html = buildEmailHtml(`
-        <h2 style="color:#1e293b;margin:0 0 12px;">Delivery Confirmation</h2>
-        <p style="color:#475569;font-size:14px;line-height:1.6;">
-          Hi${customer.contact_name ? ` ${customer.contact_name}` : ''},
-        </p>
-        <p style="color:#475569;font-size:14px;line-height:1.6;">
-          Here is your delivery confirmation for <strong>${delivery.delivery_number}</strong>.
-        </p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-          <tr>
-            <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Delivery #</td>
-            <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${delivery.delivery_number}</td>
-          </tr>
-          <tr>
-            <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Completed</td>
-            <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${delivery.completed_at ? new Date(delivery.completed_at).toLocaleDateString() : new Date().toLocaleDateString()}</td>
-          </tr>
-        </table>
-        <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Delivered Items</h3>
-        <table style="width:100%;border-collapse:collapse;">
-          <tr style="background:#f8fafc;">
-            <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
-            <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty Delivered</th>
-          </tr>
-          ${deliveredItems}
-        </table>
-        ${signatureNote}
-        <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
-          Thank you for your business!
-        </p>
-      `);
+      const html = buildDeliveryReceiptHtml({
+        variant: 'confirmation',
+        deliveryNumber: delivery.delivery_number,
+        contactName: customer.contact_name ?? null,
+        dateText: delivery.completed_at ? new Date(delivery.completed_at).toLocaleDateString() : new Date().toLocaleDateString(),
+        lines: deliveredLines,
+        signedBy: delivery.signed_by && delivery.completion_evidence !== 'no_proof' ? delivery.signed_by : null,
+        isPartial: false,
+      });
 
       await sendEmail({
         to: customer.email,

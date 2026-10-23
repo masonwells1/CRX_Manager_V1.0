@@ -49,7 +49,9 @@ const OrderDetail = lazy(() => import('./pages/OrderDetail'));
 const InventoryPage = lazy(() => import('./pages/InventoryPage'));
 const Deliveries = lazy(() => import('./pages/Deliveries'));
 const NewDelivery = lazy(() => import('./pages/NewDelivery'));
-const DeliveryDetail = lazy(() => import('./pages/DeliveryDetail'));
+// Routed through DeliveryDetailRoute, which keys DeliveryDetail by the delivery id so an edit
+// opened on one delivery never carries over to the next. See that file.
+const DeliveryDetailRoute = lazy(() => import('./components/DeliveryDetailRoute'));
 const FieldRoute = lazy(() => import('./pages/FieldRoute'));
 const FieldStop = lazy(() => import('./pages/FieldStop'));
 const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders'));
@@ -162,7 +164,7 @@ export const APP_PAGES = [
     routes: [
       { path: 'deliveries', element: <Deliveries /> },
       { path: 'deliveries/new', element: <NewDelivery />, roles: ['admin', 'sales_rep'] },
-      { path: 'deliveries/:id', element: <DeliveryDetail /> },
+      { path: 'deliveries/:id', element: <DeliveryDetailRoute /> },
     ],
   },
   {

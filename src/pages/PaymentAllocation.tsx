@@ -25,6 +25,7 @@ import { LoadFailedState } from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { ilikeOrPattern } from '../lib/recordSearch';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { fetchAllRows, pageWithList } from '../lib/pagedRead';
@@ -132,7 +133,7 @@ export default function PaymentAllocation() {
           .from('customers')
           .select('id, farm_name, account_number, prepay_balance_cents')
           .eq('is_active', true)
-          .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
+          .or(`farm_name.ilike.${ilikeOrPattern(customerSearch)},account_number.ilike.${ilikeOrPattern(customerSearch)}`)
           .order('farm_name')
           .limit(15);
         if (error) throw error;

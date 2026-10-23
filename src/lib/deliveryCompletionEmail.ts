@@ -1,16 +1,11 @@
 /**
- * Customer "delivery completed" receipt email.
+ * Customer "delivery completed" receipt email, sent from Field Mode (FieldStop.tsx).
  *
- * This is a COPY of the inline email builder in DeliveryDetail.tsx (~862-934),
- * lifted into a shared lib so Field Mode (FieldStop.tsx) can send the SAME
- * receipt the desktop screen sends — WITHOUT editing DeliveryDetail.tsx (which
- * keeps its own inline copy, untouched, per the build freeze). A future cleanup
- * can switch DeliveryDetail to this helper; until then the two are intentionally
- * duplicated. Keep them in sync if the receipt format changes.
- *
- * Source of truth for the HTML/subject: src/pages/DeliveryDetail.tsx handleComplete.
+ * The HTML comes from buildDeliveryReceiptHtml (src/lib/deliveryReceiptEmail.ts), the same
+ * builder DeliveryDetail uses for completion and resend, so all three escape typed names.
  */
-import { sendEmail, buildEmailHtml } from './emailService';
+import { sendEmail } from './emailService';
+import { buildDeliveryReceiptHtml } from './deliveryReceiptEmail';
 import { Sentry } from './sentry';
 import { parseLocalDate } from './dateUtils';
 
@@ -61,53 +56,15 @@ export async function sendDeliveryCompletionEmail(params: DeliveryCompletionEmai
   const receiptDate = deliveredOn ? parseLocalDate(deliveredOn).toLocaleDateString() : new Date().toLocaleDateString();
 
   try {
-    const deliveredItems = items
-      .filter((row) => row.qty > 0)
-      .map((row) => `<tr>
-        <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${row.name}</td>
-        <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${row.qty}</td>
-      </tr>`)
-      .join('');
-
-    const signatureNote = signedBy
-      ? `<p style="color:#475569;font-size:13px;">Signed by: <strong>${signedBy}</strong></p>`
-      : '';
-    const partialNote = isPartial
-      ? '<p style="color:#d97706;font-size:13px;font-weight:600;margin-top:8px;">This was a partial delivery. Remaining items will be delivered separately.</p>'
-      : '';
-
-    const html = buildEmailHtml(`
-      <h2 style="color:#1e293b;margin:0 0 12px;">Delivery Completed</h2>
-      <p style="color:#475569;font-size:14px;line-height:1.6;">
-        Hi${contactName ? ` ${contactName}` : ''},
-      </p>
-      <p style="color:#475569;font-size:14px;line-height:1.6;">
-        Your delivery <strong>${deliveryNumber}</strong> has been completed.
-      </p>
-      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <tr>
-          <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Delivery #</td>
-          <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${deliveryNumber}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Date</td>
-          <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${receiptDate}</td>
-        </tr>
-      </table>
-      <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Delivered Items</h3>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr style="background:#f8fafc;">
-          <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
-          <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty Delivered</th>
-        </tr>
-        ${deliveredItems}
-      </table>
-      ${partialNote}
-      ${signatureNote}
-      <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
-        Thank you for your business!
-      </p>
-    `);
+    const html = buildDeliveryReceiptHtml({
+      variant: 'completed',
+      deliveryNumber,
+      contactName: contactName ?? null,
+      dateText: receiptDate,
+      lines: items.filter((row) => row.qty > 0),
+      signedBy: signedBy || null,
+      isPartial,
+    });
 
     await sendEmail({
       to: customerEmail,

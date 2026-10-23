@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, Fragment } from 'react';
 import { Plus, Trash2, AlertTriangle, ShieldAlert, Clock, CalendarClock } from 'lucide-react';
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
+import { ilikeOrPattern } from '../../lib/recordSearch';
 import { Sentry } from '../../lib/sentry';
 import { PRODUCT_COLUMNS, withAdminCosts } from '../../lib/costFields';
 import { useAuth } from '../../contexts/AuthContext';
@@ -174,7 +175,7 @@ export default function FieldAppChemicalEntry({
       .from('products')
       .select(`${PRODUCT_COLUMNS}, product_family:product_families(name)`)
       .eq('is_active', true)
-      .or(`product_name.ilike.%${q}%,epa_registration.ilike.%${q}%`)
+      .or(`product_name.ilike.${ilikeOrPattern(q)},epa_registration.ilike.${ilikeOrPattern(q)}`)
       .order('product_name')
       .limit(15);
 
