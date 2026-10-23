@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20261023123930",
+    "migrations_high_water": "20261023223853",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -435,6 +435,10 @@
       "20261022040000_payment_allocation_tables_no_direct_writes",
       "20261022070000_role_reads_require_active_profile",
       "20261022075000_delivery_completion_evidence",
+      "20261022086000_team_board_priority_and_recap_completed_at",
+      "20261022086500_product_brands",
+      "20261022087000_job_chemicals_refuse_unpriced_zero_price_line",
+      "20261022090000_invoices_postable_view",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -2382,6 +2386,17 @@
         "pricing_workbook_exports_status_check"
       ]
     },
+    "product_brands.signal_word": {
+      "values": [
+        "Danger",
+        "Warning",
+        "Caution"
+      ],
+      "constraints": [
+        "product_brands_signal_word_check"
+      ],
+      "nullable": true
+    },
     "product_cost_basis.basis_type": {
       "values": [
         "selected_supplier_price",
@@ -3830,6 +3845,30 @@
       "table": "pricing_workbook_exports",
       "constraint": "pricing_workbook_exports_row_limit",
       "def": "CHECK ((row_count <= 5000))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_brands",
+      "constraint": "product_brands_brand_name_check",
+      "def": "CHECK (((btrim(brand_name) <> ''::text) AND (brand_name = btrim(brand_name)) AND (char_length(brand_name) <= 200)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_brands",
+      "constraint": "product_brands_epa_registration_check",
+      "def": "CHECK (((epa_registration IS NULL) OR (epa_registration ~ '^[1-9][0-9]{0,5}-[1-9][0-9]{0,4}(-[1-9][0-9]{0,5})?$'::text)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_brands",
+      "constraint": "product_brands_manufacturer_check",
+      "def": "CHECK (((manufacturer IS NULL) OR ((btrim(manufacturer) <> ''::text) AND (manufacturer = btrim(manufacturer)) AND (char_length(manufacturer) <= 200))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "product_brands",
+      "constraint": "product_brands_row_version_check",
+      "def": "CHECK ((row_version >= 1))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -5701,6 +5740,21 @@
         "created_at",
         "expires_at",
         "format_version"
+      ]
+    },
+    "product_brands": {
+      "no_default": [
+        "product_id",
+        "brand_name",
+        "created_by",
+        "updated_by"
+      ],
+      "with_default": [
+        "id",
+        "is_currently_sourced",
+        "row_version",
+        "created_at",
+        "updated_at"
       ]
     },
     "product_cost_basis": {
@@ -8071,6 +8125,21 @@
       "created_at",
       "expires_at",
       "format_version"
+    ],
+    "product_brands": [
+      "id",
+      "product_id",
+      "brand_name",
+      "epa_registration",
+      "manufacturer",
+      "is_currently_sourced",
+      "is_rup",
+      "signal_word",
+      "row_version",
+      "created_by",
+      "updated_by",
+      "created_at",
+      "updated_at"
     ],
     "product_cost_basis": [
       "id",
