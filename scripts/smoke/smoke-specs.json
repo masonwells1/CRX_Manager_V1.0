@@ -1456,6 +1456,25 @@
         "security"
       ]
     },
+    "field_functions_require_field_access": {
+      "chain": "smoke-field-functions-require-field-access.sql",
+      "container_only": true,
+      "container_prover": "prove-field-functions-require-field-access-real-schema.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-field-functions-require-field-access-real-schema.mjs, never through run-smoke.mjs against the live database: the chain plants [SMOKE] logins (auth.users rows), a customer, fields, a job, a dispatch and a team note, which the LIVE-DATA GUARD refuses. Covers 20261023090000 (To-Do row 11.4, part A): an applicator dispatched to one field of a two-field job gets only that field from get_fields_geojson_by_ids and get_field_geojson (both now filtered by the new _can_see_field); a driver is refused by get_field_dashboard, get_fields_with_geojson and get_customer_summary (Permission denied: requires admin or sales_rep role, the gate every office-only field and money function now starts with); global_search returns nothing to the driver and the customer to an active admin; get_notes_for_entity (now SECURITY INVOKER) gives the job note to the admin and the dispatched applicator but not to the driver; the admin still gets both fields and the field dashboard. The prover adds the whole-job and crew routes, cancelled, expired and deleted-job dispatches, an inactive applicator, an entity_recipient, every office-only function and mutation tests. Fail-first: step a fails before the migration. Terminal rollback.",
+      "covers": [
+        "_can_see_field",
+        "get_fields_geojson_by_ids",
+        "get_field_geojson",
+        "get_fields_with_geojson",
+        "get_field_dashboard",
+        "get_customer_summary",
+        "global_search",
+        "get_notes_for_entity"
+      ],
+      "area": [
+        "security"
+      ]
+    },
     "upsert_product_brand": {
       "chain": "smoke-upsert-product-brand.sql",
       "description": "Product brands (20261022086500): auth probes P1 no-auth, P2 anon, P3 non-admin refused with nothing written (no actor parameter, so no forged-actor probe); an active admin adds a brand; the exact retry replays the same row with its receipt bound to the admin; an edit with the version it read bumps row_version; a stale edit is refused (BRAND_CHANGED); the same name in another case is refused (BRAND_NAME_TAKEN). Container proof of the migration itself: prove-product-brands.mjs.",
