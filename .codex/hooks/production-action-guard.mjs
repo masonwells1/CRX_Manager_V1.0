@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -1441,6 +1441,192 @@ function codexAppAdvisory({ request, repoDir, runGh, clock = () => Date.now(), d
   return null;
 }
 
+// ── Native patch tool (Codex `apply_patch`) ────────────────────────────────────
+// Codex hands its native patch tool to hooks with the patch text under
+// `tool_input.command` (observed 2026-10-23: that text reached the SHELL
+// inspection below, which read `*** Begin Patch` as a wildcard command word and
+// refused every ordinary source edit). Older builds sent a bare string, which
+// never reached shell inspection. A patch is not a shell command, so a payload
+// is taken off the shell route only when ALL of these hold:
+//   1. the tool is exactly `apply_patch` (an MCP tool that merely ends in that
+//      name, or any shell tool carrying patch-looking text, stays on the shell
+//      route and is inspected as a shell command);
+//   2. the patch sits in exactly one field (`command` or `cmd`), as a string,
+//      with no second payload field that could be what the tool really applies;
+//   3. the WHOLE text parses under the patch grammar below.
+// Anything else from `apply_patch` is refused. Every path the parsed patch
+// touches (add, update, delete, move target) then goes through the same
+// protected-harness and review-proof checks as any other file write.
+const NATIVE_PATCH_TOOL_RE = /^apply_patch$/;
+const NATIVE_PATCH_OTHER_PAYLOAD_FIELDS = ["patch", "diff", "input", "changes"];
+const NATIVE_PATCH_MAX_PATHS = 200;
+const NATIVE_PATCH_MAX_PATH_LENGTH = 1024;
+const NATIVE_PATCH_MAX_PATH_SEGMENTS = 48;
+const NATIVE_PATCH_FILE_HEADER_RE =/^\*\*\* (Add|Update|Delete) File: (.+)$/;
+const NATIVE_PATCH_MOVE_RE = /^\*\*\* Move to: (.+)$/;
+
+// Spellings that name a DIFFERENT file than the path matchers compare on Windows
+// (where the patch is applied): a segment ending in `.` or a space, an NTFS
+// alternate data stream (`name::$DATA`), an 8.3 short name (`PRODUC~1.MJS`), and
+// wildcard or control characters. The shared path matchers resolve some of
+// these but not all, and this route used to refuse every patch, so a path that
+// is not plain is refused here rather than judged by a matcher that may not
+// know the alias. Returns the reason, or "" for a plain path.
+function nativePatchPathProblem(filePath) {
+  // Bounds the filesystem work of resolving every destination (a lookup per
+  // path component) so the hook finishes inside its time limit; a hook killed
+  // at the limit allows the action.
+  if (filePath.length > NATIVE_PATCH_MAX_PATH_LENGTH) return `a path longer than ${NATIVE_PATCH_MAX_PATH_LENGTH} characters`;
+  if (filePath.split(/[\\/]/).length > NATIVE_PATCH_MAX_PATH_SEGMENTS) return `a path with more than ${NATIVE_PATCH_MAX_PATH_SEGMENTS} segments`;
+  if (/[\x00-\x1f*?"<>|]/.test(filePath)) return "a path with a wildcard or control character";
+  if (filePath.replace(/^[A-Za-z]:(?=[\\/])/, "").includes(":")) return "a path with a stream or drive separator (`:`)";
+  for (const segment of filePath.split(/[\\/]/)) {
+    if (segment === ".") continue;
+    // `..` is resolved lexically by Windows but after a link by POSIX, so after
+    // a linked directory it names different files on different systems.
+    if (segment === "..") return "a path with a `..` segment";
+    if (/[. ]$/.test(segment)) return "a path segment ending in a dot or space";
+    if (/~\d/.test(segment)) return "a path with an 8.3 short-name alias (`~1`)";
+  }
+  return "";
+}
+
+// Parses a whole native patch. `{ ok: true, paths }` lists every file path the
+// patch touches; `{ ok: false, reason }` names the first line the grammar
+// rejects. Strict on purpose: a refusal costs one retry, a mis-parse could hide
+// a destination from the path checks.
+export function parseNativePatch(text) {
+  if (typeof text !== "string") return { ok: false, reason: "the patch is not text" };
+  if (text.includes("\0")) return { ok: false, reason: "the patch contains a NUL character" };
+  // Only `\n` / `\r\n` end a line here. Any other control character (a lone CR,
+  // VT, FF, the FS/GS/RS/US separators, NEL and the rest of C1) or Unicode line
+  // or paragraph separator could be read as a line break by a different parser,
+  // hiding a header inside what this one sees as a single path or content line.
+  // Tab is the only control character source text legitimately carries.
+  if (/\r(?!\n)|[\x01-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text) || text.includes(String.fromCharCode(0x2028)) || text.includes(String.fromCharCode(0x2029))) {
+    return { ok: false, reason: "the patch contains a control character or line break other than LF or CRLF" };
+  }
+  const lines = text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  if (lines[0] !== "*** Begin Patch") return { ok: false, reason: "the first line is not `*** Begin Patch`" };
+  if (lines.length < 2 || lines.at(-1) !== "*** End Patch") return { ok: false, reason: "the last line is not `*** End Patch`" };
+  const paths = [];
+  let kind = null; // the file operation whose body is being read
+  let bodyLines = 0;
+  let sawMoveWindow = false; // `*** Move to:` is legal only straight after an Update header
+  const finishFile = (index) => {
+    if (kind === "Update" && bodyLines === 0) return { ok: false, reason: `line ${index}: an Update File section has no added or removed line` };
+    return null;
+  };
+  for (let i = 1; i < lines.length - 1; i += 1) {
+    const line = lines[i];
+    const header = NATIVE_PATCH_FILE_HEADER_RE.exec(line);
+    if (header) {
+      const unfinished = finishFile(i + 1);
+      if (unfinished) return unfinished;
+      const filePath = header[2];
+      if (filePath !== filePath.trim()) return { ok: false, reason: `line ${i + 1}: a path with leading or trailing whitespace` };
+      const odd = nativePatchPathProblem(filePath);
+      if (odd) return { ok: false, reason: `line ${i + 1}: ${odd}` };
+      paths.push(filePath);
+      kind = header[1];
+      bodyLines = 0;
+      sawMoveWindow = kind === "Update";
+      continue;
+    }
+    const move = NATIVE_PATCH_MOVE_RE.exec(line);
+    if (move) {
+      if (!sawMoveWindow) return { ok: false, reason: `line ${i + 1}: \`*** Move to:\` is only valid straight after an Update File header` };
+      const target = move[1];
+      if (target !== target.trim()) return { ok: false, reason: `line ${i + 1}: a path with leading or trailing whitespace` };
+      const odd = nativePatchPathProblem(target);
+      if (odd) return { ok: false, reason: `line ${i + 1}: ${odd}` };
+      paths.push(target);
+      sawMoveWindow = false;
+      continue;
+    }
+    sawMoveWindow = false;
+    if (kind === null) return { ok: false, reason: `line ${i + 1}: content before any file header` };
+    if (kind === "Delete") return { ok: false, reason: `line ${i + 1}: a Delete File section takes no content` };
+    if (kind === "Add") {
+      if (!line.startsWith("+")) return { ok: false, reason: `line ${i + 1}: an Add File line must start with \`+\`` };
+      bodyLines += 1;
+      continue;
+    }
+    // Update File body: @@ hunk markers, ' ' / '+' / '-' lines, a bare empty
+    // line (context), or the end-of-file marker. Only an added or removed line
+    // counts as a change: a section of context alone edits nothing.
+    if (line.startsWith("@@") || line === "*** End of File" || line === "" || /^[ +-]/.test(line)) {
+      if (/^[+-]/.test(line)) bodyLines += 1;
+      continue;
+    }
+    return { ok: false, reason: `line ${i + 1}: not a valid patch line` };
+  }
+  const unfinished = finishFile(lines.length);
+  if (unfinished) return unfinished;
+  if (kind === null) return { ok: false, reason: "the patch names no file" };
+  if (paths.length > NATIVE_PATCH_MAX_PATHS) return { ok: false, reason: `the patch touches more than ${NATIVE_PATCH_MAX_PATHS} paths; split it` };
+  return { ok: true, paths };
+}
+
+// The native patch envelope of one tool call: `null` when this is not the
+// native patch tool or it carries no `command`/`cmd` payload (the older bare-
+// string and `patch`-field shapes keep their existing destination checks);
+// otherwise `{ denial }` for a malformed or conflicting envelope, or `{ paths }`
+// (every file the patch touches) for a payload that parsed completely.
+export function nativePatchEnvelope(toolName, toolInput) {
+  if (!NATIVE_PATCH_TOOL_RE.test(String(toolName))) return null;
+  if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return null;
+  const carriers = ["command", "cmd"].filter((field) => toolInput[field] !== undefined && toolInput[field] !== null);
+  if (carriers.length === 0) return null;
+  const refuse = (why) => ({
+    denial: "CODEX PRODUCTION GATE: this apply_patch call could not be verified as a well-formed native patch " +
+      `(${why}), so it is refused (fail closed). Send one complete patch from \`*** Begin Patch\` to \`*** End Patch\` ` +
+      "in a single `command` string.",
+  });
+  if (carriers.length > 1) return refuse("it carries both `command` and `cmd`");
+  const conflicting = NATIVE_PATCH_OTHER_PAYLOAD_FIELDS.filter((field) => toolInput[field] !== undefined && toolInput[field] !== null);
+  if (conflicting.length > 0) return refuse(`it also carries \`${conflicting.join("`, `")}\``);
+  const parsed = parseNativePatch(toolInput[carriers[0]]);
+  if (!parsed.ok) return refuse(parsed.reason);
+  return { paths: parsed.paths };
+}
+
+// Where a patch destination really lands once symlinks and junctions on its
+// existing part are followed, or `null` when that cannot be determined (a link
+// that does not resolve, an unreadable directory) so the caller refuses. The
+// part of the path that does not exist yet is appended unchanged.
+export function realPathThroughLinks(candidate, baseDir, deadlineMs = Infinity, clock = () => Date.now()) {
+  const absolute = path.resolve(baseDir, String(candidate));
+  const missing = [];
+  let probe = absolute;
+  for (;;) {
+    // Checked between lookups, so one slow path cannot keep the walk going past
+    // the hook's limit: out of time is "cannot resolve", which the caller refuses.
+    if (clock() >= deadlineMs) return null;
+    let present = true;
+    try {
+      lstatSync(probe);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") return null;
+      present = false;
+    }
+    if (present) {
+      // Present but unresolvable (a dangling link) is NOT "missing": a write
+      // through it would create the file at the link's target.
+      try {
+        return path.join(realpathSync.native(probe), ...missing);
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) return absolute;
+    missing.unshift(path.basename(probe));
+    probe = parent;
+  }
+}
+
 export function evaluateProductionAction({
   toolName = "",
   toolInput = {},
@@ -1488,8 +1674,15 @@ export function evaluateProductionAction({
   // documentation patches legitimately mention guard/proof paths in prose
   // (Codex round-5 false positive).
   const rawPatchBody = typeof toolInput === "string" ? toolInput : undefined;
+  // The native patch tool's `command`/`cmd` payload (see nativePatchEnvelope):
+  // a malformed or conflicting envelope is refused before any path check, and a
+  // fully parsed one contributes every path it touches (the grammar admits no
+  // other destination), then skips the shell inspection further down.
+  const nativePatch = nativePatchEnvelope(name, toolInput);
+  if (nativePatch?.denial) return denied(nativePatch.denial);
   const patchDestinations = [rawPatchBody, input.patch, input.diff, input.input, input.changes]
-    .flatMap((payloadText) => extractPatchDestinations(payloadText));
+    .flatMap((payloadText) => extractPatchDestinations(payloadText))
+    .concat(nativePatch?.paths ?? []);
   if ([...pathCandidates, ...patchDestinations].some((candidate) => reviewProofPathMentioned(candidate))) {
     return denied("CODEX PRODUCTION GATE: review proof files are wrapper-owned and cannot be written, edited, moved, or deleted directly.");
   }
@@ -1507,6 +1700,29 @@ export function evaluateProductionAction({
       protectedHarnessPathMentioned(candidate) || protectedHarnessPathMentioned(joinedWithWorkdir(candidate, actionRepoDir)))
   )) {
     return denied("CODEX PRODUCTION GATE: the production/review harness is a security boundary and cannot be changed through a direct file-write tool. Use the reviewed maintenance workflow with Mason's approval.");
+  }
+  // The spelled path is not where the write lands when it passes through a
+  // symlink or junction (`src/notes.ts` linked to a guard file). Only this
+  // route follows links, because only this route's destinations are all known.
+  for (const destination of nativePatch?.paths ?? []) {
+    // The caps above bound the work; this is the backstop: a hook killed at its
+    // time limit allows the action, so past the deadline the answer is no.
+    if (clock() >= hardGateDeadlineMs) return denied(hardGateBudgetDenial("CODEX PRODUCTION GATE"));
+    const landed = realPathThroughLinks(destination, actionRepoDir, hardGateDeadlineMs, clock);
+    if (landed === null) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} could not be resolved to the file it would really write (a link that does not resolve, or an unreadable directory), so it is refused (fail closed).`);
+    }
+    if (reviewProofPathMentioned(landed) || protectedHarnessPathMentioned(landed)) {
+      return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is a link to, or inside a link to, a protected harness or review-proof file (${landed}); it cannot be changed through a direct file-write tool.`);
+    }
+    // A hard link is the same file under a second name that no path walk can
+    // see through, so an existing file with another name is refused.
+    try {
+      const stat = lstatSync(landed);
+      if (stat.isFile() && stat.nlink > 1) {
+        return denied(`CODEX PRODUCTION GATE: the patch destination ${destination} is an existing file with more than one hard link, so it may be another name for a protected file; it is refused (fail closed).`);
+      }
+    } catch { /* the destination does not exist yet: nothing to alias */ }
   }
 
   if (NODE_REPL_TOOL.test(name)) {
@@ -1592,7 +1808,9 @@ export function evaluateProductionAction({
   }
 
   // Measured BEFORE the trim, so the trim never runs over unbounded input.
-  const untrimmedCommand = String(toolInput.command ?? toolInput.cmd ?? "");
+  // A native patch that parsed completely is not a shell command: its paths were
+  // gated above, and reading its text as shell is what refused every source edit.
+  const untrimmedCommand = nativePatch ? "" : String(toolInput.command ?? toolInput.cmd ?? "");
   const command = untrimmedCommand.length > MAX_INSPECTABLE_COMMAND_LENGTH ? untrimmedCommand : untrimmedCommand.trim();
   if (!command) return { blocked: false };
 
