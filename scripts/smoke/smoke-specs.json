@@ -519,7 +519,7 @@
     },
     "adversarial_money_inventory_closeout": {
       "chain": "smoke-adversarial-money-inventory-closeout.sql",
-      "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees; an admin delete clears its durable claim and all cached save results so the unchanged document and deterministic key create a fresh PO; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
+      "description": "Adversarial money/inventory closeout chain: invoice save and post replays remain bound to the authorized customer; invalid PO lines are rejected; one global bulk-import intent returns the original PO across authorized employees, including an admin import that carries cost after a rep's import (the fingerprint leaves out cost since 20261022100000) while a changed quantity or invoice date still conflicts; an admin delete clears its durable claim and all cached save results so the unchanged document and deterministic key create a fresh PO; omitted edit costs remain penny-exact; duplicate or foreign PO line IDs are rejected; and all disposable fixtures roll back at the terminal pass signal.",
       "covers": [
         "save_invoice",
         "post_invoice",

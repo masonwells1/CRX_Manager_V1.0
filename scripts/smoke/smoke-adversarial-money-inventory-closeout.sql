@@ -6,6 +6,9 @@
 -- Updated 2026-10-22 for 20261021140000 (purchase cost admin-only): the bulk
 -- imports send no cost and the admin prices the line with
 -- set_purchase_order_item_costs.
+-- Updated 2026-10-22 for 20261022100000 (the bulk-import fingerprint leaves out
+-- cost): an admin importing the rep's document WITH cost gets already_imported,
+-- and a changed quantity or invoice date with cost still conflicts.
 -- Exercises the exact adversarial findings without retaining business rows.
 DO $smoke$
 DECLARE
@@ -404,6 +407,46 @@ BEGIN
       v_first, v_replay;
   END IF;
 
+  -- Since 20261022100000 the content fingerprint leaves out cost: the admin's
+  -- import of the rep's document WITH cost (as BulkPOImport sends it) is the
+  -- same document, not a conflict, and it leaves the rep's line cost alone.
+  SELECT unit_cost_cents INTO v_line_cents
+    FROM public.purchase_order_items
+   WHERE purchase_order_id = v_po;
+  v_replay := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-BULK-COST-' || v_suffix,
+      'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+      'status', 'draft',
+      'bulk_import_vendor_reference', v_vendor_reference,
+      'bulk_import_invoice_date', CURRENT_DATE::text,
+      'bulk_import_intent_key', 'browser-value-is-not-authoritative'
+    ),
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_product,
+        'product_name', v_product_name,
+        'quantity_ordered', 10.125,
+        'unit_size', v_unit_size,
+        'unit_cost', 3.33,
+        'unit_cost_cents', 333
+      )
+    ),
+    v_admin,
+    'smk-po-bulk-admin-cost-' || v_suffix
+  );
+  IF (v_replay->>'po_id')::uuid IS DISTINCT FROM v_po
+     OR v_replay->>'status' IS DISTINCT FROM 'already_imported'
+     OR v_replay->>'po_number' IS DISTINCT FROM v_first->>'po_number' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: admin import with cost after the rep import returned first=% replay=%',
+      v_first, v_replay;
+  END IF;
+  IF (SELECT unit_cost_cents FROM public.purchase_order_items WHERE purchase_order_id = v_po)
+     IS DISTINCT FROM v_line_cents THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the already_imported admin import changed the rep line cost';
+  END IF;
+
   -- Unicode and ASCII capitalization changes from OCR/manual review must still
   -- hit the same durable vendor-document claim. A deliberately bogus legacy
   -- browser digest proves PostgreSQL, not the browser, owns the durable key.
@@ -486,7 +529,9 @@ BEGIN
           'product_id', v_product,
           'product_name', v_product_name,
           'quantity_ordered', 11.125,
-          'unit_size', v_unit_size
+          'unit_size', v_unit_size,
+          'unit_cost', 3.33,
+          'unit_cost_cents', 333
         )
       ),
       v_admin,
@@ -498,6 +543,39 @@ BEGIN
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_err <> 'BULK_PO_DOCUMENT_CONTENT_CONFLICT' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong content-conflict error: %', v_err;
+    END IF;
+  END;
+
+  -- A changed vendor invoice date is a real content change too, cost or not.
+  BEGIN
+    PERFORM public.save_purchase_order(
+      NULL,
+      jsonb_build_object(
+        'vendor', '[SMOKE] Élan Bulk Intent Vendor',
+        'status', 'draft',
+        'bulk_import_vendor_reference', v_vendor_reference,
+        'bulk_import_invoice_date', (CURRENT_DATE - 1)::text,
+        'bulk_import_intent_key', 'browser-value-is-not-authoritative'
+      ),
+      jsonb_build_array(
+        jsonb_build_object(
+          'product_id', v_product,
+          'product_name', v_product_name,
+          'quantity_ordered', 10.125,
+          'unit_size', v_unit_size,
+          'unit_cost', 3.33,
+          'unit_cost_cents', 333
+        )
+      ),
+      v_admin,
+      'smk-po-bulk-date-conflict-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed bulk document date was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err <> 'BULK_PO_DOCUMENT_CONTENT_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong date-conflict error: %', v_err;
     END IF;
   END;
 

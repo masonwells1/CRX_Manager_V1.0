@@ -188,12 +188,40 @@ describe('BulkPOImport', () => {
 
     expect(await screen.findByText(/successfully imported: 0 purchase orders/i)).toBeInTheDocument();
     expect(screen.getByText(/already imported and skipped: 1/i)).toBeInTheDocument();
+    // The import fingerprint ignores cost, so an admin is told a re-import never changes costs.
+    expect(mocks.toast).toHaveBeenCalledWith(
+      'info',
+      'Skipped 1 document already imported. A re-import does not change its costs; check them in Supplier POs.',
+    );
     expect(defaultProps.onSuccess).not.toHaveBeenCalled();
     expect(mocks.rpc).not.toHaveBeenCalledWith('next_po_number');
 
     fireEvent.click(screen.getByText('Close'));
     expect(defaultProps.onSuccess).toHaveBeenCalledTimes(1);
     expect(defaultProps.onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not tell a sales rep about costs when a document was already imported', async () => {
+    mocks.role = 'sales_rep';
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === 'save_purchase_order') {
+        return {
+          data: { po_id: 'po-existing', status: 'already_imported', po_number: 'PO-EXISTING' },
+          error: null,
+        };
+      }
+      return { data: null, error: new Error(`Unexpected RPC: ${name}`) };
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'INV-101.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /import 1 po/i }));
+
+    expect(await screen.findByText(/already imported and skipped: 1/i)).toBeInTheDocument();
+    expect(mocks.toast).toHaveBeenCalledWith('info', 'Skipped 1 document already imported.');
   });
 
   it('asks the server again when a browser marker points to a PO that may have been deleted', async () => {
