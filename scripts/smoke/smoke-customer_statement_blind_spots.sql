@@ -195,9 +195,9 @@ BEGIN
   RETURNING id INTO v_inv_c;
 
   -- draft -> posted (legal enforcer transition, one row at a time)
-  UPDATE invoices SET status = 'posted' WHERE id = v_inv_a;
-  UPDATE invoices SET status = 'posted' WHERE id = v_inv_b;
-  UPDATE invoices SET status = 'posted' WHERE id = v_inv_c;
+  UPDATE invoices SET status = 'posted', posted_by = v_admin, posted_at = now() WHERE id = v_inv_a;
+  UPDATE invoices SET status = 'posted', posted_by = v_admin, posted_at = now() WHERE id = v_inv_b;
+  UPDATE invoices SET status = 'posted', posted_by = v_admin, posted_at = now() WHERE id = v_inv_c;
 
   -- --------------------------------------------------------------------
   -- 2. (a) Historical LEGACY path. The old producer is intentionally retired;
@@ -301,9 +301,10 @@ BEGIN
   --    credit_memo): the existing single-count assertion
   -- --------------------------------------------------------------------
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status,
-                        total_amount_cents, invoice_date, created_by)
+                        total_amount_cents, invoice_date, created_by,
+                        posted_by, posted_at)
   VALUES ('SMK-CSB-CM-' || v_suffix, v_customer_id, 'credit_memo', 'posted',
-          -15000, v_d0, v_admin);
+          -15000, v_d0, v_admin, v_admin, now());
 
   -- --------------------------------------------------------------------
   -- 7. THE STATEMENT: 7 lines, each source exactly once, dedup pinned,

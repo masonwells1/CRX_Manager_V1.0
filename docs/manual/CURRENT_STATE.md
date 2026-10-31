@@ -6,7 +6,7 @@ Every other section keeps its own date; nothing below was re-certified by that r
 **Update triggers:** re-read the ledger after any live apply; refresh the rest when a major feature
 ships or quarterly, whichever comes first.
 
-**Payment-date candidate (#1179):** `20261029160200_chicago_payment_business_date.sql` remains unapplied. It sets omitted payment dates from the Chicago business date and preserves retry intent; existing payment/prepay season assignment for explicitly backdated payments remains unchanged. See [the payment audit](../audits/2026-10-28-chicago-payment-date.md) for evidence and release limits.
+**Payment dates (#1179, applied 2026-10-31):** `20261029160200_chicago_payment_business_date.sql` sets omitted payment dates from the Chicago business date and preserves retry intent; existing payment/prepay season assignment for explicitly backdated payments remains unchanged. See [the payment audit](../audits/2026-10-28-chicago-payment-date.md) for evidence and release limits.
 
 ## Current state at a glance (2026-10-19; migration ledger and registry lines 2026-10-20)
 

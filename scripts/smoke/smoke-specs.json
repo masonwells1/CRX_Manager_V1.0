@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency, regression). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "generate_quote_number": {
+      "chain": "smoke-document-number-year.sql",
+      "description": "20261029160300: an active admin gets quote and order numbers with the Chicago year, a driver is refused both, and a keyed rebate claim keeps a five-digit sequence, replays without a new number and refuses bad input and unauthorized callers.",
+      "covers": ["generate_quote_number", "generate_order_number", "create_rebate_claim"],
+      "area": ["lifecycle", "security", "idempotency", "regression"]
+    },
     "driver_delivery_issue_notice": {
       "chain": "smoke-driver-delivery-issue.sql",
       "container_only": true,
