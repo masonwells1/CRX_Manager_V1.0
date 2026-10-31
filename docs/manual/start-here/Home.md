@@ -10,14 +10,13 @@ Welcome to the CRX Manager knowledge vault. This is the shared notebook for **Ma
 
 ## Start here
 
-1. **[[Goals-and-Vision|Goals and Vision]]**: what CRX Manager is for and what success looks like.
-2. **[[Plans-and-Roadmap|Plans and Roadmap]]**: what we're building now, in what order, and the dates that matter.
-3. **[[Codebase-Map|Codebase Map]]**: a plain-English tour of the code folders and where each kind of work lives.
-4. **[[How-to-Use-This-Vault|How to Use This Vault]]**: how the notes are organized and the house rules for editing them.
-5. **[[Working-with-Taha|Working with Taha]]**: who decides what, what needs Mason's OK, and how work flows between us.
-6. **[[Glossary]]**: plain-English meanings of the jargon.
-7. **[[Lessons-Learned|Lessons Learned]]**: mistakes that already cost us time, and how to avoid them.
-8. **[[Chem-Man-vs-CRX|Chem Man vs CRX]]**: what Chem Man does well, where CRX is ahead, and what that means for building.
+1. **[[Codebase-Map|Codebase Map]]**: a plain-English tour of the code folders and where each kind of work lives.
+2. **[[How-to-Use-This-Vault|How to Use This Vault]]**: how the notes are organized and the house rules for editing them.
+3. **[[Working-with-Taha|Working with Taha]]**: who decides what, what needs Mason's OK, and how work flows between us.
+4. **[[Glossary]]**: plain-English meanings of the jargon.
+5. **[[Lessons-Learned|Lessons Learned]]**: mistakes that already cost us time, and how to avoid them.
+
+Goals and Vision, Plans and Roadmap, and Chem Man vs CRX now live in Mason's private notes vault (`crx-notes`, folder `Business/`), so the business plans stay out of this public repository.
 
 ## The one-sentence version
 

@@ -6,7 +6,7 @@ tags: [start-here, team]
 
 ← [[Home]] · see also [[How-to-Use-This-Vault|How to Use This Vault]]
 
-How Mason (owner) and Taha K. (developer) work together on CRX Manager. Mason's own words on how he thinks are at the bottom of [[Goals-and-Vision|Goals and Vision]]. Read that first.
+How Mason (owner) and Taha K. (developer) work together on CRX Manager. Mason's own words on how he thinks are at the bottom of Goals and Vision (in Mason's private notes, `crx-notes`). Read that first.
 
 ## Who does what
 
@@ -42,7 +42,7 @@ AI agents (Claude and Codex) also build and review much of the code. They follow
 | Inventory | |
 | Core reports: sales, inventory, cost and margin, receivables | |
 
-Field application is out of scope because it's already at Chem Man parity (see [[Chem-Man-vs-CRX|Chem Man vs CRX]]). Don't break it, though.
+Field application is out of scope because it's already at Chem Man parity (see Chem Man vs CRX (in Mason's private notes, `crx-notes`)). Don't break it, though.
 
 **Where to start:** the verified bug list Mason shares with you privately (it isn't in this public repo). The items in the December scope come first. Then the [[manual/TO_DO_LIST|To-Do List]].
 
@@ -79,7 +79,7 @@ Everything else is your call. Mason would rather hear "here's what I did and how
 1. Get a local copy running: [[SETUP-NEW-MACHINE|Setup on a New Machine]].
 2. Read [[manual/AGENT_ONBOARDING|Onboarding]] and [[manual/ARCHITECTURE|Architecture]], then the [[Codebase-Map|Codebase Map]].
 3. Learn the business rules: [[workflows/QUOTE_TO_DELIVERY|Quote to Delivery]], [[workflows/INVENTORY_RULES|Inventory Rules]] and [[workflows/RLS_SECURITY_GUIDE|Who can see what]].
-4. Read [[Plans-and-Roadmap|Plans and Roadmap]] and the [[manual/TO_DO_LIST|To-Do List]] to see what matters before January 1, 2027.
+4. Read Plans and Roadmap (in Mason's private notes, `crx-notes`) and the [[manual/TO_DO_LIST|To-Do List]] to see what matters before January 1, 2027.
 5. Skim the [[manual/DECISION_LOG|Decision Log]] so you don't reopen settled questions.
 6. Read [[Lessons-Learned|Lessons Learned]]: the mistakes that already cost CRX time.
 
