@@ -81,5 +81,11 @@ export function unsentQuoteChange(args: {
       return 'prices';
     }
   }
-  return lines.some((line) => sentLineState(sentItems, line) !== null) ? 'prices' : null;
+  // A changed price on a line the customer was sent is recorded when it is saved and needs no
+  // re-send (20261029120000, Mason 2026-10-27). A new line, or a version without line ids, still does.
+  const carriesIds = sentItemsCarryLineIds(sentItems);
+  return lines.some((line) => {
+    const state = sentLineState(sentItems, line);
+    return state !== null && !(carriesIds && state.kind === 'price');
+  }) ? 'prices' : null;
 }

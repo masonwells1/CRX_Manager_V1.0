@@ -57,6 +57,20 @@ describe('quote price lock (mirrors _assert_quote_prices_as_sent)', () => {
     expect(unsentQuoteChange({ lastSent: null, newestVersionNumber: 0, customerId: 'c1', lines })).toBeNull();
   });
 
+  // Item 10b (Mason 2026-10-27, 20261029120000): a saved line's price may change straight away; the
+  // database records it, so only a new line, a changed customer, or a version without line ids
+  // still needs a re-send.
+  it('a changed price on a line the customer was sent needs no re-send', () => {
+    const v1 = version(withIds);
+    expect(unsentQuoteChange({ lastSent: v1, newestVersionNumber: 1, customerId: 'c1',
+      lines: [{ id: 'i1', product_id: 'p1', price_per_unit: 12 }] })).toBeNull();
+    // Still shown on the line, so the rep sees what the customer was sent.
+    expect(sentLineState(withIds, { id: 'i1', product_id: 'p1', price_per_unit: 12 })).toEqual({ kind: 'price', sentCents: 1000 });
+    // A version written before line ids cannot tell the lines apart: still a re-send.
+    expect(unsentQuoteChange({ lastSent: version([sentItem({})]), newestVersionNumber: 1, customerId: 'c1',
+      lines: [{ id: 'i1', product_id: 'p1', price_per_unit: 12 }] })).toBe('prices');
+  });
+
   it('allows a removed line when the version records ids, but not when lines pair by product', () => {
     const twoWithIds = version([sentItem({ quote_item_id: 'i1' }), sentItem({ quote_item_id: 'i2', product_id: 'p2' })]);
     const oneLine = [{ id: 'i1', product_id: 'p1', price_per_unit: 10 }];

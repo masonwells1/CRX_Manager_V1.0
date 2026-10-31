@@ -1,6 +1,6 @@
 # Known Issues — what is open today
 
-**Last verified:** 2026-10-30 for the quote-expiry rules only (main `1567b768` + local replay, not live); other evidence retains its stated dates.
+**Last verified:** 2026-10-30 for KI-81 and the quote-expiry rules only (main `1567b768` + local replay, not live); other evidence retains its stated dates.
 
 **Shipment reconciliation: 2026-10-27 (America/Chicago).** Compared all 68 PRs in the October 25–27 UTC merge query with `main` at `fe258c2fe`, current source and the live read-only migration ledger. KI-15 is closed; KI-30's completed category/vendor work is removed from its open scope; KI-47/KI-52/KI-72 are narrowed. The [audit record](../audits/2026-10-27-shipped-work-reconciliation.md) lists every PR and the evidence limits. All other open and accepted risks remain; this is not a fresh full security audit.
 
@@ -273,7 +273,7 @@ orders and job lines. Two later paths read `quote_items.price_per_unit` live ins
 `_blend_quote_pick_valid_20261020`, or the first line of the job's quote section) and the field-application
 invoice (`_save_field_app_invoice_impl_20260714`, `resolve_field_app_chemical_price`, which take the first quote
 line on the field with no status, customer or deleted filter). After a revision that changed a price and was not
-re-sent, either can bill the unsent price; the field-application lookup can also take a draft, declined or deleted
+re-sent, either can bill the unsent price (with the candidate `20261029120000`, PR #1203, a price change recorded by `save_quote` is the agreed price and needs no re-send); the field-application lookup can also take a draft, declined or deleted
 quote's price. Fix: read the price from the version last sent (or refuse like the lock), with a real-schema proof.
 
 ### KI-82 — The open quote screen can show a stale cost for a line it just saved

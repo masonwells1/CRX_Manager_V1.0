@@ -143,6 +143,9 @@ interface LocalItem {
   // "Use today's price" (20261027040000): once the quote has been sent, a saved line keeps its
   // stored price (savedLineIdsRef) unless it has a manual price or this asks for today's price.
   use_todays_price?: boolean;
+  // A higher booked price on a sent quote needs the rep's "grower agreed" tick (20261029120000).
+  // Holds the price, in cents, the tick confirmed, so changing the price again clears it.
+  grower_confirmed_cents?: number;
   suggested_rate: string | null;
   actual_rate: number | null;
   rate_unit: string | null;
@@ -184,6 +187,18 @@ interface ActivePlannedHold {
   product_id: string;
   quantity: number;
   expires_at: string | null;
+}
+
+// A saved line on a sent quote whose price went up since it was saved: it needs the rep's
+// "grower agreed" tick before it saves (Mason 2026-10-27, 20261029120000).
+function priceRaise(
+  saved: { productId: string; price: number } | undefined,
+  item: { product_id: string; price_per_unit: number },
+): { fromCents: number; toCents: number } | null {
+  if (!saved || saved.productId !== item.product_id) return null;
+  const fromCents = Math.round(saved.price * 100);
+  const toCents = Math.round(item.price_per_unit * 100);
+  return toCents > fromCents ? { fromCents, toCents } : null;
 }
 
 interface DrawRow {
@@ -647,7 +662,7 @@ export default function QuoteBuilder() {
   }>());
   // The render-side copy of savedLineIdsRef, set with it on load and on each save. A line added and
   // saved since the page loaded has no local id, so the price lock names it from here.
-  const [savedLineIdByKey, setSavedLineIdByKey] = useState<ReadonlyMap<string, { id: string; productId: string }>>(new Map());
+  const [savedLineIdByKey, setSavedLineIdByKey] = useState<ReadonlyMap<string, { id: string; productId: string; price: number }>>(new Map());
   const priceLockLineOf = useCallback((item: LocalItem): PriceLockLine => {
     const saved = savedLineIdByKey.get(item._key);
     return {
@@ -2192,6 +2207,17 @@ export default function QuoteBuilder() {
       return null;
     }
 
+    if (priceLocked) {
+      const unconfirmed = sections.flatMap((sec) => sec.items).find((item) => {
+        const raise = item.product_id ? priceRaise(savedLineIdsRef.current.get(item._key), item) : null;
+        return raise && item.grower_confirmed_cents !== raise.toCents;
+      });
+      if (unconfirmed) {
+        toast('error', 'A booked price went up. Tick "Grower agreed" under that price once the grower has agreed, then save.');
+        return null;
+      }
+    }
+
     // Minted before the payload so the frozen clock can be bound to it. `getKey`
     // returns the SAME key until it is retired, so this is a read, not a new attempt.
     const idemKey = getSaveQuoteIdempotencyKey();
@@ -2271,6 +2297,7 @@ export default function QuoteBuilder() {
             price_override: item.price_override ?? null,
             // On a sent quote the server keeps the line's saved price unless this asks for today's.
             use_todays_price: wantsTodaysPrice(item),
+            ...(item.grower_confirmed_cents === Math.round(item.price_per_unit * 100) ? { grower_confirmed: true } : {}),
             current_cost: item.current_cost,
             suggested_rate: item.suggested_rate,
             actual_rate: item.actual_rate,
@@ -4283,7 +4310,7 @@ export default function QuoteBuilder() {
                   : `Prices stay as sent in V${lastSentVersion.version_number} unless you change them. `}
             {unsentChange
               ? 'Send the revised quote to the customer before converting it, drawing from it or scheduling a job.'
-              : 'Quantity and note changes need no re-send.'}
+              : 'A price you change applies without a re-send; a higher one needs the grower\u2019s OK. Quantity and note changes need no re-send.'}
           </span>
           <span className="flex flex-wrap gap-2">
             <Button
@@ -5098,6 +5125,22 @@ export default function QuoteBuilder() {
                                   </button>
                                 )}
                               </div>
+                              {!customerView && priceLocked && (() => {
+                                const raise = priceRaise(savedLineIdByKey.get(item._key), item);
+                                return raise && (
+                                  <label className="mt-0.5 flex items-center gap-1 text-xs text-amber-800">
+                                    <input
+                                      type="checkbox"
+                                      checked={item.grower_confirmed_cents === raise.toCents}
+                                      disabled={formLocked}
+                                      onChange={(e) => updateItem(sec._key, item._key, {
+                                        grower_confirmed_cents: e.target.checked ? raise.toCents : undefined,
+                                      })}
+                                    />
+                                    Grower agreed to {formatCents(raise.toCents)} (was {formatCents(raise.fromCents)})
+                                  </label>
+                                );
+                              })()}
                               {!customerView && (sentHint || todayPriceOffer != null) && (
                                 <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs">
                                   {sentHint && <span className="text-amber-700">{sentHint}</span>}
